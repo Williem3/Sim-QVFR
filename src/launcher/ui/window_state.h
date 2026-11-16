@@ -67,6 +67,8 @@ enum Ctl {
     kNrFocusScale, kNrEdgeBlend, kNrPeriphery, kNrPeripheryScale, kNrPeripheryCoverage, kNrLimit,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
+    // The clock ([clock], Headset pane).
+    kClockOn, kClockYaw, kClockPitch, kClockSize, kClockPanel,
     // The runtime composing the views ([experiment] native_quad_views, Resolution pane).
     kNativeQuad,
     // Sharpening ([quad] sharpen_percent, Resolution pane).

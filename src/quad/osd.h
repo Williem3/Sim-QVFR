@@ -13,15 +13,26 @@ namespace simqvfr {
 
 // Where the card floats ([osd], reloaded live), placed as the settings menu's panel is (settings_menu.h's
 // MenuPlacement, menu_pose): degrees right (yaw) and up (pitch) of straight ahead, and its width in
-// degrees. The default sits above the view's centre, clear of the menu.
+// degrees. The default sits straight ahead, low, beside the menu (its default place, settings_menu.h).
 struct OsdPlacement {
     bool enabled = false;
-    int yaw = 0, pitch = 18, width = 26;
+    int yaw = 0, pitch = -25, width = 19;
     bool operator==(const OsdPlacement&) const = default;
 };
 inline constexpr int kOsdYawMax = 35, kOsdPitchMax = 30, kOsdWidthMin = 12, kOsdWidthMax = 45;
 OsdPlacement read_osd_placement(const wchar_t* ini);
 bool write_osd_placement(const wchar_t* ini, const OsdPlacement& placement);
+
+// The clock ([clock], reloaded live): the local time alone on a small card of its own, placed as the overlay's card
+// (degrees right, up, wide). Off by default; the default place is low on the right, across from the menu's.
+struct ClockPlacement {
+    bool enabled = false;
+    int yaw = 22, pitch = -23, width = 8;
+    bool operator==(const ClockPlacement&) const = default;
+};
+inline constexpr int kClockYawMax = kOsdYawMax, kClockPitchMax = kOsdPitchMax, kClockWidthMin = 4, kClockWidthMax = 20;
+ClockPlacement read_clock_placement(const wchar_t* ini);
+bool write_clock_placement(const wchar_t* ini, const ClockPlacement& placement);
 
 // One of ACE's frames, as the layer sees it: from the previous xrEndFrame to this one; the render
 // thread's span from xrWaitFrame's return to xrEndFrame (its work for the frame: the frame's critical
@@ -147,10 +158,19 @@ std::vector<OsdRow> osd_rows(const OsdInput& input, const OsdSummary& summary);
 // SMVR (Sim-QVFR's software multi-view) green, Fallback (the focus views in passes of their own again) yellow.
 OsdRow osd_badge(const OsdInput& input);
 
+// One panel pixel for a quad layer: GDI's BGRx `gdi` (sRGB) with `alpha`, as RGBA premultiplied in linear light and
+// encoded sRGB again (the swapchain is _SRGB). Transparent is black: a runtime that blends the layer as premultiplied
+// (OpenXR's default, the layers carry no UNPREMULTIPLIED flag) shows nothing there. Straight alpha with the card's
+// grey left in the clear corners showed that grey on runtimes that blend as premultiplied: square corners over a dark
+// background, rounded over a bright one (2026-11-16).
+uint32_t panel_rgba(uint32_t gdi, uint8_t alpha);
+// A rounded rectangle's coverage (0..1) at pixel (x, y) of a width x height panel with corners of `radius`, antialiased.
+double panel_corner_coverage(int x, int y, int width, int height, int radius);
+
 // The local time on a 12-hour clock ("9:05 PM"), from the hour (0-23) and minute: the card's clock.
 std::wstring osd_clock(int hour, int minute);
 
-// RGBA8 pixels (sRGB, straight alpha), kOsdWidth x kOsdHeight: a rounded translucent card with the
+// RGBA8 pixels (sRGB, premultiplied alpha: panel_rgba), kOsdWidth x kOsdHeight: a rounded translucent card with the
 // `tiles` across the top, a strip graph of the recent frames (`history`, oldest first: each bar its frame time against
 // the budget, coloured by its refreshes: green shown on its refresh, yellow one missed, red more), then `rows` as a
 // grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label;
@@ -159,6 +179,11 @@ inline constexpr int kOsdWidth = 1024, kOsdHeight = 496;
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<OsdFrame>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
                                      const OsdRow& badge = {}, const std::wstring& clock = {});
+
+// RGBA8 pixels (sRGB, premultiplied alpha), kClockWidth x kClockHeight: the clock's card, rounded all round, `time` (osd_clock) large and
+// white on the overlay card's translucent dark.
+inline constexpr int kClockWidth = 320, kClockHeight = 112;
+std::vector<uint32_t> draw_clock_panel(const std::wstring& time);
 
 // The same card with a notice instead of the numbers: `title` in yellow, then `lines`, each a paragraph
 // (wrapped; the first in white, the rest grey). The layer shows it for a while at the session's start when

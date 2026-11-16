@@ -27,8 +27,9 @@ enum class MenuItem {
     // The Focus shape page (focus_shape.h): box or corners, then each corner's insets.
     Shape, ShapeTopLeftIn, ShapeTopLeftDown, ShapeTopRightIn, ShapeTopRightDown, ShapeBottomLeftIn, ShapeBottomLeftUp,
     ShapeBottomRightIn, ShapeBottomRightUp,
-    // The Overlay and menu page: the performance overlay ([osd], osd.h) and the panels' places.
-    Overlay, OverlayYaw, OverlayPitch, OverlayWidth, MenuYaw, MenuPitch, MenuWidth,
+    // The Overlay and menu page: the performance overlay ([osd], osd.h), the clock ([clock]; its size in the launcher
+    // only: the page's 13 lines) and the panels' places.
+    Overlay, OverlayYaw, OverlayPitch, OverlayWidth, Clock, ClockYaw, ClockPitch, MenuYaw, MenuPitch, MenuWidth,
     // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
     Page, CheekyProcessing, CheekyOuterDlaa, CheekyOuterScale, CheekyOuterPreset, CheekyFocusPreset,
     CheekySupersampling, CheekyMotionFix, CheekyNr, CheekyNrPreset, CheekyNrPasses,
@@ -67,10 +68,10 @@ enum class MenuItem {
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
 // reloaded live): degrees right (yaw) and up (pitch) of straight ahead, and the panel's width in
-// degrees, kMenuDistance in front of the head. The defaults are the panel's first place: 0.48 m wide,
-// a little low, at 0.8 m.
+// degrees, kMenuDistance in front of the head. The defaults: low on the left, 20 degrees wide (0.28 m at 0.8 m),
+// clear of the overlay's card below the centre and the clock's on the right (osd.h).
 struct MenuPlacement {
-    int yaw = 0, pitch = -4, width = 33;
+    int yaw = -22, pitch = -23, width = 20;
     bool operator==(const MenuPlacement&) const = default;
 };
 inline constexpr int kMenuYawMax = 35, kMenuPitchMax = 30, kMenuWidthMin = 20, kMenuWidthMax = 60;
@@ -91,6 +92,7 @@ struct MenuValues {
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone, tenths of a degree
     FocusShape shape;         // [quad] focus_shape and its corners
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
+    ClockPlacement clock;     // [clock]: the clock, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys listed under the panel
     bool cpuIsolateMain = kCpuIsolateMain.def != 0;  // [cpu] isolate_main_thread: the main thread's core to itself

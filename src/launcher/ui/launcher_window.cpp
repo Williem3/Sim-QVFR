@@ -238,7 +238,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragging = kColorWheel;
             SetCapture(hwnd);
             set_color_from(x, y);
-        } else if (h->id == kMenuPanel || h->id == kOsdPanel) {
+        } else if (h->id == kMenuPanel || h->id == kOsdPanel || h->id == kClockPanel) {
             app.dragging = h->id;
             const float k = app.placeFrame.w / kRefFovX;
             const auto [yawOf, pitchOf] = placement_of(h->id);
@@ -263,7 +263,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         const float x = dip(lParam, false), y = dip(lParam, true);
         app.mouseX = x;
         app.mouseY = y;
-        if (app.dragging == kMenuPanel || app.dragging == kOsdPanel)
+        if (app.dragging == kMenuPanel || app.dragging == kOsdPanel || app.dragging == kClockPanel)
             set_panel_from(x, y);
         else if (app.dragging == kColorWheel)
             set_color_from(x, y);

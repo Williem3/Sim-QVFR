@@ -205,6 +205,9 @@ constexpr Help kHelp[] = {
      L"density until the next launch, which sizes its view to fit."},
     {L"Next game start", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
                      L"what it started with."},
+    {L"Show the clock",
+     L"The local time on a small card in the headset, apart from the performance overlay: on or off and moved live, here or "
+     L"from the headset menu. It costs next to nothing; it redraws once a minute."},
     {L"Show the overlay",
      L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
      L"it shows."},

@@ -49,9 +49,11 @@ void set_slider_from_x(float x) {
         push_live();  // the running game follows the knob; the settings save once it is let go
 }
 
-// The place a preview drag or the arrows change: the settings menu's or the performance overlay's.
+// The place a preview drag or the arrows change: the settings menu's, the performance overlay's or the clock's.
 std::pair<int*, int*> placement_of(Ctl id) {
-    return id == kOsdPanel ? std::pair{&app.s.osd.yaw, &app.s.osd.pitch} : std::pair{&app.s.menuYaw, &app.s.menuPitch};
+    return id == kOsdPanel     ? std::pair{&app.s.osd.yaw, &app.s.osd.pitch}
+           : id == kClockPanel ? std::pair{&app.s.clock.yaw, &app.s.clock.pitch}
+                               : std::pair{&app.s.menuYaw, &app.s.menuPitch};
 }
 
 // Dragging a panel in the placement preview: its centre follows the pointer (less where it was held).

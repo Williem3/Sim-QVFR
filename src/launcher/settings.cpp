@@ -91,6 +91,7 @@ Settings load_settings(const std::wstring& ini) {
     s.dlss = read_dlss_settings(ini.c_str());
     s.nr = read_nr_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
+    s.clock = read_clock_placement(ini.c_str());
     s.crop = ini_flag(f, kCropEnabled);
     s.cropTop = ini_int(f, kCropTop);
     s.cropBottom = ini_int(f, kCropBottom);
@@ -213,6 +214,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
     ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)
     ok &= write_osd_placement(ini.c_str(), s.osd);
+    ok &= write_clock_placement(ini.c_str(), s.clock);
     ok &= write_hotkeys(ini.c_str(), s.hotkeys);
     return ok;
 }
@@ -238,7 +240,7 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
 }
 
 bool per_game_key(const std::wstring& section, const std::wstring& key) {
-    return !(section == L"menu" || section == L"osd" || section == L"hotkeys" || section == L"launcher" ||
+    return !(section == L"menu" || section == L"osd" || section == L"clock" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
              (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||
              (section == L"dlss" && key == L"folder") || (section == L"dlss_nr" && key == L"folder"));

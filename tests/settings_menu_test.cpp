@@ -265,17 +265,19 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(deadzoneIni.c_str());
     }
 
-    // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
-    // [menu] for the layer to move them, then the hotkeys footer.
+    // The Overlay and menu page: the overlay, the clock and the menu's places, stepped and written to [osd], [clock]
+    // and [menu] for the layer to move them, then the hotkeys footer.
     SettingsMenu moving;
     moving.page = 5;  // after Settings, Shape, Crop, Helmet and CPU
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 9,
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 12,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
     check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
-              placeLines[3].value == L"18° up" && placeLines[4].value == L"26°" && placeLines[5].value == L"0°" &&
-              placeLines[6].value == L"4° down" && placeLines[7].value == L"33°",
-          "the overlay's and the menu's places in degrees");
+              placeLines[3].value == L"25° down" && placeLines[4].value == L"19°" && placeLines[5].label == L"Clock" &&
+              placeLines[5].value == L"Off" && placeLines[6].value == L"22° right" && placeLines[7].value == L"23° down" &&
+              placeLines[8].value == L"22° left" && placeLines[9].value == L"23° down" && placeLines[10].value == L"20°",
+          "the overlay's, the clock's and the menu's places in degrees (the defaults: overlay low ahead, clock low right, "
+          "menu low left)");
     moving.selected = 1;
     menu_key(moving, MenuKey::Right);  // overlay on
     moving.selected = 2;
@@ -283,29 +285,43 @@ int SIM_QVFR_TEST_MAIN() {
         menu_key(moving, MenuKey::Right);
     moving.selected = 3;
     menu_key(moving, MenuKey::Left);
-    moving.selected = 5;  // Menu left / right
+    moving.selected = 5;  // Clock
+    menu_key(moving, MenuKey::Right);
+    moving.selected = 6;  // Clock left / right
+    menu_key(moving, MenuKey::Left);
+    moving.selected = 7;  // Clock up / down
+    menu_key(moving, MenuKey::Right);
+    moving.selected = 8;  // Menu left / right
     menu_key(moving, MenuKey::Left);
     menu_key(moving, MenuKey::Left);
-    moving.selected = 7;  // Menu size
+    moving.selected = 10;  // Menu size
     menu_key(moving, MenuKey::Right);
     const auto movingIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_moving.ini").wstring();
     write_menu_values(movingIni.c_str(), moving.values, true);
     const MenuPlacement moved = read_menu_placement(movingIni.c_str());
     const OsdPlacement overlayMoved = read_osd_placement(movingIni.c_str());
+    const ClockPlacement clockMoved = read_clock_placement(movingIni.c_str());
     const MenuValues reread = read_menu_values(movingIni.c_str());
     DeleteFileW(movingIni.c_str());
-    check(overlayMoved == OsdPlacement{true, 3, 17, 26} && reread.overlay == overlayMoved &&
+    check(overlayMoved == OsdPlacement{true, 3, -26, 19} && reread.overlay == overlayMoved &&
               menu_lines(moving)[2].value == L"3° right",
           "the overlay turns on and moves: right 3 degrees and down 1, written to [osd] and read back");
-    check(moved.yaw == -2 && moved.pitch == -4 && moved.width == 34 && reread.placement == moved &&
-              menu_lines(moving)[5].value == L"2° left",
+    check(clockMoved == ClockPlacement{true, 21, -22, 8} && reread.clock == clockMoved &&
+              menu_lines(moving)[5].value == L"On" && menu_lines(moving)[6].value == L"21° right",
+          "the clock turns on and moves: left 1 degree and up 1, its size kept, written to [clock] and read back");
+    check(moved.yaw == -24 && moved.pitch == -23 && moved.width == 21 && reread.placement == moved &&
+              menu_lines(moving)[8].value == L"24° left",
           "the menu moves itself: left 2 degrees and 1 degree wider, written to [menu] and read back");
     const std::vector<uint32_t> pixels =
         draw_menu_panel(L"QVFR settings", menu_resolution(shown), menu_stats(shown), lines, {}, L"hint");
     bool alpha = !pixels.empty(), highlight = false, bright = false, red = false;
+    const auto alphaAt = [&](int x, int y) { return pixels[static_cast<size_t>(y) * kPanelWidth + x] >> 24; };
+    // Translucent inside, rounded corners clear (and black: premultiplied).
+    alpha = alphaAt(kPanelWidth / 2, kPanelHeight / 2) == 0xe6 && alphaAt(40, 0) == 0xe6 && alphaAt(0, 0) == 0 &&
+            alphaAt(kPanelWidth - 1, kPanelHeight - 1) == 0 && alphaAt(0, kPanelHeight - 1) == 0 && pixels[0] == 0;
+    const uint32_t highlightRgb = panel_rgba(0x0a6e78, 0xe6) & 0xffffff;  // kHighlight, premultiplied
     for (uint32_t p : pixels) {
-        alpha &= (p >> 24) == 0xe6;
-        highlight |= (p & 0xffffff) == 0x786e0a;  // kHighlight 0x0a6e78 as RGBA bytes (R in the low byte)
+        highlight |= (p & 0xffffff) == highlightRgb;
         bright |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) > 0xc0;
         red |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) < 0x90;
     }
@@ -321,11 +337,14 @@ int SIM_QVFR_TEST_MAIN() {
         cappedRed |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) < 0x90;
     check(cappedRed, "a capped value and its note draw in red");
 
-    // The panel's place: the defaults keep its first pose; turned, it still faces the eye.
-    const MenuPose first = menu_pose(MenuPlacement{}, static_cast<float>(kPanelHeight) / kPanelWidth);
+    // The panel's place: straight ahead and a little low, 33 degrees (its first place); turned, it still faces the eye.
+    const MenuPose first = menu_pose(MenuPlacement{0, -4, 33}, static_cast<float>(kPanelHeight) / kPanelWidth);
     check(std::fabs(first.width - 0.48f) < 0.01f && std::fabs(first.position[1] + 0.056f) < 0.005f &&
               std::fabs(first.position[2] + 0.8f) < 0.005f && std::fabs(first.position[0]) < 1e-6f,
-          "menu placement: the defaults are the panel's first place (0.48 m wide, a little low, 0.8 m ahead)");
+          "menu placement: 33 degrees a little low is 0.48 m wide, 0.8 m ahead");
+    const MenuPose lowLeft = menu_pose(MenuPlacement{}, static_cast<float>(kPanelHeight) / kPanelWidth);
+    check(lowLeft.position[0] < 0 && lowLeft.position[1] < 0 && std::fabs(lowLeft.width - 0.28f) < 0.01f,
+          "menu placement: the default is low on the left, 0.28 m wide");
     const MenuPose turned = menu_pose(MenuPlacement{30, 20, 40}, 0.75f);
     // The quad's +Z, rotated by its orientation, points back along -position.
     const float qx = turned.orientation[0], qy = turned.orientation[1], qz = turned.orientation[2], qw = turned.orientation[3];
@@ -339,7 +358,7 @@ int SIM_QVFR_TEST_MAIN() {
     WritePrivateProfileStringW(L"menu", L"pitch", L"-7", placementIni.c_str());
     const MenuPlacement read = read_menu_placement(placementIni.c_str());
     DeleteFileW(placementIni.c_str());
-    check(read.yaw == -kMenuYawMax && read.pitch == -7 && read.width == 33,
+    check(read.yaw == -kMenuYawMax && read.pitch == -7 && read.width == MenuPlacement{}.width,
           "menu placement: [menu] reads negative degrees, clamps them and defaults the rest");
 
     // Foveated DLSS (Cheeky running): a page switch first, then the method's items or Cheeky's.

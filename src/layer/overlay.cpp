@@ -239,7 +239,7 @@ bool osd_resources(XrSession session) {
         return false;
     }
     XrCompositionLayerQuad& l = osd.layer;
-    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied pixels (panel_rgba)
     l.space = osd.view;
     l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
     l.subImage.swapchain = osd.chain;
@@ -465,6 +465,130 @@ void osd_shutdown() {
     osd.history.clear();
     osd.lastEnd = 0;
     osd.lastDisplay = 0;
+}
+
+// ---- Clock ---------------------------------------------------------------------------------------
+
+namespace {
+
+void clock_place() {
+    const ClockPlacement& p = clockCard.placement;
+    const MenuPose pose = menu_pose({p.yaw, p.pitch, p.width}, static_cast<float>(kClockHeight) / kClockWidth);
+    clockCard.layer.pose.position = {pose.position[0], pose.position[1], pose.position[2]};
+    clockCard.layer.pose.orientation = {pose.orientation[0], pose.orientation[1], pose.orientation[2], pose.orientation[3]};
+    clockCard.layer.size = {pose.width, pose.height};
+}
+
+bool clock_resources(XrSession session) {
+    if (!game->has_qvfr() && !game->shows_overlay())  // as the overlay's card: nothing of ours in the headset
+        return false;
+    if (clockCard.chain)
+        return true;
+    if (clockCard.failed)
+        return false;
+    const SessionGraphics graphics = session_graphics_now();
+    if (!graphics.valid())
+        return false;
+    XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    spaceInfo.poseInReferenceSpace.orientation.w = 1;
+    XrSwapchainCreateInfo chainInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    chainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    chainInfo.format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    chainInfo.sampleCount = 1;
+    chainInfo.width = kClockWidth;
+    chainInfo.height = kClockHeight;
+    chainInfo.faceCount = 1;
+    chainInfo.arraySize = 1;
+    chainInfo.mipCount = 1;
+    XrResult r = next.CreateReferenceSpace(session, &spaceInfo, &clockCard.view);
+    if (XR_SUCCEEDED(r))
+        r = next.CreateSwapchain(session, &chainInfo, &clockCard.chain);
+    if (XR_SUCCEEDED(r))
+        r = swapchain_textures(graphics, next.EnumerateSwapchainImages, clockCard.chain, clockCard.images);
+    if (XR_SUCCEEDED(r) && !clockCard.images.empty())
+        clockCard.upload = make_panel_upload(graphics, kClockWidth, kClockHeight);
+    if (XR_FAILED(r) || clockCard.images.empty() || !clockCard.upload) {
+        logf("clock: card setup failed (%d, %s)", r, graphics.name());
+        clockCard.failed = true;
+        return false;
+    }
+    XrCompositionLayerQuad& l = clockCard.layer;
+    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied pixels (panel_rgba)
+    l.space = clockCard.view;
+    l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    l.subImage.swapchain = clockCard.chain;
+    l.subImage.imageRect = {{0, 0}, {kClockWidth, kClockHeight}};
+    clock_place();
+    log_line("clock: card ready");
+    return true;
+}
+
+}  // namespace
+
+void clock_placement_changed(const ClockPlacement& placement) {
+    if (clockCard.read && placement == clockCard.placement)
+        return;
+    if (clockCard.read || placement.enabled)
+        logf("clock: %s, %d deg right, %d deg up, %d deg wide", placement.enabled ? "on" : "off", placement.yaw,
+             placement.pitch, placement.width);
+    clockCard.placement = placement;
+    clockCard.read = true;
+    clock_place();
+}
+
+const XrCompositionLayerBaseHeader* clock_frame(XrSession session) {
+    if (!clockCard.read)
+        clock_placement_changed(read_clock_placement(live.ini.c_str()));
+    if (!clockCard.placement.enabled || !clock_resources(session))
+        return nullptr;
+    // Redrawn when the minute turns over: GetLocalTime is cheap, the drawing (GDI) goes to a worker.
+    SYSTEMTIME local{};
+    GetLocalTime(&local);
+    std::wstring time = osd_clock(local.wHour, local.wMinute);
+    if (time != clockCard.shown && !clockCard.drawing.valid()) {
+        clockCard.shown = time;
+        clockCard.drawing = std::async(std::launch::async, [time = std::move(time)] { return draw_clock_panel(time); });
+    }
+    if (clockCard.drawing.valid() && clockCard.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const std::vector<uint32_t> pixels = clockCard.drawing.get();
+        uint32_t index = 0;
+        hang_watch_stage("clock card: xrAcquireSwapchainImage");
+        // A timed-out wait: the image stays acquired, waited on again at the next upload; this drawing is dropped and
+        // drawn again at the next frame.
+        if (acquire_wait(clockCard.chain, clockCard.pending, kImageWaitNs, 1, index, "clock card: xrWaitSwapchainImage") ==
+            XR_SUCCESS) {
+            bool ok = index < clockCard.images.size() && clockCard.upload;
+            hang_watch_stage("clock card: the upload");
+            ok = ok && clockCard.upload->upload(clockCard.images[index], pixels);
+            hang_watch_stage("clock card: xrReleaseSwapchainImage");
+            next.ReleaseSwapchainImage(clockCard.chain, nullptr);
+            clockCard.uploaded = clockCard.uploaded || ok;
+            if (!ok)
+                clockCard.shown.clear();
+        } else {
+            clockCard.shown.clear();
+        }
+        hang_watch_stage("clock card: done");
+    }
+    return clockCard.uploaded ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&clockCard.layer) : nullptr;
+}
+
+void clock_shutdown() {
+    if (clockCard.drawing.valid())
+        clockCard.drawing.wait();
+    clockCard.drawing = {};
+    clockCard.upload.reset();
+    if (clockCard.chain)
+        next.DestroySwapchain(clockCard.chain);
+    if (clockCard.view)
+        next.DestroySpace(clockCard.view);
+    clockCard.chain = XR_NULL_HANDLE;
+    clockCard.view = XR_NULL_HANDLE;
+    clockCard.images.clear();
+    clockCard.pending = {};
+    clockCard.uploaded = clockCard.failed = false;
+    clockCard.shown.clear();
 }
 
 }  // namespace simqvfr::layer

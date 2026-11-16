@@ -231,6 +231,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
+    clock_shutdown();
     eye_off_session_ended();
     probe_stop();
     game->session_destroyed();
