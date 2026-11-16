@@ -212,15 +212,6 @@ int SIM_QVFR_TEST_MAIN() {
     check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == 35 && read_menu_values(ini.c_str()).sharpen == 35,
           "sharpening: written for a game with it ([quad] sharpen_percent), and read back");
     v.sharpen = 0;
-    check(GetPrivateProfileIntW(L"quad", L"output_density_max", -1, ini.c_str()) == -1 &&
-              read_menu_values(ini.c_str()).outputDensityMax == 400,
-          "output size: not written where the runtime composes; unset reads as up to 400%");
-    v.outputDensityMax = 100;
-    write_menu_values(ini.c_str(), v, true, false, false, false, false, true);
-    check(GetPrivateProfileIntW(L"quad", L"output_density_max", -1, ini.c_str()) == 100 &&
-              read_menu_values(ini.c_str()).outputDensityMax == 100,
-          "output size: written where the layer composes ([quad] output_density_max), and read back");
-    v.outputDensityMax = 400;
     check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == -1 &&
               read_menu_values(ini.c_str()).focusQuadStep == kFocusQuadSteps - 1,
           "focus quad distance: not written without focus_layer=2; unset reads as 100 m");
@@ -493,48 +484,6 @@ int SIM_QVFR_TEST_MAIN() {
             SettingsMenu loop = l;
             loop.launch.qvfr = false;
             check(!shown(loop), "Sharpening: QVFR only (not in Two-loop)");
-        }
-        {
-            // Output size ([quad] output_density_max): only where the layer composes, after Sharpening (or density).
-            const auto find = [](const SettingsMenu& s, MenuItem item) {
-                const std::vector<MenuItem> items = menu_page_items(s);
-                return std::find(items.begin(), items.end(), item) - items.begin();
-            };
-            const auto shown = [&](const SettingsMenu& s) {
-                return find(s, MenuItem::OutputSize) < static_cast<std::ptrdiff_t>(menu_page_items(s).size());
-            };
-            SettingsMenu runtime = c;
-            check(!runtime.launch.outputSize && !shown(runtime),
-                  "Output size: not shown where the runtime composes (the default)");
-            SettingsMenu o = c;
-            o.launch.outputSize = true;
-            check(shown(o) && find(o, MenuItem::OutputSize) == find(o, MenuItem::Density) + 1,
-                  "Output size: right after Focus density");
-            o.launch.sharpening = true;
-            check(find(o, MenuItem::OutputSize) == find(o, MenuItem::Sharpening) + 1, "Output size: after Sharpening");
-            o.selected = static_cast<int>(find(o, MenuItem::OutputSize));
-            check(menu_lines(o)[o.selected].label == L"Output size" && menu_lines(o)[o.selected].value == L"Up to 400%",
-                  "Output size's line: up to 400% by default");
-            check(!menu_key(o, MenuKey::Right) && o.values.outputDensityMax == 400, "Output size: Right at 400% stays there");
-            check(menu_key(o, MenuKey::Left) && o.values.outputDensityMax == 375 && menu_lines(o)[o.selected].value == L"Up to 375%",
-                  "Output size: Left steps 25%");
-            for (int i = 0; i < 20; ++i)
-                menu_key(o, MenuKey::Left);
-            check(o.values.outputDensityMax == 100 && menu_lines(o)[o.selected].value == L"Native",
-                  "Output size: down to Native (100%), no lower");
-            // The centre px/deg: no more than the output holds.
-            o.launch.nativePpd = 27;
-            o.values.density = 200;
-            const int capped = menu_stats(o).centerPpd;
-            o.values.outputDensityMax = 400;
-            const int open = menu_stats(o).centerPpd;
-            o.launch.outputCap = 150;
-            const int runtimeCapped = menu_stats(o).centerPpd;
-            check(capped == 27 && open > capped && runtimeCapped == std::min(open, 41),
-                  "Output size: the centre px/deg is capped at Native, the runtime's largest image, or neither");
-            SettingsMenu loop = o;
-            loop.launch.qvfr = false;
-            check(!shown(loop), "Output size: QVFR only (not in Two-loop)");
         }
         {
             // focus_layer=2's test line: only with launch.focusQuads, right after Gaze dead-zone, in steps of metres.
