@@ -39,6 +39,13 @@ struct Feature {};
 Feature* make(ID3D12GraphicsCommandList*, unsigned, unsigned, int, unsigned, unsigned) { return nullptr; }
 void release(Feature*) {}
 bool alive(const Feature*) { return false; }
+uint64_t lifetime() { return 0; }
+bool in_lifetime(uint64_t life, const std::function<void()>& run) {
+    if (life)
+        return false;
+    run();
+    return true;
+}
 void set_eye_live(uint64_t) {}
 void set_eye_live_out(uint64_t) {}
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
@@ -70,6 +77,23 @@ Shutdown1Fn shutdown1Original = nullptr;
 ReleaseFn releaseOriginal = nullptr;  // the game's releases, seen
 SRWLOCK lifeLock = SRWLOCK_INIT;
 std::atomic<uint64_t> generation{1};
+// This thread's shared hold on lifeLock: SRW locks don't nest (a second shared acquire behind a waiting shutdown
+// deadlocks), so only the outermost scope takes it; a shutdown reached under it can't wait for exclusive either.
+thread_local int lifeDepth = 0;
+void life_enter() {
+    if (lifeDepth++ == 0)
+        AcquireSRWLockShared(&lifeLock);
+}
+void life_leave() {
+    if (--lifeDepth == 0)
+        ReleaseSRWLockShared(&lifeLock);
+}
+struct LifeShared {
+    LifeShared() { life_enter(); }
+    ~LifeShared() { life_leave(); }
+    LifeShared(const LifeShared&) = delete;
+    LifeShared& operator=(const LifeShared&) = delete;
+};
 std::atomic<int> releasesLogged{0}, staleLogged{0};
 std::atomic<bool> hooked{false};
 bool tried = false;
@@ -307,8 +331,9 @@ NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feat
 }
 
 // The eyes' preset changed while running: a feature of ours like the game's with that preset, recorded into the game's
-// list ahead of its evaluation. The game's own feature stays (it releases it itself); an older replacement is left to
-// NGX's shutdown, like our focus features on a size change.
+// list ahead of its evaluation. The game's own feature stays (it releases it itself); an older replacement of ours is
+// retired (released a few evaluations later), one per change would leak otherwise.
+void retire_feature_later(NVSDK_NGX_Handle* handle);
 const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, bool& fresh) {
     const int want = eyePreset.load();
     GameFeature g;
@@ -326,6 +351,7 @@ const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NG
         return g.ours ? g.ours : h;
     NVSDK_NGX_Handle* created = nullptr;
     if (want != g.basePreset) {
+        const LifeShared life;  // a shutdown on another thread must not free NGX under the create
         Bag* b = nullptr;
         NVSDK_NGX_Result r = allocateFn(&b);
         if (ok(r) && b) {
@@ -358,13 +384,17 @@ const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NG
         logf("focus dlss: the eyes' (periphery's) preset back to %d: the game's own feature runs again", want);
         fresh = true;
     }
+    NVSDK_NGX_Handle* old = nullptr;
     AcquireSRWLockExclusive(&lock);
     for (GameFeature& f : gameFeatures)
         if (f.game == h) {
+            if (f.ours != created)
+                old = f.ours;
             f.preset = want;
             f.ours = created;
         }
     ReleaseSRWLockExclusive(&lock);
+    retire_feature_later(old);  // replaced, or back to the game's own: the GPU may still run its last evaluation
     return created ? created : h;
 }
 
@@ -392,11 +422,10 @@ void release_old_features() {
     ReleaseSRWLockExclusive(&lock);
     if (due.empty())
         return;
-    AcquireSRWLockShared(&lifeLock);
+    const LifeShared life;
     for (const OldFeature& o : due)
         if (o.generation == generation.load() && !guarded_release(o.handle, nullptr))
             logf("focus dlss: NGX faulted releasing a replaced feature (handle %p): caught", static_cast<const void*>(o.handle));
-    ReleaseSRWLockShared(&lifeLock);
 }
 
 // The live periphery: a feature of ours like the game's `h`, at the size its eye is drawn now (the game's sizes x fx,
@@ -424,7 +453,7 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         return nullptr;  // refused at this size before: not tried again until it changes
     NVSDK_NGX_Handle* created = nullptr;
     Bag* b = nullptr;
-    AcquireSRWLockShared(&lifeLock);
+    life_enter();
     NVSDK_NGX_Result r = allocateFn(&b);
     if (ok(r) && b) {
         b->Set(NVSDK_NGX_Parameter_CreationNodeMask, g.creationMask);
@@ -445,7 +474,7 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &created);
         destroyFn(b);
     }
-    ReleaseSRWLockShared(&lifeLock);
+    life_leave();
     (ok(r) && created ? logd : logf)("focus dlss: live periphery: a feature of ours %ux%u -> %ux%u in place of the game's %ux%u -> %ux%u (preset %d, 0: "
          "the game's own): result 0x%08x%s",
          w, hgt, ow, oh, g.info.width, g.info.height, g.info.outWidth, g.info.outHeight, want, static_cast<unsigned>(r),
@@ -594,21 +623,27 @@ void forget_game_features(const char* which) {
          which, n);
 }
 
-NVSDK_NGX_Result shutdownHook() {
-    AcquireSRWLockExclusive(&lifeLock);
+// Exclusive against our NGX calls; but a shutdown reached on a thread inside one of them (it holds lifeLock shared)
+// would wait on itself forever, so that one only bumps the generation.
+template <class F>
+NVSDK_NGX_Result shut_down(const char* which, F original) {
+    const bool nested = lifeDepth > 0;
+    if (nested)
+        logf("focus dlss: %s inside one of our own NGX calls on this thread: not waited for", which);
+    else
+        AcquireSRWLockExclusive(&lifeLock);
     generation.fetch_add(1);
-    forget_game_features("NVSDK_NGX_D3D12_Shutdown");
-    const NVSDK_NGX_Result r = shutdownOriginal();
-    ReleaseSRWLockExclusive(&lifeLock);
+    forget_game_features(which);
+    const NVSDK_NGX_Result r = original();
+    if (!nested)
+        ReleaseSRWLockExclusive(&lifeLock);
     return r;
 }
+NVSDK_NGX_Result shutdownHook() {
+    return shut_down("NVSDK_NGX_D3D12_Shutdown", [] { return shutdownOriginal(); });
+}
 NVSDK_NGX_Result shutdown1Hook(ID3D12Device* device) {
-    AcquireSRWLockExclusive(&lifeLock);
-    generation.fetch_add(1);
-    forget_game_features("NVSDK_NGX_D3D12_Shutdown1");
-    const NVSDK_NGX_Result r = shutdown1Original(device);
-    ReleaseSRWLockExclusive(&lifeLock);
-    return r;
+    return shut_down("NVSDK_NGX_D3D12_Shutdown1", [device] { return shutdown1Original(device); });
 }
 // The game's own releases: logged (the first few), and our record of that feature goes.
 NVSDK_NGX_Result releaseHook(NVSDK_NGX_Handle* h) {
@@ -808,7 +843,7 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
         return nullptr;
     const CreateInfo c = create_info();
     auto* f = new Feature;
-    AcquireSRWLockShared(&lifeLock);
+    life_enter();
     f->generation = generation.load();
     NVSDK_NGX_Result r = allocateFn(&f->bag);
     if (ok(r) && f->bag) {
@@ -842,7 +877,7 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
     } else {
         logf("focus dlss: NGX parameters not allocated (0x%08x)", static_cast<unsigned>(r));
     }
-    ReleaseSRWLockShared(&lifeLock);
+    life_leave();
     if (!ok(r) || !f->handle) {
         release(f);
         return nullptr;
@@ -853,7 +888,15 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
 void release(Feature* f) {
     if (!f)
         return;
-    AcquireSRWLockShared(&lifeLock);
+    // Not waited for: the replay probe releases under its focus.lock, and a shutdown holding lifeLock may reach that
+    // lock through the queue hook. Held exclusively means a shutdown is under way, which frees this feature itself.
+    if (lifeDepth == 0 && !TryAcquireSRWLockShared(&lifeLock)) {
+        if (staleLogged.fetch_add(1) < 8)
+            logd("focus dlss: a feature of ours dropped during NGX's shutdown, not released (NGX frees it)");
+        delete f;
+        return;
+    }
+    ++lifeDepth;
     if (f->generation != generation.load()) {  // NGX was shut down since: it freed the handle and the bag itself
         if (staleLogged.fetch_add(1) < 8)
             logd("focus dlss: a feature of ours from before NGX's shutdown is dropped, not released (NGX freed it)");
@@ -861,16 +904,26 @@ void release(Feature* f) {
         logf("focus dlss: NGX faulted releasing a feature of ours (handle %p): caught; the feature is left to NGX",
              static_cast<const void*>(f->handle));
     }
-    ReleaseSRWLockShared(&lifeLock);
+    life_leave();
     delete f;
 }
 
 bool alive(const Feature* f) { return f && f->generation == generation.load(); }
+uint64_t lifetime() { return generation.load(); }
+bool in_lifetime(uint64_t life, const std::function<void()>& run) {
+    const LifeShared hold;
+    if (life != generation.load())
+        return false;
+    run();
+    return true;
+}
 
 void set_eye_live(uint64_t packed) { eyeLiveState.store(packed, std::memory_order_relaxed); }
 void set_eye_live_out(uint64_t packed) { eyeLiveOut.store(packed, std::memory_order_relaxed); }
 
 bool evaluate(ID3D12GraphicsCommandList* list, Feature* f, const Inputs& in) {
+    // held from the generation check to the end of the evaluation: a shutdown in between would free the bag and handle
+    const LifeShared life;
     if (!f || !f->bag || !f->handle || f->generation != generation.load())
         return false;
     Bag* b = f->bag;

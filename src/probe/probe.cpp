@@ -34,6 +34,7 @@ struct Probe {
     void* target = nullptr;
     void* original = nullptr;
     uint8_t* stub = nullptr;
+    bool created = false;  // MinHook holds a hook on `target` (kept on stop: a thread may still be in the stub)
     std::atomic<uint64_t> calls{0};
     std::atomic<void (*)(void*)> observer{nullptr};
 };
@@ -199,6 +200,17 @@ bool verified_build() {
     return true;
 }
 
+// Only our own probes: MinHook is shared with views4, focus DLSS, the DLSS extent fix and the rest, whose hooks stay
+// (MH_ALL_HOOKS / MH_Uninitialize would take theirs down, and free trampolines their threads may be in). Ours are
+// disabled, not removed: a thread may still be inside a stub, which jumps to the trampoline.
+void disable_own_hooks() {
+    for (Probe& p : probes)
+        if (p.created && p.target) {
+            MH_QueueDisableHook(p.target);  // a queued enable must not be applied by another module's MH_ApplyQueued
+            MH_DisableHook(p.target);
+        }
+}
+
 }  // namespace
 
 bool probe_start() {
@@ -217,21 +229,25 @@ bool probe_start() {
     size_t queued = 0;
     for (size_t i = 0; i < kProbeCount; ++i) {
         Probe& p = probes[i];
-        p.target = reinterpret_cast<void*>(base + ace::kProbeTargets[i].rva);
-        p.stub = build_stub(i);
-        const MH_STATUS status = p.stub ? MH_CreateHook(p.target, p.stub, &p.original) : MH_ERROR_MEMORY_ALLOC;
-        if (status != MH_OK) {
-            logf("probe: %s skipped (MinHook %s)", ace::kProbeTargets[i].name, MH_StatusToString(status));
-            p.target = nullptr;
-            continue;
+        if (!p.created) {  // a start after a stop: the hooks made then are enabled again
+            p.target = reinterpret_cast<void*>(base + ace::kProbeTargets[i].rva);
+            if (!p.stub)
+                p.stub = build_stub(i);
+            const MH_STATUS status = p.stub ? MH_CreateHook(p.target, p.stub, &p.original) : MH_ERROR_MEMORY_ALLOC;
+            if (status != MH_OK) {
+                logf("probe: %s skipped (MinHook %s)", ace::kProbeTargets[i].name, MH_StatusToString(status));
+                p.target = nullptr;
+                continue;
+            }
+            set_stub_target(p.stub, p.original);
+            p.created = true;
         }
-        set_stub_target(p.stub, p.original);
         MH_QueueEnableHook(p.target);
         ++queued;
     }
     if (queued == 0 || MH_ApplyQueued() != MH_OK) {
         log_line("probe: no probe could be enabled");
-        MH_Uninitialize();
+        disable_own_hooks();
         return false;
     }
     installed = true;
@@ -243,8 +259,7 @@ bool probe_start() {
 void probe_stop() {
     if (!installed)
         return;
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
+    disable_own_hooks();
     installed = false;
     log_line("probe: removed");
 }

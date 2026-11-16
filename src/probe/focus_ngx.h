@@ -8,6 +8,7 @@
 #include <d3d12.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace simqvfr::focus_ngx {
@@ -85,6 +86,11 @@ void set_eye_live_out(uint64_t packed);
 // False once NGX has been shut down since the feature was made (the game does that on an upscaling change): the
 // feature is dead and must be made again.
 bool alive(const Feature* f);
+// NGX's lifetime now (bumped by every shutdown): a list holding our evaluation recorded in an older one must not run.
+uint64_t lifetime();
+// Runs `run` (a submission of lists holding our evaluations) only while `life` is still NGX's lifetime, a shutdown
+// waiting for it; false, not run, once NGX was shut down since.
+bool in_lifetime(uint64_t life, const std::function<void()>& run);
 
 struct Inputs {
     ID3D12Resource *color = nullptr, *depth = nullptr, *motion = nullptr, *output = nullptr, *exposure = nullptr;

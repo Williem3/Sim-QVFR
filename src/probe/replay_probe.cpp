@@ -382,7 +382,7 @@ int64_t now_ticks() {
 
 // The active stream of `list` on this thread, or null (not recording: no Reset seen, a bundle, inside a replay).
 Stream* stream_of(List* list) {
-    if (inReplay)
+    if (inReplay || !installed.load(std::memory_order_relaxed))  // hooks in, but the start not done (or failed)
         return nullptr;
     if (current.list == list)
         return current.stream && current.stream->active ? current.stream : nullptr;
@@ -814,6 +814,9 @@ struct Replay {
     ComPtr<List> list;
     uint64_t fence = 0;  // done when the fence reaches it
     bool busy = false;
+    // NGX's lifetime (focus_ngx::lifetime) when it recorded our DLSS evaluations; 0: none in it. Not submitted once
+    // the game has shut NGX down since: the features and bags it names are freed.
+    uint64_t ngxLife = 0;
 };
 
 // A view the game created: its resource and view format (RTV or DSV, by CPU handle).
@@ -863,6 +866,7 @@ struct Focus {
     SRWLOCK lock = SRWLOCK_INIT;  // pool, pending, twins, views, clear list
     std::vector<std::unique_ptr<Replay>> pool;
     std::unordered_map<List*, std::vector<Replay*>> pending;  // the game's list -> our replays of it, in order
+    std::atomic<size_t> pendingLists{0};  // pending.size(), read without the lock (the game's Reset skips it when 0)
     std::unordered_map<SIZE_T, ViewInfo> views;  // the game's RTV/DSV CPU handles
     std::unordered_map<ID3D12Resource*, Twin> twins;
     std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
@@ -872,7 +876,9 @@ struct Focus {
     // signature, a 131,072-descriptor range): our descriptors take the top kTileSlots of that range in its heap.
     ComPtr<ID3D12RootSignature> cullRoot;
     ComPtr<ID3D12PipelineState> cullPso;      // copies tiledCulling's constants with the focus fields
-    ID3D12DescriptorHeap* gameHeap = nullptr;  // ACE's shader-visible CBV/SRV/UAV heap
+    // ACE's shader-visible CBV/SRV/UAV heap: held (our lists set it, and the descriptor hooks read its start), the one
+    // before retired on a change
+    ComPtr<ID3D12DescriptorHeap> gameHeap;
     UINT heapSize = 0, increment = 0;
     D3D12_GPU_DESCRIPTOR_HANDLE bindlessBase{};  // root table 18 as ACE's stereo scene lists set it
     UINT baseIndex = 0, slotFirst = 0;            // absolute heap indices
@@ -1885,6 +1891,8 @@ void retire_feature(focus_ngx::Feature*& feature) {
 }
 // Under focus.lock: releases what the GPU is done with.
 void prune_retired() {
+    if (!focus.fence)  // not made (focus_compile failed): nothing was retired against it
+        return;
     const uint64_t done = focus.fence->GetCompletedValue(), frame = focus.frame.load();
     for (Focus::Retired& r : focus.retired)
         if (!r.fence && frame >= r.frame + 4)
@@ -2360,10 +2368,13 @@ void gpu_stamp(List* l, uint8_t kind) {
 }
 
 Replay* acquire_replay() {
+    if (!focus.fence)
+        return nullptr;
     const uint64_t done = focus.fence->GetCompletedValue();
     for (auto& r : focus.pool)
         if (!r->busy && r->fence <= done) {
             r->busy = true;
+            r->ngxLife = 0;
             return r.get();
         }
     if (focus.pool.size() >= 96) {
@@ -2389,6 +2400,23 @@ Replay* acquire_replay() {
     r->busy = true;
     focus.pool.push_back(std::move(r));
     return focus.pool.back().get();
+}
+
+// Under focus.lock: our replay `r` of the game's list, run with it at its execution.
+void add_pending(List* gameList, Replay* r) {
+    focus.pending[gameList].push_back(r);
+    focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
+}
+// Under focus.lock: the game's list was Reset without being executed since its Close: our replays of it never run
+// (they would hold pool entries for good, and a later execution of the list would run them stale).
+void drop_pending(List* gameList) {
+    const auto it = focus.pending.find(gameList);
+    if (it == focus.pending.end())
+        return;
+    for (Replay* r : it->second)
+        r->busy = false;  // never submitted: its fence is from its last run (the allocator is reset at its next use)
+    focus.pending.erase(it);
+    focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
 }
 
 // The box's half extent in NDC y (x's unless a crop or a focus height of its own makes it differ).
@@ -2710,7 +2738,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     if (draws < 0)
         r->busy = false;  // recorded but never executed: the allocator is reset at its next use
     else
-        focus.pending[gameList].push_back(r);
+        add_pending(gameList, r);
     ReleaseSRWLockExclusive(&focus.lock);
     if (timed)  // (mostly the wait for focus.lock again)
         recordTiming.after.fetch_add(static_cast<uint64_t>(now_ticks() - tClosed), std::memory_order_relaxed);
@@ -2794,10 +2822,11 @@ D3D12_RESOURCE_STATES rest_of(ID3D12Resource* r, D3D12_RESOURCE_STATES otherwise
 const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
     if (focus.tilesBroken || !focus.bindlessBase.ptr || !frustums.heap)
         return nullptr;
-    if (focus.gameHeap != frustums.heap) {
+    if (focus.gameHeap.Get() != frustums.heap) {
         const D3D12_DESCRIPTOR_HEAP_DESC d = frustums.heap->GetDesc();
         if (d.Type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !(d.Flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE))
             return nullptr;
+        retire(focus.gameHeap.Get());  // our lists recorded with it may still be ahead on the GPU
         focus.gameHeap = frustums.heap;
         focus.heapSize = d.NumDescriptors;
         focus.increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -2925,7 +2954,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
         logd("replay focus: tiles: not replayed (prepared %d, ready %d, broken %d, bindless base %d, the list's heap %d (ours %d), "
              "depth twin %s, the game's tile count %.0fx%.0f, its lists at %u %u %u %u, our lists %ux%u)",
              twin ? 1 : 0, focus.tilesReady ? 1 : 0, focus.tilesBroken ? 1 : 0, focus.bindlessBase.ptr ? 1 : 0,
-             fr[0]->heap ? 1 : 0, fr[0]->heap == focus.gameHeap ? 1 : 0, d ? d->name.c_str() : "none", tileCount[0],
+             fr[0]->heap ? 1 : 0, fr[0]->heap == focus.gameHeap.Get() ? 1 : 0, d ? d->name.c_str() : "none", tileCount[0],
              tileCount[1], focus.gameTile[0], focus.gameTile[1], focus.gameTile[2], focus.gameTile[3], focus.tilesX,
              focus.tilesY);
     }
@@ -2945,7 +2974,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepTiles);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     if (fromShaderResource)
@@ -3028,7 +3057,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
     if (ok)
-        focus.pending[gameList].push_back(r);
+        add_pending(gameList, r);
     else
         r->busy = false;
     ReleaseSRWLockExclusive(&focus.lock);
@@ -3109,7 +3138,7 @@ std::vector<SkyPatch> focus_sky_prepare(const Stream& s) {
 void focus_sky_record(List* l, const std::vector<SkyPatch>& patches, const float (&centre)[2]) {
     if (patches.empty())
         return;
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     const float box = static_cast<float>(focus.settings.boxFraction), boxY = focus_box_y();
     const uint32_t boxYBits = float_bits(boxY);
@@ -3286,7 +3315,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
         rr->allocator->Reset();
         List* l = rr->list.Get();
         l->Reset(rr->allocator.Get(), nullptr);
-        ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+        ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
         l->SetDescriptorHeaps(1, heaps);
         l->SetComputeRootSignature(focus.atmoRoot.Get());
         l->SetPipelineState(focus.atmoPso[1].Get());
@@ -3314,7 +3343,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
         l->Close();
         inReplay = false;
         AcquireSRWLockExclusive(&focus.lock);
-        focus.pending[gameList].push_back(rr);
+        add_pending(gameList, rr);
         focus.fogReady = true;
         ReleaseSRWLockExclusive(&focus.lock);
         focus.fogReplays.fetch_add(1, std::memory_order_relaxed);
@@ -3343,7 +3372,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepFog);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     for (size_t e = 0; e < eyes; ++e) {
         const Stream::TileDispatch& in = *inj[e];
@@ -3408,7 +3437,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     if (!focus.fogReady)
         logd("replay focus: fog: the first focus fog replay recorded; the lighting reads it from the next frame");
     focus.fogReady = true;  // the next scene replays name our grid (executed after this one: same queue, later batch)
@@ -3501,7 +3530,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepShadow);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     // 1. The constants: normals', then each eye's shadow.
     const D3D12_GPU_VIRTUAL_ADDRESS base = focus.shadowConstants->GetGPUVirtualAddress();
@@ -3569,7 +3598,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     if (!focus.shadowReady)
         logd("replay focus: shadow: the first focus deferred-shadow replay recorded");
     focus.shadowReady = true;
@@ -3652,7 +3681,7 @@ void focus_oit_record(List* gameList, const Stream& s) {
     if (draws < 0)
         r->busy = false;
     else
-        focus.pending[gameList].push_back(r);
+        add_pending(gameList, r);
     ReleaseSRWLockExclusive(&focus.lock);
     if (draws >= 0)
         focus.oitReplays.fetch_add(1, std::memory_order_relaxed);
@@ -3894,7 +3923,7 @@ void focus_atmo_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepAtmo);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     const bool replayed = replayMaps && focus_atmo_replay(l, s, centre);
     l->SetComputeRootSignature(focus.atmoRoot.Get());
@@ -3924,7 +3953,7 @@ void focus_atmo_record(List* gameList, const Stream& s) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     if (!focus.atmoReady)
         logd("replay focus: atmosphere: first resample recorded (eye centres %.4f,%.4f and %.4f,%.4f)", centre[0][0],
              centre[0][1], centre[1][0], centre[1][1]);
@@ -4035,7 +4064,7 @@ void focus_blur_record(List* gameList) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepBlur);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     if (colour == focus.resolvedColour.Get())
         resolve_focus_colour(l);
@@ -4079,7 +4108,7 @@ void focus_blur_record(List* gameList) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     focus.blurReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.blurReplays.fetch_add(1, std::memory_order_relaxed);
@@ -4200,7 +4229,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepResolve);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     barrier(l, msDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -4228,7 +4257,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     if (!focus.resolveReady)
         logd("replay focus: msaa: the first focus depth / velocity resolve recorded");
     focus.resolveReady = true;
@@ -4425,7 +4454,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
             focus.dlssBroken = true;
             return false;
         }
-        ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};  // NGX may set its own heaps
+        ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};  // NGX may set its own heaps
         l->SetDescriptorHeaps(1, heaps);
     }
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -4520,7 +4549,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         }
         focus.ngxUsed[e] = game[e].sequence;
     }
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};  // NGX sets its own heaps
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};  // NGX sets its own heaps
     l->SetDescriptorHeaps(1, heaps);
     barrier(l, focus.dlssOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     if (autoPair)
@@ -4961,7 +4990,7 @@ void focus_post_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepPostVeil);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     // 0. MSAA: our multisampled colour twin resolved into our single-sample colour (as ACE resolves msaaColor into
     // upscaling before its DLSS).
@@ -4995,6 +5024,8 @@ void focus_post_record(List* gameList, const Stream& s) {
     }
     // 1b. P2a: our DLSS per focus eye (ACE's packing replayed for our motion vectors), read by the tonemap below.
     gpu_stamp(l, kStepPostDlss);
+    // NGX's lifetime before our evaluations are recorded: a shutdown after this makes the stamp stale, never the reverse
+    const uint64_t ngxLife = focus_ngx::lifetime();
     const bool dlssUsed = focus.settings.dlss && focus_dlss_record(l, s, colour, fw2, fh, ow2, oh, centre);
     // 1c. P2c: MSAA without DLSS: ACE's own antialiasing replayed (our colour twin multisampled, ACE's pass present)
     const bool aaUsed = !dlssUsed && colour == focus.resolvedColour.Get() && focus_aa_record(l, s, fw2, fh, centre);
@@ -5068,8 +5099,9 @@ void focus_post_record(List* gameList, const Stream& s) {
     barrier(l, focus.postConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->Close();
     inReplay = false;
+    r->ngxLife = focus.settings.dlss ? ngxLife : 0;  // (not dlssUsed: a refused second eye leaves the first's in the list)
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     if (!focus.postReady)
         logd("replay focus: post: the first focus post replay recorded (bloom, tonemap, fxaa)");
     focus.postReady = true;
@@ -5795,7 +5827,7 @@ void focus_cull_record(List* gameList, const Stream& s) {
     Replay* r = nullptr;
     float centre[2][2];
     AcquireSRWLockExclusive(&focus.lock);
-    const bool base = focus.gameHeap && focus.slotFirst && focus.gameHeap == finalize->heap && !cull.broken && focus.centresKnown;
+    const bool base = focus.gameHeap && focus.slotFirst && focus.gameHeap.Get() == finalize->heap && !cull.broken && focus.centresKnown;
     if (base) {
         const UINT64 countsBytes = countsCopy->dst->GetDesc().Width, commandsBytes = commandsCopy->dst->GetDesc().Width;
         if (!cull.instances || cull.instancesBytes != gameBytes || cull.countsBytes != countsBytes ||
@@ -5865,7 +5897,7 @@ void focus_cull_record(List* gameList, const Stream& s) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     gpu_stamp(l, kStepCull);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
     l->SetDescriptorHeaps(1, heaps);
     barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
     barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -5908,7 +5940,7 @@ void focus_cull_record(List* gameList, const Stream& s) {
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
-    focus.pending[gameList].push_back(r);
+    add_pending(gameList, r);
     ReleaseSRWLockExclusive(&focus.lock);
     cull.readyFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
     cull.culls.fetch_add(1, std::memory_order_relaxed);
@@ -6256,6 +6288,8 @@ void eye_apply(List* l, Stream* s) {
 // Under focus.lock: a list of ours for the copies (the pool grows as needed: a list that redirected its constants
 // must get them).
 Replay* eye_acquire() {
+    if (!focus.fence)
+        return nullptr;
     const uint64_t done = focus.fence->GetCompletedValue();
     for (auto& r : eyeLive.pool)
         if (!r->busy && r->fence <= done) {
@@ -6401,6 +6435,7 @@ void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* 
             focus.pending.erase(it);
         }
     }
+    focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
     if (!mine.empty()) {
         const uint64_t frame = focus.frame.load();
         if (focus.clearedFrame.load() != frame && focus.ready) {
@@ -6416,22 +6451,60 @@ void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* 
     ReleaseSRWLockExclusive(&focus.lock);
     if (mine.empty())
         return;
-    std::vector<ID3D12CommandList*> ours;
-    for (Replay* r : mine)
-        ours.push_back(r->list.Get());
-    executeOriginal(queue, static_cast<UINT>(ours.size()), ours.data());
-    const uint64_t value = focus.fenceValue.fetch_add(1) + 1;
-    queue->Signal(focus.fence.Get(), value);
+    // Our DLSS evaluations recorded before the game's last NGX shutdown name freed features: those replays are dropped
+    // (the game's lists above ran as they were). The submission holds NGX's lifetime, so no shutdown slips in between.
+    const uint64_t life = focus_ngx::lifetime();
+    std::vector<Replay*> dropped;
+    const auto split = [&](uint64_t now) {
+        std::erase_if(mine, [&](Replay* r) {
+            const bool stale = r->ngxLife && r->ngxLife != now;
+            if (stale)
+                dropped.push_back(r);
+            return stale;
+        });
+    };
+    split(life);
+    const auto submit = [&] {
+        std::vector<ID3D12CommandList*> ours;
+        for (Replay* r : mine)
+            ours.push_back(r->list.Get());
+        if (!ours.empty())
+            executeOriginal(queue, static_cast<UINT>(ours.size()), ours.data());
+    };
+    const bool holdsNgx = std::any_of(mine.begin(), mine.end(), [](const Replay* r) { return r->ngxLife != 0; });
+    if (!holdsNgx) {
+        submit();
+    } else if (!focus_ngx::in_lifetime(life, submit)) {
+        split(UINT64_MAX);  // shut down just now: every stamped one goes, the rest run
+        submit();
+    }
+    uint64_t value = 0;
+    if (!mine.empty()) {
+        value = focus.fenceValue.fetch_add(1) + 1;
+        queue->Signal(focus.fence.Get(), value);
+    }
     AcquireSRWLockExclusive(&focus.lock);
     for (Replay* r : mine) {
         r->fence = value;
         r->busy = false;
     }
+    for (Replay* r : dropped)
+        r->busy = false;  // never submitted: the fence of its last run stands
     ReleaseSRWLockExclusive(&focus.lock);
+    if (!dropped.empty()) {
+        static std::atomic<int> droppedLogged{0};
+        if (droppedLogged.fetch_add(1) < 4)
+            logf("replay focus: %zu replay(s) with our DLSS evaluations from before the game's NGX shutdown not submitted",
+                 dropped.size());
+    }
     focusReplays.fetch_add(mine.size(), std::memory_order_relaxed);
 }
 
 void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists) {
+    if (!installed.load(std::memory_order_relaxed)) {  // the start not done (or failed): focus.fence may not exist
+        executeOriginal(queue, n, lists);
+        return;
+    }
     const bool stamped = gpuSteps.on && probeMode == 3 && queue == focus.queue.Get() &&
                          gpuSteps.frame.load(std::memory_order_relaxed) == focus.frame.load(std::memory_order_relaxed);
     execute_batch(queue, n, lists, stamped);
@@ -6464,8 +6537,20 @@ void STDMETHODCALLTYPE rtvHook(ID3D12Device* d, ID3D12Resource* resource, const 
 
 HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso) {
     const HRESULT hr = resetOriginal(list, allocator, pso);
-    if (inReplay || FAILED(hr) || list->GetType() == D3D12_COMMAND_LIST_TYPE_BUNDLE)
+    if (inReplay || FAILED(hr) || !installed.load(std::memory_order_relaxed) ||
+        list->GetType() == D3D12_COMMAND_LIST_TYPE_BUNDLE)
         return hr;
+    // Closed and Reset again without an execution (or executed on another queue): what we recorded for it never runs.
+    // (an eye copy list left in eyeLive.before goes here too, or at the list's next Close in eye_record)
+    if (probeMode == 3 && focus.pendingLists.load(std::memory_order_relaxed)) {
+        AcquireSRWLockExclusive(&focus.lock);
+        drop_pending(list);
+        if (const auto it = eyeLive.before.find(list); it != eyeLive.before.end()) {
+            it->second->busy = false;  // as eye_record frees one closed again without having run
+            eyeLive.before.erase(it);
+        }
+        ReleaseSRWLockExclusive(&focus.lock);
+    }
     Stream* s = nullptr;
     AcquireSRWLockExclusive(&streamsLock);
     auto& slot = streams[list];
@@ -7397,6 +7482,8 @@ void calibrate() {
 
 namespace {
 bool skyHooksEarly = false;
+// The vtables were patched by a start that then failed: patched again, the originals saved would be our own hooks.
+bool startPatched = false;
 }
 
 void replay_probe_early_sky() {
@@ -7428,6 +7515,10 @@ void replay_probe_early_sky() {
 bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, const ReplayFocusSettings& settings) {
     if (installed || !d)
         return installed;
+    if (startPatched) {
+        log_line("replay probe: an earlier start failed with its hooks in (passing through); not started again");
+        return false;
+    }
     if (mode == 3 && !queue) {
         log_line("replay probe: mode 3 needs the game's queue");
         return false;
@@ -7446,14 +7537,17 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
     calibrate();
     if (mode == 3)
         focus.settings = settings;  // before any hook reads it
-        focus.renderScale = settings.dlss ? std::clamp(settings.dlssScale, 0.4, 1.0) : 1.0;
-        focus.outK = settings.boxFraction * settings.pixelScale;
-        focus.outKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
-                      (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale);
-        focus.sizeK = settings.boxFraction * settings.pixelScale * focus.renderScale;
-        focus.sizeKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
-                       (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale) * focus.renderScale;
+    focus.renderScale = settings.dlss ? std::clamp(settings.dlssScale, 0.4, 1.0) : 1.0;
+    focus.outK = settings.boxFraction * settings.pixelScale;
+    focus.outKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
+                  (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale);
+    focus.sizeK = settings.boxFraction * settings.pixelScale * focus.renderScale;
+    focus.sizeKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
+                   (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale) * focus.renderScale;
     void** vtable = *reinterpret_cast<void***>(list.Get());
+    // The hooks pass straight through until `installed` is set at the end (focus.fence and the rest exist then); on a
+    // failure they stay in, passing through.
+    startPatched = true;
     bool ok =
         hook(vtable, simqvfr_slot_Reset(), &resetHook, &resetOriginal) &&
         hook(vtable, simqvfr_slot_Close(), &closeHook, &closeOriginal) &&
