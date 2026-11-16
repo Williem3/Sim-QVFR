@@ -131,7 +131,6 @@ bool qvfr_wanted(const wchar_t* ini) {
 // view heights in eye columns. False: some part isn't this build's (logged); X-Plane may then render oddly, so the
 // layer stays off and the headset shows what X-Plane submits. `fourLayers`: a four-layer patch went in.
 bool apply_qvfr(const wchar_t* ini, bool& fourLayers) {
-    four_views_set_eye_columns(true);
     // Stage 1 of per-view sizes: one viewport per view, every rect the whole layer (the image must not change).
     four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1);
     four_views_set_focus_full_rate(GetPrivateProfileIntW(L"experiment", L"xplane_focus_full_rate", 1, ini) == 1);
@@ -149,8 +148,15 @@ bool apply_qvfr(const wchar_t* ini, bool& fourLayers) {
     const bool layers = apply_layer_count(ini, 4);
     const bool context = apply_context_layers(ini, 4);
     fourLayers = layers || context;
-    bool ok = four_views_copies_start() && layers && context;
-    ok = ok && four_views_eye_columns_start();
+    // The draw path only on four layers, and taken out again if the eye columns fail: a half-patched QVFR would show
+    // the focus views (layers 2-3) as the whole image.
+    bool ok = layers && context && four_views_copies_start();
+    if (ok && !four_views_eye_columns_start()) {
+        four_views_copies_undo();
+        ok = false;
+    }
+    // Before X-Plane makes its shaders: the final resolve's edit takes it.
+    four_views_set_eye_columns(ok);
     const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
     const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
     four_views_set_focus(true, fraction, fraction);
@@ -287,10 +293,12 @@ public:
     // At xrCreateInstance: X-Plane builds its render graph later, when the flight loads.
     void instance_created(const wchar_t* ini, const wchar_t*) override {
         if (patched_) {
-            simqvfr::logf("xplane: already patched at early load");
+            simqvfr::logf("xplane: already patched (at the early load or an earlier instance)");
             return;
         }
         simqvfr::logf("xplane: layer loaded at xrCreateInstance (not early): shaders X-Plane made at startup are not edited");
+        // Once per process: a later instance would find the sites patched (anchors gone) and lose the first result.
+        patched_ = true;
         fourViews_ = apply_all(ini);
     }
 

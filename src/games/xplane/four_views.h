@@ -7,9 +7,11 @@
 
 namespace xplane {
 
-// At xrCreateInstance, after the layer counts are 4 (adapter.cpp). False: nothing was changed (a site isn't this
-// build's), or some patches failed (logged).
+// At xrCreateInstance, after the layer counts are 4 (adapter.cpp). All or none: false means nothing is left changed
+// (a site isn't this build's, or a write failed and the sites written were put back; logged).
 bool four_views_copies_start();
+// Takes four_views_copies_start's edits out again (a later QVFR step failed), before X-Plane runs them.
+void four_views_copies_undo();
 
 // The focus stage: views 2-3 render the focus boxes (their projections narrowed to `fraction` x `fractionY` of each
 // eye's tangent span, centred on the gaze, or on its forward direction) instead of copies of the eyes. Any time: it
@@ -71,8 +73,8 @@ void four_views_set_object_detail(int percent);
 // The focus views shaded at the full rate (VRS writes rate 1x1 into layers 2-3). Before X-Plane makes its shaders.
 void four_views_set_focus_full_rate(bool on);
 int four_views_view_rect_sets();
-// The views' height = half the stereo image's (five sites; abi.h). After four_views_copies_start. False: not this
-// build's code, or a patch failed (logged).
+// The views' height = half the stereo image's (five sites and the final resolve's viewport; abi.h). After
+// four_views_copies_start. All or none: false means nothing is left changed (logged).
 bool four_views_eye_columns_start();
 // How many viewports the eye-columns patch gave the whole column (the final resolve's, one a frame).
 int four_views_column_viewports();

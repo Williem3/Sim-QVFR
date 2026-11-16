@@ -1009,6 +1009,18 @@ int SIM_QVFR_TEST_MAIN() {
         }
     }
 
+    // A module with a push constant block of its own gets no second one (one per entry point).
+    {
+        std::vector<std::uint32_t> plain = module(false);
+        check(!xplane::spirv_has_push_constants(plain), "push constants: none in a module without them");
+        std::vector<std::uint32_t> pushed = plain;
+        put(pushed, 32, {9, 9, 2});  // %9 = OpTypePointer PushConstant %2
+        put(pushed, 59, {9, 10, 9});  // %10 = OpVariable %9 PushConstant
+        pushed[3] = 11;
+        check(xplane::spirv_has_push_constants(pushed), "push constants: a module's own block is seen");
+        check(xplane::spirv_has_push_constants({1, 2, 3}), "push constants: unreadable words count as taken");
+    }
+
     if (const char* in = std::getenv("SIM_QVFR_SPV_IN")) {
         std::ifstream file(in, std::ios::binary);
         std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

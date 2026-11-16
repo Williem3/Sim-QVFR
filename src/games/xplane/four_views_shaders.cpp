@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -157,15 +158,28 @@ bool final_resolve(const ShaderModuleCreateInfo* info) {
 
 }  // namespace
 
-namespace fv {
+namespace {
 
-// X-Plane's vkCreateShaderModule call lands here (kShaderModuleLoad). The final resolve's fragment shader gets
-// v_eye + 2 (it then shows layers 2-3); every other module goes through as it is.
-std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
-                                  std::uint64_t* module) {
-    const auto real = *reinterpret_cast<CreateShaderModule*>(simqvfr::module_base() + kVkCreateShaderModuleSlot);
+std::atomic<int> g_ownPushModules{0};  // modules with push constants of their own: edited without the focus block
+std::atomic<int> g_rejectedModules{0}, g_failedEdits{0};
+
+// Every edit a module gets, into `words` (true: edited). The final resolve's fragment shader gets v_eye + 2 (it then
+// shows layers 2-3) or the eye columns' edit, `resolve` then saying how; other modules the per-view edits below.
+bool edit_module(const ShaderModuleCreateInfo* info, std::vector<std::uint32_t>& words, std::string& resolve) {
+    if (!info || !info->pCode || info->codeSize < 20)
+        return false;
+    words.assign(info->pCode, info->pCode + info->codeSize / 4);
+    // One push constant block per entry point: a module with its own gets the baked edits, without ours.
+    const bool ownPush = spirv_has_push_constants(words);
+    if (ownPush && g_focusPush.load()) {
+        const int n = ++g_ownPushModules;
+        if (sampled(n))
+            logf("xplane: shader module (%zu bytes) has push constants of its own: edits baked (launch size, eye's "
+                 "axis), module %d",
+                 info->codeSize, n);
+    }
+    const bool push = g_focusPush.load() && !ownPush;
     if (final_resolve(info)) {
-        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
         std::string why;
         const bool columns = g_eyeColumns.load();
         if (columns ? spirv_eye_columns_resolve(words, &why) : spirv_add_to_input(words, "v_eye", 2, &why)) {
@@ -173,27 +187,22 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             // rect, so it fills its part of the column (the composition reads whole parts).
             int rectSamples = 0;
             std::string rectWhy;
-            if (columns && g_focusPush.load() && g_viewRects.load())
+            const bool rects = columns && push && g_viewRects.load();
+            if (rects)
                 rectSamples = spirv_sample_view_rects(words, &rectWhy);
-            ShaderModuleCreateInfo edited = *info;
-            edited.codeSize = words.size() * 4;
-            edited.pCode = words.data();
-            const std::int32_t result = real(device, &edited, allocator, module);
-            logf("xplane: final resolve shader (%zu bytes) edited (%s; view rects: %s), vkCreateShaderModule %d, edit %d",
-                 info->codeSize, columns ? "eye columns: each eye's view over its focus view" : "v_eye + 2: layers 2-3",
-                 rectSamples > 0 ? (std::to_string(rectSamples) + " samples from each view's rect").c_str()
-                                 : (columns && g_focusPush.load() && g_viewRects.load() ? ("NOT: " + rectWhy).c_str()
-                                                                                        : "off"),
-                 result, ++g_finalResolveEdits);
-            return result;
+            resolve = std::string(columns ? "eye columns: each eye's view over its focus view" : "v_eye + 2: layers 2-3") +
+                      "; view rects: " +
+                      (rectSamples > 0 ? std::to_string(rectSamples) + " samples from each view's rect"
+                                       : rects ? "NOT: " + rectWhy : std::string("off"));
+            return true;
         }
         logf("xplane: final resolve shader NOT edited: %s", why.c_str());
-    } else if (info && info->pCode && info->codeSize >= 20) {
+        words.assign(info->pCode, info->pCode + info->codeSize / 4);
+    } else {
         save_resolve_family(info);
     }
     // Every shader reading X-Plane's per-eye arrays: views 2-3 read their eye's entry (index & 1).
-    if (info && info->pCode && info->codeSize >= 20) {
-        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
+    {
         // The light billboards' size: projected and un-projected with the eye's pair (docs/recon-xplane.md, "Measured:
         // focus views darker"), so a light covers the same angle in a focus view as in its eye. The fold then takes the
         // inverse's index & 1.
@@ -220,7 +229,6 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         // The focus box's size and centre: this frame's, from the push constants, in every edit that places the box
         // (docs/recon-xplane.md "Live focus size"). Without them (the pipeline calls not wrapped), the size wanted now
         // is baked in, the box on the eye's axis.
-        const bool push = g_focusPush.load();
         const float bakedFx = static_cast<float>(g_focusFraction.load()), bakedFy = static_cast<float>(g_focusFractionY.load());
         // The projection coefficients (view rays from screen positions): the focus views' own, from their eye's and
         // the focus box (docs/recon-xplane.md "Measured: the sky and positions in the focus views").
@@ -402,14 +410,65 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
                          viewportSize, n);
             }
         }
-        if (inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0 ||
-            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 || splitOff > 0 || histogram > 0 ||
-            ssrRects > 0 || diag > 0 || viewportSize > 0 || hizRects > 0) {
-            ShaderModuleCreateInfo edited = *info;
-            edited.codeSize = words.size() * 4;
-            edited.pCode = words.data();
-            return real(device, &edited, allocator, module);
-        }
+        return inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 ||
+               coefficients > 0 || ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 ||
+               splitOff > 0 || histogram > 0 || ssrRects > 0 || diag > 0 || viewportSize > 0 || hizRects > 0;
+    }
+}
+
+// A module the driver refused once edited: logged once per shader (its size and hash).
+void note_rejected(const ShaderModuleCreateInfo* info, std::int32_t result) {
+    const std::string sha = sha256_hex(info->pCode, info->codeSize);
+    static std::mutex mutex;
+    static std::set<std::string> seen;
+    {
+        std::lock_guard guard(mutex);
+        if (!seen.insert(sha).second)
+            return;
+    }
+    logf("xplane: the driver refused an edited shader module (%zu bytes, sha256 %s): vkCreateShaderModule %d; made "
+         "from X-Plane's original instead (%d so far)",
+         info->codeSize, sha.c_str(), result, ++g_rejectedModules);
+}
+
+}  // namespace
+
+namespace fv {
+
+// X-Plane's vkCreateShaderModule call lands here (kShaderModuleLoad): the module edited (edit_module), or as it is
+// when an edit throws or the driver refuses the edited code. No exception reaches X-Plane's C code.
+std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
+                                  std::uint64_t* module) {
+    const auto real = *reinterpret_cast<CreateShaderModule*>(simqvfr::module_base() + kVkCreateShaderModuleSlot);
+    std::vector<std::uint32_t> words;
+    std::string resolve;
+    bool edited = false;
+    try {
+        edited = edit_module(info, words, resolve);
+    } catch (const std::exception& e) {  // bad_alloc included
+        edited = false;
+        if (++g_failedEdits <= 3)
+            logf("xplane: a shader module's edit failed (%s): made as it is", e.what());
+    } catch (...) {
+        edited = false;
+        if (++g_failedEdits <= 3)
+            logf("xplane: a shader module's edit failed (unknown exception): made as it is");
+    }
+    if (!edited)
+        return real(device, info, allocator, module);
+    ShaderModuleCreateInfo changed = *info;
+    changed.codeSize = words.size() * 4;
+    changed.pCode = words.data();
+    const std::int32_t result = real(device, &changed, allocator, module);
+    if (result == 0) {
+        if (!resolve.empty())
+            logf("xplane: final resolve shader (%zu bytes) edited (%s), edit %d", info->codeSize, resolve.c_str(),
+                 ++g_finalResolveEdits);
+        return result;
+    }
+    try {
+        note_rejected(info, result);
+    } catch (...) {
     }
     return real(device, info, allocator, module);
 }
