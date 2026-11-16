@@ -529,10 +529,12 @@ void cpu_placement_report(const std::vector<ThreadLoad>& busiest) {
         ULONG sets = 0;
         const BOOL noSets = GetThreadSelectedCpuSets(h, nullptr, 0, &sets);
         CloseHandle(h);
+        // The ideal processor's kind only says something where there is more than one.
+        const std::string where = kinds > 1 ? " ideal " + (known ? kind_of_processor(ideal) : std::string("?")) + "," : "";
         char item[256];
-        std::snprintf(item, sizeof(item), "%s%ls%s%u %.0f%% ideal %s, priority %d%s", threads.empty() ? "" : "; ",
-                      t.name.c_str(), t.name.empty() ? "" : " ", t.id, t.percent,
-                      known ? kind_of_processor(ideal).c_str() : "?", priority, noSets || !sets ? "" : ", own CPU sets");
+        std::snprintf(item, sizeof(item), "%s%ls%s%u %.0f%%%s priority %d%s", threads.empty() ? "" : "; ", t.name.c_str(),
+                      t.name.empty() ? "" : " ", t.id, t.percent, where.c_str(), priority,
+                      noSets || !sets ? "" : ", own CPU sets");
         threads += item;
         ++listed;
     }
