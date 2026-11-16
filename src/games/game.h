@@ -81,6 +81,11 @@ struct GameInfo {
     } defaults = {};
 };
 
+// The game's id as the ini and the launcher's maps hold it (ids are ASCII: widened char by char).
+inline std::wstring wide_id(const GameInfo& game) {
+    return std::wstring(game.id, game.id + std::char_traits<char>::length(game.id));
+}
+
 // [launcher] anticheat=1 in the ini (the launcher's Games pane): the user runs Sim-QVFR with the game's anti-cheat.
 bool anticheat_chosen(const wchar_t* ini);
 

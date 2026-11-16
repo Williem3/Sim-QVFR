@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include "../../log.h"
+#include "../../quad/qvfr_settings.h"
 #include "batch_watch.h"
 #include "dlss_extent.h"
 #include "double_render.h"
@@ -71,7 +72,7 @@ public:
         views3_ = _wcsicmp(mode, L"views3") == 0;
         doubleRender_ = _wcsicmp(mode, L"double_render") == 0;
         // (a hook in ACE's code, for the batch limit 4views' extra views could pass: 4views only by default)
-        batchWatch_ = GetPrivateProfileIntW(L"experiment", L"batch_watch", _wcsicmp(mode, L"views4") == 0 ? 1 : 0, ini) != 0;
+        batchWatch_ = GetPrivateProfileIntW(L"experiment", L"batch_watch", simqvfr::parse_render_mode(mode) == simqvfr::IniRenderMode::Qvfr ? 1 : 0, ini) != 0;
         if (views3_)  // before ACE creates its renderer, so renderer init sees the patched mode
             simqvfr::views3_patch();
     }

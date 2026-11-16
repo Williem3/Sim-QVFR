@@ -37,19 +37,13 @@
 #include "launcher/update_check.h"
 #include "profile/profiles.h"
 #include "sha256_file.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 using namespace simqvfr::launcher;
 namespace fs = std::filesystem;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 fs::path folder;
 
@@ -300,9 +294,7 @@ void launch_status_checks() {
 // prune_logs never touches what it can't be sure is Sim-QVFR's own: other names, other content, links, a run folder's
 // unknown contents, a linked logs folder. 40 of each kind, so every kind is over its limit.
 void log_retention_strict_checks() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const fs::path root = fs::path(temp) / L"simqvfr-log-retention-strict", logs = root / L"logs";
+    const fs::path root = temp_path(L"simqvfr-log-retention-strict"), logs = root / L"logs";
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(logs);
@@ -379,9 +371,7 @@ void log_retention_strict_checks() {
 // The logs folder's retention (launcher/log_retention.h): the newest of each kind kept, the rest removed, the
 // registration ledgers and the diagnostics' output never touched.
 void log_retention_checks() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const fs::path logs = fs::path(temp) / L"simqvfr-log-retention-test";
+    const fs::path logs = temp_path(L"simqvfr-log-retention-test");
     std::error_code ec;
     fs::remove_all(logs, ec);
     fs::create_directories(logs);
@@ -465,9 +455,7 @@ void log_retention_checks() {
 
 // The session history (launcher/session_history.h): records kept per session, pruned, compared.
 void session_history_checks() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const fs::path dir = fs::path(temp) / L"simqvfr-session-history-test";
+    const fs::path dir = temp_path(L"simqvfr-session-history-test");
     std::error_code ec;
     fs::remove_all(dir, ec);
     check(session_id(L"C:\\q\\logs\\session-20261107-101500.log") == L"session-20261107-101500" && session_id(L"C:\\q\\ace.log").empty() &&
@@ -637,18 +625,12 @@ void per_game_settings_checks() {
     WritePrivateProfileStringW(L"launcher", L"game", L"ace", ini.c_str());
     WritePrivateProfileStringW(L"menu", L"yaw", L"7", ini.c_str());
     set_current_profile(ini.c_str(), L"Balanced");
-    const std::string untouched = [&] {
-        std::ifstream in(ini, std::ios::binary);
-        return std::string(std::istreambuf_iterator<char>(in), {});
-    }();
+    const std::string untouched = read_text(ini);
 
     std::size_t count = 0;
     games::all_games(count);
     check(seed_game_settings(ini) == static_cast<int>(count), "per-game: the first start after the update makes a copy for every game");
-    const std::string afterSeed = [&] {
-        std::ifstream in(ini, std::ios::binary);
-        return std::string(std::istreambuf_iterator<char>(in), {});
-    }();
+    const std::string afterSeed = read_text(ini);
     check(afterSeed == untouched, "per-game: seeding leaves the ini as it was (nothing changes for the user)");
     bool replicated = true;
     for (const wchar_t* id : {L"ace", L"acc", L"xplane"}) {
@@ -820,13 +802,9 @@ void settings_round_trip_checks() {
     const auto keysA = ini_keys(a);
     check(save_settings(b, load_settings(a)) && ini_keys(b) == keysA,
           "round trip: loaded and saved again, every key comes back with the same value");
-    const auto bytes = [](const std::wstring& path) {
-        std::ifstream in(path, std::ios::binary);
-        return std::string(std::istreambuf_iterator<char>(in), {});
-    };
-    const std::string before = bytes(a);
+    const std::string before = read_text(a);
     save_settings(a, load_settings(a));
-    check(bytes(a) == before, "round trip: saving what was loaded leaves the file byte for byte as it was");
+    check(read_text(a) == before, "round trip: saving what was loaded leaves the file byte for byte as it was");
     bool spotted = keysA.at(L"quad/gaze") == L"0" && keysA.at(L"experiment/focus_density") == L"155" &&
                    keysA.at(L"helmet/visor") == L"half" && keysA.at(L"cheeky/fg_release") == L"3" &&
                    keysA.at(L"dlss_nr/max_gain") == L"200" && keysA.at(L"launcher/color_ace") == L"123456";
@@ -858,9 +836,7 @@ void settings_round_trip_checks() {
 // What older versions left in their log folders (launcher/leftovers.h): only the copies of a game's program, by name,
 // content, place and kind; nothing else, whatever it is called.
 void leftovers_checks() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const fs::path root = fs::path(temp) / L"simqvfr-leftovers-test", logs = root / L"logs", layerLogs = root / L"layer" / L"logs";
+    const fs::path root = temp_path(L"simqvfr-leftovers-test"), logs = root / L"logs", layerLogs = root / L"layer" / L"logs";
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(logs / L"captures");
@@ -1110,9 +1086,7 @@ void explicit_layers_checks() {
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    folder = fs::path(temp) / L"simqvfr-launcher-test";
+    folder = temp_path(L"simqvfr-launcher-test");
     std::error_code ec;
     fs::remove_all(folder, ec);
     fs::create_directories(folder);
@@ -1664,7 +1638,7 @@ int SIM_QVFR_TEST_MAIN() {
               "Cheeky runtime: a chosen path is used as it is");
 
         // The runtime report, and the kit's example: recommended 2584 x 2160, defaults (outer 50,
-        // inner 100, 39% x 39%) give 1292 x 1080 and 1008 x 842, a 4600 x 1080 target, 4.49 M pixels.
+        // inner 100, 35% x 35%) give 1292 x 1080 and 904 x 756, a 4392 x 1080 target, 4.16 M pixels.
         const std::wstring runtimeIni = (folder / L"runtime.ini").wstring();
         check(!load_runtime_info(runtimeIni).known(), "runtime report: unknown before the first launch");
         write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nmax_width=8192\r\n"
@@ -1683,23 +1657,23 @@ int SIM_QVFR_TEST_MAIN() {
               "readouts: Center PPD = the reported native PPD x the focus density (45.32 x 120% = 54)");
         std::printf("     kit example: outer %dx%d, focus %dx%d, target %dx%d, %.2f M\n", r.outer.width, r.outer.height,
                     r.focus.width, r.focus.height, r.target.width, r.target.height, r.pixels / 1e6);
-        check(r.outer.width == 1292 && r.outer.height == 1080 && r.focus.width == 1008 && r.focus.height == 842 &&
-                  r.target.width == 4600 && r.target.height == 1080 && std::abs(r.pixels / 1e6 - 4.49) < 0.005 &&
+        check(r.outer.width == 1292 && r.outer.height == 1080 && r.focus.width == 904 && r.focus.height == 756 &&
+                  r.target.width == 4392 && r.target.height == 1080 && std::abs(r.pixels / 1e6 - 4.16) < 0.005 &&
                   !r.overRuntimeLimit,
               "readouts: the kit's example numbers (QVFR.viewPixels)");
         // VRAM: none before a QVFR launch measures it; then the part that follows ACE's target scales with
         // the target's area (here the same target, then one with half the area) and the rest stays.
         check(vram_estimate(Settings{}, r, rt).mb == 0, "vram estimate: none before a launch reports it");
         write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nvram_used_mb=9000\r\n"
-                               "vram_budget_mb=15000\r\nvram_scaled_mb=2000\r\nvram_target=4600x1080\r\n");
+                               "vram_budget_mb=15000\r\nvram_scaled_mb=2000\r\nvram_target=4392x1080\r\n");
         const RuntimeInfo withVram = load_runtime_info(runtimeIni);
         check(withVram.vramUsedMb == 9000 && withVram.vramBudgetMb == 15000 && withVram.vramScaledMb == 2000 &&
-                  withVram.vramTarget.width == 4600 && withVram.vramTarget.height == 1080,
+                  withVram.vramTarget.width == 4392 && withVram.vramTarget.height == 1080,
               "runtime report: VRAM used, budget, the part that follows the target and its size");
         const VramEstimate same = vram_estimate(Settings{}, r, withVram);
         check(std::abs(same.mb - 9000) < 1e-6 && same.budgetMb == 15000, "vram estimate: at the launch's target, what it measured");
         Readouts half = r;
-        half.target = {2300, 1080};
+        half.target = {2196, 1080};
         check(std::abs(vram_estimate(Settings{}, half, withVram).mb - 8000) < 1e-6,
               "vram estimate: half the target's area, half of the 2000 MB that follows it (9000 -> 8000)");
         // The last session (the layer's session_* keys): read back, and the pasteable summary.
@@ -1738,7 +1712,7 @@ int SIM_QVFR_TEST_MAIN() {
         wide.inner = 200;
         wide.width = 60;
         check(r.runtime.width == 2584 && r.runtime.height == 2160 && std::abs(r.runtimePixels - 2.0 * 2584 * 2160) < 1 &&
-                  std::abs(r.saved - (1 - r.pixels / r.runtimePixels)) < 1e-12 && std::lround(r.saved * 100) == 60,
+                  std::abs(r.saved - (1 - r.pixels / r.runtimePixels)) < 1e-12 && std::lround(r.saved * 100) == 63,
               "readouts: pixels saved against both eyes at the runtime's recommended size");
         const Readouts w = readouts(wide, rt);
         check(w.overRuntimeLimit, "readouts: a target wider than the runtime allows is flagged");
@@ -1767,7 +1741,7 @@ int SIM_QVFR_TEST_MAIN() {
         loopDefaults.mode = RenderMode::TwoLoop;
         const Readouts l = readouts(loopDefaults, rt);
         check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
-                  std::abs(l.focusDensity - 50.0 / 39) < 1e-9,
+                  std::abs(l.focusDensity - 50.0 / 35) < 1e-9,
               "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
 
         // Live settings: only the reloadable keys go to the running game's ini, and only while that
@@ -1797,7 +1771,7 @@ int SIM_QVFR_TEST_MAIN() {
         write_file(runtimeIni, "[runtime]\r\nlaunch_mode=views4\r\nlaunch_outer=50\r\nlaunch_focus_width=39\r\n"
                                "launch_focus_height=39\r\n");
         const LaunchSizes qvfrLaunch = load_launch_sizes(runtimeIni);
-        Settings lower = Settings{};  // outer 50, inner 100 x 39%: exactly the launch
+        Settings lower = Settings{};  // outer 50, inner 100 x 35%: inside the launch's 39%
         check(qvfrLaunch.known && qvfrLaunch.mode == RenderMode::Qvfr && fits_launch(lower, qvfrLaunch),
               "live fit: the launch settings fit");
         lower.outer = 30;
@@ -1805,7 +1779,7 @@ int SIM_QVFR_TEST_MAIN() {
         lower.width = 45;  // 80% x 45% = 36% of the native eye, under 39%
         check(fits_launch(lower, qvfrLaunch), "live fit: lower periphery and a wider box at lower density fit");
         Settings higher = Settings{};
-        higher.inner = 120;  // 120% x 39% = 47%, over 39%
+        higher.inner = 120;  // 120% x 35% = 42%, over 39%
         Settings wider = Settings{};
         wider.width = 50;  // the same density over a larger box needs more pixels
         Settings sharper = Settings{};
@@ -2989,6 +2963,5 @@ int SIM_QVFR_TEST_MAIN() {
     log_retention_strict_checks();
     explicit_layers_checks();
     leftovers_checks();
-    std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
-    return failures == 0 ? 0 : 1;
+    return test_result();
 }

@@ -7,7 +7,8 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
+#include "../text.h"
 
 namespace simqvfr {
 namespace {
@@ -28,26 +29,6 @@ constexpr Preset kEyeTrackedPresets[] = {
 constexpr Preset kFixedPresets[] = {
     {L"Performance", 25, 120, 35, 30}, {L"Balanced", 25, 140, 40, 35}, {L"Quality", 25, 160, 42, 38}};
 constexpr const Preset (&kPresets)[3] = kEyeTrackedPresets;  // the names, the same in both sets
-
-std::string utf8(const std::wstring& s) {
-    if (s.empty())
-        return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n, nullptr, nullptr);
-    return out;
-}
-
-std::wstring wide(const std::string& s) {
-    if (s.empty())
-        return {};
-    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    if (n <= 0)
-        return {};
-    std::wstring out(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
-    return out;
-}
 
 constexpr char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -107,19 +88,9 @@ std::vector<std::wstring> nul_list(const wchar_t* ini, const wchar_t* section) {
     return out;
 }
 
+// The key's value, kIniAbsent when it isn't there.
 std::wstring read_value(const wchar_t* ini, const std::wstring& section, const std::wstring& key) {
-    wchar_t value[1024] = {};
-    GetPrivateProfileStringW(section.c_str(), key.c_str(), L"\x01", value, static_cast<DWORD>(std::size(value)), ini);
-    return value;
-}
-
-std::wstring trim(std::wstring s) {
-    while (!s.empty() && std::iswspace(s.back()))
-        s.pop_back();
-    size_t i = 0;
-    while (i < s.size() && std::iswspace(s[i]))
-        ++i;
-    return s.substr(i);
+    return ini_get(ini, section.c_str(), key.c_str(), kIniAbsent);
 }
 
 }  // namespace
@@ -168,12 +139,17 @@ std::wstring game_settings_file(const std::wstring& settingsIni, const std::wstr
     return (fs::path(game_settings_folder(settingsIni)) / (gameId + kExtension)).wstring();
 }
 
+std::wstring launcher_game_id(const wchar_t* ini) {
+    std::wstring selected = read_value(ini, L"launcher", L"game");
+    if (selected.empty() || selected == kIniAbsent)  // not set: ACE
+        selected = L"ace";
+    return selected;
+}
+
 std::wstring game_settings_target(const std::wstring& settingsIni, const std::wstring& gameId) {
     if (settingsIni.empty() || gameId.empty())
         return settingsIni;
-    std::wstring selected = read_value(settingsIni.c_str(), L"launcher", L"game");
-    if (selected.empty() || selected == L"\x01")  // not set: ACE, as the launcher reads it
-        selected = L"ace";
+    const std::wstring selected = launcher_game_id(settingsIni.c_str());
     if (_wcsicmp(selected.c_str(), gameId.c_str()) == 0)
         return settingsIni;
     return game_settings_file(settingsIni, gameId);
@@ -270,7 +246,7 @@ bool profile_matches(const wchar_t* ini, const Profile& profile) {
 
 std::wstring current_profile(const wchar_t* ini) {
     const std::wstring name = read_value(ini, L"profiles", L"current");
-    return name == L"\x01" ? std::wstring() : name;
+    return name == kIniAbsent ? std::wstring() : name;
 }
 
 bool set_current_profile(const wchar_t* ini, const std::wstring& name) {
@@ -287,7 +263,7 @@ std::string export_profile(const Profile& profile) {
         }
         text += k.key + L"=" + k.value + L"\n";
     }
-    return "QVFR1:" + base64(utf8(text));
+    return "QVFR1:" + base64(narrow(text));
 }
 
 bool import_profile(const std::string& in, Profile& profile) {
@@ -299,7 +275,7 @@ bool import_profile(const std::string& in, Profile& profile) {
     std::string bytes;
     if (!unbase64(text.substr(6), bytes))
         return false;
-    const std::wstring lines = wide(bytes);
+    const std::wstring lines = widen_strict(bytes);
     Profile p;
     std::wstring section;
     size_t at = 0;

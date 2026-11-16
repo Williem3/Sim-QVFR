@@ -16,7 +16,8 @@
 #include <utility>
 #include <vector>
 
-#include "json.h"
+#include "../json.h"
+#include "../text.h"
 
 namespace simqvfr::launcher {
 
@@ -108,8 +109,9 @@ std::wstring environment_block(const std::vector<std::wstring>& current,
 // Steam library folders from libraryfolders.vdf ("path" entries, unescaped).
 std::vector<std::wstring> steam_libraries(const std::string& vdf);
 
-std::wstring widen(const std::string& utf8);
-std::string narrow(const std::wstring& wide);
+// UTF-8 <-> UTF-16 (text.h), by the names the launcher has always called them.
+using simqvfr::narrow;
+using simqvfr::widen;
 // The text files the launcher reads (manifests, libraryfolders.vdf, ledgers, requests) are small; a bigger one
 // (another vendor's registration can name any file) is refused rather than read whole.
 inline constexpr unsigned long long kMaxReadBytes = 1ull << 20;

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../text.h"
 #include "settings.h"
 
 namespace simqvfr::launcher {
@@ -144,7 +145,8 @@ struct IssueField {
 };
 // what (the description), files (the zip to drag in), checks (the causes) and details, in that order.
 std::vector<IssueField> issue_fields(const IssueReport& report);
-std::string utf8(const std::wstring& text);
+// UTF-16 to UTF-8 (text.h narrow).
+inline std::string utf8(const std::wstring& text) { return narrow(text); }
 // UTF-8, percent-encoded but for RFC 3986's unreserved characters.
 std::string url_encode(const std::wstring& text);
 // https://github.com/<repo>/issues/new?template=<form>&title=...&<id>=..., at most `max` characters: lines

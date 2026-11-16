@@ -7,14 +7,10 @@
 
 #include <bcrypt.h>
 
+#include "../ini.h"
+
 namespace simqvfr::launcher {
 namespace {
-
-std::wstring ini_string(const std::wstring& ini, const wchar_t* key) {
-    wchar_t buffer[4096] = {};
-    GetPrivateProfileStringW(L"launcher", key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
-}
 
 std::wstring join(const std::vector<std::string>& names) {
     std::string out;
@@ -69,8 +65,6 @@ std::string layer_name(const std::wstring& manifest) {
     const json::Value* layer = v.find("api_layer");
     return layer ? layer->string_at("name") : std::string();
 }
-
-bool same_name(const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) == 0; }
 
 // A .reg file of the key's values (UTF-16 with a byte-order mark, as regedit writes them).
 bool write_backup(const std::wstring& path, bool machine, const wchar_t* subkey, const std::vector<RawValue>& values) {
@@ -130,8 +124,9 @@ std::vector<std::string> split_layer_names(const std::wstring& list) {
 }
 
 LauncherLayers read_launcher_layers(const std::wstring& ini) {
-    return {split_layer_names(ini_string(ini, L"layer_order")), split_layer_names(ini_string(ini, L"off_layers")),
-            split_layer_names(ini_string(ini, L"on_layers"))};
+    return {split_layer_names(ini_get(ini.c_str(), L"launcher", L"layer_order")),
+            split_layer_names(ini_get(ini.c_str(), L"launcher", L"off_layers")),
+            split_layer_names(ini_get(ini.c_str(), L"launcher", L"on_layers"))};
 }
 
 bool write_launcher_layers(const std::wstring& ini, const LauncherLayers& l) {
@@ -261,7 +256,7 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
     const std::vector<RawValue> existing = read_values(key);
     bool sameSet = existing.size() == want.size();
     for (const SystemLayer& w : want)
-        sameSet &= std::any_of(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, w.manifest); });
+        sameSet &= std::any_of(existing.begin(), existing.end(), [&](const RawValue& v) { return iequals(v.name, w.manifest); });
     if (!sameSet) {
         RegCloseKey(key);
         error = L"the installed layers changed since they were read; nothing was written";
@@ -276,7 +271,7 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
         shown.push_back({v.name, machine, is_on(v), layer_name(v.name), {}});
     lock_system_layers(shown);
     for (size_t i = 0; i < want.size(); ++i)
-        if (!same_name(shown[i].manifest, want[i].manifest)) {
+        if (!iequals(shown[i].manifest, want[i].manifest)) {
             RegCloseKey(key);
             error = L"the order of Windows' OpenXR layers can't be changed safely without the launcher; nothing was "
                     L"written (on/off switches still apply)";
@@ -290,7 +285,7 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
     // Only a switch that changes is written, in place, as the loader's DWORD (0 on, 1 off): the user's own choice.
     bool ok = true;
     for (const SystemLayer& w : want) {
-        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, w.manifest); });
+        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return iequals(v.name, w.manifest); });
         if (is_on(was) == w.on)
             continue;
         RawValue v = was;

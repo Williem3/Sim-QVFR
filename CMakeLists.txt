@@ -485,6 +485,13 @@ target_compile_definitions(settings_menu_test PRIVATE SIM_QVFR_DOCUMENTED_INI="$
 target_compile_options(settings_menu_test PRIVATE /utf-8)
 target_link_libraries(settings_menu_test PRIVATE sim_qvfr_core)
 
+# Offline check that the launcher, the headset menu and the layer read the shared settings table alike
+# (tests/qvfr_settings_test.cpp; quad/qvfr_settings.h).
+sim_qvfr_test(qvfr_settings_test tests/qvfr_settings_test.cpp)
+target_include_directories(qvfr_settings_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(qvfr_settings_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(qvfr_settings_test PRIVATE /W4 /permissive- /utf-8)
+
 # Offline check of the performance overlay: its numbers, rows and card (tests/osd_test.cpp).
 sim_qvfr_test(osd_test tests/osd_test.cpp)
 target_include_directories(osd_test PRIVATE src)

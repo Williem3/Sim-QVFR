@@ -91,11 +91,9 @@ t::Accent builtin_accent(const games::GameInfo& game) {
     return {base.accent, base.accent_fill, base.on_accent, base.focus_ring};
 }
 
-std::wstring game_id(const games::GameInfo& game) { return widen(std::string(game.id)); }
-
 // A game's accent: the colour picked for it in the Games pane (game_tabs.h accent_from), else its palette.
 t::Accent game_accent(const games::GameInfo& game) {
-    const auto custom = app.s.gameColors.find(game_id(game));
+    const auto custom = app.s.gameColors.find(games::wide_id(game));
     if (custom == app.s.gameColors.end())
         return builtin_accent(game);
     const AccentColors a = accent_from(custom->second, app.dark);
@@ -201,16 +199,13 @@ void record_session() {
             return;
     // Its game: the run folder's copy of the ini names it ([launcher] game, ACE when unset); without one, the game shown.
     const std::wstring runIni = session_run_ini(s.log);
-    std::wstring game = game_id(games::launcher_game());
-    if (GetFileAttributesW(runIni.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        wchar_t named[32] = {};
-        GetPrivateProfileStringW(L"launcher", L"game", L"ace", named, static_cast<DWORD>(std::size(named)), runIni.c_str());
-        game = named;
-    }
+    std::wstring game = games::wide_id(games::launcher_game());
+    if (GetFileAttributesW(runIni.c_str()) != INVALID_FILE_ATTRIBUTES)
+        game = launcher_game_id(runIni.c_str());
     // Every ~10 s while the game runs, so the history is kept up to date here rather than read again (12 files of ~100
     // keys): the shown game's settings are the window's own, kept in step with the ini (follow_ini).
     const std::wstring source = game_settings_target(app.ini, game);
-    SessionRecord record = session_record(s, game, game == game_id(games::launcher_game()) ? app.s : load_settings(source));
+    SessionRecord record = session_record(s, game, game == games::wide_id(games::launcher_game()) ? app.s : load_settings(source));
     if (!store_session(sessions_folder(app.ini), record, source))
         return;
     std::vector<SessionRecord>& list = app.sessions;

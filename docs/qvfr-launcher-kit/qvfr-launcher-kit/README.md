@@ -17,10 +17,10 @@ A Windows launcher that starts Assetto Corsa EVO with foveated rendering, built 
 | Foveated mode | `PopUpButton` | Eye tracked | Eye tracked, Fixed | Rendering |
 | Outer resolution | `PercentSlider` | 50% | 20–100% of recommended | Resolution |
 | Inner resolution | `PercentSlider` | 100% | 50–200% focus density | Resolution |
-| Foveated width | `PercentSlider` | 39% | 10–100% of the outer view | Foveation |
-| Foveated height | `PercentSlider` | 39% | 10–100% of the outer view | Foveation |
+| Foveated width | `PercentSlider` | 35% | 10–100% of the outer view | Foveation |
+| Foveated height | `PercentSlider` | 35% | 10–100% of the outer view | Foveation |
 | Show focus outline | `Checkbox` | Off | | Focus overlay |
-| Outline color | `SegmentedControl` | Teal | Teal, Magenta, Green | Focus overlay |
+| Outline color | `SegmentedControl` | Green | Teal, Magenta, Green | Focus overlay |
 | Focus edge blend | `Checkbox` | On | | Focus overlay |
 | Feather | `Checkbox` | Off | | Focus overlay |
 
@@ -29,7 +29,7 @@ All sizes are percentages. Pixel sizes are derived from the headset's recommende
 - Outer view px = recommended × outer resolution %.
 - Focus view px = recommended × inner resolution % × foveated size %.
 
-With the example recommended resolution of 2584 × 2160, the defaults give a 1292 × 1080 outer view and a 1008 × 842 focus view: a 4600 × 1080 render target at 4.49 M pixels per frame. Your focus density 128% run is inner resolution 128%.
+With the example recommended resolution of 2584 × 2160, the defaults give a 1292 × 1080 outer view and a 904 × 756 focus view: a 4392 × 1080 render target at 4.16 M pixels per frame. Your focus density 128% run is inner resolution 128%.
 
 Rules:
 

@@ -16,19 +16,9 @@
 #include "ini_put.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
+#include "test_util.h"
 
 using namespace simqvfr;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     SettingsMenu m;
@@ -70,7 +60,7 @@ int SIM_QVFR_TEST_MAIN() {
     check(m.values.periphery == 10 && !menu_key(m, MenuKey::Left), "periphery stops at 10%, no change reported");
     m.selected = 3;
     menu_key(m, MenuKey::Right);
-    check(m.values.width == 40, "focus width steps by 1");
+    check(m.values.width == 36, "focus width steps by 1 (from the default 35)");
     m.selected = 7;
     check(menu_key(m, MenuKey::Right) && m.values.outline && menu_key(m, MenuKey::Left) && !m.values.outline,
           "outline toggles either way");
@@ -667,6 +657,7 @@ int SIM_QVFR_TEST_MAIN() {
     {
         SettingsMenu v;
         v.launch = {true, 50, 39, 39, 2000, 2000};
+        v.values.width = v.values.height = 39;  // the launch's box
         v.page = 2;
         check(menu_title(v) == L"View crop" && menu_page_items(v).size() == 2 && menu_resolution(v).shown,
               "View crop: off, only the switch (and the resolution)");
@@ -884,9 +875,7 @@ int SIM_QVFR_TEST_MAIN() {
               "Hotkeys footer: on by default, the Overlay and menu page's last line");
         check(menu_key(f, MenuKey::Right) && !f.values.hotkeyFooter && menu_lines(f).back().value == L"Off",
               "Hotkeys footer: Right or Left turns it off and on");
-        wchar_t temp[MAX_PATH];
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-footer.ini";
+        const std::wstring ini = temp_path(L"simqvfr-menu-footer.ini");
         DeleteFileW(ini.c_str());
         check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,
@@ -897,9 +886,7 @@ int SIM_QVFR_TEST_MAIN() {
     // Only what changed is written (ini_put.h): WritePrivateProfileString rewrites the whole ini for every key, even
     // one that already holds the value, and a step changes one key of the ~50 the menu writes.
     {
-        wchar_t temp[MAX_PATH];
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-only-changes.ini";
+        const std::wstring ini = temp_path(L"simqvfr-menu-only-changes.ini");
         const auto bytes = [&ini] {
             std::string text;
             if (FILE* f = _wfopen(ini.c_str(), L"rb")) {
@@ -941,14 +928,14 @@ int SIM_QVFR_TEST_MAIN() {
         v.width = 33;
         write_menu_values(ini.c_str(), v, true);
         std::string expected = before;
-        const size_t at = expected.find("focus_percent=39");
+        const size_t at = expected.find("focus_percent=35");
         if (at != std::string::npos)
             expected.replace(at, 16, "focus_percent=33");
         check(at != std::string::npos && bytes() == expected, "menu step: only the changed key's line is rewritten");
         DeleteFileW(ini.c_str());
 
         // On the documented ini (34 KB): 20 steps took ~7 s when every key was rewritten (0.37 s a step).
-        const std::wstring documented = std::wstring(temp) + L"simqvfr-menu-documented.ini";
+        const std::wstring documented = temp_path(L"simqvfr-menu-documented.ini");
         const bool copied = CopyFileW(L"" SIM_QVFR_DOCUMENTED_INI, documented.c_str(), FALSE) != 0;
         MenuValues d = read_menu_values(documented.c_str());
         const auto start = std::chrono::steady_clock::now();
@@ -1048,9 +1035,7 @@ int SIM_QVFR_TEST_MAIN() {
                   "FSR page without an RTX card: titled FSR, its switch FSR, Native AA, no presets or Upscaler row");
         }
 
-        wchar_t temp[MAX_PATH];
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-dlss.ini";
+        const std::wstring ini = temp_path(L"simqvfr-menu-dlss.ini");
         DeleteFileW(ini.c_str());
         DlssSettings fresh = read_dlss_settings(ini.c_str());
         check(!fresh.on && fresh.folder.empty() && fresh.focusScale == 100 && fresh.focusPreset == 0 && fresh.eyePreset == 11 &&
@@ -1169,15 +1154,12 @@ int SIM_QVFR_TEST_MAIN() {
         nm.values.dlss.on = true;
         check(!has_note(L"Runs with DLSS on"), "DLSS-NR page: with DLSS on, no such note");
 
-        wchar_t temp[MAX_PATH];
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-nr.ini";
+        const std::wstring ini = temp_path(L"simqvfr-menu-nr.ini");
         DeleteFileW(ini.c_str());
         check(write_nr_settings(ini.c_str(), nm.values.nr) && read_menu_values(ini.c_str()).nr == nm.values.nr,
               "[dlss_nr]: the menu's values read what the page wrote");
         DeleteFileW(ini.c_str());
     }
 
-    std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
-    return failures == 0 ? 0 : 1;
+    return test_result();
 }

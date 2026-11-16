@@ -505,7 +505,6 @@ bool layers_dirty();
 // app_actions.cpp
 COLORREF colorref(uint32_t rgb);
 t::Accent builtin_accent(const games::GameInfo& game);
-std::wstring game_id(const games::GameInfo& game);
 t::Accent game_accent(const games::GameInfo& game);
 ThemeChoice read_theme_choice();
 void cycle_theme();

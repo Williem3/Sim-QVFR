@@ -16,8 +16,6 @@ namespace {
 
 namespace fs = std::filesystem;
 
-bool same_name(const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) == 0; }
-
 bool is_variable_name(const std::string& s) {
     if (s.empty() || !(isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_'))
         return false;
@@ -64,24 +62,6 @@ std::string loader_rejects(const json::Value& manifest) {
     if (!std::all_of(implementation.begin(), implementation.end(), [](char c) { return c >= '0' && c <= '9'; }))
         return "implementation_version \"" + implementation + "\" is not a whole number";
     return {};
-}
-
-std::wstring widen(const std::string& utf8) {
-    if (utf8.empty())
-        return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    std::wstring out(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), n);
-    return out;
-}
-
-std::string narrow(const std::wstring& wide) {
-    if (wide.empty())
-        return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-    return out;
 }
 
 bool read_file(const std::wstring& path, std::string& out, unsigned long long maxBytes) {
@@ -157,7 +137,7 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
     const auto is_set = [&](const std::string& variable) {
         const std::wstring w = widen(variable);
         return std::any_of(options.setVariables.begin(), options.setVariables.end(),
-                           [&](const std::wstring& v) { return same_name(v, w); });
+                           [&](const std::wstring& v) { return iequals(v, w); });
     };
     const auto listed = [](const std::vector<std::string>& names, const std::string& name) {
         return std::find(names.begin(), names.end(), name) != names.end();
@@ -348,7 +328,7 @@ std::wstring environment_block(const std::vector<std::wstring>& current,
         vars.emplace_back(std::move(name), entry.substr(eq + 1));
     }
     for (const auto& [name, value] : set) {
-        const auto it = std::find_if(vars.begin(), vars.end(), [&](const auto& p) { return same_name(p.first, name); });
+        const auto it = std::find_if(vars.begin(), vars.end(), [&](const auto& p) { return iequals(p.first, name); });
         if (it != vars.end())
             it->second = value;
         else

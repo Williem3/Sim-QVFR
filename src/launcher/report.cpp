@@ -11,7 +11,9 @@
 #include <dxgi.h>
 #include <shlobj.h>
 
-#include "json.h"
+#include "../json.h"
+#include "../log_prefix.h"
+#include "../text.h"
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -22,15 +24,6 @@ namespace simqvfr::launcher {
 namespace fs = std::filesystem;
 
 namespace {
-
-std::wstring widen(const std::string& text) {
-    if (text.empty())
-        return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring out(static_cast<size_t>(std::max(n, 0)), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n);
-    return out;
-}
 
 // `format` with one number, at whatever length it comes to.
 std::wstring formatted(const wchar_t* format, double v) {
@@ -43,11 +36,6 @@ std::wstring formatted(const wchar_t* format, double v) {
 }
 
 std::wstring number(int v) { return std::to_wstring(v); }
-
-bool starts_with(const std::wstring& s, const wchar_t* prefix) { return s.rfind(prefix, 0) == 0; }
-bool ends_with(const std::wstring& s, const std::wstring& suffix) {
-    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
 
 struct Found {
     fs::path path;
@@ -178,10 +166,7 @@ std::wstring local_stamp(uint64_t ticks) {
     SYSTEMTIME utc{}, local{};
     if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local))
         return L"unknown";
-    wchar_t text[32];
-    swprintf_s(text, L"%04u%02u%02u-%02u%02u%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute,
-               local.wSecond);
-    return text;
+    return file_stamp(local);
 }
 
 // The game's crash folders (any folder in `folder` holding a minidump or a CrashContext), newest first by their
@@ -826,15 +811,6 @@ SystemInfo system_info() {
         info.openxrRuntime = read_file(manifest, text) ? openxr_runtime_name(text, manifest)
                                                        : fs::path(manifest).filename().wstring() + L" (missing)";
     return info;
-}
-
-std::string utf8(const std::wstring& text) {
-    if (text.empty())
-        return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(std::max(n, 0)), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n, nullptr, nullptr);
-    return out;
 }
 
 std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {

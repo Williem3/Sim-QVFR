@@ -103,7 +103,7 @@ std::wstring game_settings_ini(const std::wstring& settings) {
     const games::GameInfo* g = games::current_game();
     if (settings.empty() || !g)
         return settings;
-    return game_settings_target(settings, std::wstring(g->id, g->id + std::strlen(g->id)));
+    return game_settings_target(settings, games::wide_id(*g));
 }
 
 namespace {

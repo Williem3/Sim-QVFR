@@ -15,6 +15,7 @@
 #include "gaze_deadzone.h"
 #include "helmet.h"
 #include "osd.h"
+#include "qvfr_settings.h"
 
 namespace simqvfr {
 
@@ -76,12 +77,12 @@ inline constexpr float kMenuDistance = 0.8f;
 // Percent values, as the launcher's Settings (src/launcher/settings.h), with its ranges; the panel's
 // place in degrees.
 struct MenuValues {
-    int periphery = 50;  // periphery_scale
-    int density = 100;   // focus_density
-    int width = 39;      // focus_percent
-    int height = 39;     // focus_height_percent
-    int feather = 20;    // [quad] feather_percent
-    int corners = 0;     // [quad] corner_radius_percent
+    int periphery = kPeripheryScale.def;   // periphery_scale (qvfr_settings.h, as every key here it has)
+    int density = kFocusDensity.def;       // focus_density
+    int width = kFocusPercent.def;         // focus_percent
+    int height = kFocusHeightPercent.def;  // focus_height_percent
+    int feather = kFeatherPercent.def;     // [quad] feather_percent
+    int corners = kCornerRadiusPercent.def;  // [quad] corner_radius_percent
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
@@ -93,7 +94,7 @@ struct MenuValues {
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)
-    int objectDetail = 100;   // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
+    int objectDetail = kObjectDetail.def;  // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances

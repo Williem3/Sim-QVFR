@@ -10,6 +10,9 @@
 #include <dbghelp.h>
 #include <psapi.h>
 
+#include "log_prefix.h"
+#include "text.h"
+
 namespace simqvfr {
 namespace {
 
@@ -38,10 +41,11 @@ public:
         SYSTEMTIME t;
         GetLocalTime(&t);
         char line[2048];
-        int n = std::snprintf(line, sizeof(line), "%02u:%02u:%02u.%03u [%lu] %s\r\n", t.wHour, t.wMinute, t.wSecond,
-                              t.wMilliseconds, GetCurrentThreadId(), message);
-        if (n <= 0)
+        int n = log_prefix(line, sizeof(line), t, GetCurrentThreadId());
+        const int m = n > 0 ? std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), "%s\r\n", message) : -1;
+        if (m < 0)
             return;
+        n += m;
         if (n >= static_cast<int>(sizeof(line)))
             n = static_cast<int>(sizeof(line)) - 1;
         DWORD written = 0;
@@ -51,15 +55,6 @@ public:
 private:
     HANDLE file_;
 };
-
-std::string utf8(const wchar_t* text) {
-    const int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
-    if (n <= 1)
-        return {};
-    std::string out(static_cast<size_t>(n - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), n, nullptr, nullptr);
-    return out;
-}
 
 // The game's modules, read from its loader list through ReadProcessMemory. The list can change while the game
 // loads, so a failed or grown read is tried again.
@@ -90,7 +85,7 @@ void log_modules(HANDLE process, Log& log) {
         GetModuleInformation(process, modules[i], &info, sizeof(info));
         GetModuleFileNameExW(process, modules[i], path, MAX_PATH);
         log("  module %016llx size %08lx %s", reinterpret_cast<unsigned long long>(info.lpBaseOfDll),
-            info.SizeOfImage, utf8(path).c_str());
+            info.SizeOfImage, narrow(path).c_str());
     }
 }
 
@@ -129,7 +124,7 @@ int hang_dump(unsigned long pid, const wchar_t* logPath) {
     const size_t slash = dump.find_last_of(L"\\/");
     dump = (slash == std::wstring::npos ? std::wstring() : dump.substr(0, slash + 1)) + name;
     const wchar_t* dumpPath = dump.c_str();
-    const std::string dumpName = utf8(dumpPath);
+    const std::string dumpName = narrow(dumpPath);
     log_modules(process, log);
     HMODULE dbghelp = LoadLibraryExW(L"dbghelp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     const auto write = dbghelp ? reinterpret_cast<decltype(&MiniDumpWriteDump)>(GetProcAddress(dbghelp, "MiniDumpWriteDump"))

@@ -10,7 +10,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
-#include "json.h"
+#include "../json.h"
 #include "launch_plan.h"
 
 namespace simqvfr::launcher {

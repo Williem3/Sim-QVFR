@@ -34,7 +34,11 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/nvapi_gpus.h"
 #include "../games/game.h"
+#include "../ini.h"
+#include "../log_prefix.h"
+#include "../profile/profiles.h"
 #include "../probe/hang_dump.h"
+#include "../quad/qvfr_settings.h"
 #include "explicit_layers.h"
 #include "launch_plan.h"
 #include "launcher.h"
@@ -71,9 +75,7 @@ void say(const std::wstring& line) {
 std::wstring exe_folder() { return fs::path(module_path()).parent_path().wstring(); }
 
 std::wstring ini_string(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
-    wchar_t buffer[2048] = {};
-    GetPrivateProfileStringW(section, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
+    return simqvfr::ini_get(ini.c_str(), section, key);
 }
 
 std::vector<Registration> implicit_registrations() {
@@ -97,18 +99,6 @@ std::vector<Registration> implicit_registrations() {
     return out;
 }
 
-bool process_running(const wchar_t* exe) {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE)
-        return false;
-    PROCESSENTRY32W entry{sizeof(entry)};
-    bool found = false;
-    for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry))
-        found = _wcsicmp(entry.szExeFile, exe) == 0;
-    CloseHandle(snapshot);
-    return found;
-}
-
 // The id of a running `exe`, 0 if none.
 DWORD process_id(const wchar_t* exe) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -122,6 +112,8 @@ DWORD process_id(const wchar_t* exe) {
     CloseHandle(snapshot);
     return pid;
 }
+
+bool process_running(const wchar_t* exe) { return process_id(exe) != 0; }  // pid 0 is only the idle process
 
 // The game the anti-cheat's bootstrapper (`bootstrapper`, started) goes on to start: waited for up to `seconds`, while
 // the bootstrapper shows its splash. The game wasn't running before the launch (run checks), so the first one is it.
@@ -182,7 +174,7 @@ std::wstring find_game_folder(const games::GameInfo& game) {
 
 // A game's folder: [launcher] game_dir_<id> (ACE: also game_dir), else its folder in Steam's libraries.
 std::wstring game_folder(const std::wstring& ini, const games::GameInfo& game = games::launcher_game()) {
-    std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + widen(game.id)).c_str());
+    std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + games::wide_id(game)).c_str());
     if (set.empty() && game.id == std::string_view("ace"))
         set = ini_string(ini, L"launcher", L"game_dir");
     return set.empty() ? find_game_folder(game) : set;
@@ -219,17 +211,14 @@ Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstrin
     // Through the game's anti-cheat ([launcher] anticheat=1): Cheeky's layer off (games/game.h antiCheatStart).
     const bool antiCheat = game.antiCheatStart && games::anticheat_chosen(ini.c_str());
     return launch_options(read_launcher_layers(ini),
-                          _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0,
+                          simqvfr::parse_render_mode(mode.c_str()) == simqvfr::IniRenderMode::TwoLoop,
                           dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment), antiCheat);
 }
 
 std::wstring stamp_now() {
-    wchar_t stamp[32];
-    const std::time_t now = std::time(nullptr);
-    std::tm local{};
-    localtime_s(&local, &now);
-    std::wcsftime(stamp, std::size(stamp), L"%Y%m%d-%H%M%S", &local);
-    return stamp;
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    return simqvfr::file_stamp(now);
 }
 
 // An elevated launch's registrations (explicit_layers.h): one ledger per launch in logs\openxr-registrations, and
@@ -412,7 +401,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const games::GameInfo& info = games::launcher_game();
     const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
-        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + widen(info.id) +
+        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + games::wide_id(info) +
                     L" in [launcher] of sim-qvfr.ini");
     // [launcher] anticheat=1 (the Games pane), for a game with an anti-cheat bootstrapper: the game starts protected,
     // through the bootstrapper, and the layer runs in it as usual (games/game.h antiCheatStart). The user's risk.
@@ -743,9 +732,7 @@ bool game_installed(const games::GameInfo& game) {
 }
 
 void choose_launcher_game() {
-    wchar_t id[32] = {};
-    GetPrivateProfileStringW(L"launcher", L"game", L"ace", id, static_cast<DWORD>(std::size(id)), settings_path().c_str());
-    if (const games::GameInfo* game = games::game_by_id(narrow(id).c_str()))
+    if (const games::GameInfo* game = games::game_by_id(narrow(simqvfr::launcher_game_id(settings_path().c_str())).c_str()))
         games::set_launcher_game(*game);
 }
 
@@ -755,9 +742,10 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.gameExe = exe;
     in.build = build;
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
-    in.mode = mode.empty() || _wcsicmp(mode.c_str(), L"off") == 0                              ? LaunchMode::Off
-              : _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0 ? LaunchMode::TwoLoop
-                                                                                                 : LaunchMode::Qvfr;
+    const simqvfr::IniRenderMode iniMode = simqvfr::parse_render_mode(mode.c_str());
+    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off
+              : iniMode == simqvfr::IniRenderMode::TwoLoop ? LaunchMode::TwoLoop
+                                                           : LaunchMode::Qvfr;  // views4 and the research modes
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();

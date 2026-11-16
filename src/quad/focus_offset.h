@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
 
 namespace simqvfr {
 
@@ -27,9 +27,7 @@ struct FocusOffset {
 
 inline FocusOffset read_focus_offset(const wchar_t* ini) {
     const auto number = [ini](const wchar_t* key) {
-        wchar_t text[16] = {};  // as a string: GetPrivateProfileInt reads negative values as 0
-        GetPrivateProfileStringW(L"quad", key, L"", text, 16, ini);
-        return std::clamp(text[0] ? _wtoi(text) : 0, -kFocusOffsetMax, kFocusOffsetMax);
+        return std::clamp(ini_signed(ini, L"quad", key, 0), -kFocusOffsetMax, kFocusOffsetMax);
     };
     return {number(L"fixed_offset_y"), number(L"gaze_offset_y")};
 }

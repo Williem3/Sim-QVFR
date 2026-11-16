@@ -1,5 +1,6 @@
 #include "log_retention.h"
 
+#include "../text.h"
 #include "leftovers.h"
 
 #include <windows.h>
@@ -14,13 +15,6 @@ namespace fs = std::filesystem;
 
 namespace simqvfr::launcher {
 namespace {
-
-bool starts_with(const std::wstring& s, const wchar_t* prefix) { return s.rfind(prefix, 0) == 0; }
-
-bool ends_with(const std::wstring& s, const wchar_t* suffix) {
-    const size_t n = std::wcslen(suffix);
-    return s.size() >= n && _wcsicmp(s.c_str() + s.size() - n, suffix) == 0;
-}
 
 // `name` is exactly `pattern`, each '#' a digit ("session-########-######.log").
 bool named(const std::wstring& name, const wchar_t* pattern) {
@@ -82,7 +76,7 @@ bool run_file(const fs::path& p) {
     const std::wstring name = p.filename().wstring();
     return plain_file(p) && (name == L"launch.txt" || name == L"sim-qvfr.ini" || name == L"ace-quadview.ini" ||
                              name == L"openxr-loader.log" || name == L"openxr-explicit-before.reg" ||
-                             ends_with(name, L".json"));
+                             iends_with(name, L".json"));
 }
 
 // A file: removed. A run folder: the launch's own files in it removed, then the folder if that left it empty; anything

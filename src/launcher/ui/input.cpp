@@ -309,9 +309,9 @@ void activate(Ctl id, int option) {
             return;  // the last tab stays
         // An installed game is hidden by its listing in hidden_games; one Steam doesn't find is shown by shown_games.
         if (installed(*all[option]))
-            app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+            app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, games::wide_id(*all[option]), hide);
         else
-            app.s.shownGames = with_game_hidden(app.s.shownGames, game_id(*all[option]), !hide);
+            app.s.shownGames = with_game_hidden(app.s.shownGames, games::wide_id(*all[option]), !hide);
         changed();
         if (hide && all[option] == &games::launcher_game())  // the game in use went: the first shown takes over
             for (std::size_t i = 0; i < count; ++i)
@@ -328,7 +328,7 @@ void activate(Ctl id, int option) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     case kColorReset:
-        app.s.gameColors.erase(game_id(color_game()));
+        app.s.gameColors.erase(games::wide_id(color_game()));
         app.colorLoaded = -2;
         load_color_edit();
         apply_theme();

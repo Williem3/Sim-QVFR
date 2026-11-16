@@ -33,7 +33,7 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
 
 namespace simqvfr {
 
@@ -110,15 +110,10 @@ inline void helmet_far_centre(double distance, float rise, const float (&offset)
 }
 
 inline HelmetSettings read_helmet_settings(const wchar_t* ini) {
-    const auto number = [ini](const wchar_t* key, int fallback) {
-        wchar_t text[16] = {};  // as a string: GetPrivateProfileInt reads negative values as 0
-        GetPrivateProfileStringW(L"helmet", key, L"", text, 16, ini);
-        return text[0] ? _wtoi(text) : fallback;
-    };
+    const auto number = [ini](const wchar_t* key, int fallback) { return ini_signed(ini, L"helmet", key, fallback); };
     const auto path = [ini](const wchar_t* key, const std::wstring& fallback) {
-        wchar_t text[MAX_PATH] = {};
-        const DWORD n = GetPrivateProfileStringW(L"helmet", key, L"\x01", text, MAX_PATH, ini);
-        return n == 1 && text[0] == L'\x01' ? fallback : std::wstring(text);  // unset: the default
+        const std::wstring text = ini_get(ini, L"helmet", key, kIniAbsent);
+        return text == kIniAbsent ? fallback : text;  // unset: the default
     };
     HelmetSettings h;
     h.on = number(L"enabled", 0) != 0;

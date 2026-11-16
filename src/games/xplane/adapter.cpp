@@ -7,6 +7,7 @@
 
 #include "../../engine/code_patch.h"
 #include "../../log.h"
+#include "../../quad/qvfr_settings.h"
 #include "../diag_switches.h"
 #include "abi.h"
 #include "four_views.h"
@@ -88,10 +89,9 @@ bool apply_copies(const wchar_t* ini) {
     const bool layers = apply_layer_count(ini, 4);
     const bool context = apply_context_layers(ini, 4);
     four_views_copies_start();
-    // [experiment] xplane_focus = 1: views 2-3 render focus boxes of focus_percent (default 20) of each eye.
+    // [experiment] xplane_focus = 1: views 2-3 render focus boxes of focus_percent of each eye.
     if (GetPrivateProfileIntW(L"experiment", L"xplane_focus", 0, ini) == 1) {
-        const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
-        const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
+        const double fraction = simqvfr::ini_int(ini, simqvfr::kFocusPercent) / 100.0;
         four_views_set_focus(true, fraction, fraction);
     }
     return layers || context;
@@ -123,7 +123,7 @@ bool writable_image_float(std::uintptr_t rva) {
 bool qvfr_wanted(const wchar_t* ini) {
     wchar_t mode[32] = {};
     GetPrivateProfileStringW(L"experiment", L"mode", L"off", mode, 32, ini);
-    return _wcsicmp(mode, L"views4") == 0 && GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini) == 1 &&
+    return simqvfr::parse_render_mode(mode) == simqvfr::IniRenderMode::Qvfr && GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini) == 1 &&
            GetPrivateProfileIntW(L"experiment", L"baseline", 0, ini) == 0;
 }
 
@@ -157,8 +157,7 @@ bool apply_qvfr(const wchar_t* ini, bool& fourLayers) {
     }
     // Before X-Plane makes its shaders: the final resolve's edit takes it.
     four_views_set_eye_columns(ok);
-    const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
-    const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
+    const double fraction = simqvfr::ini_int(ini, simqvfr::kFocusPercent) / 100.0;  // the layer's read_live default and range
     four_views_set_focus(true, fraction, fraction);
     simqvfr::logf("xplane: QVFR %s (eye columns, D3D11 compositor)", ok ? "patched in" : "NOT fully patched in");
     return ok;

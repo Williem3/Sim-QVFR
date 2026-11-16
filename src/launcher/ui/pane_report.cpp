@@ -13,6 +13,7 @@
 #include "../launch_plan.h"
 #include "../report.h"
 #include "../../games/game.h"
+#include "../../log_prefix.h"
 #include "launcher_version.h"
 #include "window_state.h"
 #include "card.h"
@@ -27,10 +28,7 @@ namespace {
 std::wstring zip_name(const wchar_t* prefix) {
     SYSTEMTIME now;
     GetLocalTime(&now);
-    wchar_t name[64];
-    swprintf_s(name, L"%s-%04u%02u%02u-%02u%02u%02u.zip", prefix, now.wYear, now.wMonth, now.wDay, now.wHour,
-               now.wMinute, now.wSecond);
-    return name;
+    return std::wstring(prefix) + L"-" + file_stamp(now) + L".zip";
 }
 
 // The files a report zips (report_files): the session logs, the ini files, the CPU captures and hang dumps,

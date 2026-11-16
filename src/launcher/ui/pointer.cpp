@@ -393,8 +393,8 @@ void select_game(int option) {
         return;
     if (app.iniFound) {
         // Each game keeps its own settings: this one's go to its copy, the other's come back into the ini.
-        switch_game_settings(app.ini, widen(games::launcher_game().id), widen(all[option]->id));
-        WritePrivateProfileStringW(L"launcher", L"game", widen(all[option]->id).c_str(), app.ini.c_str());
+        switch_game_settings(app.ini, games::wide_id(games::launcher_game()), games::wide_id(*all[option]));
+        WritePrivateProfileStringW(L"launcher", L"game", games::wide_id(*all[option]).c_str(), app.ini.c_str());
         choose_launcher_game();
         app.s = load_settings(app.ini);
         app.iniText = ini_text();
@@ -548,7 +548,7 @@ void choose_game_folder() {
                picked + L" has no " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " + game_name() + L".");
         return;
     }
-    if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + widen(game.id)).c_str(), folder.c_str(),
+    if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + games::wide_id(game)).c_str(), folder.c_str(),
                                                      app.ini.c_str())) {
         notify(L"The folder couldn’t be saved", L"sim-qvfr.ini wasn’t found next to the launcher.");
         return;

@@ -15,6 +15,7 @@
 #include <dbghelp.h>
 
 #include "../log.h"
+#include "../log_prefix.h"
 
 namespace simqvfr {
 namespace {
@@ -697,10 +698,7 @@ bool cpu_profile_start(const CpuProfileRequest& request) {
     if (path.empty()) {
         SYSTEMTIME now;
         GetLocalTime(&now);
-        wchar_t name[64];
-        swprintf_s(name, L"\\cpu-profile-%04u%02u%02u-%02u%02u%02u.txt", now.wYear, now.wMonth, now.wDay, now.wHour,
-                   now.wMinute, now.wSecond);
-        path = log_directory() + name;
+        path = log_directory() + L"\\cpu-profile-" + file_stamp(now) + L".txt";
     }
     std::string ids;
     for (const Target& t : targets)

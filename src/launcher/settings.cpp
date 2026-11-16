@@ -11,7 +11,7 @@
 #include <windows.h>
 
 #include "../games/game.h"
-#include "../ini_put.h"
+#include "../ini.h"
 #include "game_tabs.h"
 
 namespace simqvfr::launcher {
@@ -25,15 +25,11 @@ int read_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key
 }
 
 std::wstring read_string(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
-    wchar_t buffer[256] = {};
-    GetPrivateProfileStringW(section, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
+    return ini_get(ini.c_str(), section, key);
 }
 
-// Signed: GetPrivateProfileInt reads negative values as 0.
 int read_signed(const std::wstring& ini, const wchar_t* section, const wchar_t* key, int fallback) {
-    const std::wstring text = read_string(ini, section, key);
-    return text.empty() ? fallback : _wtoi(text.c_str());
+    return ini_signed(ini.c_str(), section, key, fallback);
 }
 
 int clamp_to(int v, Range r) { return std::clamp(v, r.min, r.max); }
@@ -42,6 +38,8 @@ int clamp_to(int v, Range r) { return std::clamp(v, r.min, r.max); }
 bool write(const std::wstring& ini, const wchar_t* section, const wchar_t* key, const std::wstring& value) {
     return ini_put(ini.c_str(), section, key, value.c_str());
 }
+
+bool write(const std::wstring& ini, const IniInt& k, const std::wstring& value) { return write(ini, k.section, k.key, value); }
 
 }  // namespace
 
@@ -55,27 +53,28 @@ const wchar_t* color_name(OutlineColor color) {
 
 Settings load_settings(const std::wstring& ini) {
     Settings s;
-    const std::wstring mode = read_string(ini, L"experiment", L"mode");
-    s.mode = _wcsicmp(mode.c_str(), L"quad") == 0 ? RenderMode::TwoLoop : RenderMode::Qvfr;
-    s.width = clamp_to(read_int(ini, L"experiment", L"focus_percent", s.width), kSizeRange);
-    s.height = clamp_to(read_int(ini, L"experiment", L"focus_height_percent", s.width), kSizeRange);
-    const int eyeScale = read_int(ini, L"experiment", L"eye_scale", s.outer);
-    const int periphery = read_int(ini, L"experiment", L"periphery_scale", 0);
-    s.outer = clamp_to(s.mode == RenderMode::Qvfr && periphery ? periphery : eyeScale, kOuterRange);
+    const wchar_t* const f = ini.c_str();
+    s.mode = parse_render_mode(read_string(ini, L"experiment", L"mode").c_str()) == IniRenderMode::TwoLoop ? RenderMode::TwoLoop
+                                                                                                          : RenderMode::Qvfr;
+    s.width = ini_int(f, kFocusPercent);
+    s.height = ini_int(f, kFocusHeightPercent, s.width);
+    const int eyeScale = ini_raw(f, kEyeScale, kEyeScale.def);
+    const int periphery = ini_raw(f, kPeripheryScale, 0);
+    s.outer = kPeripheryScale.clamp(s.mode == RenderMode::Qvfr && periphery ? periphery : eyeScale);
     // Unset, the layer derives the density from eye_scale (equal quarters); show that value.
-    const int density = read_int(ini, L"experiment", L"focus_density", 0);
-    s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
-    s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
-    s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
-    s.eyeOff = std::clamp(read_int(ini, L"quad", L"eye_off", 0), 0, 2);
+    const int density = ini_raw(f, kFocusDensity, 0);
+    s.inner = kFocusDensity.clamp(density ? density : static_cast<int>(std::lround(100.0 * kEyeScale.clamp(eyeScale) / s.width)));
+    s.objectDetail = ini_int(f, kObjectDetail);
+    s.sharpen = ini_int(f, kSharpenPercent);
+    s.eyeOff = ini_int(f, kEyeOff);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
-    s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
-    s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
-    s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
-    s.offset = read_focus_offset(ini.c_str());
-    s.gazeDeadzone = read_gaze_deadzone(ini.c_str());
-    s.shape = read_focus_shape(ini.c_str());
-    s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
+    s.feather = ini_int(f, kFeatherPercent);
+    s.corner = ini_int(f, kCornerRadiusPercent);
+    s.eyeTracking = ini_flag(f, kGaze);
+    s.offset = read_focus_offset(f);
+    s.gazeDeadzone = read_gaze_deadzone(f);
+    s.shape = read_focus_shape(f);
+    s.outline = ini_flag(f, kDebugBorder);
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
@@ -89,29 +88,27 @@ Settings load_settings(const std::wstring& ini) {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
         for (std::size_t i = 0; i < count; ++i) {
-            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id));
+            const std::wstring id = games::wide_id(*all[i]);
             uint32_t rgb = 0;
             if (parse_color(read_string(ini, L"launcher", (L"color_" + id).c_str()), rgb))
                 s.gameColors[id] = rgb;
         }
     }
-    const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
-    s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
-              : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
-                                                       : OutlineColor::Teal;
+    const BorderColor color = read_border_color(f);
+    s.color = color == BorderColor::Magenta ? OutlineColor::Magenta : color == BorderColor::Teal ? OutlineColor::Teal : OutlineColor::Green;
     s.menuYaw = clamp_to(read_signed(ini, L"menu", L"yaw", s.menuYaw), kMenuYawRange);
     s.menuPitch = clamp_to(read_signed(ini, L"menu", L"pitch", s.menuPitch), kMenuPitchRange);
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
-    s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
+    s.hotkeyFooter = ini_flag(f, kHotkeyFooter);
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.dlss = read_dlss_settings(ini.c_str());
     s.nr = read_nr_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
-    s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
-    s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
-    s.cropBottom = clamp_to(read_int(ini, L"crop", L"bottom", 0), kCropRange);
-    s.cropOuter = clamp_to(read_int(ini, L"crop", L"outer", 0), kCropRange);
-    s.cropInner = clamp_to(read_int(ini, L"crop", L"inner", 0), kCropRange);
+    s.crop = ini_flag(f, kCropEnabled);
+    s.cropTop = ini_int(f, kCropTop);
+    s.cropBottom = ini_int(f, kCropBottom);
+    s.cropOuter = ini_int(f, kCropOuter);
+    s.cropInner = ini_int(f, kCropInner);
     s.helmet = read_helmet_settings(ini.c_str());
     s.hotkeys = read_hotkeys(ini.c_str());
     return s;
@@ -159,12 +156,12 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"views4_callers", kQvfrCallers);
         ok &= write(ini, L"experiment", L"views4_compose", L"1");
         ok &= write(ini, L"experiment", L"views4_show_copies", L"0");
-        ok &= write(ini, L"experiment", L"periphery_scale", n(s.outer));
-        ok &= write(ini, L"experiment", L"focus_density", n(s.inner));
+        ok &= write(ini, kPeripheryScale, n(s.outer));
+        ok &= write(ini, kFocusDensity, n(s.inner));
     } else {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
-    ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write(ini, kEyeScale, n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
@@ -179,7 +176,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
         for (std::size_t i = 0; i < count; ++i) {
-            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id)), key = L"color_" + id;
+            const std::wstring id = games::wide_id(*all[i]), key = L"color_" + id;
             const auto it = s.gameColors.find(id);
             ok &= WritePrivateProfileStringW(L"launcher", key.c_str(), it == s.gameColors.end() ? nullptr : color_text(it->second).c_str(),
                                              ini.c_str()) != 0 || it == s.gameColors.end();  // no colour: the key goes
@@ -198,32 +195,32 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
     if (s.mode == RenderMode::Qvfr) {  // QVFR resizes its views live, up to their launch size
-        ok &= write(ini, L"experiment", L"periphery_scale", n(clamp_to(s.outer, kOuterRange)));
-        ok &= write(ini, L"experiment", L"focus_density", n(clamp_to(s.inner, kInnerRange)));
-        ok &= write(ini, L"crop", L"enabled", s.crop ? L"1" : L"0");  // and the FOV crop
-        ok &= write(ini, L"crop", L"top", n(clamp_to(s.cropTop, kCropRange)));
-        ok &= write(ini, L"crop", L"bottom", n(clamp_to(s.cropBottom, kCropRange)));
-        ok &= write(ini, L"crop", L"outer", n(clamp_to(s.cropOuter, kCropRange)));
-        ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
+        ok &= write(ini, kPeripheryScale, n(clamp_to(s.outer, kOuterRange)));
+        ok &= write(ini, kFocusDensity, n(clamp_to(s.inner, kInnerRange)));
+        ok &= write(ini, kCropEnabled, s.crop ? L"1" : L"0");  // and the FOV crop
+        ok &= write(ini, kCropTop, n(clamp_to(s.cropTop, kCropRange)));
+        ok &= write(ini, kCropBottom, n(clamp_to(s.cropBottom, kCropRange)));
+        ok &= write(ini, kCropOuter, n(clamp_to(s.cropOuter, kCropRange)));
+        ok &= write(ini, kCropInner, n(clamp_to(s.cropInner, kCropRange)));
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
-        ok &= write(ini, L"experiment", L"object_detail", n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
-        ok &= write(ini, L"quad", L"sharpen_percent", n(clamp_to(s.sharpen, kSharpenRange)));
+        ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
+        ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
     }
-    ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
-    ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
-    ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
-    ok &= write(ini, L"quad", L"corner_radius_percent", n(s.corner));
-    ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
-    ok &= write(ini, L"quad", L"eye_off", n(std::clamp(s.eyeOff, 0, 2)));  // QVFR or not (the layer's black eye)
+    ok &= write(ini, kFocusPercent, n(s.width));
+    ok &= write(ini, kFocusHeightPercent, n(s.height));
+    ok &= write(ini, kFeatherPercent, n(s.feather));
+    ok &= write(ini, kCornerRadiusPercent, n(s.corner));
+    ok &= write(ini, kGaze, s.eyeTracking ? L"1" : L"0");
+    ok &= write(ini, kEyeOff, n(kEyeOff.clamp(s.eyeOff)));  // QVFR or not (the layer's black eye)
     ok &= write_focus_offset(ini.c_str(), s.offset);
     ok &= write_gaze_deadzone(ini.c_str(), s.gazeDeadzone);
     ok &= write_focus_shape(ini.c_str(), s.shape);
-    ok &= write(ini, L"quad", L"debug_border",s.outline ? L"1" : L"0");
-    ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));
+    ok &= write(ini, kDebugBorder, s.outline ? L"1" : L"0");
+    ok &= write(ini, kBorderColorSection, kBorderColorKey, color_name(s.color));
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));
     ok &= write(ini, L"menu", L"pitch", n(clamp_to(s.menuPitch, kMenuPitchRange)));
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
-    ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
+    ok &= write(ini, kHotkeyFooter, s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
     ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)
@@ -261,14 +258,9 @@ bool per_game_key(const std::wstring& section, const std::wstring& key) {
 
 namespace {
 
-std::wstring widen_id(const char* id) { return std::wstring(id, id + std::strlen(id)); }
-
-constexpr wchar_t kAbsent[] = L"\x01";  // GetPrivateProfileString's fallback: the key isn't there
-
+// The key's value, kIniAbsent when it isn't there.
 std::wstring ini_value(const std::wstring& ini, const std::wstring& section, const std::wstring& key) {
-    wchar_t value[1024] = {};
-    GetPrivateProfileStringW(section.c_str(), key.c_str(), kAbsent, value, static_cast<DWORD>(std::size(value)), ini.c_str());
-    return value;
+    return ini_get(ini.c_str(), section.c_str(), key.c_str(), kIniAbsent);
 }
 
 // A game's copy written in one go (each WritePrivateProfileString rewrites the whole file): its keys by section, in
@@ -310,7 +302,7 @@ bool write_game_copy(const std::wstring& file, const std::vector<ProfileKey>& ke
 std::vector<ProfileKey> game_copy_keys(const std::wstring& ini) {
     std::vector<ProfileKey> keys = settings_profile(load_settings(ini), L"game").keys;
     const std::wstring current = ini_value(ini, L"profiles", L"current");
-    if (current != kAbsent)
+    if (current != kIniAbsent)
         keys.push_back({L"profiles", L"current", current});
     return keys;
 }
@@ -322,7 +314,7 @@ std::vector<ProfileKey> first_game_copy(std::vector<ProfileKey> keys, const std:
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
     for (std::size_t i = 0; i < count; ++i) {
-        if (_wcsicmp(widen_id(all[i]->id).c_str(), gameId.c_str()) != 0)
+        if (_wcsicmp(games::wide_id(*all[i]).c_str(), gameId.c_str()) != 0)
             continue;
         const games::GameInfo::Defaults& d = all[i]->defaults;
         const std::pair<const wchar_t*, int> sizes[] = {{L"periphery_scale", d.periphery}, {L"focus_density", d.density},
@@ -382,12 +374,12 @@ int seed_game_settings(const std::wstring& ini) {
     int made = 0;
     std::vector<ProfileKey> keys;  // the settings in use, read once for every game that needs them
     for (std::size_t i = 0; i < count; ++i) {
-        const std::wstring file = game_settings_file(ini, widen_id(all[i]->id));
+        const std::wstring file = game_settings_file(ini, games::wide_id(*all[i]));
         if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
             continue;
         if (keys.empty())
             keys = game_copy_keys(ini);
-        made += write_game_copy(file, first_game_copy(keys, widen_id(all[i]->id))) ? 1 : 0;
+        made += write_game_copy(file, first_game_copy(keys, games::wide_id(*all[i]))) ? 1 : 0;
     }
     return made;
 }
@@ -506,7 +498,7 @@ LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
     LaunchSizes l;
     const std::wstring mode = read_string(runtimeInfo, L"runtime", L"launch_mode");
     l.known = !mode.empty();
-    l.mode = _wcsicmp(mode.c_str(), L"quad") == 0 ? RenderMode::TwoLoop : RenderMode::Qvfr;
+    l.mode = parse_render_mode(mode.c_str()) == IniRenderMode::TwoLoop ? RenderMode::TwoLoop : RenderMode::Qvfr;
     l.outer = read_int(runtimeInfo, L"runtime", L"launch_outer", 0);
     l.focusWidth = read_int(runtimeInfo, L"runtime", L"launch_focus_width", 0);
     l.focusHeight = read_int(runtimeInfo, L"runtime", L"launch_focus_height", 0);

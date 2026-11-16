@@ -21,6 +21,7 @@
 #include "../quad/gaze_deadzone.h"
 #include "../quad/helmet.h"
 #include "../quad/osd.h"
+#include "../quad/qvfr_settings.h"
 
 namespace simqvfr::launcher {
 
@@ -30,12 +31,12 @@ enum class OutlineColor { Teal, Magenta, Green };
 struct Settings {
     RenderMode mode = RenderMode::Qvfr;
     bool eyeTracking = true;  // [quad] gaze: Eye tracked, or Fixed (centre)
-    int outer = 50;           // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
-    int inner = 100;          // focus_density (QVFR): focus pixel density, percent of recommended
-    int objectDetail = 100;   // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
+    int outer = kPeripheryScale.def;  // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
+    int inner = kFocusDensity.def;    // focus_density (QVFR): focus pixel density, percent of recommended
+    int objectDetail = kObjectDetail.def;  // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening as the views are composed,
     // 0 off (the default) to 100 the strongest (live).
-    int sharpen = 0;
+    int sharpen = kSharpenPercent.def;
     // [quad] eye_off (a game with GameFeatures::eyeOff: LMU; quad/eye_off.h): 0 both eyes on (the default), 1 the left
     // eye off, 2 the right. The headset shows that eye black and the game renders little of it (live).
     int eyeOff = 0;
@@ -43,11 +44,11 @@ struct Settings {
     // the runtime composes the four views (layer/native_quad.cpp). 1 auto (the default), 0 off, 2 asked for even with
     // another OpenXR layer between (the runtime's offer unknown). Next launch.
     int nativeQuad = 1;
-    int width = 39;           // focus_percent: foveated width, percent of the outer view
-    int height = 39;          // focus_height_percent: foveated height
+    int width = kFocusPercent.def;          // focus_percent: foveated width, percent of the outer view
+    int height = kFocusHeightPercent.def;   // focus_height_percent: foveated height
     bool outline = false;     // [quad] debug_border
-    OutlineColor color = OutlineColor::Teal;
-    int feather = 20;         // [quad] feather_percent: blend band, percent of the focus region
+    OutlineColor color = OutlineColor::Green;  // [quad] debug_border_color
+    int feather = kFeatherPercent.def;      // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
     FocusShape shape;         // [quad] focus_shape: the box (rounded by corner), or each corner pulled in on its own
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y: the focus region's vertical offset, degrees up
@@ -102,14 +103,16 @@ struct Settings {
 struct Range {
     int min, max;
 };
-inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10, 100}, kFeatherRange{0, 50},
-    kCornerRange{0, 100}, kCropRange{0, 40}, kObjectDetailRange{0, 100},  // kCropRange: the layer's kCropMax
-    kSharpenRange{0, 100},
+// The shared table's (quad/qvfr_settings.h), as the sliders' ranges.
+constexpr Range range_of(const IniInt& k) { return {k.min, k.max}; }
+inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = range_of(kFocusDensity),
+    kSizeRange = range_of(kFocusPercent), kFeatherRange = range_of(kFeatherPercent), kCornerRange = range_of(kCornerRadiusPercent),
+    kCropRange = range_of(kCropTop), kObjectDetailRange = range_of(kObjectDetail), kSharpenRange = range_of(kSharpenPercent),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its
 // 350 values span fewer pixels than that, so a plain drag skipped round values such as 100% (99, then 101).
-inline constexpr int kInnerDragStep = 5;
+inline constexpr int kInnerDragStep = kFocusDensity.step;
 // Detailed logs ([launcher] debug_logs): the launches they last once switched on.
 inline constexpr int kDebugLogLaunches = 3;
 // A slider's value at `share` (0..1) of its travel: on a grid of `step` from range.min, never past range.max.
