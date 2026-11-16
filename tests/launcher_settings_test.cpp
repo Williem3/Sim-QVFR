@@ -1,0 +1,542 @@
+// Offline check of the launcher's settings (settings.h, the window's model): the shipped QVFR ini, saves and
+// reloads, the mode switch, other keys left alone, the runtime report, the kit's readouts, the live settings, and
+// every setting the launcher shows surviving a load and save (the UI overhaul's round trip).
+#include "launcher_test_kit.h"
+
+namespace {
+
+// Every key of an ini file, "section/key" (lower case) -> value.
+std::map<std::wstring, std::wstring> ini_keys(const std::wstring& ini) {
+    std::map<std::wstring, std::wstring> out;
+    std::vector<wchar_t> sections(64 * 1024), entries(64 * 1024);
+    GetPrivateProfileSectionNamesW(sections.data(), static_cast<DWORD>(sections.size()), ini.c_str());
+    for (const wchar_t* s = sections.data(); *s; s += wcslen(s) + 1) {
+        GetPrivateProfileSectionW(s, entries.data(), static_cast<DWORD>(entries.size()), ini.c_str());
+        for (const wchar_t* e = entries.data(); *e; e += wcslen(e) + 1) {
+            const std::wstring entry = e;
+            const size_t eq = entry.find(L'=');
+            std::wstring key = std::wstring(s) + L"/" + entry.substr(0, eq);
+            std::transform(key.begin(), key.end(), key.begin(), towlower);
+            out[key] = eq == std::wstring::npos ? L"" : entry.substr(eq + 1);
+        }
+    }
+    return out;
+}
+
+// The UI overhaul's guard (docs/ui/OVERHAUL_PLAN.md): every setting the launcher shows, at a value other than its
+// default, survives load and save unchanged (the window's every change is a load_settings, an edit, a save_settings),
+// a profile of them round trips, and the window's own [launcher] ui_theme is in no profile and left alone by a save.
+void settings_round_trip_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-round-trip-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    Settings s;
+    s.eyeTracking = false;
+    s.outer = 37;
+    s.inner = 155;
+    s.objectDetail = 61;
+    s.sharpen = 23;
+    s.nativeQuad = 0;
+    s.width = 44;
+    s.height = 36;
+    s.outline = true;
+    s.color = OutlineColor::Magenta;
+    s.feather = 17;
+    s.corner = 12;
+    s.shape.corners = true;
+    for (int i = 0; i < kFocusCorners; ++i) {
+        s.shape.in[i] = 5 + i;
+        s.shape.vertical[i] = 20 - i;
+    }
+    s.offset.fixed = 3;
+    s.offset.gaze = -2;
+    s.gazeDeadzone = 22;
+    s.menuYaw = -9;
+    s.menuPitch = 5;
+    s.menuWidth = 41;
+    s.hotkeyFooter = false;
+    s.osd = {true, 12, -8, 30};
+    s.crop = true;
+    s.cropTop = 5;
+    s.cropBottom = 7;
+    s.cropOuter = 9;
+    s.cropInner = 3;
+    s.helmet.on = true;
+    s.helmet.rim = 8;
+    s.helmet.corners = 50;
+    s.helmet.light = 60;
+    s.helmet.size = 120;
+    s.helmet.height = -4;
+    s.helmet.depth = 20;
+    s.helmet.visor = VisorPosition::Half;
+    s.helmet.detail = true;
+    s.cheeky = {true, false, false, 60, 12, 11, 130, true, true, 2, 2, true, 3, 40, 75, 25, true, 3};
+    s.dlss.on = true;
+    s.dlss.folder = L"C:\\Games\\dlss";
+    s.dlss.focusScale = 67;
+    s.dlss.focusPreset = 13;
+    s.dlss.eyePreset = 6;
+    s.dlss.textureSharpening = 2;
+    s.dlss.carVectors = false;
+    s.nr.on = true;
+    s.nr.folder = L"C:\\Games\\nr";
+    s.nr.preset = 1;
+    s.nr.style = 2;
+    s.nr.intensity = 70;
+    s.nr.localTone = 120;
+    s.nr.localStructure = 80;
+    s.nr.autoMask = true;
+    s.nr.periphery = true;
+    s.nr.focusScale = 60;
+    s.nr.peripheryScale = 40;
+    s.nr.workingLimit = 15;
+    s.nr.peripheryCoverage = 70;
+    s.nr.edgeBlend = 12;
+    s.nr.beforeDlss = true;
+    s.nr.exposure = 120;
+    s.nr.inputGamma = false;
+    s.nr.autoExposure = false;
+    s.nr.maxGain = 200;
+    s.cpuProfile = true;
+    s.frameCapture = true;
+    s.hotkeys[static_cast<int>(HotkeyAction::Overlay)].key = KeyCombo{'O', true, false, true};
+    s.baselineNext = true;
+    s.antiCheat = true;
+    s.updateCheck = true;
+    s.updateAsked = true;
+    s.hiddenGames = L"xplane";
+    s.shownGames = L"lmu";
+    s.gameColors[L"ace"] = 0x123456;
+    const std::wstring a = (dir / L"a.ini").wstring(), b = (dir / L"b.ini").wstring();
+    check(save_settings(a, s), "round trip: a user's settings, none at its default, save");
+    const auto keysA = ini_keys(a);
+    check(save_settings(b, load_settings(a)) && ini_keys(b) == keysA,
+          "round trip: loaded and saved again, every key comes back with the same value");
+    const std::string before = read_text(a);
+    save_settings(a, load_settings(a));
+    check(read_text(a) == before, "round trip: saving what was loaded leaves the file byte for byte as it was");
+    bool spotted = keysA.at(L"quad/gaze") == L"0" && keysA.at(L"experiment/focus_density") == L"155" &&
+                   keysA.at(L"helmet/visor") == L"half" && keysA.at(L"cheeky/fg_release") == L"3" &&
+                   keysA.at(L"dlss_nr/max_gain") == L"200" && keysA.at(L"launcher/color_ace") == L"123456";
+    check(spotted, "round trip: the values are the ones set (not defaults)");
+
+    // A profile of them: saved, read back and applied to another ini, it holds the same keys.
+    const Profile p = settings_profile(load_settings(a), L"Mine");
+    const std::wstring profiles = (dir / L"profiles").wstring();
+    Profile q;
+    check(save_profile(profiles, p) && load_profile(profiles, L"Mine", q, false) && q.keys == p.keys,
+          "round trip: a profile saves and loads with identical keys");
+    const std::wstring c = (dir / L"c.ini").wstring();
+    save_settings(c, Settings{});
+    check(apply_profile(c.c_str(), q) && settings_profile(load_settings(c), L"Mine").keys == p.keys,
+          "round trip: applied to fresh settings, a profile gives back the same picture");
+
+    // The theme button's key: one for every game, kept by a save.
+    WritePrivateProfileStringW(L"launcher", L"ui_theme", L"dark", a.c_str());
+    save_settings(a, load_settings(a));
+    wchar_t theme[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"ui_theme", L"", theme, 16, a.c_str());
+    check(std::wstring(theme) == L"dark" && !per_game_key(L"launcher", L"ui_theme"),
+          "round trip: [launcher] ui_theme stays through a save and is in no profile or game copy");
+    fs::remove_all(dir, ec);
+}
+
+}  // namespace
+
+int SIM_QVFR_TEST_MAIN() {
+    folder = temp_path(L"simqvfr-launcher-settings-test");
+    std::error_code ec;
+    fs::remove_all(folder, ec);
+    fs::create_directories(folder);
+
+    // Settings (the window's model): the shipped QVFR ini, a save and reload, the mode switch, other
+    // keys left alone, the runtime report and the kit's readouts.
+    {
+        const std::wstring ini = (folder / L"settings.ini").wstring();
+        write_file(ini, "; comment kept\r\n[experiment]\r\nmode=views4\r\ndred=1\r\nfocus_percent=31\r\neye_scale=40\r\n"
+                        "[quad]\r\nfeather_percent=20\r\ndebug_border=0\r\ndebug_border_color=magenta\r\ngaze=1\r\n");
+        const Settings shipped = load_settings(ini);
+        check(shipped.mode == RenderMode::Qvfr && shipped.outer == 40 && shipped.width == 31 && shipped.height == 31 &&
+                  shipped.inner == 129 && shipped.feather == 20 && shipped.eyeTracking && !shipped.outline &&
+                  shipped.color == OutlineColor::Magenta,
+              "settings: the shipped ini reads as QVFR outer 40%, 31% x 31%, inner 129% (from eye_scale)");
+
+        Settings s = shipped;
+        s.outer = 30;
+        s.inner = 110;
+        s.width = 35;
+        s.height = 25;
+        s.feather = 12;
+        s.corner = 40;
+        s.eyeTracking = false;
+        s.outline = true;
+        s.color = OutlineColor::Teal;
+        s.offset = {-6, 3};
+        const bool saved = save_settings(ini, s);
+        const Settings reread = load_settings(ini);
+        std::string iniText;
+        read_file(ini, iniText);
+        check(saved && reread.outer == 30 && reread.inner == 110 && reread.width == 35 && reread.height == 25 &&
+                  reread.feather == 12 && reread.corner == 40 && !reread.eyeTracking && reread.outline && reread.color == OutlineColor::Teal &&
+                  iniText.find("periphery_scale=30") != std::string::npos && iniText.find("focus_density=110") != std::string::npos &&
+                  iniText.find("focus_height_percent=25") != std::string::npos &&
+                  iniText.find("corner_radius_percent=40") != std::string::npos &&
+                  iniText.find("views4_compose=1") != std::string::npos && iniText.find("debug_border_color=teal") != std::string::npos,
+              "settings: QVFR save writes periphery_scale, focus_density, both focus axes and the views4 keys, and reads back");
+        check(iniText.find("; comment kept") != std::string::npos && iniText.find("dred=1") != std::string::npos,
+              "settings: comments and other keys are left alone");
+        check(reread.offset.fixed == -6 && reread.offset.gaze == 3 && iniText.find("fixed_offset_y=-6") != std::string::npos &&
+                  iniText.find("gaze_offset_y=3") != std::string::npos,
+              "settings: both vertical offsets are written (negative too) and read back");
+        {
+            // The focus shape: a box by default (the shipped ini has no shape keys); corners round-trip.
+            Settings f = reread;
+            check(!f.shape.corners && f.shape == simqvfr::FocusShape{}, "settings: the focus shape is a box by default");
+            f.shape.corners = true;
+            f.shape.in[static_cast<int>(simqvfr::FocusCorner::TopLeft)] = 25;
+            f.shape.in[static_cast<int>(simqvfr::FocusCorner::TopRight)] = 25;
+            f.shape.vertical[static_cast<int>(simqvfr::FocusCorner::BottomLeft)] = 60;  // clamps to kFocusCornerMax
+            save_live_settings(ini, f);
+            std::string shapeText;
+            read_file(ini, shapeText);
+            const Settings shape = load_settings(ini);
+            check(shape.shape.corners && shape.shape.in[0] == 25 && shape.shape.in[1] == 25 &&
+                      shape.shape.vertical[static_cast<int>(simqvfr::FocusCorner::BottomLeft)] == simqvfr::kFocusCornerMax &&
+                      shapeText.find("focus_shape=corners") != std::string::npos &&
+                      shapeText.find("shape_top_left_in=25") != std::string::npos,
+                  "settings: the corner shape is written live and read back, its insets clamped");
+            save_settings(ini, reread);
+        }
+        {
+            // The Diagnostics pane's switches: the CPU capture and the one launch without QVFR.
+            Settings d = reread;
+            d.cpuProfile = true;
+            d.baselineNext = true;
+            save_settings(ini, d);
+            std::string diagText;
+            read_file(ini, diagText);
+            const Settings diag = load_settings(ini);
+            check(diag.cpuProfile && diag.baselineNext && diagText.find("cpu_profile=1") != std::string::npos &&
+                      diagText.find("baseline_next=1") != std::string::npos && diagText.find("baseline=") == std::string::npos,
+                  "settings: CPU capture and next launch without QVFR are saved and read back ([experiment] baseline untouched)");
+            d.cpuProfile = d.baselineNext = false;
+            save_settings(ini, d);
+            const Settings off = load_settings(ini);
+            check(!off.cpuProfile && !off.baselineNext, "settings: and both turn off again");
+        }
+
+        s.mode = RenderMode::TwoLoop;
+        save_settings(ini, s);
+        const Settings loop = load_settings(ini);
+        read_file(ini, iniText);
+        check(loop.mode == RenderMode::TwoLoop && loop.outer == 30 && iniText.find("mode=quad") != std::string::npos &&
+                  iniText.find("eye_scale=30") != std::string::npos,
+              "settings: Two-loop writes mode=quad with the outer resolution as eye_scale");
+
+        Settings big;
+        big.outer = 200;
+        big.width = 1;
+        save_settings(ini, big);
+        const Settings clamped = load_settings(ini);
+        check(clamped.outer == kOuterRange.max && clamped.width == kSizeRange.min, "settings: values are clamped to the kit's ranges");
+
+        {
+            // Dragging Inner resolution: 5% steps from 50 to 400, and 100% under some whole pixel at any track width
+            // (a plain 1% drag over ~230 px went 99 -> 101).
+            bool hundred = true, onGrid = true;
+            for (int travel = 120; travel <= 900; ++travel) {
+                bool found = false;
+                for (int px = 0; px <= travel; ++px) {
+                    const int at = slider_value_at(kInnerRange, static_cast<double>(px) / travel, kInnerDragStep);
+                    found |= at == 100;
+                    onGrid &= at >= kInnerRange.min && at <= kInnerRange.max && (at - kInnerRange.min) % kInnerDragStep == 0;
+                }
+                hundred &= found;
+            }
+            check(hundred && onGrid && slider_value_at(kInnerRange, 0.0, kInnerDragStep) == kInnerRange.min &&
+                      slider_value_at(kInnerRange, 1.0, kInnerDragStep) == kInnerRange.max &&
+                      slider_value_at(kInnerRange, 2.0, kInnerDragStep) == kInnerRange.max &&
+                      slider_value_at(kInnerRange, -1.0, kInnerDragStep) == kInnerRange.min,
+                  "slider: Inner resolution drags in 5% steps, 100% reachable at any width, ends at 50% and 400%");
+            check(slider_value_at(kOuterRange, 0.5) == 55 && slider_value_at(kOuterRange, 0.0) == 10 &&
+                      slider_value_at(kOuterRange, 1.0) == 100 && slider_value_at({0, 50}, 0.31) == 16,
+                  "slider: other sliders keep 1% steps");
+        }
+
+        Settings placed;
+        placed.menuYaw = -20;
+        placed.menuPitch = -12;
+        placed.menuWidth = 45;
+        save_settings(ini, placed);
+        const Settings menu = load_settings(ini);
+        read_file(ini, iniText);
+        check(menu.menuYaw == -20 && menu.menuPitch == -12 && menu.menuWidth == 45 && iniText.find("[menu]") != std::string::npos &&
+                  iniText.find("yaw=-20") != std::string::npos,
+              "settings: the headset menu's place round-trips through [menu], negative degrees included");
+        placed.menuYaw = 90;
+        placed.menuWidth = 5;
+        save_settings(ini, placed);
+        const Settings outside = load_settings(ini);
+        check(outside.menuYaw == kMenuYawRange.max && outside.menuWidth == kMenuWidthRange.min,
+              "settings: the headset menu's place is clamped to its ranges");
+
+        // Cheeky Foveated DLSS: [cheeky] round-trips; the live save leaves `enabled` (next launch) alone.
+        Settings dlss = placed;
+        dlss.cheeky = {true, false, true, 60, 12, 10};
+        dlss.cheeky.supersampling = 150;
+        dlss.cheeky.motionFix = dlss.cheeky.nr = true;
+        dlss.cheeky.nrPreset = 1;
+        dlss.cheeky.nrPasses = 2;
+        dlss.cheeky.fg = true;
+        dlss.cheeky.fgMultiplier = 3;
+        dlss.cheeky.fgSize = 40;
+        dlss.cheeky.fgScale = 75;
+        dlss.cheeky.fgPeriphery = 25;
+        save_settings(ini, dlss);
+        check(load_settings(ini).cheeky == dlss.cheeky, "settings: [cheeky] round-trips (load, processing, outer, presets, supersampling, motion fix, DLSS-NR, frame generation)");
+        Settings dlssLive = dlss;
+        dlssLive.cheeky.load = false;
+        dlssLive.cheeky.outerScale = 40;
+        save_live_settings(ini, dlssLive);
+        const simqvfr::CheekySettings afterLive = load_settings(ini).cheeky;
+        check(afterLive.load && afterLive.outerScale == 40, "settings: the live save changes Cheeky's settings, not enabled");
+        dlssLive.osd = {true, -15, 22, 30};
+        save_live_settings(ini, dlssLive);
+        check(load_settings(ini).osd == dlssLive.osd, "settings: [osd] (the performance overlay) round-trips, live");
+        Settings cropSave = load_settings(ini);
+        cropSave.mode = RenderMode::Qvfr;
+        cropSave.crop = true;
+        cropSave.cropTop = 30;
+        cropSave.cropBottom = 55;  // above kCropRange: clamped on its own
+        cropSave.cropOuter = 12;
+        cropSave.cropInner = 0;
+        save_settings(ini, cropSave);
+        const Settings cropBack = load_settings(ini);
+        check(cropBack.crop && cropBack.cropTop == 30 && cropBack.cropBottom == kCropRange.max && cropBack.cropOuter == 12 &&
+                  cropBack.cropInner == 0,
+              "settings: [crop] round-trips, each side clamped on its own");
+        {
+            Settings detail = cropBack;
+            check(detail.objectDetail == 100, "settings: object detail defaults to 100% (the focus views' LOD)");
+            detail.objectDetail = 40;
+            save_live_settings(ini, detail);
+            check(load_settings(ini).objectDetail == 40, "settings: object detail round-trips, live");
+            detail.objectDetail = 250;  // above kObjectDetailRange: clamped
+            save_settings(ini, detail);
+            check(load_settings(ini).objectDetail == kObjectDetailRange.max, "settings: object detail is clamped to 0-100%");
+            check(detail.sharpen == 0, "settings: sharpening defaults to off");
+            detail.sharpen = 45;
+            save_live_settings(ini, detail);
+            check(load_settings(ini).sharpen == 45 && ini_int(ini, L"quad", L"sharpen_percent") == 45,
+                  "settings: sharpening round-trips, live ([quad] sharpen_percent)");
+            detail.sharpen = 150;  // above kSharpenRange: clamped
+            save_settings(ini, detail);
+            check(load_settings(ini).sharpen == kSharpenRange.max, "settings: sharpening is clamped to 0-100%");
+            check(per_game_key(L"quad", L"sharpen_percent"), "settings: sharpen_percent is a per-game key");
+            {
+                Settings sharp;
+                sharp.sharpen = 60;
+                bool inProfile = false;
+                for (const ProfileKey& k : settings_profile(sharp, L"sharp").keys)
+                    inProfile |= k.section == L"quad" && k.key == L"sharpen_percent" && k.value == L"60";
+                check(inProfile, "settings: a profile holds the sharpening");
+                check(restored_defaults(sharp).sharpen == 0, "settings: Restore Defaults turns sharpening off");
+            }
+            detail.sharpen = 0;
+            save_settings(ini, detail);
+        }
+        LaunchSizes launched;
+        launched.known = true;
+        launched.outer = cropBack.outer;
+        launched.focusWidth = launched.focusHeight = 1000;
+        launched.crop = L"30,40,12,0";
+        const bool sameCrop = fits_launch(cropBack, launched);
+        launched.crop = L"0,0,0,0";
+        const bool moreCrop = fits_launch(cropBack, launched);
+        Settings lessCrop = cropBack;
+        lessCrop.crop = false;
+        launched.crop = L"30,40,12,0";
+        Settings helmetSave = cropBack;
+        helmetSave.helmet.on = true;
+        helmetSave.helmet.rim = 9;
+        helmetSave.helmet.light = 30;
+        save_settings(ini, helmetSave);
+        check(load_settings(ini).helmet == helmetSave.helmet, "settings: [helmet] round-trips");
+        check(sameCrop && moreCrop && !fits_launch(lessCrop, launched),
+              "live: a crop applies live, up to the launch's outer views (less crop than at launch: next launch)");
+        check(cheeky_runtime_path(ini, L"C:\\layer") == L"C:\\layer\\CheekyFoveatedDLSS\\CheekyFoveatedDLSSRuntime.dll",
+              "Cheeky runtime: by default in CheekyFoveatedDLSS next to the layer");
+        save_cheeky_runtime(ini, L"D:\\cheeky\\CheekyFoveatedDLSSRuntime.dll");
+        check(cheeky_runtime_path(ini, L"C:\\layer") == L"D:\\cheeky\\CheekyFoveatedDLSSRuntime.dll",
+              "Cheeky runtime: a chosen path is used as it is");
+
+        // The runtime report, and the kit's example: recommended 2584 x 2160, defaults (outer 50,
+        // inner 100, 35% x 35%) give 1292 x 1080 and 904 x 756, a 4392 x 1080 target, 4.16 M pixels.
+        const std::wstring runtimeIni = (folder / L"runtime.ini").wstring();
+        check(!load_runtime_info(runtimeIni).known(), "runtime report: unknown before the first launch");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nmax_width=8192\r\n"
+                               "max_height=8192\r\neye_tracking=0\r\n");
+        const RuntimeInfo rt = load_runtime_info(runtimeIni);
+        check(rt.known() && rt.width == 2584 && rt.height == 2160 && rt.maxWidth == 8192 && rt.eyeTracker == EyeTracker::Missing,
+              "runtime report: recommended size, maximum and a missing eye tracker");
+        const Readouts r = readouts(Settings{}, rt);
+        check(r.centerPpd == 0, "readouts: no Center PPD before the layer reports it");
+        RuntimeInfo withPpd = rt;
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nnative_center_ppd=45.32\r\n");
+        withPpd.centerPpd = load_runtime_info(runtimeIni).centerPpd;
+        Settings sharp;
+        sharp.inner = 120;
+        check(std::abs(withPpd.centerPpd - 45.32) < 1e-9 && std::lround(readouts(sharp, withPpd).centerPpd) == 54,
+              "readouts: Center PPD = the reported native PPD x the focus density (45.32 x 120% = 54)");
+        std::printf("     kit example: outer %dx%d, focus %dx%d, target %dx%d, %.2f M\n", r.outer.width, r.outer.height,
+                    r.focus.width, r.focus.height, r.target.width, r.target.height, r.pixels / 1e6);
+        check(r.outer.width == 1292 && r.outer.height == 1080 && r.focus.width == 904 && r.focus.height == 756 &&
+                  r.target.width == 4392 && r.target.height == 1080 && std::abs(r.pixels / 1e6 - 4.16) < 0.005 &&
+                  !r.overRuntimeLimit,
+              "readouts: the kit's example numbers (QVFR.viewPixels)");
+        // VRAM: none before a QVFR launch measures it; then the part that follows ACE's target scales with
+        // the target's area (here the same target, then one with half the area) and the rest stays.
+        check(vram_estimate(Settings{}, r, rt).mb == 0, "vram estimate: none before a launch reports it");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nvram_used_mb=9000\r\n"
+                               "vram_budget_mb=15000\r\nvram_scaled_mb=2000\r\nvram_target=4392x1080\r\n");
+        const RuntimeInfo withVram = load_runtime_info(runtimeIni);
+        check(withVram.vramUsedMb == 9000 && withVram.vramBudgetMb == 15000 && withVram.vramScaledMb == 2000 &&
+                  withVram.vramTarget.width == 4392 && withVram.vramTarget.height == 1080,
+              "runtime report: VRAM used, budget, the part that follows the target and its size");
+        const VramEstimate same = vram_estimate(Settings{}, r, withVram);
+        check(std::abs(same.mb - 9000) < 1e-6 && same.budgetMb == 15000, "vram estimate: at the launch's target, what it measured");
+        Readouts half = r;
+        half.target = {2196, 1080};
+        check(std::abs(vram_estimate(Settings{}, half, withVram).mb - 8000) < 1e-6,
+              "vram estimate: half the target's area, half of the 2000 MB that follows it (9000 -> 8000)");
+        // The last session (the layer's session_* keys): read back, and the pasteable summary.
+        check(!withVram.session.known() && session_summary_text(withVram).find(L"no session") != std::wstring::npos,
+              "session: none before a launch reports one");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nvram_used_mb=12519\r\n"
+                               "vram_budget_mb=13008\r\nsession_time=2026-11-03 09:07\r\nsession_mode=QVFR\r\n"
+                               "session_fps=90.0\r\nsession_frame_p50_ms=11.11\r\nsession_frame_p90_ms=11.66\r\n"
+                               "session_late_percent=0.1\r\nsession_refresh_hz=90\r\nsession_cpu_ms=7.70\r\n"
+                               "session_gpu_ms=8.60\r\nsession_gpu_busy=78\r\nsession_cpu_cores=4.8\r\n"
+                               "session_limited=Neither (headroom)\r\n"
+                               "session_threads=(aSeeVRClient.dll)=96|Physics=95|GameThread=69|Render Worker 0=26\r\n"
+                               "session_frame_generation=0\r\nsession_gaze_ms=0.020\r\nsession_layer_ms=0.03\r\n"
+                               "session_layers_below=XR_APILAYER_MBUCCHIA_toolkit\r\nsession_cpu_profile=\r\n");
+        const RuntimeInfo withSession = load_runtime_info(runtimeIni);
+        const SessionInfo& si = withSession.session;
+        check(si.known() && std::abs(si.fps - 90) < 1e-9 && std::abs(si.cpuMs - 7.7) < 1e-9 && std::abs(si.gpuMs - 8.6) < 1e-9 &&
+                  si.limited == L"Neither (headroom)" && !si.frameGeneration && si.cpuProfile.empty(),
+              "session: frame rate, CPU and GPU frame time, what limits it read back");
+        check(si.threads.size() == 4 && si.threads[0].first == L"(aSeeVRClient.dll)" && std::abs(si.threads[0].second - 96) < 1e-9 &&
+                  si.threads[3].first == L"Render Worker 0",
+              "session: the busiest threads in order, names with spaces and parentheses kept");
+        const std::wstring summaryText = session_summary_text(withSession);
+        std::printf("     summary:\n%ls", summaryText.c_str());
+        check(summaryText.find(L"CPU frame time (render thread): 7.70 ms") != std::wstring::npos &&
+                  summaryText.find(L"GPU frame time (whole GPU): 8.60 ms, 78% busy") != std::wstring::npos &&
+                  summaryText.find(L"GameThread 69%") != std::wstring::npos &&
+                  summaryText.find(L"VRAM: 12.2 GB of 12.7 GB") != std::wstring::npos &&
+                  summaryText.find(L"frame generation off") != std::wstring::npos,
+              "session: the summary has the frame times, threads, VRAM and frame generation");
+        Settings twoLoop;
+        twoLoop.mode = RenderMode::TwoLoop;
+        check(vram_estimate(twoLoop, r, withVram).mb == 0, "vram estimate: QVFR only");
+        Settings wide;
+        wide.outer = 100;
+        wide.inner = 200;
+        wide.width = 60;
+        check(r.runtime.width == 2584 && r.runtime.height == 2160 && std::abs(r.runtimePixels - 2.0 * 2584 * 2160) < 1 &&
+                  std::abs(r.saved - (1 - r.pixels / r.runtimePixels)) < 1e-12 && std::lround(r.saved * 100) == 63,
+              "readouts: pixels saved against both eyes at the runtime's recommended size");
+        const Readouts w = readouts(wide, rt);
+        check(w.overRuntimeLimit, "readouts: a target wider than the runtime allows is flagged");
+        // The layer clamps the offered eye to half the maximum width and the views keep their shares.
+        std::printf("     clamped: outer %dx%d, focus %dx%d, target %dx%d\n", w.outer.width, w.outer.height, w.focus.width,
+                    w.focus.height, w.target.width, w.target.height);
+        check(std::abs(w.target.width / 2 - 4096) <= 2 && w.outer.height == 2160 &&
+                  std::abs(w.pixels - 2.0 * (static_cast<double>(w.outer.width) * w.outer.height +
+                                             static_cast<double>(w.focus.width) * w.focus.height)) < 1 &&
+                  w.saved < 0,
+              "readouts: views shrink with the clamped eye; more pixels than the runtime shows as negative saved");
+        // FOV crop: the outer views keep their density over the kept share; the focus views are unchanged.
+        Settings cropped;
+        cropped.crop = true;
+        cropped.cropTop = 15;
+        cropped.cropBottom = 5;
+        cropped.cropOuter = 10;
+        const Readouts cr = readouts(cropped, rt);
+        check(cr.outer.width == 1163 && cr.outer.height == 864 && cr.focus.width == r.focus.width && cr.pixels < r.pixels,
+              "readouts: a crop of 15/5 top/bottom and 10 outer gives 1163 x 864 outer views, the same focus views");
+        Settings cropOff = cropped;
+        cropOff.crop = false;
+        check(readouts(cropOff, rt).outer.width == 1292 && crop_key(cropOff) == L"0,0,0,0" && crop_key(cropped) == L"15,5,10,0",
+              "readouts: a crop that is off changes nothing");
+        Settings loopDefaults;
+        loopDefaults.mode = RenderMode::TwoLoop;
+        const Readouts l = readouts(loopDefaults, rt);
+        check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
+                  std::abs(l.focusDensity - 50.0 / 35) < 1e-9,
+              "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
+
+        // Live settings: only the reloadable keys go to the running game's ini, and only while that
+        // process is ACE.
+        const std::wstring liveIni = (folder / L"live.ini").wstring();
+        write_file(liveIni, "[experiment]\r\nmode=views4\r\nperiphery_scale=50\r\nfocus_percent=39\r\n");
+        Settings changedLive = Settings{};
+        changedLive.outer = 70;
+        changedLive.width = 45;
+        changedLive.feather = 25;
+        changedLive.outline = true;
+        check(save_live_settings(liveIni, changedLive), "live: the live keys are written");
+        read_file(liveIni, iniText);
+        check(iniText.find("focus_percent=45") != std::string::npos && iniText.find("feather_percent=25") != std::string::npos &&
+                  iniText.find("debug_border=1") != std::string::npos && iniText.find("periphery_scale=70") != std::string::npos &&
+                  iniText.find("focus_density=100") != std::string::npos && iniText.find("eye_scale") == std::string::npos &&
+                  iniText.find("mode=views4") != std::string::npos,
+              "live: QVFR sends foveation and resolution, never the method or eye_scale");
+        write_file(liveIni, "[experiment]\r\nmode=quad\r\neye_scale=50\r\n");
+        changedLive.mode = RenderMode::TwoLoop;
+        save_live_settings(liveIni, changedLive);
+        read_file(liveIni, iniText);
+        check(iniText.find("periphery_scale") == std::string::npos && iniText.find("eye_scale=50") != std::string::npos,
+              "live: Two-loop sends no resolution");
+
+        // Live resolution fits the launch: QVFR up to its launch sizes, Two-loop only unchanged.
+        write_file(runtimeIni, "[runtime]\r\nlaunch_mode=views4\r\nlaunch_outer=50\r\nlaunch_focus_width=39\r\n"
+                               "launch_focus_height=39\r\n");
+        const LaunchSizes qvfrLaunch = load_launch_sizes(runtimeIni);
+        Settings lower = Settings{};  // outer 50, inner 100 x 35%: inside the launch's 39%
+        check(qvfrLaunch.known && qvfrLaunch.mode == RenderMode::Qvfr && fits_launch(lower, qvfrLaunch),
+              "live fit: the launch settings fit");
+        lower.outer = 30;
+        lower.inner = 80;
+        lower.width = 45;  // 80% x 45% = 36% of the native eye, under 39%
+        check(fits_launch(lower, qvfrLaunch), "live fit: lower periphery and a wider box at lower density fit");
+        Settings higher = Settings{};
+        higher.inner = 120;  // 120% x 35% = 42%, over 39%
+        Settings wider = Settings{};
+        wider.width = 50;  // the same density over a larger box needs more pixels
+        Settings sharper = Settings{};
+        sharper.outer = 60;
+        Settings loopMode = Settings{};
+        loopMode.mode = RenderMode::TwoLoop;
+        check(!fits_launch(higher, qvfrLaunch) && !fits_launch(wider, qvfrLaunch) && !fits_launch(sharper, qvfrLaunch) &&
+                  !fits_launch(loopMode, qvfrLaunch),
+              "live fit: more density, a larger box at the same density, more periphery or another method do not");
+        write_file(runtimeIni, "[runtime]\r\nlaunch_mode=quad\r\nlaunch_outer=50\r\n");
+        const LaunchSizes loopLaunch = load_launch_sizes(runtimeIni);
+        Settings loopLower = loopMode;
+        loopLower.outer = 40;
+        check(fits_launch(loopMode, loopLaunch) && !fits_launch(loopLower, loopLaunch) && !load_launch_sizes(liveIni).known,
+              "live fit: Two-loop resolution is fixed; no launch report, no fit");
+        write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=" +
+                                   std::to_string(GetCurrentProcessId()) + "\r\n");
+        check(running_live_ini(runtimeIni).empty(), "live: a live_pid that is not ACE is ignored");
+        write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=0\r\n");
+        check(running_live_ini(runtimeIni).empty(), "live: no running game, no live ini");
+    }
+
+    fs::remove_all(folder, ec);
+    settings_round_trip_checks();
+    return test_result();
+}
