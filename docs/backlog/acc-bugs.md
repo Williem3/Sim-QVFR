@@ -1,7 +1,7 @@
 # Assetto Corsa Competizione: known bugs
 
-Issues in ACC's QVFR path; none is open. The detailed measurements are in the local recon notes (`docs/recon-acc.md`, not in the
-repository).
+Issues in ACC's QVFR path; none is open. The detailed measurements are in the local recon notes (`docs/recon-acc.md`,
+not in the repository).
 
 ## Fixed: the focus region was darker than the periphery in sunlight
 
