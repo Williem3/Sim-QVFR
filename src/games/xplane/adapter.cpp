@@ -20,38 +20,39 @@ using simqvfr::Views4Layout;
 
 // [experiment] xplane_layers = 3 or 4: the render size query reports that many layers instead of 2, so
 // REN_graph_info and the per-eye targets get them. A measurement for QVFR: a frame capture then shows which counts,
-// targets and draws follow (docs/recon-xplane.md). 0 or 2: X-Plane as it is.
-void apply_layer_count(const wchar_t* ini, int forced = 0) {
+// targets and draws follow (docs/recon-xplane.md). 0 or 2: X-Plane as it is. True: the count was patched.
+bool apply_layer_count(const wchar_t* ini, int forced = 0) {
     const int layers = forced ? forced : GetPrivateProfileIntW(L"experiment", L"xplane_layers", 0, ini);
     if (layers == 0 || layers == 2)
-        return;
+        return false;
     if (layers < 1 || layers > 4) {
         simqvfr::logf("xplane: xplane_layers=%d ignored (1-4)", layers);
-        return;
+        return false;
     }
     if (!simqvfr::code_matches(kVrLayerCount, kVrLayerCountAnchor, sizeof(kVrLayerCountAnchor))) {
         simqvfr::logf("xplane: xplane_layers=%d not applied: the layer count at 0x%llx isn't this build's", layers,
                       static_cast<unsigned long long>(kVrLayerCount));
-        return;
+        return false;
     }
     const auto value = static_cast<std::uint8_t>(layers);
     const bool ok = simqvfr::code_write(kVrLayerCount + kVrLayerCountImm, &value, 1);
     simqvfr::logf("xplane: VR layer count 2 -> %d %s (render size query, 0x%llx)", layers, ok ? "patched" : "FAILED",
                   static_cast<unsigned long long>(kVrLayerCount));
+    return ok;
 }
 
 // [experiment] xplane_context_layers = 3 or 4: the VR render context is made with that many layers, its stereo test
 // becomes layers >= 2 (it is layers == 2, which would turn the context mono), the camera still takes two views'
 // tangents (its room), the 3D world subgraph gives its targets that many layers, and the two VR-context resizes keep
 // that many (they passed 2, which also rebuilt its lit-image miptree with two layers). 0 or 2: X-Plane as it is. All
-// patches or none.
-void apply_context_layers(const wchar_t* ini, int forced = 0) {
+// patches or none (true: all went in).
+bool apply_context_layers(const wchar_t* ini, int forced = 0) {
     const int layers = forced ? forced : GetPrivateProfileIntW(L"experiment", L"xplane_context_layers", 0, ini);
     if (layers == 0 || layers == 2)
-        return;
+        return false;
     if (layers < 3 || layers > 4) {
         simqvfr::logf("xplane: xplane_context_layers=%d ignored (3-4)", layers);
-        return;
+        return false;
     }
     if (!simqvfr::code_matches(kVrContextLayers, kVrContextLayersAnchor, sizeof(kVrContextLayersAnchor)) ||
         !simqvfr::code_matches(kStereoTestCmp, kStereoTestCmpAnchor, sizeof(kStereoTestCmpAnchor)) ||
@@ -61,7 +62,7 @@ void apply_context_layers(const wchar_t* ini, int forced = 0) {
         !simqvfr::code_matches(kVrContextResizeA, kVrContextResizeAnchor, sizeof(kVrContextResizeAnchor)) ||
         !simqvfr::code_matches(kVrContextResizeB, kVrContextResizeAnchor, sizeof(kVrContextResizeAnchor))) {
         simqvfr::logf("xplane: xplane_context_layers=%d not applied: the VR context code isn't this build's", layers);
-        return;
+        return false;
     }
     const auto value = static_cast<std::uint8_t>(layers);
     const bool ok = simqvfr::code_write(kTangentCopyBound, kTangentCopyBoundTwo, sizeof(kTangentCopyBoundTwo)) &&
@@ -74,16 +75,18 @@ void apply_context_layers(const wchar_t* ini, int forced = 0) {
                   "camera tangents kept at 2: %s",
                   layers,
                   ok ? "patched" : "FAILED");
+    return ok;
 }
 
 // [experiment] xplane_copies = 1: X-Plane draws four views, slots 2-3 copies of the eyes, and its final resolve shows
 // layers 2-3 (four_views.h). Includes every four-layer patch (xplane_layers and xplane_context_layers at 4). A normal
-// headset image: four views rendered. The stage gate before the focus cameras.
-void apply_copies(const wchar_t* ini) {
+// headset image: four views rendered. The stage gate before the focus cameras. True: a four-layer patch went in
+// (X-Plane then makes four-layer targets).
+bool apply_copies(const wchar_t* ini) {
     if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) != 1)
-        return;
-    apply_layer_count(ini, 4);
-    apply_context_layers(ini, 4);
+        return false;
+    const bool layers = apply_layer_count(ini, 4);
+    const bool context = apply_context_layers(ini, 4);
     four_views_copies_start();
     // [experiment] xplane_focus = 1: views 2-3 render focus boxes of focus_percent (default 20) of each eye.
     if (GetPrivateProfileIntW(L"experiment", L"xplane_focus", 0, ini) == 1) {
@@ -91,6 +94,28 @@ void apply_copies(const wchar_t* ini) {
         const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
         four_views_set_focus(true, fraction, fraction);
     }
+    return layers || context;
+}
+
+// True when the exe's `rva` holds a float inside its image, in committed read-write (or write-copy) data.
+bool writable_image_float(std::uintptr_t rva) {
+    const std::uintptr_t base = simqvfr::module_base();
+    if (!base)
+        return false;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || rva + sizeof(float) > nt->OptionalHeader.SizeOfImage)
+        return false;
+    const std::uintptr_t at = base + rva;
+    MEMORY_BASIC_INFORMATION mbi = {};
+    if (VirtualQuery(reinterpret_cast<const void*>(at), &mbi, sizeof(mbi)) != sizeof(mbi))
+        return false;
+    const DWORD protect = mbi.Protect & 0xFF;
+    const auto end = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    return mbi.State == MEM_COMMIT && mbi.Type == MEM_IMAGE && !(mbi.Protect & PAGE_GUARD) &&
+           (protect == PAGE_READWRITE || protect == PAGE_WRITECOPY) && at + sizeof(float) <= end;
 }
 
 // QVFR as the ini asks for it: [experiment] mode=views4 with views4_compose=1 (the launcher's QVFR). Read at the early
@@ -104,8 +129,8 @@ bool qvfr_wanted(const wchar_t* ini) {
 
 // QVFR: four views (layers, contexts, multiplier, copies stage), focus cameras at focus_percent, the final resolve and
 // view heights in eye columns. False: some part isn't this build's (logged); X-Plane may then render oddly, so the
-// layer stays off and the headset shows what X-Plane submits.
-bool apply_qvfr(const wchar_t* ini) {
+// layer stays off and the headset shows what X-Plane submits. `fourLayers`: a four-layer patch went in.
+bool apply_qvfr(const wchar_t* ini, bool& fourLayers) {
     four_views_set_eye_columns(true);
     // Stage 1 of per-view sizes: one viewport per view, every rect the whole layer (the image must not change).
     four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1);
@@ -121,9 +146,10 @@ bool apply_qvfr(const wchar_t* ini) {
     // xplane_diag_ssr_off, _ao_off, _shadow_off).
     four_views_set_diag_edits(GetPrivateProfileIntW(L"experiment", L"xplane_diag", 0, ini) == 1);
     four_views_set_gaze_follow(GetPrivateProfileIntW(L"experiment", L"xplane_gaze", 1, ini) == 1);
-    apply_layer_count(ini, 4);
-    apply_context_layers(ini, 4);
-    bool ok = four_views_copies_start();
+    const bool layers = apply_layer_count(ini, 4);
+    const bool context = apply_context_layers(ini, 4);
+    fourLayers = layers || context;
+    bool ok = four_views_copies_start() && layers && context;
     ok = ok && four_views_eye_columns_start();
     const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
     const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
@@ -227,19 +253,30 @@ public:
         simqvfr::logf("xplane: layer loaded early (at X-Plane's Vulkan start): patching now");
         patched_ = true;
         if (qvfr_wanted(ini)) {
-            qvfr_ = apply_qvfr(ini);
+            bool fourLayers = false;
+            qvfr_ = apply_qvfr(ini, fourLayers);
             // Diagnostic switches (xplane_diag=1): SSR, AO and the sun's shadow (four_views_set_diagnostics).
             if (diag_.start(ini, L"xplane", {L"ssr", L"ao", L"shadow"}))
                 simqvfr::logf("xplane: diagnostic switches read from %ls", diag_.ini().c_str());
-            fourViews_ = true;
+            fourViews_ = fourLayers;
             return;
         }
         fourViews_ = apply_all(ini);
     }
     // Every xrEndFrame: with four views, exposure fusion stays off (it builds its pyramids for two layers only; abi.h).
-    // X-Plane's static initialisers set the control after an early load, so it is checked here, not once.
+    // X-Plane's static initialisers set the control after an early load, so it is checked here, not once. Only after a
+    // four-layer patch went in (its anchors matched: this build), at an address checked once as the exe's writable data.
     void frame_end() override {
         if (!fourViews_)
+            return;
+        if (!fusionChecked_) {
+            fusionChecked_ = true;
+            fusionOk_ = writable_image_float(kExposureFusionControl);
+            if (!fusionOk_)
+                simqvfr::logf("xplane: exposure fusion control at 0x%llx isn't writable data of this exe: left alone",
+                              static_cast<unsigned long long>(kExposureFusionControl));
+        }
+        if (!fusionOk_)
             return;
         auto* control = reinterpret_cast<volatile float*>(simqvfr::module_base() + kExposureFusionControl);
         if (*control != 0.0f) {
@@ -266,7 +303,9 @@ private:
     }
 
     bool patched_ = false;
-    bool fourViews_ = false;
+    bool fourViews_ = false;      // a four-layer patch went in: exposure fusion kept off
+    bool fusionChecked_ = false;  // the control's address validated (writable_image_float), once
+    bool fusionOk_ = false;
     bool qvfr_ = false;
     bool viewSizes_ = false;  // per-view sizes on (xplane_view_sizes=1, at QVFR's start)
     simqvfr::games::DiagSwitches diag_;  // xplane_diag=1
@@ -298,10 +337,8 @@ private:
             simqvfr::logf("xplane: baseline=1: nothing patched, X-Plane renders its own two views");
             return false;
         }
-        if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1) {
-            apply_copies(ini);
-            return true;
-        }
+        if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1)
+            return apply_copies(ini);
         apply_layer_count(ini);
         apply_context_layers(ini);
         return false;

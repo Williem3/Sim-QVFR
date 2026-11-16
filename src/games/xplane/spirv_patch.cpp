@@ -31,6 +31,43 @@ bool typed_result(std::uint16_t code) {
     }
 }
 
+// Every instruction with both a result type (word 1) and a result id (word 2), per the SPIR-V core grammar (1.6): the
+// only ones whose word 2 is a definition. Types, OpString, OpLabel and the like hold their result in word 1;
+// OpSource, OpEntryPoint, decorations and names hold other operands in word 2.
+bool result_in_word2(std::uint16_t code) {
+    switch (code) {
+    case 1:                                            // Undef
+    case 12:                                           // ExtInst
+    case 41: case 42: case 43: case 44: case 45: case 46:  // ConstantTrue .. ConstantNull
+    case 48: case 49: case 50: case 51: case 52:       // SpecConstantTrue .. SpecConstantOp
+    case 54: case 55: case 57:                         // Function, FunctionParameter, FunctionCall
+    case 59: case 60: case 61:                         // Variable, ImageTexelPointer, Load
+    case 65: case 66: case 67: case 68: case 69: case 70:  // AccessChain .. InBoundsPtrAccessChain
+    case 227:                                          // AtomicLoad
+    case 245:                                          // Phi
+    case 259:                                          // GroupAsyncCopy
+    case 318: case 320: case 321:                      // AtomicFlagTestAndSet, ImageSparseRead, SizeOf
+    case 400: case 401: case 402: case 403:            // CopyLogical, PtrEqual, PtrNotEqual, PtrDiff
+    case 5381:                                         // IsHelperInvocationEXT
+        return true;
+    default:
+        break;
+    }
+    return (code >= 77 && code <= 84) ||    // VectorExtractDynamic .. Transpose
+           (code >= 86 && code <= 98) ||    // SampledImage, ImageSample* .. ImageRead (99 ImageWrite has none)
+           (code >= 100 && code <= 107) ||  // Image, ImageQuery*
+           (code >= 109 && code <= 124) ||  // conversions .. Bitcast
+           (code >= 126 && code <= 152) ||  // SNegate .. SMulExtended
+           (code >= 154 && code <= 191) ||  // Any .. FUnordGreaterThanEqual
+           (code >= 194 && code <= 205) ||  // shifts, bitwise, BitField*, BitReverse, BitCount
+           (code >= 207 && code <= 215) ||  // derivatives
+           (code >= 229 && code <= 242) ||  // AtomicExchange .. AtomicXor
+           (code >= 261 && code <= 271) ||  // GroupAll .. GroupSMax
+           (code >= 305 && code <= 316) ||  // ImageSparse* .. ImageSparseTexelsResident
+           (code >= 333 && code <= 366) ||  // GroupNonUniform*
+           (code >= 4421 && code <= 4432);  // SubgroupBallotKHR .. SubgroupReadInvocationKHR
+}
+
 std::uint32_t op(std::uint16_t code, std::uint16_t count) { return (static_cast<std::uint32_t>(count) << 16) | code; }
 
 // The literal string starting at word `at` of an instruction `count` words long.
@@ -692,11 +729,11 @@ struct Module {
             }
         return 0;
     }
-    // Where the instruction with result id `id` is, among those with the result in word 2 (insts.size() if none).
+    // Where the value with result id `id` is defined: among instructions with a result type and a result id, word 2
+    // (result_in_word2; types, whose result is word 1, are found with `find`). insts.size() if none.
     std::size_t defined_at(std::uint32_t id) const {
         for (std::size_t i = 0; i < insts.size(); ++i)
-            if (insts[i].size() >= 3 && code(insts[i]) != kDecorate && code(insts[i]) != kName &&
-                code(insts[i]) != kMemberName && insts[i][2] == id)
+            if (insts[i].size() >= 3 && insts[i][2] == id && result_in_word2(code(insts[i])))
                 return i;
         return insts.size();
     }

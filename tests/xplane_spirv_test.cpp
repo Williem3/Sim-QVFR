@@ -38,6 +38,57 @@ std::vector<std::uint32_t> module(bool secondLoad) {
     return w;
 }
 
+// Appends instruction `code` with `operands`, then the literal string `s` (if any), to `m`.
+void put(std::vector<std::uint32_t>& m, std::uint16_t code, std::vector<std::uint32_t> operands,
+         const char* s = nullptr) {
+    if (s) {
+        std::vector<std::uint32_t> text((std::strlen(s) + 4) / 4, 0);
+        std::memcpy(text.data(), s, std::strlen(s));
+        operands.insert(operands.end(), text.begin(), text.end());
+    }
+    m.push_back(op(code, static_cast<std::uint16_t>(operands.size() + 1)));
+    m.insert(m.end(), operands.begin(), operands.end());
+}
+
+// A shading-rate compute shader (spirv_full_rate_from_layer's) whose written texel, the OpCompositeConstruct %texel,
+// comes after OpSource GLSL 450 (word 2 = 450) and OpTypeInt %1 32 0 (word 2 = 32): ids that equal those words.
+std::vector<std::uint32_t> rate_module(std::uint32_t texel) {
+    std::vector<std::uint32_t> m = {0x07230203, 0x00010300, 0, 500, 0};
+    put(m, 3, {2, 450});  // OpSource GLSL 450
+    put(m, 5, {10}, "shading_rate_data");
+    put(m, 6, {10, 0}, "u_fill_rate");
+    put(m, 5, {11}, "gl_GlobalInvocationID");
+    put(m, 21, {1, 32, 0});    // %1 uint
+    put(m, 23, {2, 1, 3});     // %2 uvec3
+    put(m, 32, {3, 1, 2});     // %3 Input ptr to uvec3
+    put(m, 59, {3, 11, 1});    // %11 Input var
+    put(m, 23, {4, 1, 4});     // %4 uvec4
+    put(m, 54, {5, 6, 0, 7});  // %6 = OpFunction
+    put(m, 248, {8});          // OpLabel
+    put(m, 80, {4, texel, 20, 20, 20, 20});
+    put(m, 99, {21, 22, texel});  // OpImageWrite
+    put(m, 253, {});
+    put(m, 56, {});
+    return m;
+}
+
+// True when `m` (edited) still has the OpSource and the uint type as they were, and the construct %texel now takes its
+// rate from the OpSelect right before it (its else value the original rate %20).
+bool rate_edited(const std::vector<std::uint32_t>& m, std::uint32_t texel) {
+    bool source = false, uintType = false, construct = false;
+    std::size_t prev = 0;
+    for (std::size_t i = 5; i < m.size(); i += m[i] >> 16) {
+        const std::uint16_t c = static_cast<std::uint16_t>(m[i] & 0xffff);
+        source |= c == 3 && m[i + 1] == 2 && m[i + 2] == 450;
+        uintType |= c == 21 && m[i + 1] == 1 && m[i + 2] == 32 && m[i + 3] == 0;
+        if (c == 80 && m[i + 2] == texel && prev && (m[prev] & 0xffff) == 169 && m[prev + 2] == m[i + 3] &&
+            m[prev + 5] == 20)
+            construct = true;
+        prev = i;
+    }
+    return source && uintType && construct;
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
@@ -237,6 +288,18 @@ int SIM_QVFR_TEST_MAIN() {
         const std::vector<std::uint32_t> earlyCopy = early;
         check(!xplane::spirv_eye_columns_resolve(early, &reason) && early == earlyCopy,
               "v_eye loaded before the row: left alone");
+    }
+
+    // A value's definition is the instruction with it as result id (word 2 after a result type), not one whose word 2
+    // only holds the same number: OpSource's version 450, OpTypeInt's width 32.
+    for (const std::uint32_t texel : {450u, 32u}) {
+        std::vector<std::uint32_t> m = rate_module(texel);
+        std::string reason;
+        const int n = xplane::spirv_full_rate_from_layer(m, 2, &reason);
+        check(n == 1 && rate_edited(m, texel), texel == 450 ? "texel id 450: its construct found, not OpSource 450"
+                                                            : "texel id 32: its construct found, not OpTypeInt 32");
+        if (n != 1)
+            std::printf("     %d: %s\n", n, reason.c_str());
     }
 
     // SIM_QVFR_SPV_COLUMNS: the final resolve fragment shader (from a capture); writes <file>.columns.spv.
