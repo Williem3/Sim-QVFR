@@ -26,6 +26,8 @@
 #include "../xr.h"
 #include "d3d11_capture.h"  // write_png_bgra
 #include "focus_ngx.h"
+#include "replay_internal.h"
+#include "replay_shaders.h"
 #include "../games/ace/stereo_flag.h"
 
 extern "C" size_t simqvfr_slot_SetPipelineState(void);
@@ -68,10 +70,10 @@ extern "C" size_t simqvfr_slot_CopyDescriptorsSimple(void);
 extern "C" size_t simqvfr_slot_CreateUnorderedAccessView(void);
 
 namespace simqvfr {
-namespace {
 
-using List = ID3D12GraphicsCommandList;
-using Microsoft::WRL::ComPtr;
+using namespace replay_detail;  // what this file shares with replay_samples.cpp, replay_cull.cpp
+
+namespace {
 
 using CloseFn = HRESULT(STDMETHODCALLTYPE*)(List*);
 using ResetFn = HRESULT(STDMETHODCALLTYPE*)(List*, ID3D12CommandAllocator*, ID3D12PipelineState*);
@@ -98,7 +100,6 @@ using DsvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D
                                        D3D12_CPU_DESCRIPTOR_HANDLE);
 using RtvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_RENDER_TARGET_VIEW_DESC*,
                                        D3D12_CPU_DESCRIPTOR_HANDLE);
-using ExecuteFn = void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 using DispatchFn = void(STDMETHODCALLTYPE*)(List*, UINT, UINT, UINT);
 using SrvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_SHADER_RESOURCE_VIEW_DESC*,
                                        D3D12_CPU_DESCRIPTOR_HANDLE);
@@ -126,7 +127,11 @@ IndirectFn indirectOriginal;
 OmFn omOriginal;
 DsvFn dsvOriginal;
 RtvFn rtvOriginal;
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 ExecuteFn executeOriginal;
+}  // namespace replay_detail
+namespace {
 RootSigFn computeRootSigOriginal;
 ConstNFn computeConstNOriginal;
 VaFn computeCbvOriginal;
@@ -148,208 +153,24 @@ using LibStreamFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12PipelineLibrary1*, LPCWSTR
 LibGfxFn libGfxOriginal;
 LibStreamFn libStreamOriginal;
 CopySimpleFn copySimpleOriginal;
-using UavFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, ID3D12Resource*, const D3D12_UNORDERED_ACCESS_VIEW_DESC*,
-                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 UavFn uavViewOriginal;  // our own UAVs go straight to it (the hook takes focus.lock)
+}  // namespace replay_detail
+namespace {
 using CopyRangesFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, UINT, const D3D12_CPU_DESCRIPTOR_HANDLE*, const UINT*, UINT,
                                               const D3D12_CPU_DESCRIPTOR_HANDLE*, const UINT*, D3D12_DESCRIPTOR_HEAP_TYPE);
 CopyRangesFn copyRangesOriginal;
 // ID3D12Device declares CopyDescriptors right before CopyDescriptorsSimple (d3d12.h).
 size_t slot_CopyDescriptors() { return simqvfr_slot_CopyDescriptorsSimple() - 1; }
 
-enum Op : uint8_t {
-    kRootSig = 1, kPso, kHeaps, kTable, kConst1, kConstN, kCbv, kSrv, kTopology, kIb, kVb, kViewports, kScissors,
-    kStencil, kDraw, kDrawIndexed, kIndirect, kOm
-};
-
 constexpr UINT kPassConstantsRoot = 1;  // ACE: root parameter 1 of scene draws is the 2 KB pass constants
 
-// One command list's recorded calls since its Reset.
-struct Stream {
-    std::vector<uint8_t> bytes;
-    bool active = false;
-    uint32_t draws = 0, calls = 0;
-    float maxViewportWidth = 0;
-    int64_t resetTicks = 0;
-    uint64_t hookCycles = 0;
-    // mode 3: a list with two eye-sized viewports side by side, and the targets it binds
-    bool sawRtv = false, sawDsv = false, stereo = false;
-    float eyeW = 0, eyeH = 0;
-    std::vector<SIZE_T> targets;                             // distinct RTV/DSV CPU handles it binds
-    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> passConstants;  // distinct root-1 addresses, in order
-    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> frameConstants;  // distinct root-0 addresses (frameData: tileCount)
-    // R2b: the compute bindings in effect and ACE's tile passes (found by pipeline name) as they were dispatched.
-    int psoKind = 0;  // 1 tileFrustums, 2 tiledCulling
-    ID3D12PipelineState* pso = nullptr;
-    ID3D12RootSignature* computeRoot = nullptr;
-    ID3D12DescriptorHeap* heap = nullptr;  // the CBV/SRV/UAV heap set
-    uint32_t constants[20] = {};
-    D3D12_GPU_VIRTUAL_ADDRESS computeCbv = 0;
-    D3D12_GPU_DESCRIPTOR_HANDLE tables[10] = {};
-    D3D12_GPU_DESCRIPTOR_HANDLE bindlessUint{};  // root table 18 (space 45 in ACE's scene root signature)
-    D3D12_GPU_VIRTUAL_ADDRESS computeCbvs[8] = {};
-    ID3D12RootSignature* computeCbvRoots[8] = {};  // the compute root signature each was set under
-    // R2c: graphics state for ACE's deferredShadows draws (root tables / CBVs 0-7 as last set)
-    ID3D12RootSignature* gfxRoot = nullptr;
-    D3D12_GPU_DESCRIPTOR_HANDLE gfxTables[8] = {};
-    D3D12_GPU_VIRTUAL_ADDRESS gfxCbvs[8] = {};
-    struct ShadowDraw {
-        ID3D12PipelineState* pso;
-        ID3D12RootSignature* root;
-        D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
-        D3D12_GPU_VIRTUAL_ADDRESS cbv;  // root 5: the eye's 560-B constants
-    };
-    std::vector<ShadowDraw> shadowDraws;
-    // R2c: a list with one eye-size viewport (ACE's per-eye transparents), and the OIT composite's tables
-    bool monoSeen = false, monoMixed = false;
-    float monoX = 0, monoW = 0, monoH = 0;
-    bool oitDraw = false;
-    D3D12_GPU_DESCRIPTOR_HANDLE oitTables[4] = {};
-    // P1: graphics root constants (root 0) and the first render target as last set; the post draws
-    uint32_t gfxConsts[8] = {};
-    SIZE_T lastRtv = 0;
-    struct PostDraw {
-        ID3D12PipelineState* pso;
-        ID3D12RootSignature* root;
-        D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
-        D3D12_GPU_VIRTUAL_ADDRESS cbv;  // root 6 (tonemap's constants)
-        uint32_t consts[8];             // root 0 (fxaa's)
-        SIZE_T rtv;
-    };
-    PostDraw tonemapDraw{}, fxaaDraw{};
-    bool skyBound = false;              // the bound PSO is the sky's
-    // ACE's tyres under single-pass stereo: the bound PSO is the tyres', the viewports and scissors as last set, our
-    // right-eye constants per root-1 address (this list's)
-    bool tyreBound = false;
-    UINT vpCount = 0, scCount = 0;
-    D3D12_VIEWPORT vp[2] = {};
-    D3D12_RECT sc[2] = {};
-    std::vector<std::pair<D3D12_GPU_VIRTUAL_ADDRESS, D3D12_GPU_VIRTUAL_ADDRESS>> tyreConstants;
-    std::vector<UINT64> skyTables;      // root-4 tables (b3..b12, cbSky at b4) the sky draws used
-    bool hasTonemap = false, hasFxaa = false;
-    struct TileDispatch {
-        int kind;
-        ID3D12PipelineState* pso;
-        ID3D12RootSignature* root;
-        ID3D12DescriptorHeap* heap;
-        uint32_t constants[20];
-        D3D12_GPU_VIRTUAL_ADDRESS cbv;
-        D3D12_GPU_DESCRIPTOR_HANDLE tables[10];
-        UINT dims[3];
-        D3D12_GPU_VIRTUAL_ADDRESS cbv2;  // root 2 (normalReconstructionViewSpace's constants)
-        D3D12_GPU_VIRTUAL_ADDRESS cbv6;  // root 6 (vrAntialiasing's constants)
-        D3D12_GPU_VIRTUAL_ADDRESS cbv1;  // root 1 (atmosphericScattering's scatteringSettings)
-    };
-    std::vector<TileDispatch> tileDispatches;
-    std::vector<ID3D12PipelineState*> dispatchPsos;  // every compute dispatch's pipeline (diagnostics)
-    // ACE's instance visibility pass (focus culling): root 0's constants as last set (visibilityGlobals, 52 values), its
-    // culling and finalize dispatches, and the buffer copies of the list (the count and command templates).
-    uint32_t visConsts[64] = {};
-    struct VisDispatch {
-        int kind;  // 25 cull, 26 its directional-shadow variant, 27 finalize
-        ID3D12PipelineState* pso;
-        ID3D12RootSignature* root;
-        ID3D12DescriptorHeap* heap;
-        uint32_t consts[52];
-        D3D12_GPU_DESCRIPTOR_HANDLE tables[10];
-        UINT dims[3];
-    };
-    std::vector<VisDispatch> visDispatches;
-    struct BufferCopy {
-        ID3D12Resource* dst;
-        UINT64 dstOffset;
-        ID3D12Resource* src;
-        UINT64 srcOffset, bytes;
-    };
-    std::vector<BufferCopy> bufferCopies;
-    // The live periphery (eye_apply): every viewport and scissor as the game last set them, what of ours is in effect
-    // in the game's own list, and the constants this list needs patched before it runs.
-    UINT vpN = 0, scN = 0;
-    D3D12_VIEWPORT vpAll[4] = {};
-    D3D12_RECT scAll[4] = {};
-    bool eyeDirty = false, eyeScaled = false, eyeCbv1 = false, eyeCbv5 = false, eyeClipped = false;
-    ID3D12RootSignature* cbv1Root = nullptr;   // the root signature root 1's address was set under
-    ID3D12RootSignature* cbv5Root = nullptr;   // and root 5's (deferredShadows' constants)
-    ID3D12RootSignature* sceneRoot = nullptr;  // ACE's scene root signature (its table 18 was set under it)
-    uint64_t eyeState = 0;                     // the live size this list records with (0: off), taken at its Reset
-    uint64_t eyeOut = 0;                       // and the region after the game's DLSS upscale (eye_out), taken with it
-    struct EyePatch {
-        D3D12_GPU_VIRTUAL_ADDRESS from, to;
-        int mode;    // 0 pass constants, 1 tile culling, 2 normal reconstruction, 3 deferred shadows, 4 velocity packing
-        float w, h;  // mode 0: the list's live view size
-    };
-    std::vector<EyePatch> eyePatches;
-
-    void begin(int64_t now) {
-        bytes.clear();
-        active = true;
-        draws = calls = 0;
-        maxViewportWidth = 0;
-        resetTicks = now;
-        hookCycles = 0;
-        sawRtv = sawDsv = stereo = false;
-        eyeW = eyeH = 0;
-        targets.clear();
-        passConstants.clear();
-        frameConstants.clear();
-        psoKind = 0;
-        pso = nullptr;
-        computeRoot = nullptr;
-        heap = nullptr;
-        computeCbv = 0;
-        bindlessUint = {};
-        tileDispatches.clear();
-        dispatchPsos.clear();
-        visDispatches.clear();
-        bufferCopies.clear();
-        std::memset(computeCbvs, 0, sizeof(computeCbvs));
-        std::memset(computeCbvRoots, 0, sizeof(computeCbvRoots));
-        gfxRoot = nullptr;
-        std::memset(gfxTables, 0, sizeof(gfxTables));
-        std::memset(gfxCbvs, 0, sizeof(gfxCbvs));
-        shadowDraws.clear();
-        monoSeen = monoMixed = oitDraw = false;
-        std::memset(gfxConsts, 0, sizeof(gfxConsts));
-        lastRtv = 0;
-        hasTonemap = hasFxaa = false;
-        skyBound = false;
-        skyTables.clear();
-        tyreBound = false;
-        vpCount = scCount = 0;
-        tyreConstants.clear();
-        monoX = monoW = monoH = 0;
-        std::memset(oitTables, 0, sizeof(oitTables));
-        vpN = scN = 0;
-        eyeDirty = eyeScaled = eyeCbv1 = eyeCbv5 = eyeClipped = false;
-        cbv1Root = cbv5Root = sceneRoot = nullptr;
-        eyeState = eyeOut = 0;
-        eyePatches.clear();
-    }
-    template <class T> void put(const T& v) {
-        const size_t at = bytes.size();
-        bytes.resize(at + sizeof(T));
-        std::memcpy(bytes.data() + at, &v, sizeof(T));
-    }
-    void put_bytes(const void* p, size_t n) {
-        const size_t at = bytes.size();
-        bytes.resize(at + n);
-        if (n)
-            std::memcpy(bytes.data() + at, p, n);
-    }
-    void op(Op o) {
-        bytes.push_back(o);
-        ++calls;
-    }
-    void target(SIZE_T h) {
-        if (std::find(targets.begin(), targets.end(), h) == targets.end())
-            targets.push_back(h);
-    }
-    bool replayable(bool all) const {
-        return stereo && draws > 0 && !passConstants.empty() && (sawDsv || sawRtv) && (all || (sawDsv && !sawRtv));
-    }
-};
-
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 ComPtr<ID3D12Device> device;
+}  // namespace replay_detail
+namespace {
 std::atomic<bool> installed{false};
 int probeMode = 0;
 std::atomic<bool> replayOn{true};
@@ -366,7 +187,11 @@ struct Current {
     Stream* stream = nullptr;
 };
 thread_local Current current;
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 thread_local bool inReplay = false;
+}  // namespace replay_detail
+namespace {
 thread_local ComPtr<ID3D12CommandAllocator> replayAllocator;
 thread_local ComPtr<List> replayList;
 thread_local bool replayBroken = false;
@@ -690,653 +515,13 @@ void replay_unexecuted(const Stream& s) {
 
 // ---- Mode 3: replays that draw, into twins of the game's targets ---------------------------------------------------
 
-// The pass constants copied into our slot with the off-axis focus remap (ACE's layout, recon-ace.md "R1"): left
-// projections at rows 13/17/21/25, right at 95/103/107, each 4 rows x, y, z, w with w = (0,0,-1,0); row 38.xy target
-// size, row 84 the viewport rect, row 112.z eyeHalfWidthPixels. Rows 128-131 keep each eye's unjittered x/y rows.
-// Jitter (ACE's DLSS; 21:20 capture): row 85.xy is the frame's jitter in the eye's NDC (0 under MSAA), and the rows named
-// "unjittered" carry it too: 13, 17, 25 and the right eye's 95, 103, 107 are all centre - jitter; only prevProjection
-// (21) and inverseViewProjection (29-32) are without. So each eye's centre is row 17 / 103 plus row 85, and the rows'
-// own jitter is row 85 by that list (not read back from a row's z: 21:38 capture, the focus views drawn 0.14 of the
-// eye's NDC off). The focus views take the same jitter in their own pixels
-// (the eye's NDC jitter x eye size / focus size), not the box's magnification of it: DLSS takes sub-pixel jitter.
-constexpr char kPatchShader[] = R"(
-cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; uint eyeMode; float4 gaze; float4 gazePrev; };
-RWByteAddressBuffer dst : register(u0);
-bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
-[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 132) return;
-    if (i >= 128) {
-        const uint from[4] = {17, 18, 103, 104};
-        float4 kept = src[from[i - 128]];
-        kept.z += (i & 1) ? src[85].y : src[85].x;  // without the jitter
-        dst.Store4(i * 16, asuint(kept));
-        return;
-    }
-    float4 v = src[i];
-    const bool left = i < 64;
-    // The box's centre off the eye's forward axis (the gaze; NDC, per eye: gaze.xy left, .zw right; a right-eye list
-    // holds its eye in the left rows). The previous frame's projections take the previous frame's centre, so velocities
-    // and reprojection stay right while the box moves.
-    const bool rightEye = !left || src[84].x > 0;
-    const bool prevRow = (i >= 21 && i <= 28) || (i >= 107 && i <= 110);
-    const float2 g = prevRow ? (rightEye ? gazePrev.zw : gazePrev.xy) : (rightEye ? gaze.zw : gaze.xy);
-    const float2 jitter = src[85].xy;
-    const float ux = (left ? src[17].z : src[103].z) + jitter.x;  // each eye's own centre, without the jitter
-    const float uy = (left ? src[18].z : src[104].z) + jitter.y;
-    // eyeMode (the live periphery): the eye's own projection, drawn smaller: no remap, the jitter kept in pixels
-    const float ox = eyeMode ? 0 : ux - g.x, oy = eyeMode ? 0 : uy - g.y;
-    const bool remap = eyeMode == 0;
-    const float ax = 1.0 / halfExtent.x, ay = 1.0 / halfExtent.y;
-    // The jitter's scale into the focus view's NDC: the same pixels' worth there as in the eye.
-    const float sx = src[84].z > 0 ? src[84].z / focusSize.x : ax, sy = src[84].w > 0 ? src[84].w / focusSize.y : ay;
-    if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107)) {  // viewProjection and the projections
-        const float own = i == 21 ? 0 : jitter.x;                 // this row's own jitter: all but prevProjection carry it
-        v = ax * v + (ax * ox - own * (ax - sx)) * src[i + 3];    // x' = a x + b w, b = -a * centre = a * ox
-    } else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108)) {
-        const float own = i == 22 ? 0 : jitter.y;
-        v = ay * v + (ay * oy - own * (ay - sy)) * src[i + 2];    // y' = c y + d w
-    }
-    if (i == 85) v.xy = jitter * float2(sx, sy);
-    if (i == 38 && remap) v.xy = float2(focusSize.x * 2, focusSize.y);  // (the eye stays in ACE's own target)
-    if (i == 84) v = float4(v.x > 0 ? focusSize.x : 0, 0, focusSize.x, focusSize.y);  // a right-eye list: its offset
-    if (i >= 29 && i <= 32)  // inverseViewProjection: inverse(R VP) = inverse(VP) inverse(R)
-        v = float4(v.x * halfExtent.x, v.y * halfExtent.y, v.z, v.w - v.x * ox - v.y * oy);
-    if (i == 112 && v.z != 0) v.z = focusSize.x;  // eyeHalfWidthPixels (a float, as ACE writes it; 0 in per-eye lists)
-    // Bindless indices the game's -> ours (R2b tile lists, R2c previous-frame colour): entityTilesIndex (row 0.x),
-    // entityTilesIndexRight (112.y), the screen-space map indices (rows 76, 77). Unused pairs never match.
-    const uint from[8] = {from0.x, from0.y, from0.z, from0.w, from1.x, from1.y, from1.z, from1.w};
-    const uint to[8] = {to0.x, to0.y, to0.z, to0.w, to1.x, to1.y, to1.z, to1.w};
-    [unroll] for (uint k = 0; k < 8; ++k) {
-        if (remap && i == 0 && asuint(v.x) == from[k]) v.x = asfloat(to[k]);
-        if (remap && i == 112 && asuint(v.y) == from[k]) v.y = asfloat(to[k]);
-        if (remap && (i == 76 || i == 77)) {
-            if (asuint(v.x) == from[k]) v.x = asfloat(to[k]);
-            if (asuint(v.y) == from[k]) v.y = asfloat(to[k]);
-            if (asuint(v.z) == from[k]) v.z = asfloat(to[k]);
-            if (asuint(v.w) == from[k]) v.w = asfloat(to[k]);
-        }
-    }
-    // volumetricFogMapIndex (76.w): ACE's stereo lighting reads voxelGrid0 for both eyes; ours is eye 0's focus grid.
-    if (i == 76 && fogSrv != 0) v.w = asfloat(src[84].x > 0 && fogSrv1 != 0 ? fogSrv1 : fogSrv);  // right-eye list: grid 1
-    // deferredShadowMapIndex (76.x): ours, from the focus depth (R2c).
-    if (i == 76 && shadowSrv != 0) v.x = asfloat(shadowSrv);
-    // refractionMapIndex (76.z): our opaqueSceneBlur (P1).
-    if (i == 76 && blurSrv != 0) v.z = asfloat(blurSrv);
-    // The atmosphere maps (73.y in-scatter, 73.z out-scatter, 75.x / 75.y sky): our focus copies, the right eye's set
-    // for a right-eye list (its own offset, row 84.x > 0), eye 0's otherwise (ACE's stereo lists read _0 for both).
-    if (atmo0.x != 0 && (i == 73 || i == 75)) {
-        const uint4 a = src[84].x > 0 ? atmo1 : atmo0;
-        if (i == 73) { v.y = asfloat(a.x); v.z = asfloat(a.y); }
-        else if (a.z != 0) { v.x = asfloat(a.z); v.y = asfloat(a.w); }  // sky maps: 0 = keep ACE's
-    }
-    dst.Store4(i * 16, asuint(v));
-}
-)";
+// (the HLSL sources and our slot layout: replay_shaders.h; Replay, Twin, Focus: replay_internal.h)
 
-// kPatchShader's Params as 32-bit values, at HLSL's packing (a vector never straddles a 16-byte register): 0-3 the
-// floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, (22-23 padding), 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
-// fogSrv1, 34 eyeMode, (35 padding), 36-39 gaze, 40-43 gazePrev.
-constexpr UINT kPatchParams = 44;
-// ACE's tyre shaders have no single-pass-stereo variant (the vertex shader takes no instance id and writes no viewport
-// index; 16:43 capture): the pass constants copied with the right eye's matrices in the left eye's rows, for a second
-// draw into the right eye's viewport. The tyre VS reads view (5-8), prevView (9-12), projection (13-16) and
-// prevProjection (21-24); the right eye's are viewRight (91-94), prevViewRight (99-102), projectionRight (95-98) and
-// prevProjectionUnjitteredRight (107-110; the previous jitter = the left eye's 21-24 minus its unjittered 25-28). The
-// pixel shader takes its eye from the pixel position, as in ACE's stereo draws: the rest stays.
-constexpr char kTyreRightShader[] = R"(
-cbuffer Src : register(b0) { float4 src[113]; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 113) return;
-    float4 v = src[i];
-    if (i >= 5 && i <= 8) v = src[i + 86];
-    else if (i >= 9 && i <= 12) v = src[i + 90];
-    else if (i >= 13 && i <= 16) v = src[i + 82];
-    else if (i >= 17 && i <= 20) v = src[i + 86];
-    else if (i >= 21 && i <= 24) v = src[i + 86] + (src[i] - src[i + 4]);
-    else if (i >= 25 && i <= 28) v = src[i + 82];
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-constexpr UINT kTyreSlots = 64, kTyreSlotBytes = 2048;
-
-// frameData (root 0, 1136 B) for the focus replays: tileCount (uint2 at 0, the lighting's tile-list stride) is the
-// focus views' own grid. The game's grid is its eye's; a focus view with more pixels than the eye has more tiles, and
-// with the game's stride its lists wrapped and ran out (18:39 capture: a dark band and blocks in the focus image).
-constexpr char kFrameShader[] = R"(
-cbuffer Src : register(b0) { float4 src[72]; };
-cbuffer P : register(b1) { uint tx; uint ty; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 72) return;
-    uint4 v = asuint(src[i]);
-    if (i == 0) { v.x = tx; v.y = ty; }
-    dst.Store4(i * 16, v);
-}
-)";
-
-constexpr UINT kSlotBytes = 4096;  // 2 KB constants + 4 kept rows, CBV-aligned
-constexpr UINT kSlots = 512;
-constexpr UINT kRtvSlots = 32, kDsvSlots = 16;
-
-struct Replay {
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<List> list;
-    uint64_t fence = 0;  // done when the fence reaches it
-    bool busy = false;
-    // NGX's lifetime (focus_ngx::lifetime) when it recorded our DLSS evaluations; 0: none in it. Not submitted once
-    // the game has shut NGX down since: the features and bags it names are freed.
-    uint64_t ngxLife = 0;
-};
-
-// A view the game created: its resource and view format (RTV or DSV, by CPU handle).
-struct ViewInfo {
-    ComPtr<ID3D12Resource> resource;
-    DXGI_FORMAT viewFormat = DXGI_FORMAT_UNKNOWN;
-    bool depth = false;
-};
-
-// Our twins of one game target: focus size (both focus views side by side) and eye size (the reference, samples).
-// Sized from the game target itself (two eyes side by side), so passes at other resolutions (ACE's half-width `flags`
-// pass) have twins of their own size; per eye: eyeW x eyeH, focusW x focusH.
-struct Twin {
-    ComPtr<ID3D12Resource> focus, eye;
-    D3D12_CPU_DESCRIPTOR_HANDLE focusView{}, eyeView{};
-    D3D12_RESOURCE_DESC gameDesc{};
-    DXGI_FORMAT viewFormat = DXGI_FORMAT_UNKNOWN;
-    bool depth = false;
-    std::string name;
-    UINT eyeW = 0, eyeH = 0, focusW = 0, focusH = 0;
-    int focusSlot = -1, eyeSlot = -1;  // view slots in our heaps
-};
-
-struct Focus {
-    ReplayFocusSettings settings;
-    ComPtr<ID3D12CommandQueue> queue;
-    ComPtr<ID3D12Fence> fence;
-    std::atomic<uint64_t> fenceValue{0};
-    ComPtr<ID3D12RootSignature> patchRoot;
-    ComPtr<ID3D12PipelineState> patchPso;
-    ComPtr<ID3D12Resource> constants;  // kSlots x kSlotBytes, UNORDERED_ACCESS
-    std::atomic<uint32_t> nextSlot{0};
-    ComPtr<ID3D12DescriptorHeap> rtvHeap, dsvHeap;
-    std::vector<int> freeRtv, freeDsv;  // view slots (OMSetRenderTargets copies a view at record time: reusable at once)
-    bool ready = false;
-    // Twins and lists of an earlier game setup, kept alive until the GPU has passed the stamped fence value.
-    // (see retire(): freed only once every list recorded up to a few frames later has run)
-    struct Retired {
-        uint64_t frame = 0;   // the frame it was retired in
-        uint64_t fence = 0;   // once aged: the last fence value signalled by then (0: not aged yet)
-        ComPtr<IUnknown> object;
-        focus_ngx::Feature* feature = nullptr;  // or one of our NGX features
-    };
-    std::vector<Retired> retired;
-    ComPtr<ID3D12CommandAllocator> clearAllocator, eyeClearAllocator;
-    ComPtr<List> clearList, eyeClearList;  // the focus twins every frame; the eye references at sample frames
-    SRWLOCK lock = SRWLOCK_INIT;  // pool, pending, twins, views, clear list
-    std::vector<std::unique_ptr<Replay>> pool;
-    std::unordered_map<List*, std::vector<Replay*>> pending;  // the game's list -> our replays of it, in order
-    std::atomic<size_t> pendingLists{0};  // pending.size(), read without the lock (the game's Reset skips it when 0)
-    // After a rebuild (slots_writable): held until the GPU is past slotsFence, from frame slotsHeldFrame; submitting:
-    // execute_batch's replays taken from pending and not yet signalled.
-    std::atomic<bool> slotsHeld{false};
-    uint64_t slotsFence = 0, slotsHeldFrame = 0;
-    int submitting = 0;
-    std::unordered_map<SIZE_T, ViewInfo> views;  // the game's RTV/DSV CPU handles
-    std::unordered_map<ID3D12Resource*, Twin> twins;
-    std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
-    bool viewsMoved = false;      // a view handle now names another resource: twins of orphaned resources go
-    uint64_t releaseChecked = UINT64_MAX;  // the frame focus_prepare last looked for game targets only we still hold
-    // R2b: the focus views' light tiles. ACE's tile lists are bindless (space 45, root table 18 of its scene root
-    // signature, a 131,072-descriptor range): our descriptors take the top kTileSlots of that range in its heap.
-    ComPtr<ID3D12RootSignature> cullRoot;
-    ComPtr<ID3D12PipelineState> cullPso;      // copies tiledCulling's constants with the focus fields
-    // ACE's shader-visible CBV/SRV/UAV heap: held (our lists set it, and the descriptor hooks read its start), the one
-    // before retired on a change
-    ComPtr<ID3D12DescriptorHeap> gameHeap;
-    UINT heapSize = 0, increment = 0;
-    // gameHeap's CPU range, for the descriptor hooks' check without the lock (0, 0: none yet)
-    std::atomic<SIZE_T> heapCpuLo{0}, heapCpuHi{0};
-    D3D12_GPU_DESCRIPTOR_HANDLE bindlessBase{};  // root table 18 as ACE's stereo scene lists set it
-    UINT baseIndex = 0, slotFirst = 0;            // absolute heap indices
-    UINT tilesX = 0, tilesY = 0;                  // the focus views' tile grid per eye (our lists' size and stride)
-    ComPtr<ID3D12PipelineState> framePso;         // kFrameShader on patchRoot
-    ComPtr<ID3D12Resource> frustums[2], opaque[2], transparent[2];
-    ID3D12Resource* depthForTiles = nullptr;      // the focus depth twin our depth SRV names
-    bool tilesShaderResource = false;             // opaque/transparent: after a recorded tile replay
-    bool tilesReady = false, tilesBroken = false;
-    uint32_t gameTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};  // opaque L/R, transparent L/R (relative)
-    uint32_t ourTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
-    std::vector<std::pair<SIZE_T, int>> tileViews;  // CPU handles the game wrote its named SRVs to (staging or not):
-                                                    // 0-3 tile lists, 4 post_process_color (previous-frame colour)
-    // R2c: the focus views' previous-frame colour (our colour twin copied before each frame's clear).
-    uint32_t gamePrev[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};  // its SRVs (relative)
-    ComPtr<ID3D12Resource> prevColour;
-    ID3D12Resource* prevSource = nullptr;
-    ComPtr<ID3D12CommandAllocator> prevAllocator;
-    ComPtr<List> prevList;
-    bool prevReady = false;
-    SIZE_T maxWritten = 0;                          // the highest index the game wrote in the bindless range
-    SIZE_T maxUavWritten = 0;                       // the highest it wrote below the bindless range (the UAV table)
-    bool collision = false;
-    std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling, 3/4 fog
-    // psoKinds is keyed by address and read from the pipeline's name once. The game makes its pipelines again on a
-    // DLSS mode change, and a new pipeline at a freed one's address took the old answer (05:26 run: tiledCulling no
-    // longer known after the switch, so no tile replay and nothing after it). After a rebuild the answers are thrown
-    // away for this many frames (names read again: one lookup per pipeline a frame), covering pipelines made around it.
-    std::atomic<int> psoFlush{0};
-    // R2c: the focus views' volumetric fog. Per eye our grid and two histories (ping-pong), 3D like ACE's; their views
-    // at our slots 16 + 6e: grid UAV/SRV, history 0 UAV/SRV, history 1 UAV/SRV. ACE's grid SRVs learned by name.
-    ComPtr<ID3D12RootSignature> fogRoot;
-    ComPtr<ID3D12PipelineState> fogPso;
-    ComPtr<ID3D12Resource> fogConstants;  // kFogSlots x kFogSlotBytes, UNORDERED_ACCESS
-    uint32_t fogSlot = 0;
-    ComPtr<ID3D12Resource> fogGrid[2], fogHistory[2][2];
-    D3D12_RESOURCE_DESC gameGridDesc{}, gameHistoryDesc{};  // from ACE's voxelGrid0 / voxelGridHistory_0_0
-    std::vector<ComPtr<ID3D12Resource>> views3d;          // every 3D texture the game made an SRV of (ACE names its
-                                                          // resources after their views: names read at the fog pass)
-    bool fogMade = false, fogBroken = false, fogHistoryValid = false, fogReady = false, fogMissLogged = false;
-    bool fogResampleViews = false;
-    // The fog shaders' UAVs (space 20) are in another table: its base (ACE's 475,136) and our UAVs at its range's top
-    // (kFogUavSlots, offset = our bindless fog slot - kFogFirst), guarded like the bindless block.
-    UINT uavBaseIndex = 0, fogUavFirst = 0;
-    int fogParity = 0;
-    std::atomic<uint64_t> fogReplays{0};
-    ComPtr<ID3D12Resource> gameGrid[2];  // ACE's voxelGrid0 / 1 (replay_fog=2: resampled into ours)
-    // R2c: the focus views' deferred sun shadow: our normals (UAV slot 28, SRV 14) and shadow (SRV 15, an RTV of ours).
-    ComPtr<ID3D12RootSignature> shadowPatchRoot;
-    ComPtr<ID3D12PipelineState> shadowPatchPso;
-    ComPtr<ID3D12Resource> shadowConstants;
-    uint32_t shadowSlot = 0;
-    ComPtr<ID3D12Resource> normals, shadow;
-    UINT shadowFw = 0, shadowFh = 0;
-    int shadowRtvSlot = -1;
-    D3D12_CPU_DESCRIPTOR_HANDLE shadowRtv{};
-    bool shadowBroken = false, shadowReady = false;
-    std::atomic<uint64_t> shadowReplays{0};
-    // R2c: SRVs the game made of its render targets (CPU handle -> resource, view), for the OIT composite's tables
-    std::unordered_map<SIZE_T, std::pair<ComPtr<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC>> srvInfo;
-    std::atomic<uint64_t> monoReplays{0}, oitReplays{0};
-    // per frame (logged at sample frames): per-eye lists taken by eye, replayed by eye, unfit, broken (draws < 0)
-    std::atomic<uint32_t> monoTaken[2]{}, monoDone[2]{}, monoUnfit{0}, monoBroken{0}, monoOit{0}, monoMixed{0}, monoInStereo[2]{},
-        monoNoConst{0}, monoNoTarget{0};
-    std::atomic<float> sceneEyeW{0}, sceneEyeH{0};  // the stereo scene lists' eye size: per-eye lists must match it
-    // R2c: the atmosphere maps' focus copies (m = eye * 4 + map), the eyes' NDC centres (from the tile passes)
-    ComPtr<ID3D12RootSignature> atmoRoot;
-    ComPtr<ID3D12PipelineState> atmoPso[2];  // 2D, 3D
-    ComPtr<ID3D12Resource> atmo[8];
-    ID3D12Resource* atmoGame[8] = {};
-    float eyeCentre[2][2] = {};
-    // The focus box's centre off each eye's forward axis, in the eye's NDC (the gaze): asked for by the layer
-    // (replay_probe_set_gaze), taken at the frame's end for the next frame's lists (every pass of a frame uses one
-    // centre), clamped so the box stays inside the eye's image; last frame's for the previous-frame projections.
-    float gazeWanted[2][2] = {}, gazeOffset[2][2] = {}, gazePrev[2][2] = {};
-    // The focus views' size as a share of the eye's (box x pixels per eye pixel), fixed at the start: the box's size
-    // can change while running (replay_probe_set_box, taken at a frame's end), the focus pixels stay, so the density
-    // follows. 0: no change asked.
-    double sizeK = 0, sizeKy = 0;
-    // Our DLSS upscaling the focus views (settings.dlssScale < 1): sizeK / sizeKy are the render size (the twins'), and
-    // the output size (our DLSS image, the post targets, the image composed) is the render size over this.
-    double renderScale = 1.0;
-    std::atomic<double> boxYWanted{0};
-    std::atomic<double> boxWanted{0};
-    // Our sizes asked while running (the headset menu; taken at a frame's end, then focus_rebuild): the focus views'
-    // output size as a share of the eye's each way (focus density), and the render share of it (Focus views mode).
-    std::atomic<double> outKWanted{0}, outKyWanted{0}, renderScaleWanted{0};
-    double outK = 0, outKy = 0;  // as set (sizeK = outK x renderScale)
-    // replay_atmosphere=4: ACE's atmosphericScattering + upscaling replayed per focus eye (ray grid narrowed to the box):
-    // our low-res sky maps and the upscaling intermediates, per eye [in low, out low, in intermediate, out
-    // intermediate] (SRV at slot 112 + 8 e + 2 k, UAV + 1); our grid constants.
-    ComPtr<ID3D12Resource> atmoSkyWork[2][4];
-    ComPtr<ID3D12PipelineState> atmoGridPso;
-    ComPtr<ID3D12Resource> atmoGridConstants;
-    UINT atmoGridSlot = 0;
-    bool atmoWorkMade = false, atmoReplayLogged = false;
-    bool centresKnown = false, atmoMade = false, atmoReady = false, atmoBroken = false, atmoMissLogged = false;
-    std::atomic<uint64_t> atmoReplays{0};
-    // P1: the focus post
-    ComPtr<ID3D12RootSignature> cbPatchRoot;
-    ComPtr<ID3D12PipelineState> cbPatchPso;
-    ComPtr<ID3D12Resource> postConstants, postVeil, postLdr, postFinal, postGameFxaa;
-    DXGI_FORMAT postGameFxaaFormat = DXGI_FORMAT_UNKNOWN;
-    ID3D12Resource* postColour = nullptr;
-    UINT postW = 0, postH = 0, postSlot = 0;
-    int postLdrRtvSlot = -1, postFinalRtvSlot = -1;
-    bool postFxaa = true;  // the post targets were made for a list with ACE's fxaa draw (false: tonemap only, its menus)
-    // replay_dlss=2: the same frame's tonemap also from our colour (no DLSS) and from DLSS without CAS, compared too
-    ComPtr<ID3D12Resource> postAlt[2];
-    int postAltRtvSlot[2] = {-1, -1};
-    D3D12_CPU_DESCRIPTOR_HANDLE postAltRtv[2]{};
-    DXGI_FORMAT postLdrRtvFormat = DXGI_FORMAT_UNKNOWN;
-    D3D12_CPU_DESCRIPTOR_HANDLE postLdrRtv{}, postFinalRtv{};
-    bool postBroken = false, postReady = false;
-    std::atomic<uint64_t> postFrame{UINT64_MAX};  // the frame whose focus post replay was recorded last (focus.frame)
-    std::atomic<uint64_t> postReplays{0};
-    // P2a: our DLSS per focus view: ACE's velocity packing replayed (our four outputs, UAV offsets 24-27; our
-    // velocity / flags twin SRVs at slots 69 / 70), our NGX features (one per eye), our DLSS image (SRV slot 71)
-    ComPtr<ID3D12RootSignature> packRoot;
-    ComPtr<ID3D12PipelineState> packPso;
-    ComPtr<ID3D12Resource> packConstants, packAa, packMb, packVelocity, packFlags, dlssOut, dlssOutAuto, casOut;
-    bool casDone = false;
-    // P2c (MSAA without DLSS): ACE's vrAntialiasing replayed per focus eye: our multisampled colour twin (SRV slot 76),
-    // our scene depth (slot 12), our history (slot 77) -> aaOut (UAV block 32, SRV slot 78), copied into aaHistory.
-    ComPtr<ID3D12RootSignature> aaPatchRoot;
-    ComPtr<ID3D12PipelineState> aaPatchPso;
-    ComPtr<ID3D12Resource> aaConstants, aaOut, aaHistory;
-    ID3D12Resource* aaSource = nullptr;
-    UINT aaSlot = 0;
-    bool aaBroken = false, aaReady = false, aaFresh = true;
-    std::atomic<uint64_t> aaReplays{0};
-    // MSAA: single-sample focus copies made from our multisampled twins: depth and velocity by ACE's own resolve passes
-    // replayed (SRVs of the twins at slots 74/75, our velocity's SRV 76; UAVs at block offsets 29-31), colour by a
-    // ResolveSubresource before the post. Each has a stand-in Twin (not in `twins`) for the code that takes one.
-    ComPtr<ID3D12Resource> resolvedDepth, closestDepth, resolvedVelocity, resolvedColour;
-    Twin resolvedDepthTwin, resolvedVelocityTwin, resolvedColourTwin;
-    ID3D12Resource *resolveDepthSource = nullptr, *resolveVelocitySource = nullptr;
-    bool resolveBroken = false, resolveReady = false;
-    std::atomic<uint64_t> resolveReplays{0};  // this frame's DLSS image sharpened (ACE's CAS replayed: our casOut, SRV slot 73)
-    ID3D12Resource *packColour = nullptr, *packVelocityTwin = nullptr, *packFlagsTwin = nullptr;
-    UINT packW = 0, packH = 0, packSlot = 0;
-    focus_ngx::Feature* ngx[2] = {};
-    focus_ngx::Feature* ngxAuto[2] = {};  // replay_dlss=2: DLSS's own auto-exposure, no exposure texture (SRV slot 72)
-    int dlssPhase = -1;
-    UINT ngxW = 0, ngxH = 0, ngxOutW = 0, ngxOutH = 0, packOutW = 0, packOutH = 0;
-    int ngxPreset = 0;  // focus_ngx::focus_preset() the features were made with
-    uint64_t ngxUsed[2] = {};
-    bool dlssBroken = false, dlssReady = false, dlssFresh = true;
-    std::atomic<uint64_t> dlssEvaluations{0};
-    // P1: the focus refraction source
-    ComPtr<ID3D12Resource> blur;
-    ID3D12Resource* blurColour = nullptr;
-    UINT blurMips = 0;
-    bool blurBroken = false, blurReady = false, blurMissLogged = false;
-    std::atomic<uint64_t> blurReplays{0};
-    // the focus sky (clouds through the box): its PSOs, the game's CBVs, our cbSky copies and table sets
-    std::unordered_set<ID3D12PipelineState*> skyPsos;
-    // ACE's tyres under single-pass stereo: its tyre pipelines, our right-eye constants (kTyreSlots x 2048 B, at rest
-    // VERTEX_AND_CONSTANT_BUFFER) and the copy shader
-    std::unordered_set<ID3D12PipelineState*> tyrePsos;
-    struct VsInfo {
-        uint32_t length;
-        uint8_t digest[4];  // the container digest's first bytes
-        uint8_t bits;       // 1 BONEWEIGHTS, 2 MATERIALID, 4 SV_Position, 8 SV_InstanceID, 16 SV_ViewportArrayIndex
-    };
-    std::unordered_map<ID3D12PipelineState*, VsInfo> vsSeen;  // every pipeline whose creation we saw (psoLock)
-    ComPtr<ID3D12RootSignature> tyreRoot;
-    ComPtr<ID3D12PipelineState> tyrePso;
-    ComPtr<ID3D12Resource> tyreConstants;
-    std::atomic<uint32_t> tyreSlot{0};
-    std::atomic<bool> tyreGameLogged{false}, tyreComputeLogged{false};
-    std::unordered_map<SIZE_T, D3D12_CONSTANT_BUFFER_VIEW_DESC> cbvInfo;
-    SRWLOCK cbvLock = SRWLOCK_INIT;
-    ComPtr<ID3D12RootSignature> skyRoot;
-    ComPtr<ID3D12PipelineState> skyPso;
-    ComPtr<ID3D12Resource> skyConstants, skyClouds;
-    UINT skyRing = 0, skySlot = 0;
-    bool skyBroken = false, skyCloudViews = false, skyMissLogged = false;
-    std::atomic<uint64_t> skyPatches{0};
-    SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
-    std::atomic<uint64_t> tileReplays{0};
-    std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
-    // samples: armed for a frame (references replayed too), copied before the next frame's clear, saved off-thread
-    std::atomic<uint64_t> sampleFrame{UINT64_MAX};
-    std::atomic<uint32_t> samplesTaken{0};
-    std::atomic<uint32_t> sampleSlot{UINT32_MAX};  // the sample frame's first constants slot
-    std::atomic<bool> copyPending{false};
-    std::atomic<uint64_t> copyFrame{0};  // the sample frame being copied (its label)
-    std::atomic<bool> saving{false};
-    ReplayFocusCompare compare;
-    SRWLOCK compareLock = SRWLOCK_INIT;
-};
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 Focus focus;
-
-// Our descriptors at the top of the bindless range: 0-11 tile lists, 12 focus depth, 13 previous colour, 14-15 shadow,
-// 16-27 fog, 28 normals UAV, 29-31 OIT views, 32-55 atmosphere (game SRVs, our SRVs, our UAVs), 56-60 post, 61-66
-// refraction blur.
-constexpr UINT kTileSlots = 160, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
-// the sky: 80.. our CBV table sets (kSkyRing x kSkyTable), 110/111 our clouds' SRV / UAV
-constexpr UINT kSkyTable = 10, kSkyRing = 3, kSkySlotsFirst = 80, kSkyCloudSrv = 110, kSkySlots = 16, kSkyCloudSize = 512;
-constexpr UINT kFogFirst = 16, kFogUavSlots = 40;  // 0-11 fog, 24-27 packing, 28 CAS, 29-31 resolves, 32 MSAA AA
-constexpr UINT kShadowSlots = 48, kShadowSlotBytes = 1024;
-constexpr UINT kPostSlots = 16;  // 256 B each
-constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constants are 15,840 B
-
-// The culling constants (tiledCulling cb0, 240 B: inverseView, view, inverseProjectionMatrix at 128, tileCount 192,
-// entityCount, dimension 208, pixelOffset 216, aabbTolerance) copied with the focus inverse projection and its region
-// of our focus depth twin.
-constexpr char kCullShader[] = R"(
-cbuffer Source : register(b0) { float4 src[15]; };
-cbuffer Params : register(b1) { float4 inverseProjection[4]; int2 dimension; int2 pixelOffset; float2 tiles; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 15) return;
-    float4 v = src[i];
-    if (i >= 8 && i < 12) v = inverseProjection[i - 8];
-    if (i == 12) v.xy = tiles;  // tileCount: the focus views' own grid
-    if (i == 13) v = float4(asfloat(dimension), asfloat(pixelOffset));
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// R2c: ACE's fog constants copied for a focus view. Injection (mode 0, 15,840 B: all 990 registers, the tail holds
-// voxelGridSize, cameraForward, shLumaFactor): its matrices' columns are in the
-// registers (column_major, out = M v): viewProjection 4-7 and prevViewProjection 8-11 get x' = a x + a ox w,
-// y' = a y + a oy w per register; invViewProjection 16-19 the inverse (columns 0/1 x box, column 3 - ox c0 - oy c1).
-// The eye's centre (ox, oy) = P02, P12 of P = VP inverse(view): view is rigid, so inverse(view)'s column 2 is the
-// view rotation's row 2 (registers 0-2 .z). temporalReproject (24.z) off for a fresh history; historyIndex and
-// outputIndex (25.z/w) ours. Scatter (mode 1, 32 B): outputIndex and inputIndex (1.x/y) ours.
-constexpr char kFogShader[] = R"(
-cbuffer Source : register(b0) { float4 src[990]; };
-cbuffer Params : register(b1) { float halfExtent; uint mode; uint historySrv; uint outputUav; uint inputSrv; uint fresh; float gx; float gy; float halfY; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (mode == 1) {
-        if (i >= 2) return;
-        uint4 s = asuint(src[i]);
-        if (i == 1) { s.x = outputUav; s.y = inputSrv; }
-        dst.Store4(i * 16, s);
-        return;
-    }
-    if (i >= 990) return;
-    float4 v = src[i];
-    const float ox = src[4].x * src[0].z + src[5].x * src[1].z + src[6].x * src[2].z - gx;  // less the gaze offset
-    const float oy = src[4].y * src[0].z + src[5].y * src[1].z + src[6].y * src[2].z - gy;
-    const float a = 1.0 / halfExtent, ay = 1.0 / halfY;
-    if (i >= 4 && i <= 11) {
-        v.x = a * v.x + a * ox * v.w;
-        v.y = ay * v.y + ay * oy * v.w;
-    }
-    if (i == 16) v *= halfExtent;
-    if (i == 17) v *= halfY;
-    if (i == 19) v = v - ox * src[16] - oy * src[17];
-    if (i == 24 && fresh != 0) v.z = asfloat(0u);
-    if (i == 25) { v.z = asfloat(historySrv); v.w = asfloat(outputUav); }
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// R2c: ACE's deferred-shadow constants for the focus views. Mode 0: normalReconstructionViewSpace's (288 B): the
-// inverse projections (left 4-7, right 12-15; columns in the registers) remapped like the fog's (columns 0/1 x box,
-// column 3 - ox c0 - oy c1; ox = P02 = c3.x / c0.x, oy = c3.y / c1.y), bufferSize = both focus views, eyeSplitX and
-// rcpEyeWidth the focus width. Mode 1: deferredShadows' (560 B) for eye `eye`: inverseViewProjection (0-3) the same
-// way, with that eye's centre from the normals constants (b0).
-constexpr char kShadowShader[] = R"(
-cbuffer Normals : register(b0) { float4 nrm[18]; };
-cbuffer Shadow : register(b1) { float4 shd[35]; };
-cbuffer Params : register(b2) { float box; uint mode; uint eye; float fw; float fh; float boxY; float4 gaze; };  // gaze: value 8
-RWByteAddressBuffer dst : register(u0);
-[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (mode == 0) {
-        if (i >= 18) return;
-        float4 v = nrm[i];
-        if ((i >= 4 && i <= 7) || (i >= 12 && i <= 15)) {
-            const uint b = i < 8 ? 4 : 12;
-            const float2 g = i < 8 ? gaze.xy : gaze.zw;
-            const float ox = nrm[b + 3].x / nrm[b].x - g.x, oy = nrm[b + 3].y / nrm[b + 1].y - g.y;
-            if (i == b) v *= box;
-            if (i == b + 1) v *= boxY;
-            if (i == b + 3) v = v - ox * nrm[b] - oy * nrm[b + 1];
-        }
-        if (i == 16) v = float4(2 * fw, fh, 1.0 / (2 * fw), 1.0 / fh);
-        if (i == 17) { v.z = fw; v.w = 1.0 / fw; }
-        dst.Store4(i * 16, asuint(v));
-        return;
-    }
-    if (i >= 35) return;
-    float4 v = shd[i];
-    const uint b = eye == 0 ? 4 : 12;
-    const float2 g = eye == 0 ? gaze.xy : gaze.zw;
-    const float ox = nrm[b + 3].x / nrm[b].x - g.x, oy = nrm[b + 3].y / nrm[b + 1].y - g.y;
-    if (i == 0) v *= box;
-    if (i == 1) v *= boxY;
-    if (i == 3) v = v - ox * shd[0] - oy * shd[1];
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// R2c: an atmosphere map resampled for a focus view. ACE's maps are screen-shaped (looked up at (SV_Position - offset) /
-// size, row 84; 3D ones with a log-distance slice in z): the focus texel at focus uv takes the eye map at the eye uv
-// the remap gives (eye NDC = centre + box * focus NDC); z slices kept. Built twice: 2D (ATMO_3D 0) and 3D.
-constexpr char kAtmoShader[] = R"(
-cbuffer P : register(b0) { float box; float cx; float cy; uint sx; uint sy; uint sz; uint stereo; float cx1; float cy1; float mipLevel; float boxY; float ux; float uy; };
-SamplerState lin : register(s0);
-#if ATMO_3D
-Texture3D<float4> src : register(t0);
-RWTexture3D<float4> dst : register(u0);
-#else
-Texture2D<float4> src : register(t0);
-RWTexture2D<float4> dst : register(u0);
-#endif
-[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= sx || id.y >= sy || id.z >= sz) return;
-    float2 uf = (float2(id.xy) + 0.5) / float2(sx, sy);
-    float2 c = float2(cx, cy);
-    float eye = 0;
-    if (stereo != 0) {  // two eyes side by side (the veil): each half through its own eye's box
-        eye = uf.x >= 0.5 ? 1 : 0;
-        uf.x = uf.x * 2 - eye;
-        if (eye > 0) c = float2(cx1, cy1);
-    }
-    const float2 ndc = c + float2(box, boxY) * float2(uf.x * 2 - 1, 1 - uf.y * 2);
-    float2 ue = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if (stereo != 0) ue.x = (ue.x + eye) * 0.5;
-    if (ux > 0) ue *= float2(ux, uy);  // the source's region in use (the live periphery: ACE's eyes drawn smaller)
-#if ATMO_3D
-    dst[id] = src.SampleLevel(lin, float3(ue, (id.z + 0.5) / sz), 0);
-#else
-    dst[id.xy] = src.SampleLevel(lin, ue, mipLevel);
-#endif
-}
-)";
-
-// P1: a constant buffer copied with one register replaced (the tonemap's target size).
-constexpr char kCbPatchShader[] = R"(
-cbuffer Src : register(b0) { float4 src[16]; };
-cbuffer P : register(b1) { uint count; uint reg; uint mask; uint pad; float4 value; };  // mask 0: all of the register
-RWByteAddressBuffer dst : register(u0);
-[numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= count) return;
-    float4 v = src[i];
-    if (i == reg && !((mask & 16) && asint(v.x) < 0)) {  // mask 16: an index of -1 (none) stays
-        if (mask == 0 || (mask & 1)) v.x = value.x;
-        if (mask == 0 || (mask & 2)) v.y = value.y;
-        if (mask == 0 || (mask & 4)) v.z = value.z;
-        if (mask == 0 || (mask & 8)) v.w = value.w;
-    }
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// P2a: ACE's VelocityAndDepthPacking constants (352 B, 22 registers) for a focus eye: inverseViewProj (0-3),
-// viewProj (4-7), prevViewProj (8-11), columns in the registers: x' = a x + a ox w per column, the inverse columns 0/1 x
-// box and column 3 - ox c0 - oy c1 (ox = -the eye's NDC centre); rcpRes and resolution the focus size; the jitters (pixels;
-// 12.zw half the step from last frame's, 14.xy this frame's) as ACE's: the focus views jitter by the same pixels; pixelOffset the focus eye's; the texture indices ours (SRVs: velocity, depth, flags; UAVs: MB, velocity only,
-// flags output, AA).
-constexpr char kPackShader[] = R"(
-cbuffer Src : register(b0) { float4 src[22]; };
-cbuffer P : register(b1) { float box; float ox; float oy; float k; float fw; float fh; float offX; uint velSrv;
-                           uint depthSrv; uint flagsSrv; uint mbUav; uint velOnlyUav; uint flagsUav; uint aaUav; float pox; float poy; float boxY; float ky; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(32, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 22) return;
-    float4 v = src[i];
-    const float a = 1.0 / box, ay = 1.0 / boxY;
-    if (i == 0) v *= box;
-    if (i == 1) v *= boxY;
-    if (i == 3) v = v - ox * src[0] - oy * src[1];
-    if (i >= 4 && i <= 7) { v.x = a * v.x + a * ox * v.w; v.y = ay * v.y + ay * oy * v.w; }
-    if (i >= 8 && i <= 11) { v.x = a * v.x + a * pox * v.w; v.y = ay * v.y + ay * poy * v.w; }  // last frame's box
-    if (i == 12) v.xy = float2(1.0 / fw, 1.0 / fh);
-    if (i == 13) { v.x = asfloat(velSrv); v.y = asfloat(depthSrv); }
-    if (i == 15) { v.x = asfloat(mbUav); v.y = asfloat(uint(fw)); v.z = asfloat(uint(fh)); }
-    if (i == 16) { v.y = asfloat(velOnlyUav); v.w = asfloat(flagsSrv); }
-    if (i == 17) v.x = offX;
-    if (i == 20) v.w = asfloat(flagsUav);
-    if (i == 21) v.w = asfloat(aaUav);
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// P2c: ACE's vrAntialiasing constants (272 B, 17 registers) for a focus eye: TextureSize (0.xy) the focus target;
-// inverseViewProj (3-6), viewProj (7-10), prevViewProj (11-14) remapped like the packing's (columns in the registers);
-// viewportOffset / Size (16) the focus eye's.
-constexpr char kAaShader[] = R"(
-cbuffer Src : register(b0) { float4 src[17]; };
-cbuffer P : register(b1) { float box; float ox; float oy; float fw; float fh; float offX; float pox; float poy; float boxY; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(32, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 17) return;
-    float4 v = src[i];
-    const float a = 1.0 / box, ay = 1.0 / boxY;
-    if (i == 0) v.xy = float2(2 * fw, fh);
-    if (i == 3) v *= box;
-    if (i == 4) v *= boxY;
-    if (i == 6) v = v - ox * src[3] - oy * src[4];
-    if (i >= 7 && i <= 10) { v.x = a * v.x + a * ox * v.w; v.y = ay * v.y + ay * oy * v.w; }
-    if (i >= 11 && i <= 14) { v.x = a * v.x + a * pox * v.w; v.y = ay * v.y + ay * poy * v.w; }  // last frame's box
-    if (i == 16) v = float4(offX, 0, fw, fh);
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// replay_atmosphere=4: ACE's scatteringSettings (96 B, 6 registers) for a focus eye: the ray grid narrowed to the box.
-// Per cell ray = eyeDirection + dx x + dy y over the W x H grid; the focus cell (x, y) is the eye's cell (ox + b x,
-// oy + b y): eyeDirection' = eyeDirection + ox dx + oy dy, dx' = b dx, dy' = b dy (w components kept).
-constexpr char kAtmoGridShader[] = R"(
-cbuffer Src : register(b0) { float4 src[6]; };
-cbuffer P : register(b1) { float box; float ox; float oy; float p3; float p4; float p5; };
-RWByteAddressBuffer dst : register(u0);
-[numthreads(8, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    if (i >= 6) return;
-    float4 v = src[i];
-    if (i == 0) v.xyz = src[0].xyz + ox * src[2].xyz + oy * src[3].xyz;
-    if (i == 2) v.xyz = box * src[2].xyz;
-    if (i == 3) v.xyz = p3 * src[3].xyz;  // p3: the box's height
-    dst.Store4(i * 16, asuint(v));
-}
-)";
-
-// The sky's screen-space clouds for a focus view: the cloud texture the sky draw's cbSky names (CloudsScreenBindless
-// Index, register 4.x; read on the GPU) sampled through the box (eye uv = centre + box x focus uv) into ours.
-constexpr char kSkyCloudShader[] = R"(
-cbuffer Sky : register(b0) { float4 sky[5]; };
-cbuffer P : register(b1) { float box; float cx; float cy; uint size; float boxY; };
-Texture2D<float4> bindless[] : register(t0, space1);
-RWTexture2D<float4> dst : register(u0);
-SamplerState lin : register(s0);
-[numthreads(8, 8, 1)] void main(uint2 id : SV_DispatchThreadID) {
-    if (id.x >= size || id.y >= size) return;
-    // ACE's own rule for this lookup (the sky PS's screen-clouds sample: index < range ? index : 0; other lookups
-    // fall back to 1): no clouds (clear sky) is -1, which reads descriptor 0.
-    uint idx = asuint(sky[4].x);
-    if (idx >= 131072) idx = 0;
-    const float2 uf = (float2(id) + 0.5) / size;
-    const float2 ndc = float2(cx, cy) + float2(box, boxY) * float2(uf.x * 2 - 1, 1 - uf.y * 2);
-    const float2 ue = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    dst[id] = bindless[NonUniformResourceIndex(idx)].SampleLevel(lin, ue, 0);
-}
-)";
+}  // namespace replay_detail
+namespace {
 
 bool invert(const double (&m)[4][4], double (&out)[4][4]) {
     double a[4][8];
@@ -1881,6 +1066,8 @@ ComPtr<ID3D12Resource> make_twin(const Twin& t, UINT width, UINT height, D3D12_C
     return r;
 }
 
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 std::string debug_name(ID3D12Resource* r) {
     wchar_t name[96] = {};
     UINT size = sizeof(name) - sizeof(wchar_t);
@@ -1901,6 +1088,8 @@ void retire(IUnknown* object) {
     if (object)
         focus.retired.push_back({focus.frame.load(), 0, object, nullptr});
 }
+}  // namespace replay_detail
+namespace {
 // Our NGX features go the same way (they were left to NGX's shutdown: two a rebuild, 112 in one session).
 void retire_feature(focus_ngx::Feature*& feature) {
     if (feature)
@@ -1962,6 +1151,8 @@ bool record_clear() {
 // goes quiet after a mode or resolution change in the game says why.
 std::atomic<int> remakeEpoch{0};
 std::atomic<uint64_t> focusRebuilds{0};
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 bool miss_allowed(int& epoch, int& count, int limit) {
     if (const int e = remakeEpoch.load(); epoch != e) {
         epoch = e;
@@ -1969,6 +1160,8 @@ bool miss_allowed(int& epoch, int& count, int limit) {
     }
     return count++ < limit;
 }
+}  // namespace replay_detail
+namespace {
 
 // Under focus.lock: everything the focus views sized or learned from the game's targets goes, so the next lists
 // build it again exactly as at launch (a launch works in every mode; state carried across a size change did not:
@@ -2353,34 +1546,14 @@ bool focus_prepare(const Stream& s) {
     return true;
 }
 
-extern std::atomic<int> remakeEpoch;
-bool miss_allowed(int& epoch, int& count, int limit);
-
 // Under focus.lock: a free replay entry (its last execution done).
 // ---- Focus culling (replay_cull) -----------------------------------------------------------------------------------
-// The focus replays draw each eye's whole draw list into a view covering a small part of it: ~2.4 ms of GPU a frame in
-// geometry, whatever the focus views' size (2026-11-14: 9x fewer focus pixels saved 0.3 ms). About 1.4 ms of it is
-// ExecuteIndirect draws, whose instances and draw arguments come from ACE's instance visibility pass. That pass is
-// replayed for the focus views: the eyes' culling dispatches again (the ones with dualFrustumCull set: left eye's
-// frustum from viewProjectionTransform, right eye's from mainViewProjectionTransform), both matrices remapped to the
-// focus boxes, writing our own visible-instances and count buffers; then ACE's finalize into our own command buffer.
-// The focus replays' ExecuteIndirect calls and instance vertex buffer views are pointed at ours. Draws ACE issues
-// directly are not culled.
-struct FocusCull {
-    std::atomic<int> mode{0};  // 0 off, 1 computed only, 2 used by the focus replays, 3 used in alternate 900-frame windows
-    std::atomic<bool> use{false};  // this window's replays read ours
-    std::atomic<uint64_t> gameInstancesVa{0}, gameInstancesBytes{0};  // ACE's visible-instances buffer
-    std::atomic<uint64_t> readyFrame{UINT64_MAX};  // the frame ours hold the culling of
-    // under focus.lock
-    ComPtr<ID3D12Resource> instances, counts, commands;
-    ID3D12Resource* gameCommands = nullptr;
-    D3D12_GPU_VIRTUAL_ADDRESS instancesVa = 0;
-    UINT64 instancesBytes = 0, countsBytes = 0, commandsBytes = 0;
-    bool broken = false;
-    std::atomic<uint64_t> culls{0}, listsCulled{0}, listsWhole{0};
-};
+// What it does and its state: FocusCull in replay_internal.h; its record (focus_cull_record): replay_cull.cpp.
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 FocusCull cull;
-constexpr UINT kCullSlot = 130;  // of our descriptors: instances UAV, counts UAV, counts SRV, commands UAV, (its SRV)
+}  // namespace replay_detail
+namespace {
 
 // ---- GPU time by step (replay_gpu_steps=1) --------------------------------------------------------------------------
 // Where a frame's GPU time goes, from D3D12 timestamps on ACE's queue: one frame in sixteen, every list of ours stamps
@@ -2389,10 +1562,7 @@ constexpr UINT kCullSlot = 130;  // of our descriptors: instances UAV, counts UA
 // next: lists run one after another on the queue. Summed by kind and averaged over the samples of a 900-frame window.
 // A list recorded in one frame and run in the next is not stamped: its time falls to the stamp before it.
 constexpr UINT kStepQueries = 256;
-enum : uint8_t {
-    kStepScene, kStepMono, kStepTiles, kStepFog, kStepShadow, kStepOit, kStepAtmo, kStepBlur, kStepResolve, kStepPostVeil,
-    kStepPostDlss, kStepPostTone, kStepEyeCopies, kStepCull, kStepGame, kStepCompose, kStepGap, kStepKinds
-};
+// (the step kinds, kStepScene..kStepKinds: replay_internal.h)
 struct GpuSteps {
     bool on = false;
     ComPtr<ID3D12QueryHeap> heap;
@@ -2413,6 +1583,8 @@ struct GpuSteps {
 GpuSteps gpuSteps;
 thread_local uint8_t gpuBatchKind = kStepGame;  // what the batches this thread executes are (replay_probe_gpu_scope)
 
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 // In a list of ours being recorded: a timestamp where `kind` starts.
 void gpu_stamp(List* l, uint8_t kind) {
     if (gpuSteps.frame.load(std::memory_order_relaxed) != focus.frame.load(std::memory_order_relaxed))
@@ -2464,6 +1636,8 @@ void add_pending(List* gameList, Replay* r) {
     focus.pending[gameList].push_back(r);
     focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
 }
+}  // namespace replay_detail
+namespace {
 // Under focus.lock: the game's list was Reset without being executed since its Close: our replays of it never run
 // (they would hold pool entries for good, and a later execution of the list would run them stale).
 void drop_pending(List* gameList) {
@@ -2476,16 +1650,22 @@ void drop_pending(List* gameList) {
     focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
 }
 
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 // The box's half extent in NDC y (x's unless a crop or a focus height of its own makes it differ).
 float focus_box_y() {
     return static_cast<float>(focus.settings.boxFractionY > 0 ? focus.settings.boxFractionY : focus.settings.boxFraction);
 }
+}  // namespace replay_detail
+namespace {
 uint32_t float_bits(float f) {
     uint32_t u;
     std::memcpy(&u, &f, 4);
     return u;
 }
 
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 // Each eye's box centre in its NDC: the eye's forward axis plus the gaze offset of this frame (under focus.lock).
 void focus_centres(float (&centre)[2][2]) {
     for (int e = 0; e < 2; ++e)
@@ -2501,6 +1681,8 @@ void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOU
     b.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
     l->ResourceBarrier(1, &b);
 }
+}  // namespace replay_detail
+namespace {
 
 // ACE's tyres under single-pass stereo: after a tyre draw (one instance, viewport 0 = the left eye) the same draw into
 // the second viewport with our right-eye copy of the pass constants `constants` (made in this list, once per address:
@@ -2815,6 +1997,8 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
 
 // ---- R2b: the focus views' light tiles ------------------------------------------------------------------------------
 
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 D3D12_CPU_DESCRIPTOR_HANDLE game_cpu(UINT index) {
     D3D12_CPU_DESCRIPTOR_HANDLE h = focus.gameHeap->GetCPUDescriptorHandleForHeapStart();
     h.ptr += static_cast<SIZE_T>(index) * focus.increment;
@@ -2825,6 +2009,8 @@ D3D12_GPU_DESCRIPTOR_HANDLE game_gpu(UINT index) {
     h.ptr += UINT64{index} * focus.increment;
     return h;
 }
+}  // namespace replay_detail
+namespace {
 ComPtr<ID3D12Resource> make_buffer(UINT64 bytes) {
     D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
     D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
@@ -2834,6 +2020,8 @@ ComPtr<ID3D12Resource> make_buffer(UINT64 bytes) {
                                     IID_PPV_ARGS(&r));
     return r;
 }
+}  // namespace
+namespace replay_detail {  // declared in replay_internal.h
 void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlot, UINT srvSlot) {
     D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
     u.Format = DXGI_FORMAT_UNKNOWN;
@@ -2849,6 +2037,8 @@ void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlo
     v.Buffer.StructureByteStride = stride;
     srvViewOriginal(device.Get(), r, &v, game_cpu(srvSlot));
 }
+}  // namespace replay_detail
+namespace {
 
 // Under focus.lock: the twin of the stereo scene depth: single-sample R32_TYPELESS (what the tile and shadow passes
 // read as R32_FLOAT), the largest, ACE's msaaDepth by name on a tie. Not just "the largest depth": flagsDepth (D32) is
@@ -4828,10 +4018,6 @@ bool table_view(D3D12_GPU_DESCRIPTOR_HANDLE table, ComPtr<ID3D12Resource>& r, D3
 // each focus box into our veil; the game's tonemap replayed into our focus image (our colour and veil; the game's
 // exposure, grading LUT; its constants with our size); its fxaa into our final focus image. Our slots: 56 our colour
 // twin's SRV, 57 the game veil's SRV, 58/59 our veil UAV/SRV, 60 our tonemapped image's SRV.
-bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, UINT ow2, UINT oh,
-                       const float (&centre)[2][2]);
-bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&centre)[2][2]);
-
 void focus_post_record(List* gameList, const Stream& s) {
     Replay* r = nullptr;
     UINT fw2 = 0, fh = 0, ow2 = 0, oh = 0;  // the focus views' render size and their output size (our DLSS upscaling)
@@ -5233,786 +4419,7 @@ void focus_prev_copy(ID3D12CommandQueue* queue) {
     }
 }
 
-// ---- Samples: readback, pictures, comparison -----------------------------------------------------------------------
-
-// R11G11B10_FLOAT: 6-bit-mantissa 11-bit floats (red, green) and a 5-bit-mantissa 10-bit float (blue), 5-bit exponents.
-float unpack_small_float(uint32_t bits, int mantissaBits) {
-    const uint32_t mantissa = bits & ((1u << mantissaBits) - 1), exponent = bits >> mantissaBits;
-    if (exponent == 0)
-        return std::ldexp(static_cast<float>(mantissa), -14 - mantissaBits);
-    if (exponent == 31)
-        return 65504.0f;
-    return std::ldexp(1.0f + static_cast<float>(mantissa) / static_cast<float>(1u << mantissaBits),
-                      static_cast<int>(exponent) - 15);
-}
-float half_to_float(uint16_t h) {
-    const uint32_t sign = h >> 15, exponent = (h >> 10) & 31, mantissa = h & 1023;
-    const float v = exponent == 0 ? std::ldexp(static_cast<float>(mantissa), -24)
-                    : exponent == 31 ? 65504.0f
-                                     : std::ldexp(1.0f + static_cast<float>(mantissa) / 1024.0f, static_cast<int>(exponent) - 15);
-    return sign ? -v : v;
-}
-
-bool colour_supported(DXGI_FORMAT f) {
-    return f == DXGI_FORMAT_R11G11B10_FLOAT || f == DXGI_FORMAT_R16G16B16A16_FLOAT || f == DXGI_FORMAT_R8G8B8A8_UNORM ||
-           f == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || f == DXGI_FORMAT_B8G8R8A8_UNORM;
-}
-bool depth_supported(DXGI_FORMAT f) { return f == DXGI_FORMAT_R32_TYPELESS || f == DXGI_FORMAT_D32_FLOAT || f == DXGI_FORMAT_R32_FLOAT; }
-
-// A readback as floats: 1 per pixel (depth) or 3 (colour, as stored).
-std::vector<float> read_back(ID3D12Resource* readback, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& f, DXGI_FORMAT format,
-                             bool depth) {
-    const UINT w = f.Footprint.Width, h = f.Footprint.Height;
-    std::vector<float> out(size_t{w} * h * (depth ? 1 : 3));
-    void* p = nullptr;
-    if (FAILED(readback->Map(0, nullptr, &p)))
-        return {};
-    for (UINT y = 0; y < h; ++y) {
-        const uint8_t* row = static_cast<const uint8_t*>(p) + f.Offset + size_t{y} * f.Footprint.RowPitch;
-        for (UINT x = 0; x < w; ++x) {
-            const size_t i = size_t{y} * w + x;
-            if (depth) {
-                std::memcpy(&out[i], row + size_t{x} * 4, 4);
-            } else if (format == DXGI_FORMAT_R11G11B10_FLOAT) {
-                uint32_t v;
-                std::memcpy(&v, row + size_t{x} * 4, 4);
-                out[i * 3 + 0] = unpack_small_float(v & 0x7ff, 6);
-                out[i * 3 + 1] = unpack_small_float((v >> 11) & 0x7ff, 6);
-                out[i * 3 + 2] = unpack_small_float((v >> 22) & 0x3ff, 5);
-            } else if (format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
-                uint16_t v[4];
-                std::memcpy(v, row + size_t{x} * 8, 8);
-                for (int c = 0; c < 3; ++c) out[i * 3 + c] = half_to_float(v[c]);
-            } else {
-                const uint8_t* v = row + size_t{x} * 4;
-                const bool bgra = format == DXGI_FORMAT_B8G8R8A8_UNORM;
-                for (int c = 0; c < 3; ++c) out[i * 3 + c] = v[bgra ? 2 - c : c] / 255.0f;
-            }
-        }
-    }
-    readback->Unmap(0, nullptr);
-    return out;
-}
-
-void save_picture(const std::wstring& path, const std::vector<float>& v, UINT w, UINT h, bool depth, float scale) {
-    std::vector<uint8_t> bgra(size_t{w} * h * 4);
-    for (size_t i = 0; i < size_t{w} * h; ++i) {
-        uint8_t rgb[3];
-        if (depth) {
-            const float d = v[i];
-            rgb[0] = rgb[1] = rgb[2] =
-                static_cast<uint8_t>(std::lround((d <= 0 ? 0.0f : std::sqrt(std::min(1.0f, d * scale))) * 255));
-        } else {
-            for (int c = 0; c < 3; ++c) {
-                if (scale < 0) {  // already display values (8-bit, tonemapped): written as they are
-                    rgb[c] = static_cast<uint8_t>(std::lround(std::clamp(v[i * 3 + c], 0.0f, 1.0f) * 255));
-                    continue;
-                }
-                const float x = std::max(0.0f, v[i * 3 + c] * scale);
-                rgb[c] = static_cast<uint8_t>(std::lround(std::pow(x / (1 + x), 1 / 2.2f) * 255));
-            }
-        }
-        bgra[i * 4 + 0] = rgb[2];
-        bgra[i * 4 + 1] = rgb[1];
-        bgra[i * 4 + 2] = rgb[0];
-        bgra[i * 4 + 3] = 255;
-    }
-    write_png_bgra(path, bgra, w, h);
-}
-
-struct SampleTarget {
-    std::string name;
-    bool depth = false;
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-    ComPtr<ID3D12Resource> focusRead, eyeRead;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT focusFoot{}, eyeFoot{};
-    UINT fw = 0, fh = 0, ew = 0, eh = 0;  // per eye
-};
-struct SampleJob {
-    uint64_t fenceValue = 0, frame = 0;
-    double box = 0;
-    bool shadowOn = true;  // R2c shadow A/B: whether this sample frame's focus lighting used our deferred shadow
-    uint32_t phase = 0;    // replay_diag: the sample's index (0-based)
-    ComPtr<ID3D12Resource> constantsRead;
-    std::vector<SampleTarget> targets;
-    std::vector<ComPtr<IUnknown>> keep;  // the copy list and twins until the copy is done
-    struct Extra {  // whole textures saved as pictures only (the atmosphere sky maps: ours vs the game's)
-        std::string name;
-        ComPtr<ID3D12Resource> read;
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT foot{};
-        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-    };
-    std::vector<Extra> extras;
-};
-
-// The focus pixel (u, v) of eye `eye`, as a fractional pixel position in the eye reference.
-struct Mapper {
-    double cx[2], cy[2], box;
-    UINT fw, fh, ew, eh;
-    void eye_pixel(int eye, double u, double v, double& x, double& y) const {
-        const double nx = (u + 0.5) / fw * 2 - 1, ny = 1 - (v + 0.5) / fh * 2;
-        x = (cx[eye] + nx * box + 1) * 0.5 * ew - 0.5;
-        y = (1 - (cy[eye] + ny * box)) * 0.5 * eh - 0.5;
-    }
-};
-
-// Bilinear in the eye reference, `channels` floats per pixel; false at the image edge or across sky / no sky.
-bool bilinear(const std::vector<float>& img, UINT stride, int eye, UINT ew, UINT eh, double x, double y, int channels,
-              const std::vector<float>* depthForSky, float* out) {
-    const long px = static_cast<long>(std::floor(x)), py = static_cast<long>(std::floor(y));
-    if (px < 1 || py < 1 || px + 2 >= static_cast<long>(ew) || py + 2 >= static_cast<long>(eh))
-        return false;
-    const auto idx = [&](long xx, long yy) {
-        return static_cast<size_t>(yy) * stride + static_cast<size_t>(eye) * ew + static_cast<size_t>(xx);
-    };
-    if (depthForSky) {
-        const auto& d = *depthForSky;
-        const bool s00 = d[idx(px, py)] <= 0, s10 = d[idx(px + 1, py)] <= 0, s01 = d[idx(px, py + 1)] <= 0,
-                   s11 = d[idx(px + 1, py + 1)] <= 0;
-        if (s00 != s11 || s10 != s01 || s00 != s10)
-            return false;  // an edge against the sky: no bilinear value
-    }
-    const double tx = x - px, ty = y - py;
-    for (int c = 0; c < channels; ++c) {
-        const float a = img[idx(px, py) * channels + c], b = img[idx(px + 1, py) * channels + c];
-        const float d0 = img[idx(px, py + 1) * channels + c], d1 = img[idx(px + 1, py + 1) * channels + c];
-        out[c] = static_cast<float>((a * (1 - tx) + b * tx) * (1 - ty) + (d0 * (1 - tx) + d1 * tx) * ty);
-    }
-    return true;
-}
-
-// Off the game's threads: waits for the copy, saves every twin pair and compares them through the remap.
-void focus_save(std::shared_ptr<SampleJob> job) {
-    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    focus.fence->SetEventOnCompletion(job->fenceValue, event);
-    WaitForSingleObject(event, 10000);
-    CloseHandle(event);
-    float rows[16] = {};
-    void* p = nullptr;
-    if (job->constantsRead && SUCCEEDED(job->constantsRead->Map(0, nullptr, &p))) {
-        std::memcpy(rows, static_cast<const uint8_t*>(p) + 128 * 16, sizeof(rows));
-        job->constantsRead->Unmap(0, nullptr);
-    }
-    const std::filesystem::path dir = std::filesystem::path(log_directory()) / L"replay";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    ReplayFocusCompare result;
-    std::vector<float> eyeDepth;
-    UINT eyeDepthW = 0;
-    double bestShare = -1;
-    double cx[2] = {-rows[2], -rows[10]}, cy[2] = {-rows[6], -rows[14]};
-    for (const SampleTarget& t : job->targets) {
-        const Mapper m{{cx[0], cx[1]}, {cy[0], cy[1]}, job->box, t.fw, t.fh, t.ew, t.eh};
-        const std::vector<float> f = read_back(t.focusRead.Get(), t.focusFoot, t.format, t.depth);
-        const std::vector<float> e = read_back(t.eyeRead.Get(), t.eyeFoot, t.format, t.depth);
-        if (f.empty() || e.empty())
-            continue;
-        // Picture scale: depth by the reference's 99th percentile; colour by its median (to ~0.18).
-        std::vector<float> sorted;
-        for (size_t i = 0; i < e.size(); i += t.depth ? 7 : 21)
-            if (e[i] > 0) sorted.push_back(e[i]);
-        std::sort(sorted.begin(), sorted.end());
-        float scale = 1;
-        if (!sorted.empty())
-            scale = t.depth ? 1.0f / std::max(1e-6f, sorted[sorted.size() * 99 / 100])
-                            : 0.18f / std::max(1e-4f, sorted[sorted.size() / 2]);
-        if (t.name.rfind("post", 0) == 0)
-            scale = -1;  // display values: raw
-        wchar_t name[160];
-        std::swprintf(name, 160, L"frame-%llu-%hs-focus.png", static_cast<unsigned long long>(job->frame), t.name.c_str());
-        save_picture((dir / name).wstring(), f, t.fw * 2, t.fh, t.depth, scale);
-        std::swprintf(name, 160, L"frame-%llu-%hs-eye.png", static_cast<unsigned long long>(job->frame), t.name.c_str());
-        save_picture((dir / name).wstring(), e, t.ew * 2, t.eh, t.depth, scale);
-        const UINT fStride = t.fw * 2, eStride = t.ew * 2;
-        if (t.depth && bestShare < 0) {  // the largest depth twin (sorted first)
-            eyeDepth = e;
-            eyeDepthW = t.ew;
-            for (int dy = -2; dy <= 2; ++dy)
-                for (int dx = -2; dx <= 2; ++dx) {
-                    uint64_t compared = 0, agree = 0;
-                    for (int eye = 0; eye < 2; ++eye)
-                        for (UINT v = 2; v + 2 < t.fh; v += 2)
-                            for (UINT u = 2; u + 2 < t.fw; u += 2) {
-                                double x, y;
-                                m.eye_pixel(eye, u, v, x, y);
-                                float b;
-                                const float a = f[size_t{v} * fStride + static_cast<size_t>(eye) * t.fw + u];
-                                if (!bilinear(e, eStride, eye, t.ew, t.eh, x + dx, y + dy, 1, &e, &b))
-                                    continue;
-                                if (a <= 0 && b <= 0)
-                                    continue;  // sky in both
-                                ++compared;
-                                if (std::fabs(a - b) <= 0.01f * std::max(a, b))
-                                    ++agree;
-                            }
-                    const double share = compared ? static_cast<double>(agree) / static_cast<double>(compared) : 0;
-                    if (share > bestShare) {
-                        bestShare = share;
-                        result.pixels = compared;
-                        result.agree = share;
-                        result.shiftX = dx;
-                        result.shiftY = dy;
-                    }
-                }
-        } else if (!t.depth && (result.colourPixels == 0 || t.name.rfind("post", 0) == 0)) {  // the largest colour twin; P1 post
-            const ReplayFocusCompare kept = result;  // the post comparison logs only
-            const bool skyMask = eyeDepthW == t.ew && !eyeDepth.empty();
-            uint64_t compared = 0, agree = 0;
-            for (int eye = 0; eye < 2; ++eye)
-                for (UINT v = 2; v + 2 < t.fh; v += 2)
-                    for (UINT u = 2; u + 2 < t.fw; u += 2) {
-                        double x, y;
-                        m.eye_pixel(eye, u, v, x, y);
-                        float b[3];
-                        if (!bilinear(e, eStride, eye, t.ew, t.eh, x + result.shiftX, y + result.shiftY, 3,
-                                      skyMask ? &eyeDepth : nullptr, b))
-                            continue;
-                        const float* a = &f[(size_t{v} * fStride + static_cast<size_t>(eye) * t.fw + u) * 3];
-                        ++compared;
-                        bool same = true;
-                        for (int c = 0; c < 3; ++c)
-                            same = same && std::fabs(a[c] - b[c]) <= 0.03f * std::max(std::fabs(a[c]), std::fabs(b[c])) + 0.003f;
-                        if (same)
-                            ++agree;
-                    }
-            result.colourPixels = compared;
-            result.colourAgree = compared ? static_cast<double>(agree) / static_cast<double>(compared) : 0;
-            // At the eye's pixel size: k x k focus pixels (one eye pixel's footprint) averaged, compared with the eye
-            // at the block's centre.
-            const UINT k = std::max(1u, static_cast<UINT>(std::lround(t.fw / std::max(1.0, t.ew * job->box))));
-            uint64_t eyeCompared = 0, eyeAgree = 0, hoodAgree = 0;
-            for (int eye = 0; eye < 2; ++eye)
-                for (UINT v0 = k; v0 + 2 * k <= t.fh; v0 += k)
-                    for (UINT u0 = k; u0 + 2 * k <= t.fw; u0 += k) {
-                        double x, y;
-                        m.eye_pixel(eye, u0 + (k - 1) * 0.5, v0 + (k - 1) * 0.5, x, y);
-                        float b[3];
-                        if (!bilinear(e, eStride, eye, t.ew, t.eh, x + result.shiftX, y + result.shiftY, 3,
-                                      skyMask ? &eyeDepth : nullptr, b))
-                            continue;
-                        float a[3] = {};
-                        for (UINT v = v0; v < v0 + k; ++v)
-                            for (UINT u = u0; u < u0 + k; ++u)
-                                for (int c = 0; c < 3; ++c)
-                                    a[c] += f[(size_t{v} * fStride + static_cast<size_t>(eye) * t.fw + u) * 3 + c];
-                        ++eyeCompared;
-                        bool same = true;
-                        for (int c = 0; c < 3; ++c) {
-                            a[c] /= static_cast<float>(k * k);
-                            same = same && std::fabs(a[c] - b[c]) <= 0.03f * std::max(std::fabs(a[c]), std::fabs(b[c])) + 0.003f;
-                        }
-                        if (same)
-                            ++eyeAgree;
-                        // Within the eye's 3x3 neighbourhood around the mapped position (bilinear() checked the edges).
-                        const long px = static_cast<long>(std::floor(x + result.shiftX + 0.5));
-                        const long py = static_cast<long>(std::floor(y + result.shiftY + 0.5));
-                        bool inHood = true;
-                        for (int c = 0; c < 3 && inHood; ++c) {
-                            float lo = 1e30f, hi = -1e30f;
-                            for (long dy = -1; dy <= 1; ++dy)
-                                for (long dx = -1; dx <= 1; ++dx) {
-                                    const long qx = std::clamp(px + dx, 0L, static_cast<long>(t.ew) - 1);
-                                    const long qy = std::clamp(py + dy, 0L, static_cast<long>(t.eh) - 1);
-                                    const float q = e[(static_cast<size_t>(qy) * eStride + static_cast<size_t>(eye) * t.ew +
-                                                       static_cast<size_t>(qx)) * 3 + c];
-                                    lo = std::min(lo, q);
-                                    hi = std::max(hi, q);
-                                }
-                            const float tol = 0.03f * std::max(std::fabs(lo), std::fabs(hi)) + 0.003f;
-                            inHood = a[c] >= lo - tol && a[c] <= hi + tol;
-                        }
-                        if (inHood)
-                            ++hoodAgree;
-                    }
-            if (focus.settings.diag) {
-                static const char* const kPhase[4] = {"as set", "our fog OFF", "our 3D atmosphere ON",
-                                                      "our 3D atmosphere + sky maps ON"};
-                logd("replay focus: sample frame %llu: diagnostic phase: %s", static_cast<unsigned long long>(job->frame),
-                     kPhase[std::min<uint32_t>(3, job->phase)]);
-            }
-            if (focus.settings.atmosphere == 2)
-                logd("replay focus: sample frame %llu: atmosphere A/B: the focus views %s our atmosphere maps",
-                     static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
-            if (focus.settings.transparents == 2)
-                logd("replay focus: sample frame %llu: transparents A/B: %s",
-                     static_cast<unsigned long long>(job->frame), job->shadowOn ? "replayed" : "NOT replayed");
-            if (focus.settings.shadows == 2)
-                logd("replay focus: sample frame %llu: shadow A/B: the focus lighting %s our deferred shadow",
-                     static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
-            result.colourEyePixels = eyeCompared;
-            result.colourEyeAgree = eyeCompared ? static_cast<double>(eyeAgree) / static_cast<double>(eyeCompared) : 0;
-            result.colourHoodAgree = eyeCompared ? static_cast<double>(hoodAgree) / static_cast<double>(eyeCompared) : 0;
-            logd("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
-                 "compared, %.1f%% agree; %.1f%% within the eye's 3x3 neighbourhood (edge-tolerant)",
-                 static_cast<unsigned long long>(job->frame), t.name.c_str(), k, k,
-                 static_cast<unsigned long long>(eyeCompared), result.colourEyeAgree * 100, result.colourHoodAgree * 100);
-            logd("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
-                 static_cast<unsigned long long>(job->frame), t.name.c_str(), static_cast<unsigned long long>(compared),
-                 result.colourAgree * 100);
-            if (t.name.rfind("post", 0) == 0)
-                result = kept;  // the scene colour's result stays the one reported
-        }
-    }
-    for (const SampleJob::Extra& x : job->extras) {  // pictures only, each at its own median exposure
-        const std::vector<float> v = read_back(x.read.Get(), x.foot, x.format, false);
-        if (v.empty())
-            continue;
-        std::vector<float> sorted;
-        for (size_t i = 0; i < v.size(); i += 7)
-            if (v[i] > 0) sorted.push_back(v[i]);
-        std::sort(sorted.begin(), sorted.end());
-        const float scale = sorted.empty() ? 1.0f : 0.18f / std::max(1e-6f, sorted[sorted.size() / 2]);
-        double mean[3] = {};
-        for (size_t i = 0; i < v.size() / 3; ++i)
-            for (int c = 0; c < 3; ++c) mean[c] += v[i * 3 + c];
-        const double n = static_cast<double>(std::max<size_t>(1, v.size() / 3));
-        double alpha = -1;
-        if (x.format == DXGI_FORMAT_R16G16B16A16_FLOAT) {  // the alpha (cloud coverage / transmittance)
-            void* m = nullptr;
-            if (SUCCEEDED(x.read->Map(0, nullptr, &m))) {
-                double sum = 0;
-                for (UINT y = 0; y < x.foot.Footprint.Height; ++y)
-                    for (UINT xx = 0; xx < x.foot.Footprint.Width; ++xx) {
-                        uint16_t h;
-                        std::memcpy(&h, static_cast<const uint8_t*>(m) + x.foot.Offset + size_t{y} * x.foot.Footprint.RowPitch +
-                                            size_t{xx} * 8 + 6,
-                                    2);
-                        sum += half_to_float(h);
-                    }
-                x.read->Unmap(0, nullptr);
-                alpha = sum / (static_cast<double>(x.foot.Footprint.Width) * x.foot.Footprint.Height);
-            }
-        }
-        if (alpha >= 0)
-            logd("replay focus: sample frame %llu: %s alpha mean %.4f", static_cast<unsigned long long>(job->frame),
-                 x.name.c_str(), alpha);
-        logd("replay focus: sample frame %llu: %s %ux%u mean (%.4f, %.4f, %.4f), median %.4f",
-             static_cast<unsigned long long>(job->frame), x.name.c_str(), x.foot.Footprint.Width, x.foot.Footprint.Height,
-             mean[0] / n, mean[1] / n, mean[2] / n, sorted.empty() ? 0.0f : sorted[sorted.size() / 2]);
-        wchar_t name[160];
-        std::swprintf(name, 160, L"frame-%llu-%hs.png", static_cast<unsigned long long>(job->frame), x.name.c_str());
-        save_picture((dir / name).wstring(), v, x.foot.Footprint.Width, x.foot.Footprint.Height, false, scale);
-    }
-    AcquireSRWLockExclusive(&focus.compareLock);
-    result.sample = focus.compare.sample + 1;
-    focus.compare = result;
-    ReleaseSRWLockExclusive(&focus.compareLock);
-    logd("replay focus: sample frame %llu: depth %llu pixels compared, %.1f%% agree within 1%% at the best shift (%d, %d) "
-         "eye pixels; eye centres (%.4f, %.4f) and (%.4f, %.4f); images in logs\\replay",
-         static_cast<unsigned long long>(job->frame), static_cast<unsigned long long>(result.pixels), result.agree * 100,
-         result.shiftX, result.shiftY, cx[0], cy[0], cx[1], cy[1]);
-    focus.saving = false;
-}
-
-// Under focus.lock, on the submit thread before the next frame's clear: every twin of a readable format and the
-// sample's constants copied to readback, then saved off-thread.
-void focus_copy_sample() {
-    focus.copyPending = false;
-    auto job = std::make_shared<SampleJob>();
-    job->frame = focus.copyFrame.load();
-    job->box = focus.settings.boxFraction;
-    job->shadowOn = (focus.samplesTaken.load() + 1) % 2 == 0;  // counted at the sample frame's end: k + 1 here
-    job->phase = focus.samplesTaken.load() - 1;
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<List> l;
-    if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
-        FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&l))))
-        return;
-    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_READBACK};
-    const auto buffer = [&](UINT64 bytes) {
-        ComPtr<ID3D12Resource> out;
-        D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
-                              D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE};
-        device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                        IID_PPV_ARGS(&out));
-        return out;
-    };
-    inReplay = true;
-    // Depth twins first (the colour comparison skips sky edges by the depth).
-    std::vector<const Twin*> order;
-    for (const auto& [game, t] : focus.twins)
-        if (t.gameDesc.SampleDesc.Count == 1 &&
-            (t.depth ? depth_supported(t.gameDesc.Format) : colour_supported(t.viewFormat)))
-            order.push_back(&t);
-    std::stable_sort(order.begin(), order.end(), [](const Twin* a, const Twin* b) {
-        // depth first, then the largest, then ACE's scene targets by name (same-size flagsDepth, oit*, velocity)
-        if (a->depth != b->depth)
-            return a->depth;
-        if (a->eyeW != b->eyeW)
-            return a->eyeW > b->eyeW;
-        const auto scene = [](const Twin* t) { return t->name == "msaaDepth" || t->name == "msaaColor"; };
-        return scene(a) && !scene(b);
-    });
-    for (const Twin* t : order) {
-        SampleTarget s;
-        s.name = t->name;
-        s.depth = t->depth;
-        s.format = t->depth ? DXGI_FORMAT_R32_FLOAT : t->viewFormat;
-        s.fw = t->focusW;
-        s.fh = t->focusH;
-        s.ew = t->eyeW;
-        s.eh = t->eyeH;
-        const D3D12_RESOURCE_DESC fd = t->focus->GetDesc(), ed = t->eye->GetDesc();
-        UINT64 fb = 0, eb = 0;
-        device->GetCopyableFootprints(&fd, 0, 1, 0, &s.focusFoot, nullptr, nullptr, &fb);
-        device->GetCopyableFootprints(&ed, 0, 1, 0, &s.eyeFoot, nullptr, nullptr, &eb);
-        s.focusRead = buffer(fb);
-        s.eyeRead = buffer(eb);
-        if (!s.focusRead || !s.eyeRead)
-            continue;
-        const D3D12_RESOURCE_STATES state = t->depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET;
-        const std::tuple<ID3D12Resource*, ID3D12Resource*, D3D12_PLACED_SUBRESOURCE_FOOTPRINT> pairs[2] = {
-            {t->focus.Get(), s.focusRead.Get(), s.focusFoot}, {t->eye.Get(), s.eyeRead.Get(), s.eyeFoot}};
-        for (const auto& [twin, read, foot] : pairs) {
-            barrier(l.Get(), twin, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION dst{read, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-            dst.PlacedFootprint = foot;
-            D3D12_TEXTURE_COPY_LOCATION src{twin, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-            src.SubresourceIndex = 0;
-            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-            barrier(l.Get(), twin, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-            job->keep.emplace_back(twin);
-        }
-        job->targets.push_back(std::move(s));
-    }
-    if (focus.skyCloudViews && focus.skyClouds) {  // our focus clouds (the sky patch), as a picture with its alpha logged
-        SampleJob::Extra x;
-        x.name = "clouds-ours";
-        const D3D12_RESOURCE_DESC d = focus.skyClouds->GetDesc();
-        x.format = d.Format;
-        UINT64 bytes = 0;
-        device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
-        x.read = buffer(bytes);
-        if (x.read) {
-            barrier(l.Get(), focus.skyClouds.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-            dst.PlacedFootprint = x.foot;
-            D3D12_TEXTURE_COPY_LOCATION src{focus.skyClouds.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-            src.SubresourceIndex = 0;
-            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-            barrier(l.Get(), focus.skyClouds.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
-            job->keep.emplace_back(focus.skyClouds.Get());
-            job->extras.push_back(std::move(x));
-        }
-    }
-    if (focus.atmoMade) {  // the sky maps of eye 0 (ours resampled, the game's): pictures for the sky investigation
-        const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        for (int m : {2, 3}) {
-            for (int which = 0; which < 2; ++which) {
-                ID3D12Resource* res = which ? focus.atmoGame[m] : focus.atmo[m].Get();
-                if (!res)
-                    continue;
-                SampleJob::Extra x;
-                x.name = std::string(m == 2 ? "skyIn" : "skyOut") + (which ? "-game" : "-ours");
-                const D3D12_RESOURCE_DESC d = res->GetDesc();
-                x.format = d.Format;
-                UINT64 bytes = 0;
-                device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
-                x.read = buffer(bytes);
-                if (!x.read)
-                    continue;
-                const D3D12_RESOURCE_STATES state = which ? read : D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
-                barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-                dst.PlacedFootprint = x.foot;
-                D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-                src.SubresourceIndex = 0;
-                l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-                barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-                job->keep.emplace_back(res);
-                job->extras.push_back(std::move(x));
-            }
-        }
-    }
-    {  // MSAA: our refraction source's mip 0 (the opaque scene, resolved at the blur) and our resolved colour (the post's)
-        const std::tuple<ID3D12Resource*, const char*, D3D12_RESOURCE_STATES> extra[2] = {
-            {focus.blur.Get(), "blur0-ours", D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE},
-            {focus.resolvedColour.Get(), "colour-resolved", D3D12_RESOURCE_STATE_RENDER_TARGET}};
-        for (const auto& [res, nm, state] : extra) {
-            if (!res || !focus.resolvedColour)
-                continue;
-            SampleJob::Extra x;
-            x.name = nm;
-            const D3D12_RESOURCE_DESC d = res->GetDesc();
-            x.format = d.Format;
-            UINT64 bytes = 0;
-            device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
-            x.read = buffer(bytes);
-            if (!x.read)
-                continue;
-            barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-            dst.PlacedFootprint = x.foot;
-            D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-            src.SubresourceIndex = 0;
-            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-            barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-            job->keep.emplace_back(res);
-            job->extras.push_back(std::move(x));
-        }
-    }
-    if (focus.dlssReady && focus.dlssOut && focus.packAa) {  // P2a: our DLSS image and packed motion vectors
-        for (int which = 0; which < 2; ++which) {
-            ID3D12Resource* res = which ? focus.packAa.Get() : focus.dlssOut.Get();
-            if (which == 1 && focus.ngxAuto[0])
-                res = focus.dlssOutAuto.Get();
-            else if (which == 1 && focus.casDone)
-                res = focus.casOut.Get();
-            const D3D12_RESOURCE_STATES state =
-                which && !focus.ngxAuto[0] && !focus.casDone ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-                                                             : D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
-            SampleJob::Extra x;
-            x.name = which ? (focus.ngxAuto[0] ? "dlss-auto" : focus.casDone ? "dlss-cas" : "motion-ours") : "dlss-ours";
-            const D3D12_RESOURCE_DESC d = res->GetDesc();
-            x.format = d.Format;
-            UINT64 bytes = 0;
-            device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
-            x.read = buffer(bytes);
-            if (!x.read)
-                continue;
-            barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-            dst.PlacedFootprint = x.foot;
-            D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-            src.SubresourceIndex = 0;
-            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-            barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-            job->keep.emplace_back(res);
-            job->extras.push_back(std::move(x));
-        }
-    }
-    if (focus.postReady && focus.postLdr && focus.postGameFxaa) {  // P1: our tonemapped focus vs the game's eyes
-        const Twin* colourTwin = nullptr;
-        for (const auto& [game, t] : focus.twins)
-            if (!t.depth && t.name == "msaaColor" && t.gameDesc.SampleDesc.Count == 1)
-                colourTwin = &t;
-        if (!colourTwin && focus.resolvedColour)
-            colourTwin = &focus.resolvedColourTwin;
-        const std::pair<ID3D12Resource*, const char*> posts[3] = {
-            {focus.postLdr.Get(), "post"}, {focus.postAlt[0].Get(), "post-nodlss"},
-            {focus.postAlt[1].Get(), focus.ngxAuto[0] ? "post-auto" : "post-nocas"}};
-        for (const auto& [postRes, postName] : posts) {
-        if (colourTwin && postRes) {
-            SampleTarget s;
-            s.name = postName;
-            s.format = focus.postGameFxaaFormat;
-            s.fw = focus.postW / 2;
-            s.fh = focus.postH;
-            s.ew = colourTwin->eyeW;
-            s.eh = colourTwin->eyeH;
-            const D3D12_RESOURCE_DESC fd = postRes->GetDesc(), ed = focus.postGameFxaa->GetDesc();
-            UINT64 fb = 0, eb = 0;
-            device->GetCopyableFootprints(&fd, 0, 1, 0, &s.focusFoot, nullptr, nullptr, &fb);
-            device->GetCopyableFootprints(&ed, 0, 1, 0, &s.eyeFoot, nullptr, nullptr, &eb);
-            s.focusRead = buffer(fb);
-            s.eyeRead = buffer(eb);
-            if (s.focusRead && s.eyeRead && ed.Width == UINT64{2} * s.ew && ed.Height == s.eh) {
-                // ours rests as a shader resource, the game's fxaa_texture as a render target (end of its post list)
-                const std::tuple<ID3D12Resource*, ID3D12Resource*, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATES>
-                    pairs[2] = {{postRes, s.focusRead.Get(), s.focusFoot, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE},
-                                {focus.postGameFxaa.Get(), s.eyeRead.Get(), s.eyeFoot, D3D12_RESOURCE_STATE_RENDER_TARGET}};
-                for (const auto& [res, read, foot, state] : pairs) {
-                    barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                    D3D12_TEXTURE_COPY_LOCATION dst{read, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-                    dst.PlacedFootprint = foot;
-                    D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-                    src.SubresourceIndex = 0;
-                    l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-                    barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
-                    job->keep.emplace_back(res);
-                }
-                job->targets.push_back(std::move(s));
-            }
-        }
-        }
-    }
-    const uint32_t slot = focus.sampleSlot.load();
-    if (slot != UINT32_MAX) {
-        job->constantsRead = buffer(kSlotBytes);
-        barrier(l.Get(), focus.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        l->CopyBufferRegion(job->constantsRead.Get(), 0, focus.constants.Get(), UINT64{slot} * kSlotBytes, kSlotBytes);
-        barrier(l.Get(), focus.constants.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
-    l->Close();
-    inReplay = false;
-    if (job->targets.empty()) {
-        logd("replay focus: no twin of a format the sample can read (multisampled, or not depth / colour)");
-        return;
-    }
-    ID3D12CommandList* lists[] = {l.Get()};
-    executeOriginal(focus.queue.Get(), 1, lists);
-    job->fenceValue = focus.fenceValue.fetch_add(1) + 1;
-    focus.queue->Signal(focus.fence.Get(), job->fenceValue);
-    job->keep.emplace_back(l.Get());
-    job->keep.emplace_back(allocator.Get());
-    focus.saving = true;
-    std::thread(focus_save, job).detach();
-}
-
-// At the game's Close of its instance visibility list: the eyes' culling again for the focus views, into our buffers.
-void focus_cull_record(List* gameList, const Stream& s) {
-    static int epoch = 0, missed = 0;
-    const auto miss = [&](const char* why) {
-        if (miss_allowed(epoch, missed, 4))
-            logd("replay cull: not this frame (%s)", why);
-    };
-    std::vector<const Stream::VisDispatch*> eyes;
-    const Stream::VisDispatch* finalize = nullptr;
-    for (const Stream::VisDispatch& d : s.visDispatches) {
-        if (d.kind == 25 && d.consts[49] != 0)  // dualFrustumCull: the two eyes
-            eyes.push_back(&d);
-        else if (d.kind == 27)
-            finalize = &d;
-    }
-    if (eyes.empty() || !finalize)
-        return miss(eyes.empty() ? "no culling dispatch with two frustums in ACE's visibility list" : "no finalize dispatch");
-    // The count and command templates ACE copied in from its upload buffer, by their targets' names.
-    const Stream::BufferCopy* countsCopy = nullptr;
-    const Stream::BufferCopy* commandsCopy = nullptr;
-    for (const Stream::BufferCopy& c : s.bufferCopies) {
-        const std::string name = debug_name(c.dst);
-        if (name.rfind("instanceVisibilityPerLodCount", 0) == 0)
-            countsCopy = &c;
-        else if (name.rfind("instancesIndirectCommandBuffer", 0) == 0)
-            commandsCopy = &c;
-    }
-    if (!countsCopy || !commandsCopy)
-        return miss("the copies into ACE's count and command buffers were not seen in its visibility list");
-    uint64_t gameVa = 0;
-    std::memcpy(&gameVa, eyes[0]->consts + 20, 8);  // outputInstancesBufferAddress
-    cull.gameInstancesVa.store(gameVa, std::memory_order_relaxed);
-    const uint64_t gameBytes = cull.gameInstancesBytes.load(std::memory_order_relaxed);
-    if (!gameVa || !gameBytes)
-        return miss("the size of ACE's visible-instances buffer is not known yet (no vertex buffer view at its address seen)");
-    Replay* r = nullptr;
-    float centre[2][2];
-    AcquireSRWLockExclusive(&focus.lock);
-    const bool base = focus.gameHeap && focus.slotFirst && focus.gameHeap.Get() == finalize->heap && !cull.broken && focus.centresKnown;
-    if (base) {
-        const UINT64 countsBytes = countsCopy->dst->GetDesc().Width, commandsBytes = commandsCopy->dst->GetDesc().Width;
-        if (!cull.instances || cull.instancesBytes != gameBytes || cull.countsBytes != countsBytes ||
-            cull.commandsBytes != commandsBytes) {
-            retire(cull.instances.Get());
-            retire(cull.counts.Get());
-            retire(cull.commands.Get());
-            const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
-            const auto make = [&](UINT64 bytes, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
-                const D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
-                                            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-                out.Reset();
-                return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
-            };
-            // (their states between our lists: what the draws read them in, and the counts ready to be written)
-            if (!make(gameBytes, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, cull.instances) ||
-                !make(countsBytes, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, cull.counts) ||
-                !make(commandsBytes, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, cull.commands)) {
-                cull.broken = true;
-                log_line("replay cull: our buffers could not be made; the focus replays stay whole");
-            } else {
-                cull.instancesBytes = gameBytes;
-                cull.countsBytes = countsBytes;
-                cull.commandsBytes = commandsBytes;
-                cull.instancesVa = cull.instances->GetGPUVirtualAddress();
-                D3D12_UNORDERED_ACCESS_VIEW_DESC raw{};  // instanceOutputs: a RWByteAddressBuffer
-                raw.Format = DXGI_FORMAT_R32_TYPELESS;
-                raw.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-                raw.Buffer.NumElements = static_cast<UINT>(gameBytes / 4);
-                raw.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
-                uavViewOriginal(device.Get(), cull.instances.Get(), nullptr, &raw, game_cpu(focus.slotFirst + kCullSlot));
-                structured_views(cull.counts.Get(), static_cast<UINT>(countsBytes / 4), 4, focus.slotFirst + kCullSlot + 1,
-                                 focus.slotFirst + kCullSlot + 2);
-                structured_views(cull.commands.Get(), static_cast<UINT>(commandsBytes / 32), 32, focus.slotFirst + kCullSlot + 3,
-                                 focus.slotFirst + kCullSlot + 4);
-                logf("replay cull: our buffers made: visible instances %llu B (ACE's at 0x%llx), counts %llu B, commands %llu B "
-                     "(%llu draws); %zu eye dispatches a frame",
-                     static_cast<unsigned long long>(gameBytes), static_cast<unsigned long long>(gameVa),
-                     static_cast<unsigned long long>(countsBytes), static_cast<unsigned long long>(commandsBytes),
-                     static_cast<unsigned long long>(commandsBytes / 32), eyes.size());
-            }
-        }
-        cull.gameCommands = commandsCopy->dst;
-        if (!cull.broken && countsCopy->bytes <= cull.countsBytes && commandsCopy->bytes <= cull.commandsBytes)
-            r = acquire_replay();
-        focus_centres(centre);
-    }
-    ReleaseSRWLockExclusive(&focus.lock);
-    if (!r)
-        return miss(base ? "no replay entry, or ACE's copies are larger than our buffers" : "the heap, our slots or the eyes' centres aren't known yet");
-    // Each eye's frustum remapped to its focus box (a margin wider): x' = a (x - cx w), y' = b (y - cy w). In ACE's
-    // visibilityGlobals each register holds one input coordinate's share of clip x, y, z, w (the shader builds its
-    // planes as -(register.w + register.x) and so on, one component per register): x, y and w are components 0, 1, 3 of
-    // every register.
-    const float box = static_cast<float>(focus.settings.boxFraction) * 1.15f, boxY = focus_box_y() * 1.15f;
-    const auto remap = [&](uint32_t* m, const float (&c)[2]) {
-        float v[16];
-        std::memcpy(v, m, sizeof(v));
-        for (int k = 0; k < 4; ++k) {
-            v[4 * k] = (v[4 * k] - c[0] * v[4 * k + 3]) / box;
-            v[4 * k + 1] = (v[4 * k + 1] - c[1] * v[4 * k + 3]) / boxY;
-        }
-        std::memcpy(m, v, sizeof(v));
-    };
-    inReplay = true;
-    r->allocator->Reset();
-    List* l = r->list.Get();
-    l->Reset(r->allocator.Get(), nullptr);
-    gpu_stamp(l, kStepCull);
-    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap.Get()};
-    l->SetDescriptorHeaps(1, heaps);
-    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
-    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_COPY_DEST);
-    l->CopyBufferRegion(cull.counts.Get(), countsCopy->dstOffset, countsCopy->src, countsCopy->srcOffset, countsCopy->bytes);
-    l->CopyBufferRegion(cull.commands.Get(), commandsCopy->dstOffset, commandsCopy->src, commandsCopy->srcOffset, commandsCopy->bytes);
-    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    barrier(l, cull.instances.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    const uint64_t mineVa = cull.instancesVa;
-    for (const Stream::VisDispatch* d : eyes) {
-        uint32_t c[52];
-        std::memcpy(c, d->consts, sizeof(c));
-        remap(c, centre[0]);
-        remap(c + 28, centre[1]);
-        std::memcpy(c + 20, &mineVa, 8);
-        l->SetComputeRootSignature(d->root);
-        l->SetPipelineState(d->pso);
-        l->SetComputeRoot32BitConstants(0, 52, c, 0);
-        for (UINT t = 1; t <= 4; ++t)
-            l->SetComputeRootDescriptorTable(t, d->tables[t]);
-        l->SetComputeRootDescriptorTable(5, game_gpu(focus.slotFirst + kCullSlot));
-        l->SetComputeRootDescriptorTable(6, game_gpu(focus.slotFirst + kCullSlot + 1));
-        l->SetComputeRootDescriptorTable(7, d->tables[7]);  // ACE's stats
-        l->Dispatch(d->dims[0], d->dims[1], d->dims[2]);
-    }
-    D3D12_RESOURCE_BARRIER uav{};
-    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    l->ResourceBarrier(1, &uav);
-    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    l->SetComputeRootSignature(finalize->root);
-    l->SetPipelineState(finalize->pso);
-    l->SetComputeRootDescriptorTable(0, finalize->tables[0]);
-    l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + kCullSlot + 2));
-    l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + kCullSlot + 3));
-    l->SetComputeRootDescriptorTable(3, finalize->tables[3]);
-    l->Dispatch(finalize->dims[0], finalize->dims[1], finalize->dims[2]);
-    barrier(l, cull.instances.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    l->Close();
-    inReplay = false;
-    AcquireSRWLockExclusive(&focus.lock);
-    add_pending(gameList, r);
-    ReleaseSRWLockExclusive(&focus.lock);
-    cull.readyFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    cull.culls.fetch_add(1, std::memory_order_relaxed);
-    static std::atomic<bool> said{false};
-    if (!said.exchange(true))
-        logd("replay cull: the first focus culling recorded: %zu eye dispatches (the first %ux%ux%u), finalize %ux%ux%u; box "
-             "%.3f x %.3f around %.3f,%.3f and %.3f,%.3f; counts copied %llu B, commands %llu B",
-             eyes.size(), eyes[0]->dims[0], eyes[0]->dims[1], eyes[0]->dims[2], finalize->dims[0], finalize->dims[1],
-             finalize->dims[2], box, boxY, centre[0][0], centre[0][1], centre[1][0], centre[1][1],
-             static_cast<unsigned long long>(countsCopy->bytes), static_cast<unsigned long long>(commandsCopy->bytes));
-}
+// ---- Samples (replay_samples.cpp) and the focus culling record (replay_cull.cpp) ---------------------------------
 
 // ---- The live periphery: ACE's own eyes drawn into a smaller region of its launch-size targets ---------------------
 //
