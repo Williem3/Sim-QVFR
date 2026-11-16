@@ -689,7 +689,7 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     // Density in effect (QVFR: the fit's, horizontal; Two-loop: eye_scale over the box's share).
     const double density = l.qvfr ? f.densityX : l.twoLoopScale * 100 / menu.values.width;
     if (l.nativePpd > 0)
-        s.centerPpd = static_cast<int>(std::lround(l.nativePpd * density / 100));
+        s.centerPpd = static_cast<int>(std::lround(l.nativePpd * (l.outputCap > 0 ? std::min(density, l.outputCap) : density) / 100));
     // Rendered against both native eyes, in pixels when the native size is known (as the launcher).
     double rendered, native;
     if (l.nativeWidth > 0 && l.nativeHeight > 0) {

@@ -394,6 +394,13 @@ target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/incl
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(quad_flow_test PRIVATE sim_qvfr_layer)
 
+# The output density (quad/output_density.h): the composed output at the focus views' density (tests/output_density_test.cpp).
+sim_qvfr_test(output_density_test tests/output_density_test.cpp)
+target_include_directories(output_density_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(output_density_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(output_density_test PRIVATE /utf-8)
+target_link_libraries(output_density_test PRIVATE sim_qvfr_core)
+
 # One eye off: the frame's layers as the runtime gets them, and the headset menu's line (tests/eye_off_test.cpp).
 sim_qvfr_test(eye_off_test tests/eye_off_test.cpp)
 target_include_directories(eye_off_test PRIVATE src ${THIRD_PARTY}/openxr/include)

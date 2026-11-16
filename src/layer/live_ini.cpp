@@ -94,6 +94,9 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
+    if (experiment.outputDensityMax.exchange(l.outputDensityMax) != l.outputDensityMax)
+        logf("live: output density up to %d%% of the native eye%s", l.outputDensityMax,
+             l.outputDensityMax <= 100 ? " (composed at native size)" : "");
     if (experiment.cpuSettings && experiment.cpuIsolate != l.cpuIsolate) {
         logf("live: main thread core %s", l.cpuIsolate == 1 ? "its own" : l.cpuIsolate > 1 ? "A/B" : "shared");
         experiment.cpuIsolate = l.cpuIsolate;

@@ -25,6 +25,7 @@
 #include "quad/focus_turn.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
+#include "quad/output_density.h"
 #include "quad/session_graphics.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
@@ -249,6 +250,15 @@ void menu_open(int64_t now) {
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
+            // The output's largest size (quad/output_density.h): the D3D12 chain is made once at launch.
+            double cap = 0;
+            if (experiment.composing() && !nativeQuad.active && experiment.focusLayer == 0) {
+                cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
+                                         experiment.outputDensityMax.load(std::memory_order_relaxed));
+                if (!experiment.views4ComposeD3D11 && quad.outChain)
+                    cap = std::min(cap, quad.outDensity.chainScale);
+            }
+            menu.model.launch.outputCap = cap * 100;
         }
         menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
         if (!optimize.optimizer.running()) {  // a finished run's detail is not kept over a reopen

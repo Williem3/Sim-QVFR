@@ -155,6 +155,9 @@ struct MenuLaunch {
     // items are still the plain set until the path has settings of its own).
     bool apiPath = false;
     int apiFocusScale = 100;  // the focus views' mode this launch runs ([dlss] focus_scale at launch)
+    // Composed by the layer: the most focus density the headset gets, percent of the native eye (the output's largest
+    // size, quad/output_density.h); above it the density only antialiases. 0: no such cap (the runtime composes).
+    double outputCap = 0;
     bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
 };
 
