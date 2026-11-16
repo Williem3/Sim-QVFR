@@ -26,16 +26,11 @@
 #include <nvsdk_ngx.h>
 #include <nvsdk_ngx_helpers.h>
 
+#include "test_util.h"
+
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::printf("  ngx: %s", message);
@@ -308,9 +303,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         return 2;
     }
 
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    std::wstring data = std::wstring(temp) + L"sim-qvfr-ngx-check";
+    std::wstring data = temp_path(L"sim-qvfr-ngx-check");
     CreateDirectoryW(data.c_str(), nullptr);
     const wchar_t* paths[] = {argv[1]};
     NVSDK_NGX_FeatureCommonInfo info{};

@@ -7,15 +7,9 @@
 #include <vector>
 
 #include "games/acc/gate_compare.h"
+#include "test_util.h"
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 // A scene as a function of the eye's image coordinates (0-1, rows down): smooth, with detail at several scales.
 double scene(double u, double v) {
@@ -190,6 +184,5 @@ int SIM_QVFR_TEST_MAIN() {
                   std::fabs(b[1] - 0.25) < 1e-6 && std::fabs(b[3] - 0.55) < 1e-6,
               "a focus view's box in its eye from the two tangent sets");
     }
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

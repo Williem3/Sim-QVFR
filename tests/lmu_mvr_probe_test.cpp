@@ -16,17 +16,11 @@
 #include "games/lmu/game.h"
 #include "games/lmu/mvr_probe.h"
 #include "games/multi_view.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::vector<uint8_t> compile(const std::string& source, const char* profile) {
     ComPtr<ID3DBlob> code, errors;
@@ -167,9 +161,7 @@ int SIM_QVFR_TEST_MAIN() {
           "multi-view offered on RTX 20 and newer only: not the GTX 16 series (TU116, TU117, or named GTX), not Pascal or Volta");
     // The layer's decision (games/multi_view.h) from an ini: multi_view=1 for a game that has it, on such a GPU.
     {
-        wchar_t temp[MAX_PATH] = {};
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-multiview-" + std::to_wstring(GetCurrentProcessId()) + L".ini";
+        const std::wstring ini = temp_path(L"simqvfr-multiview-") + std::to_wstring(GetCurrentProcessId()) + L".ini";
         WritePrivateProfileStringW(L"experiment", L"cpu_profile", L"0", ini.c_str());  // an ini without multi_view
         std::string why;
         check(simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why), "no multi_view key: on (the default)");

@@ -16,52 +16,20 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include "png_test_util.h"
 #include "quad/d3d11_compositor.h"
 #include "quad/native_quad.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
 
 namespace {
 
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
-
 constexpr UINT kW = 256, kH = 192;          // the views' image: two eye columns of 128, outer 128 high, focus 64
 constexpr UINT kOutW = 2 * 96, kOutH = 96;  // the output: two eyes of 96 x 96
 // RGBA8: outer left red, outer right blue, focus left green, focus right white.
 constexpr uint32_t kOuter[2] = {0xff0000ff, 0xffff0000}, kFocus[2] = {0xff00ff00, 0xffffffff};
-
-// A 1-pixel-wide PNG of `rows` RGBA rows (0xRRGGBBAA, straight alpha), for the helmet's pieces.
-bool write_png(const std::wstring& path, const std::vector<uint32_t>& rows) {
-    const UINT height = static_cast<UINT>(rows.size());
-    std::vector<uint8_t> bgra(height * 4);
-    for (UINT y = 0; y < height; ++y) {
-        const uint32_t c = rows[y];
-        bgra[y * 4 + 0] = static_cast<uint8_t>(c >> 8);
-        bgra[y * 4 + 1] = static_cast<uint8_t>(c >> 16);
-        bgra[y * 4 + 2] = static_cast<uint8_t>(c >> 24);
-        bgra[y * 4 + 3] = static_cast<uint8_t>(c);
-    }
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    ComPtr<IWICImagingFactory> wic;
-    ComPtr<IWICStream> stream;
-    ComPtr<IWICBitmapEncoder> encoder;
-    ComPtr<IWICBitmapFrameEncode> frame;
-    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-    return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
-           SUCCEEDED(wic->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
-           SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
-           SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
-           SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
-           SUCCEEDED(frame->SetSize(1, height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
-           SUCCEEDED(frame->WritePixels(height, 4, static_cast<UINT>(bgra.size()), bgra.data())) &&
-           SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
-}
 
 // A copy of `texture` (RGBA8) as rows of pixels.
 struct Image {
@@ -388,9 +356,7 @@ int SIM_QVFR_TEST_MAIN() {
 
     // The pieces (light 0: as drawn) over the whole output (tangents -2..2, no turn), 8 rows each: the top
     // piece's first quarter white, the rest clear; the scene through the clear part.
-    wchar_t tempDir[MAX_PATH];
-    GetTempPathW(MAX_PATH, tempDir);
-    const std::wstring top = std::wstring(tempDir) + L"simqvfr-d3d11-helmet-top.png";
+    const std::wstring top = temp_path(L"simqvfr-d3d11-helmet-top.png");
     const uint32_t clear = 0xFFFFFF00;
     const bool loaded = write_png(top, {0xFFFFFFFF, 0xFFFFFFFF, clear, clear, clear, clear, clear, clear}) &&
                         compositor.load_helmet_piece(HelmetPiece::Top, top);
@@ -442,6 +408,5 @@ int SIM_QVFR_TEST_MAIN() {
     DeleteFileW(top.c_str());
     compositor.shutdown();
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

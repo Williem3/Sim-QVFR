@@ -10,19 +10,9 @@
 
 #include "engine/nr_math.h"
 #include "engine/nr_settings.h"
+#include "test_util.h"
 
 using namespace simqvfr;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     // The covered part of an eye's view.
@@ -119,9 +109,7 @@ int SIM_QVFR_TEST_MAIN() {
     check(nr::gain(0.002, 0.001, 3) > 0.9, "gain: the darkest values barely swing it (no crushed blacks from their noise)");
     // [dlss_nr].
     {
-        wchar_t temp[MAX_PATH];
-        GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"simqvfr-nr-settings.ini";
+        const std::wstring ini = temp_path(L"simqvfr-nr-settings.ini");
         DeleteFileW(ini.c_str());
         const NrSettings fresh = read_nr_settings(ini.c_str());
         check(!fresh.on && fresh.folder.empty() && !fresh.periphery && !fresh.beforeDlss && fresh.intensity == 100 && fresh.style == 0 &&

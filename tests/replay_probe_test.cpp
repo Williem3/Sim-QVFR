@@ -9,25 +9,13 @@
 
 #include "games/ace/stereo_flag.h"
 #include "probe/replay_probe.h"
+#include "test_util.h"
 #include "xr.h"
 
 using Microsoft::WRL::ComPtr;
 
-namespace {
-
-int failures = 0;
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    if (!ok)
-        ++failures;
-}
-
-}  // namespace
-
 int SIM_QVFR_TEST_MAIN() {
-    wchar_t temp[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, temp);
-    SetEnvironmentVariableW(L"SIM_QVFR_LOG", (std::wstring(temp) + L"simqvfr-replay-probe-test.log").c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", temp_path(L"simqvfr-replay-probe-test.log").c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;

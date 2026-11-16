@@ -16,21 +16,9 @@
 
 #include "probe/cpu_load.h"
 #include "probe/gpu_load.h"
+#include "test_util.h"
 
 using namespace simqvfr;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-bool close_to(double a, double b, double tolerance = 1e-6) { return a > b - tolerance && a < b + tolerance; }
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     {
@@ -55,24 +43,24 @@ int SIM_QVFR_TEST_MAIN() {
             {L"pid_40_luid_0x00000000_0x00001111_phys_0_eng_0_engtype_3D", 100},
         };
         const GpuLoad load = gpu_load_from(sample, 0, 0xD1B6, 10);
-        check(load.valid && close_to(load.busy, 92) && close_to(load.game, 70) && load.engine == L"3D",
+        check(load.valid && close_to(load.busy, 92, 1e-6) && close_to(load.game, 70, 1e-6) && load.engine == L"3D",
               "the adapter's busiest render engine: every process summed (92%), ACE's share (70%)");
         const GpuLoad full = gpu_load_from({{L"pid_10_luid_0x00000000_0x0000D1B6_phys_0_eng_0_engtype_3D", 80},
                                             {L"pid_20_luid_0x00000000_0x0000D1B6_phys_0_eng_0_engtype_3D", 40}},
                                            0, 0xD1B6, 10);
-        check(close_to(full.busy, 100) && close_to(full.game, 80), "an engine's processes sum to at most 100%");
+        check(close_to(full.busy, 100, 1e-6) && close_to(full.game, 80, 1e-6), "an engine's processes sum to at most 100%");
         check(!gpu_load_from(sample, 0, 0x9999, 10).valid, "no engine of the adapter: no load");
     }
     {
         const std::map<uint32_t, uint64_t> before = {{1, 1000}, {2, 5000}, {3, 0}};
         const std::map<uint32_t, uint64_t> after = {{1, 2000}, {2, 95000}, {3, 40000}, {4, 70000}};
         const CpuLoad load = cpu_load_from(before, after, 100000, 3);
-        check(load.valid && load.busiestThread == 2 && close_to(load.busiestPercent, 90) && close_to(load.renderPercent, 40) &&
-                  close_to(load.processPercent, 131) && load.threads == 3,
+        check(load.valid && load.busiestThread == 2 && close_to(load.busiestPercent, 90, 1e-6) && close_to(load.renderPercent, 40, 1e-6) &&
+                  close_to(load.processPercent, 131, 1e-6) && load.threads == 3,
               "threads' share of a core: the busiest (90%), the render thread's (40%), all of them; a new thread skipped");
         check(!cpu_load_from(before, after, 0, 3).valid, "no elapsed cycles: no load");
         const CpuLoad spun = cpu_load_from(before, after, 100000, 3, {2});
-        check(spun.valid && spun.busiestThread == 3 && close_to(spun.busiestPercent, 40) && close_to(spun.processPercent, 131),
+        check(spun.valid && spun.busiestThread == 3 && close_to(spun.busiestPercent, 40, 1e-6) && close_to(spun.processPercent, 131, 1e-6),
               "a spinning thread is never the busiest (the next one is, 40%) but counts in the process's total");
         check(cpu_load_spins(L"Physics") && cpu_load_spins(L"(aSeeVRClient.dll)") &&
                   cpu_load_spins(L"(virtualdesktop-openxr.dll)") && !cpu_load_spins(L"GameThread") &&
@@ -82,7 +70,7 @@ int SIM_QVFR_TEST_MAIN() {
               "spinning threads by description: ACE's and LMU's physics threads, the eye tracker's client and Virtual "
               "Desktop's pacing");
         const std::map<uint32_t, double> shares = cpu_load_shares(before, after, 100000);
-        check(shares.size() == 3 && close_to(shares.at(1), 1) && close_to(shares.at(2), 90) && close_to(shares.at(3), 40) &&
+        check(shares.size() == 3 && close_to(shares.at(1), 1, 1e-6) && close_to(shares.at(2), 90, 1e-6) && close_to(shares.at(3), 40, 1e-6) &&
                   !shares.count(4),
               "every thread's share of a core (the thread table); a new thread skipped");
     }
@@ -190,6 +178,5 @@ int SIM_QVFR_TEST_MAIN() {
             std::printf("     live: no hardware adapter; skipped\n");
         }
     }
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

@@ -41,17 +41,11 @@
 #include "engine/dlss_views.h"
 #include "engine/ngx_dlss.h"
 #include "log.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 ComPtr<ID3D11Device> device;
 ComPtr<ID3D11DeviceContext> context;
@@ -325,9 +319,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     paced = fsrMode;
     if (fsrMode)
         std::printf("     AMD FSR runs the views (its DLLs from %ls)\n", fsrFolder.c_str());
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const std::wstring log = std::wstring(temp) + L"sim-qvfr-lmu-dlss-check.log";
+    const std::wstring log = temp_path(L"sim-qvfr-lmu-dlss-check.log");
     DeleteFileW(log.c_str());
     SetEnvironmentVariableW(L"SIM_QVFR_LOG", log.c_str());
 

@@ -10,15 +10,9 @@
 #include <vector>
 
 #include "games/lmu/car_motion.h"
+#include "test_util.h"
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 struct M {
     float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
@@ -290,6 +284,5 @@ int SIM_QVFR_TEST_MAIN() {
               what);
     }
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

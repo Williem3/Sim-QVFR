@@ -19,18 +19,12 @@
 
 #include "games/ace/stereo_flag.h"
 #include "probe/replay_probe.h"
+#include "test_util.h"
 #include "xr.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    if (!ok)
-        ++failures;
-}
 
 // ACE's projection rows: x (sx, 0, ox, 0), y (0, sy, oy, 0), z (0, 0, n, f) reverse-Z, w (0, 0, -1, 0).
 void put_projection(float* rows, int base, float sx, float ox, float sy, float oy) {
@@ -116,9 +110,7 @@ void check_inverse_projection() {
 
 int SIM_QVFR_TEST_MAIN() {
     check_inverse_projection();
-    wchar_t temp[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, temp);
-    const std::wstring logPath = std::wstring(temp) + L"simqvfr-replay-focus-test.log";
+    const std::wstring logPath = temp_path(L"simqvfr-replay-focus-test.log");
     DeleteFileW(logPath.c_str());
     SetEnvironmentVariableW(L"SIM_QVFR_LOG", logPath.c_str());
     ComPtr<IDXGIFactory4> factory;

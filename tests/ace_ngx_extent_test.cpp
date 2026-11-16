@@ -8,18 +8,12 @@
 #include <string>
 
 #include "games/ace/ngx_extent.h"
+#include "test_util.h"
 
 struct ID3D11Resource;
 struct ID3D12Resource;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 enum NgxResult : int { kSuccess = 0x1, kFailNotFound = static_cast<int>(0xbad00002) };
 

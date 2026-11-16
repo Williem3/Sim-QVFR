@@ -12,17 +12,11 @@
 #include <windows.h>
 
 #include "probe/cpu_profile.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::atomic<bool> stop{false};
 std::atomic<uint64_t> spins{0};
@@ -182,6 +176,5 @@ int SIM_QVFR_TEST_MAIN() {
               "the slow frames' extra self time is the spike's leaf");
     }
     DeleteFileW(path.c_str());
-    std::puts(failures ? "RESULT: FAIL" : "RESULT: pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

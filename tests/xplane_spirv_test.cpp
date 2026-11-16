@@ -11,15 +11,9 @@
 #include <vector>
 
 #include "games/xplane/spirv_patch.h"
+#include "test_util.h"
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::uint32_t op(std::uint16_t code, std::uint16_t count) { return (static_cast<std::uint32_t>(count) << 16) | code; }
 
@@ -1035,6 +1029,5 @@ int SIM_QVFR_TEST_MAIN() {
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
         }
     }
-    std::printf("%s\n", failures ? "RESULT: FAIL" : "RESULT: pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

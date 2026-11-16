@@ -15,17 +15,11 @@
 
 #include "engine/context_hooks.h"
 #include "games/scssoftware/pass_probe.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 using scs::PassTracker;
 

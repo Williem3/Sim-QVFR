@@ -8,17 +8,7 @@
 #include "games/acc/gate_compare.h"
 #include "games/acc/views_map.h"
 #include "quad/offaxis_focus.h"
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-}  // namespace
+#include "test_util.h"
 
 int SIM_QVFR_TEST_MAIN() {
     using namespace acc;
@@ -393,6 +383,5 @@ int SIM_QVFR_TEST_MAIN() {
         check(same_sizes(handed_layout(launch, W, H), handed_layout(atLaunch, W, H)) && !same_sizes(handed[0], handed[1]),
               "handed-out layouts compare by their views' sizes");
     }
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

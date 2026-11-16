@@ -20,17 +20,11 @@
 
 #include "games/lmu/glare_math.h"
 #include "probe/d3d11_capture.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 // R11G11B10_FLOAT from and to floats (non-negative): the half's bits shifted (5-bit exponent, 6/5-bit mantissa).
 std::uint16_t to_half(float f) {
@@ -178,9 +172,7 @@ void dds_checks(ID3D11Device* device) {
     check(read && w == kW && h == kH && format == DXGI_FORMAT_R11G11B10_FLOAT && bytes.size() == kW * kH * 4 &&
               std::memcmp(bytes.data(), texels.data(), bytes.size()) == 0,
           "capture: an R11G11B10 texture reads back as it is, tight rows");
-    wchar_t dir[MAX_PATH];
-    GetTempPathW(MAX_PATH, dir);
-    const std::wstring path = std::wstring(dir) + L"lmu_glare_test.dds";
+    const std::wstring path = temp_path(L"lmu_glare_test.dds");
     check(simqvfr::write_dds(path, bytes, w, h, format), "capture: written as DDS");
     std::vector<std::uint8_t> file;
     if (std::FILE* f = nullptr; _wfopen_s(&f, path.c_str(), L"rb") == 0 && f) {

@@ -22,17 +22,11 @@
 #include "games/lmu/mvr_probe.h"
 #include "games/lmu/yebis_shaders.h"
 #include "probe/d3d11_capture.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 int twoViewsOn = 0, twoViewsCalls = 0;
 int fake_two_views(ID3D11DeviceContext*, bool on) {

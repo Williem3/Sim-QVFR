@@ -9,18 +9,12 @@
 #include <vector>
 
 #include "layer_chain.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 namespace fs = std::filesystem;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::vector<std::string> visited;
 

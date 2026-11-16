@@ -14,18 +14,12 @@
 
 #include "quad/compose_shader.h"
 #include "quad/d3d11_compositor.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
 
 // The views' image, as d3d11_compositor_test's: two eye columns of 128, outer views 128 high on top, focus views 64
 // high below.

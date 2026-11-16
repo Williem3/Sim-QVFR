@@ -5,19 +5,9 @@
 #include <cstdio>
 
 #include "quad/frame_records.h"
+#include "test_util.h"
 
 using namespace simqvfr;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     {
@@ -70,6 +60,5 @@ int SIM_QVFR_TEST_MAIN() {
         }
         check(drifted && v == next - 2, "one in flight: a lasting backlog of two resyncs to one behind the newest");
     }
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

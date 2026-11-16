@@ -13,18 +13,12 @@
 #include "games/acc/view_share.h"
 #include "quad/d3d11_view_resample.h"
 #include "quad/focus_turn.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
 
 constexpr UINT kW = 128, kH = 160;  // eye region at 0,0 128x96; focus region at 0,96 128x64 (eye columns)
 const ViewRegion kEye{0, 0, 128, 96}, kFocus{0, 96, 128, 64};

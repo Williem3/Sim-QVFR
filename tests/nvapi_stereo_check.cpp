@@ -42,19 +42,13 @@
 #include "engine/nvapi_stereo.h"
 #include "engine/object_vtable.h"
 #include "games/lmu/mvr_pass.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 namespace dxbc = simqvfr::dxbc;
 namespace nvapi = simqvfr::nvapi;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::vector<uint8_t> compile(const char* source, const char* profile) {
     ComPtr<ID3DBlob> code, errors;
