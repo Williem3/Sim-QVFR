@@ -186,12 +186,24 @@ bool apply(bool on) {
     ULONG processSets = 0, threadSets = 0;
     GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &processSets);
     GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadSets);
-    iso.refused = processSets || threadSets;
+    // An affinity narrower than every processor (a Process Lasso rule pinning the game to one CCD, the game's own):
+    // the player or the game chose the cores already.
+    DWORD_PTR processMask = 0, systemMask = 0;
+    const bool affinityKnown = GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) != FALSE;
+    const bool narrowAffinity = affinityKnown && processMask != systemMask;
+    iso.refused = processSets || threadSets || narrowAffinity;
     if (iso.refused) {
-        if (!iso.refusedLogged)
-            logf("cpu isolation: left off: the game already has CPU sets (the process %lu, the main thread %lu), set by "
-                 "the game or a tool such as Process Lasso; they stay as they are",
-                 static_cast<unsigned long>(processSets), static_cast<unsigned long>(threadSets));
+        if (!iso.refusedLogged) {
+            if (narrowAffinity)
+                logf("cpu isolation: left off: the game's affinity is %d of %d logical processors (mask 0x%llx), set by "
+                     "the game or a tool such as Process Lasso; it stays as it is",
+                     static_cast<int>(__popcnt64(processMask)), static_cast<int>(__popcnt64(systemMask)),
+                     static_cast<unsigned long long>(processMask));
+            else
+                logf("cpu isolation: left off: the game already has CPU sets (the process %lu, the main thread %lu), "
+                     "set by the game or a tool such as Process Lasso; they stay as they are",
+                     static_cast<unsigned long>(processSets), static_cast<unsigned long>(threadSets));
+        }
         iso.refusedLogged = true;
         return false;
     }

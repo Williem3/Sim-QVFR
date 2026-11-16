@@ -186,6 +186,25 @@ int SIM_QVFR_TEST_MAIN() {
         check(threadCount == 1, "and switching off leaves them too");
         cpu_isolation_end();
         SetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0);
+
+        // An affinity narrower than every processor (a Process Lasso rule): left as it is, isolation stays off.
+        DWORD_PTR processMask = 0, systemMask = 0;
+        GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask);
+        const DWORD_PTR narrow = systemMask & ~(systemMask & (0 - systemMask));  // every processor but the lowest
+        const bool narrowed = narrow && SetProcessAffinityMask(GetCurrentProcess(), narrow);
+        cpu_isolation_mode(1);
+        cpu_isolation_frame();
+        count = threadCount = 99;
+        GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
+        GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        DWORD_PTR after = 0, unused = 0;
+        GetProcessAffinityMask(GetCurrentProcess(), &after, &unused);
+        check(narrowed && count == 0 && threadCount == 0 && after == narrow,
+              "a narrower affinity: kept, nothing of ours set");
+        cpu_isolation_mode(0);
+        cpu_isolation_frame();
+        cpu_isolation_end();
+        SetProcessAffinityMask(GetCurrentProcess(), systemMask);
     }
     return test_result();
 }

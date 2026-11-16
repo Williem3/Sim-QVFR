@@ -322,10 +322,29 @@ float color_panel(float x, float y, float w, bool draw) {
     return b.height();
 }
 
-// The Game tab's cards, in order: what everyone needs first (the checks, racing online, getting help), then the last
-// sessions and the games, the OpenXR layers (for troubleshooting) last.
+// The game's main thread on a core of its own ([cpu] isolate_main_thread, probe/cpu_isolation.h): every game.
+Card cpu_card() {
+    Card c{Tab::Game, L"CPU", Applies::Live};
+    c.body = [](Body& b) {
+        b.toggle(kCpuIsolateMain, L"Give the main thread a core of its own", app.s.cpuIsolateMain,
+                 app.s.cpuIsolateMain
+                     ? L"On: the game thread that finishes each frame runs alone on one core, and the game’s other threads "
+                       L"(its physics among them) use the rest, so none slows it down by sharing that core."
+                     : L"Off (the default): the game’s threads share every core, as Windows places them.");
+        b.note(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs with 6 "
+               L"or more cores and two threads per core, and stays off if another tool (such as Process Lasso) already "
+               L"set the game’s CPU sets or affinity. Try it on and watch your frames; the headset menu’s CPU page "
+               L"changes it too.");
+    };
+    c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
+    return c;
+}
+
+// The Game tab's cards, in order: what everyone needs first (the checks, racing online, getting help), the game's CPU,
+// then the last sessions and the games, the OpenXR layers (for troubleshooting) last.
 float game_page(float x, float y, float w, bool draw) {
-    const std::vector<Card> cards = {checks_card(), online_card(), help_card(), diagnostics_card(), games_card(), layers_card()};
+    const std::vector<Card> cards = {checks_card(), online_card(), help_card(), cpu_card(),
+                                     diagnostics_card(), games_card(), layers_card()};
     return card_grid(cards, x, y, w, draw);
 }
 

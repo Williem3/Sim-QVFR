@@ -4,9 +4,9 @@
 // its workers, the driver's, ours) runs on the core's other half, where it would share the core's execution units with
 // the main thread. Other processes are not touched. Only the game's own process and thread scheduling change: no game
 // code, no Windows setting. Off on a CPU with fewer than kIsolationMinCores cores or one thread per core (nothing to
-// keep free), and whenever the game already has CPU sets (its own, or a tool's such as Process Lasso): those are never
-// replaced or cleared. Turning it off takes back only what it set.
-//   The mode (layer/config.cpp): [cpu] isolate_main_thread, the players' option (1 on, the default; 0 off), unless
+// keep free), and whenever the game already has CPU sets or an affinity narrower than every processor (its own, or a
+// tool's such as Process Lasso): those are never replaced or cleared. Turning it off takes back only what it set.
+//   The mode (layer/config.cpp): [cpu] isolate_main_thread, the players' option (1 on; 0 off, the default), unless
 // [experiment] cpu_isolate is above 0: 1 on, N > 1 an interleaved A/B: N frames isolated, N shared, and so on, logging the
 // main thread's CPU time per frame on each side (its cycles at each xrEndFrame), so one run measures the lever.
 #pragma once

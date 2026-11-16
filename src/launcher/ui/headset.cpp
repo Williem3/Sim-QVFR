@@ -70,24 +70,6 @@ Card vision_card() {
     return c;
 }
 
-// The game's main thread on a core of its own ([cpu] isolate_main_thread, probe/cpu_isolation.h): every game.
-Card cpu_card() {
-    Card c{Tab::Headset, L"CPU", Applies::Live};
-    c.body = [](Body& b) {
-        b.toggle(kCpuIsolateMain, L"Give the main thread a core of its own", app.s.cpuIsolateMain,
-                 app.s.cpuIsolateMain
-                     ? L"On: the game thread that finishes each frame runs alone on one core, and the game’s other threads "
-                       L"(its physics among them) use the rest, so none slows it down by sharing that core."
-                     : L"Off: the game’s threads share every core, as Windows places them.");
-        b.note(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs with 6 "
-               L"or more cores and two threads per core, and stays off if another tool (such as Process Lasso) already "
-               L"set the game’s CPU sets. Try it off if frames get worse on your PC. The headset menu’s Overlay and menu "
-               L"page changes it too.");
-    };
-    c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
-    return c;
-}
-
 Card placement_card() {
     Card c{Tab::Headset, L"Placement", Applies::Live};
     c.body = [](Body& b) {
@@ -200,7 +182,7 @@ Card hotkeys_card() {
 }
 
 std::vector<Card> headset_cards() {
-    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), cpu_card(), hotkeys_card()};
+    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), hotkeys_card()};
     if (game_has(&games::GameFeatures::eyeOff))  // a game whose eye passes can be turned off (LMU)
         cards.insert(cards.begin() + 2, vision_card());
     return cards;

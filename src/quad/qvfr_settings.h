@@ -51,9 +51,9 @@ inline constexpr IniInt kCropBottom{L"crop", L"bottom", 0, 0, 40, 1};
 inline constexpr IniInt kCropOuter{L"crop", L"outer", 0, 0, 40, 1};
 inline constexpr IniInt kCropInner{L"crop", L"inner", 0, 0, 40, 1};
 inline constexpr IniInt kHotkeyFooter{L"menu", L"hotkey_footer", 1, 0, 1, 1};
-// [cpu] (probe/cpu_isolation.h): 1 the game's main thread gets a core to itself, the game's other threads the rest (the
-// default); 0 they share every core. Live; not in a baseline or a log-only run. [experiment] cpu_isolate > 0 overrides it.
-inline constexpr IniInt kCpuIsolateMain{L"cpu", L"isolate_main_thread", 1, 0, 1, 1};
+// [cpu] (probe/cpu_isolation.h): 1 the game's main thread gets a core to itself, the game's other threads the rest; 0
+// they share every core (the default). Live; not in a baseline or a log-only run. [experiment] cpu_isolate > 0 overrides it.
+inline constexpr IniInt kCpuIsolateMain{L"cpu", L"isolate_main_thread", 0, 0, 1, 1};
 
 // The key as written, `fallback` when missing; not clamped (0 keeps its "unset" meaning where a key has one).
 // GetPrivateProfileInt, as every reader had it: a negative value reads as 0.
