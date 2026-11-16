@@ -217,12 +217,6 @@ constexpr Help kHelp[] = {
      L"pull the top corners in for a trapezoid, more of the dash sharp at the same cost. To hide the area’s edge, raise "
      L"Feather."},
     {L"Outline color", L"The outline’s colour in the headset. It shows while Show focus outline is on."},
-    {L"Let the runtime compose",
-     L"Pimax and Varjo: your headset’s own software draws the focus area at full resolution, sharper than Sim-QVFR can. On "
-     L"other headsets (SteamVR) nothing changes. With the runtime composing, the resolution set "
-     L"here applies and changes while you drive. The focus area shows inside the runtime’s own focus region (Pimax Play’s or "
-     L"Varjo Base’s focus area), centred where the runtime puts it: keep that at least as large as the focus area here. Off "
-     L"with frame generation (Cheeky’s or VectorXR’s), which needs one composed image."},
     {L"nvngx_dlss.dll",
      L"The DLSS Sim-QVFR uses: the one it includes (NVIDIA’s), or another you choose, a newer one from a game, say (DLSS 310 "
      L"or newer). Use included goes back. Applies at the next launch."},

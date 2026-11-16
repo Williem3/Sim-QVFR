@@ -348,9 +348,9 @@ std::vector<Tile> picture_tiles() {
                        !q ? L"In Quad View Foveated Rendering only" : crop && app.s.crop ? L"Edges cropped" : L"Whole view rendered",
                        L"", 3, L"View & helmet"});
     }
-    const bool nativeQuad = game_has(&games::GameFeatures::nativeQuadViews), ownDlss = game_has(&games::GameFeatures::sideLoadedDlss),
-               cheeky = game_has(&games::GameFeatures::foveatedDlss), multiView = multi_view_game();
-    if (method_shown() || nativeQuad || ownDlss || cheeky || multiView) {
+    const bool ownDlss = game_has(&games::GameFeatures::sideLoadedDlss), cheeky = game_has(&games::GameFeatures::foveatedDlss),
+               multiView = multi_view_game();
+    if (method_shown() || ownDlss || cheeky || multiView) {
         std::wstring line = q ? L"" : L"Legacy method (Two-loop)";
         const auto add = [&line](const std::wstring& part) { line += (line.empty() ? L"" : L" · ") + part; };
         if (multiView && q)
@@ -362,9 +362,7 @@ std::vector<Tile> picture_tiles() {
         if (line.empty())
             line = L"Sim-QVFR draws the views";
         // It opens the DLSS card where the game has one (its switch is there), else Rendering.
-        out.push_back({L"Rendering", line,
-                       nativeQuad && q ? (app.s.nativeQuad ? L"Runtime composes where it can" : L"Sim-QVFR composes") : L"",
-                       L"", 3, ownDlss ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : cheeky ? L"Foveated DLSS" : L"Rendering"});
+        out.push_back({L"Rendering", line, L"", L"", 3, ownDlss ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : cheeky ? L"Foveated DLSS" : L"Rendering"});
     }
     for (Tile& tile : out)
         tile.pane = Pane::Picture;

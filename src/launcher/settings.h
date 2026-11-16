@@ -42,7 +42,9 @@ struct Settings {
     int eyeOff = 0;
     // [experiment] native_quad_views (QVFR, a game with GameFeatures::nativeQuadViews: LMU): on a Pimax or Varjo runtime,
     // the runtime composes the four views (layer/native_quad.cpp). 1 auto (the default), 0 off, 2 asked for even with
-    // another OpenXR layer between (the runtime's offer unknown). Next launch.
+    // another OpenXR layer between (the runtime's offer unknown). No control since 2026-11-16 (it was the Rendering
+    // card's Let the runtime compose): a 0 that card saved reads as auto once ([launcher] native_quad_reset), and a value
+    // set by hand after that is kept as it is. Next launch.
     int nativeQuad = 1;
     int width = kFocusPercent.def;          // focus_percent: foveated width, percent of the outer view
     int height = kFocusHeightPercent.def;   // focus_height_percent: foveated height

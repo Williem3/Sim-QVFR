@@ -516,16 +516,24 @@ void game_tabs_checks() {
     const Settings after = load_settings(ini);
     check(after.hiddenGames == L"acc" && after.gameColors.count(L"ace") == 1, "game tabs: switching games keeps them");
     // Runtime composition (native_quad_views): auto (1) by default, read so from an ini without the key (one from
-    // before the setting), and saved back as it was.
+    // before the setting). No control any more: an off the old card saved reads as auto once, a hand-set value after
+    // that is kept.
     {
         const std::wstring old = (dir / L"before-native.ini").wstring();
         WritePrivateProfileStringW(L"experiment", L"periphery_scale", L"40", old.c_str());
         check(Settings{}.nativeQuad == 1 && load_settings(old).nativeQuad == 1,
               "runtime composition: auto by default, also for an ini from before the setting");
-        Settings off = load_settings(old);
-        off.nativeQuad = 0;
-        save_settings(old, off);
-        check(load_settings(old).nativeQuad == 0, "runtime composition: off saved and read back");
+        WritePrivateProfileStringW(L"experiment", L"native_quad_views", L"0", old.c_str());  // the old card's off
+        check(load_settings(old).nativeQuad == 1, "runtime composition: the old card's off reads as auto");
+        save_settings(old, load_settings(old));
+        check(GetPrivateProfileIntW(L"experiment", L"native_quad_views", -1, old.c_str()) == 1 &&
+                  GetPrivateProfileIntW(L"launcher", L"native_quad_reset", -1, old.c_str()) == 1,
+              "runtime composition: saved as auto, the reset marked done");
+        WritePrivateProfileStringW(L"experiment", L"native_quad_views", L"0", old.c_str());  // set by hand afterwards
+        Settings kept = load_settings(old);
+        check(kept.nativeQuad == 0, "runtime composition: a hand-set off after the reset is kept");
+        save_settings(old, kept);
+        check(load_settings(old).nativeQuad == 0, "runtime composition: and saved back as it was");
     }
     fs::remove_all(dir, ec);
 }

@@ -213,7 +213,6 @@ Use these freely to make the picture look better:
 | **Gaze dead-zone**, **Gaze offset**, **Vertical position** | Picture tab, Foveation | None. |
 | **Sharpening** | Picture tab, Resolution | A little GPU time. Crisper edges; too much makes the periphery shimmer. |
 | **Show a helmet** | Picture tab, View & helmet | Nothing for the game; the headset composites one extra layer. |
-| **Let the runtime compose** | Picture tab, Rendering (Pimax, Varjo) | Usually a sharper focus area for the same settings. With **Sharpening** on, the periphery is sharpened on a copy, which costs a little more. |
 | **Show focus outline** | Picture tab, Foveation | None, but turn it off to drive. |
 
 ---

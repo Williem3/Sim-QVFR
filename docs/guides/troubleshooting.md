@@ -40,7 +40,7 @@ whether the game started with Sim-QVFR.
 - Your headset may have no eye tracking (Quest 2 and 3 don't): the sharp area stays in the middle.
 - With eye tracking, check it's on in your headset's software and that **Picture › Foveation** is set to
   **Eye tracked**. See [Eye tracking](headsets.md#eye-tracking).
-- In Le Mans Ultimate on Pimax or Varjo with **Let the runtime compose**, the headset's own eye tracking places it.
+- In Le Mans Ultimate on Pimax or Varjo (the runtime composes the views), the headset's own eye tracking places it.
 
 **The launcher can't find my game**
 - Make sure the game is installed and, for a Steam game, that Steam is running.

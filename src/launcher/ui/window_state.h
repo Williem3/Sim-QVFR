@@ -69,8 +69,6 @@ enum Ctl {
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // The clock ([clock], Headset pane).
     kClockOn, kClockYaw, kClockPitch, kClockSize, kClockPanel,
-    // The runtime composing the views ([experiment] native_quad_views, Resolution pane).
-    kNativeQuad,
     // Sharpening ([quad] sharpen_percent, Resolution pane).
     kSharpen,
     // One eye off ([quad] eye_off, Headset tab's Vision card; a game with GameFeatures::eyeOff).
