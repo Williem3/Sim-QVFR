@@ -237,6 +237,14 @@ target_compile_definitions(dxbc_patch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 target_compile_options(dxbc_patch_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(dxbc_patch_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
+# Check of what a detour like LMU's car hooks costs per call (tests/car_hook_cost_check.cpp): not in the suite (no _test
+# suffix; a measurement on a WARP device).
+sim_qvfr_test(car_hook_cost_check tests/car_hook_cost_check.cpp)
+target_include_directories(car_hook_cost_check PRIVATE src ${THIRD_PARTY}/minhook/include)
+target_compile_definitions(car_hook_cost_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(car_hook_cost_check PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(car_hook_cost_check PRIVATE minhook d3d11)
+
 # Hardware check of NVIDIA single-pass stereo with converted shaders (tests/nvapi_stereo_check.cpp): not in the suite
 # (no _test suffix; needs an NVIDIA GPU). Optional argument: a folder of a game's vertex shaders, kept local.
 sim_qvfr_test(nvapi_stereo_check tests/nvapi_stereo_check.cpp)

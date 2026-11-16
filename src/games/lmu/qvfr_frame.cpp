@@ -529,6 +529,15 @@ void mvr_before_pass(int p) {
                 carSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.carAb)) % 2);
                 mvr_car_active(carSide == 0);
                 mvr_frame_mode(carSide);
+            } else if (carsOn) {  // DLSS or the cars' motion turned off while the game runs: no tracking for nothing
+                const bool pause = !carsWanted.load(std::memory_order_relaxed);
+                if (pause != carsPaused) {
+                    carsPaused = pause;
+                    mvr_car_active(!pause);
+                    simqvfr::log_line(pause ? "lmu mvr: other cars' motion paused (DLSS or its car motion turned off; "
+                                              "the hooks stay in until the session ends)"
+                                            : "lmu mvr: other cars' motion resumed");
+                }
             }
             if (cfg.maskAb > 0) {  // the lens mask this frame or not (between frames)
                 if (!maskAbLogged) {
@@ -1175,6 +1184,8 @@ void qvfr_frame_frame_end() {
     }
 
 }
+
+void qvfr_frame_cars_wanted(bool wanted) { carsWanted.store(wanted, std::memory_order_relaxed); }
 
 void qvfr_frame_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
     std::lock_guard guard(liveMutex);

@@ -115,6 +115,10 @@ void qvfr_frame_view_size(int (&size)[2]);
 // next frame. LMU's render scale is set per pass, so each pass renders into the top-left of its target; the copies
 // and the atlas regions follow the sizes rendered. Any thread.
 void qvfr_frame_set_live_scales(double outer, double focus);
+// The player's DLSS (or FSR) and its other cars' motion as they are now (live, any thread): with either off the cars'
+// tracking pauses at the next frame (its hooks, installed at launch, stay in until the session ends), and resumes when
+// both are on again. Not while lmu_car_vectors_ab alternates it.
+void qvfr_frame_cars_wanted(bool wanted);
 // The same per axis (QvfrFrameRun::perAxis): the outer and focus views' shares of the target's width and height.
 void qvfr_frame_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight);
 // Every xrLocateViews: the FOV the game just located (with the layer's FOV crop). The game builds its lens mask in

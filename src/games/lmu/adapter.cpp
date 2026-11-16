@@ -268,6 +268,7 @@ public:
         live.textureSharpening = settings.textureSharpening;
         live.upscaler = fsrAllowed_ ? settings.upscaler : 0;
         simqvfr::dlss_live(live);
+        qvfr_frame_cars_wanted(settings.on && settings.carVectors);  // the cars' tracking only for an upscaler using it
     }
     // The player's DLSS-NR settings changed: the module takes them between frames (another folder: the next launch).
     void qvfr_set_nr(const simqvfr::NrSettings& settings) override {
