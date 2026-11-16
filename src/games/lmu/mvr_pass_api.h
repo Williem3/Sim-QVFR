@@ -492,20 +492,19 @@ void mvr_redraw_panel(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv,
                       unsigned vertexCount, unsigned startVertex) {
     if (!context || !rtv || !width || !height)
         return;
-    ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* dsv = nullptr;
-    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
-    D3D11_VIEWPORT vps[kMaxRects];
-    UINT n = kMaxRects;
-    context->RSGetViewports(&n, vps);
-    D3D11_RECT scs[kMaxRects];
-    UINT sn = kMaxRects;
-    context->RSGetScissorRects(&sn, scs);
+    // The game's targets, viewports and scissors kept, put back past the hooks when this returns (a count of 0 set back
+    // as 0; the real calls don't look at g.replaying).
+    simqvfr::d3d11_state::Spec spec;
+    spec.parts = simqvfr::d3d11_state::kOMTargets | simqvfr::d3d11_state::kViewports | simqvfr::d3d11_state::kScissors;
+    const simqvfr::d3d11_state::Guard<RealCalls> keep(context, spec);
+    const UINT n = keep.viewport_count(), sn = keep.scissor_count();
+    const D3D11_VIEWPORT* vps = keep.viewports();
+    const D3D11_RECT* scs = keep.scissors();
     // The game's target's size: its viewport and scissors scaled from that to the image's.
     float sx = 1, sy = 1;
-    if (rtvs[0]) {
+    if (ID3D11RenderTargetView* first = keep.rtv(0)) {
         ComPtr<ID3D11Resource> resource;
-        rtvs[0]->GetResource(&resource);
+        first->GetResource(&resource);
         ComPtr<ID3D11Texture2D> texture;
         D3D11_TEXTURE2D_DESC d{};
         if (resource && SUCCEEDED(resource.As(&texture))) {
@@ -531,14 +530,6 @@ void mvr_redraw_panel(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv,
     realRSSetViewports(context, 1, &vp);
     realRSSetScissorRects(context, 1, &sc);
     call_real<kHookDraw>(context, static_cast<UINT>(vertexCount), static_cast<UINT>(startVertex));
-    realOMSetRenderTargets(context, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
-    realRSSetViewports(context, n, vps);
-    realRSSetScissorRects(context, sn, scs);
     g.replaying = was;
-    for (ID3D11RenderTargetView* r : rtvs)
-        if (r)
-            r->Release();
-    if (dsv)
-        dsv->Release();
     ++g.stats.panelReplays;
 }

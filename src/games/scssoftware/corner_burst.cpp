@@ -119,33 +119,9 @@ void shoot(ID3D11Texture2D* image, int chain, uint32_t index, bool after, bool s
         return;
     ID3D11DeviceContext1* c = g.context.Get();
     const ch::Bypass bypass;
-    ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> ps;
-    ComPtr<ID3D11ShaderResourceView> psSrv;
-    ComPtr<ID3D11SamplerState> samp;
-    ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* dsv = nullptr;
-    D3D11_VIEWPORT vp[kMaxViews];
-    UINT vpCount = kMaxViews;
-    ComPtr<ID3D11RasterizerState> raster;
-    ComPtr<ID3D11BlendState> blend;
-    FLOAT bf[4];
-    UINT mask;
-    ComPtr<ID3D11DepthStencilState> depth;
-    UINT ref;
-    ComPtr<ID3D11InputLayout> layout;
-    D3D11_PRIMITIVE_TOPOLOGY topo;
-    c->VSGetShader(&vs, nullptr, nullptr);
-    c->PSGetShader(&ps, nullptr, nullptr);
-    c->PSGetShaderResources(0, 1, &psSrv);
-    c->PSGetSamplers(0, 1, &samp);
-    c->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
-    c->RSGetViewports(&vpCount, vp);
-    c->RSGetState(&raster);
-    c->OMGetBlendState(&blend, bf, &mask);
-    c->OMGetDepthStencilState(&depth, &ref);
-    c->IAGetInputLayout(&layout);
-    c->IAGetPrimitiveTopology(&topo);
+    // The game's state put back (no scissors: none set) when this returns, inside the bypass.
+    const simqvfr::D3D11StateGuard keep(c, blit_state(d3s::kInputLayout | d3s::kVS | d3s::kPS | d3s::kOMTargets |
+                                                      d3s::kBlend | d3s::kDepth | d3s::kRSState | d3s::kViewports));
     ID3D11RenderTargetView* out[] = {g.burstRtv.Get()};
     c->OMSetRenderTargets(1, out, nullptr);
     const D3D11_VIEWPORT v = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
@@ -164,25 +140,6 @@ void shoot(ID3D11Texture2D* image, int chain, uint32_t index, bool after, bool s
     ID3D11ShaderResourceView* none[] = {nullptr};
     c->PSSetShaderResources(0, 1, none);
     c->CopyResource(shot.staging.Get(), g.burstTex.Get());
-    c->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
-    for (ID3D11RenderTargetView* r : rtvs)
-        if (r)
-            r->Release();
-    if (dsv)
-        dsv->Release();
-    if (vpCount)
-        c->RSSetViewports(vpCount, vp);
-    c->RSSetState(raster.Get());
-    c->OMSetBlendState(blend.Get(), bf, mask);
-    c->OMSetDepthStencilState(depth.Get(), ref);
-    c->IASetInputLayout(layout.Get());
-    c->IASetPrimitiveTopology(topo);
-    c->VSSetShader(vs.Get(), nullptr, 0);
-    c->PSSetShader(ps.Get(), nullptr, 0);
-    ID3D11ShaderResourceView* put[] = {psSrv.Get()};
-    ID3D11SamplerState* putS[] = {samp.Get()};
-    c->PSSetShaderResources(0, 1, put);
-    c->PSSetSamplers(0, 1, putS);
     shot.frame = g.stats.frames;
     shot.tag = tag ? tag : L"";
     shot.w = w;

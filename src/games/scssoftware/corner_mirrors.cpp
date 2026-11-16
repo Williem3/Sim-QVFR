@@ -50,17 +50,14 @@ bool big_scratch(UINT bytes) {
     return true;
 }
 
-// Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back.
+// Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back (b0 with its range).
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
             UINT groups) {
-    ComPtr<ID3D11ComputeShader> gameCs;
-    ComPtr<ID3D11ShaderResourceView> srv;
-    ComPtr<ID3D11UnorderedAccessView> uav;
-    ComPtr<ID3D11Buffer> cb;
-    g.context->CSGetShader(&gameCs, nullptr, nullptr);
-    g.context->CSGetShaderResources(0, 1, &srv);
-    g.context->CSGetUnorderedAccessViews(0, 1, &uav);
-    g.context->CSGetConstantBuffers(0, 1, &cb);
+    d3s::Spec spec;
+    spec.parts = d3s::kCS;
+    spec.csSrv = spec.csUavs = spec.csCb = {0, 1};
+    spec.instances = false;
+    const simqvfr::D3D11StateGuard keep(g.context.Get(), spec);
     g.context->UpdateSubresource(g.params.Get(), 0, nullptr, params, 0, 0);
     ID3D11ShaderResourceView* const ins[] = {in};
     ID3D11UnorderedAccessView* const outs[] = {out};
@@ -70,13 +67,6 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetUnorderedAccessViews(0, 1, outs, nullptr);
     g.context->CSSetConstantBuffers(0, 1, ps);
     g.context->Dispatch(groups, 1, 1);
-    ID3D11ShaderResourceView* const s0[] = {srv.Get()};
-    ID3D11UnorderedAccessView* const u0[] = {uav.Get()};
-    ID3D11Buffer* const c0[] = {cb.Get()};
-    g.context->CSSetShader(gameCs.Get(), nullptr, 0);
-    g.context->CSSetShaderResources(0, 1, s0);
-    g.context->CSSetUnorderedAccessViews(0, 1, u0, nullptr);
-    g.context->CSSetConstantBuffers(0, 1, c0);
 }
 
 // This frame's copy of a mirrored buffer: the game's data copied and every eye-shaped pair rewritten. Copied again

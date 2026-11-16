@@ -37,6 +37,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../../engine/d3d11_state.h"
 #include "../../quad/focus_mask.h"
 #include "car_motion.h"
 #include "focus_post.h"

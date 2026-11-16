@@ -352,6 +352,13 @@ target_compile_definitions(lmu_focus_post_roles_test PRIVATE UNICODE _UNICODE WI
 target_compile_options(lmu_focus_post_roles_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_focus_post_roles_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
+# Offline check of the shared D3D11 state guard on a WARP device (tests/d3d11_state_test.cpp).
+sim_qvfr_test(d3d11_state_test tests/d3d11_state_test.cpp)
+target_include_directories(d3d11_state_test PRIVATE src)
+target_compile_definitions(d3d11_state_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(d3d11_state_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(d3d11_state_test PRIVATE d3d11 d3dcompiler)
+
 # Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
 sim_qvfr_test(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
 target_include_directories(d3d11_compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
