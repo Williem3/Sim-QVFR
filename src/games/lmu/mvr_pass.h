@@ -106,9 +106,10 @@ int mvr_mask_dropped();
 // elsewhere with mvr_redraw_panel. Null: none.
 using PanelFn = void (*)(ID3D11DeviceContext* context, bool after, unsigned vertexCount, unsigned startVertex);
 void mvr_panel_draws(PanelFn fn);
-// The source of the game's latest CopySubresourceRegion into `dst` in this frame or the one before (raw, compared only),
-// null if none: LMU's submit copies each eye's image into that eye's swapchain image that way, which names the eye images
-// from the d3d11 calls. Hooked with the focus post.
+// The source of the game's latest CopySubresourceRegion into `dst` in this frame or the one before, null if none: LMU's
+// submit copies each eye's image into that eye's swapchain image that way, which names the eye images from the d3d11
+// calls. Hooked with the focus post. Raw, but referenced by the copy record (the game may have released it): valid on
+// the render thread until its next copies, so take a reference of your own right away.
 ID3D11Resource* mvr_copy_source(ID3D11Resource* dst);
 // Eye `eye`'s final as its pass's final blit last drew into it (raw), null if none yet.
 ID3D11Texture2D* mvr_eye_final(int eye);
@@ -258,8 +259,9 @@ struct MvrPassStats {
     // draws replayed for the menus (mvr_redraw_panel).
     uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
     // Instancing: the game's draws made with twice their instances; those with a per-instance layout's twin bound around
-    // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double).
-    uint64_t doubledDraws = 0, layoutSwaps = 0, eyeOnlyDraws = 0;
+    // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double); draws into the eye
+    // alone for their input layout (per-instance data without its twin, or a layout the probe didn't see made).
+    uint64_t doubledDraws = 0, layoutSwaps = 0, eyeOnlyDraws = 0, layoutEyeOnly = 0;
     uint64_t instancedTakeovers = 0;  // single-pass stereo refused and instancing took over (once a session)
     // Texture sharpening: passes with a mip bias; pixel shader binds of a twin, of a game shader with none while it
     // was wanted, and the twin lookups (and those not cached).

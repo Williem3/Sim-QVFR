@@ -68,6 +68,10 @@ bool noRoles = false;
 std::atomic<bool> nvapiUsable{false};
 std::atomic<bool> instancedUsable{false};  // the device lets a vertex shader pick the viewport (D3D11_OPTIONS3)
 std::atomic<uint64_t> perInstanceLayouts{0};
+// Any per-instance layout seen (twinned or not), or the device hooked late (layouts made before it not known): doubled
+// draws look at the bound layout's kind. The layouts made (each marked before it counts).
+std::atomic<bool> layoutsToCheck{false};
+std::atomic<uint64_t> layoutGeneration{0};
 
 std::mutex statsMutex;
 MvrProbeStats stats;
@@ -346,15 +350,23 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
 HRESULT STDMETHODCALLTYPE create_input_layout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count,
                                               const void* code, SIZE_T size, ID3D11InputLayout** layout) {
     const HRESULT hr = originalCreateInputLayout(device, elements, count, code, size, layout);
-    if (FAILED(hr) || !layout || !*layout || !elements || !attach || inProbe)
+    if (FAILED(hr) || !layout || !*layout || !attach || inProbe)
+        return hr;
+    bool perInstance = false;
+    for (UINT i = 0; elements && i < count; ++i)
+        perInstance = perInstance || (elements[i].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA &&
+                                      elements[i].InstanceDataStepRate > 0);
+    // Every layout marked with its kind, twinned or not (a doubled draw draws the eye alone with one it can't double).
+    const UINT kind = perInstance ? kMvrLayoutPerInstance : kMvrLayoutPerVertex;
+    (*layout)->SetPrivateData(kMvrLayoutKindGuid, sizeof(kind), &kind);
+    if (perInstance)
+        layoutsToCheck.store(true, std::memory_order_release);
+    layoutGeneration.fetch_add(1, std::memory_order_release);
+    if (!elements)
         return hr;
     log_support(device, "first input layout");  // a layout may come before the first vertex shader
     if (!instancedUsable)
         return hr;
-    bool perInstance = false;
-    for (UINT i = 0; i < count; ++i)
-        perInstance = perInstance || (elements[i].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA &&
-                                      elements[i].InstanceDataStepRate > 0);
     {
         std::lock_guard guard(statsMutex);
         ++stats.layouts;
@@ -481,7 +493,7 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
     return hr;
 }
 
-void hook_shaders(ID3D11Device* device, const char* when) {
+void hook_shaders(ID3D11Device* device, const char* when, bool late = false) {
     if (!device || shaderHookTried.exchange(true))
         return;
     const bool ok = deviceVtable.install(device, simqvfr::kD3D11DeviceSlots,
@@ -493,6 +505,8 @@ void hook_shaders(ID3D11Device* device, const char* when) {
                                            reinterpret_cast<void**>(&originalCreatePixelShader)}});
     if (ok)
         hookedDevice = device;
+    if (ok && late)  // its layouts made before now aren't marked: doubled draws look at the bound one
+        layoutsToCheck.store(true, std::memory_order_release);
     simqvfr::logf("lmu mvr probe: input layout, vertex and pixel shader creation %s (%s; the device on a vtable copy, %zu "
                   "entries)",
                   ok ? "hooked" : "NOT hooked", when, deviceVtable.slots());
@@ -584,7 +598,7 @@ void mvr_probe_device(ID3D11Device* device) {
     if (hookedDevice && device != hookedDevice)
         simqvfr::log_line("lmu mvr probe: the session's device isn't the first one created (the one hooked): its "
                           "shaders aren't seen");
-    hook_shaders(device, "at xrCreateSession: shaders created before it aren't seen");
+    hook_shaders(device, "at xrCreateSession: shaders created before it aren't seen", true);
 }
 
 void mvr_probe_frame_end() {
@@ -669,6 +683,8 @@ MvrBackend mvr_probe_backend() {
 bool mvr_probe_instanced() { return attach && instancedUsable; }
 
 uint64_t mvr_probe_instanced_layouts() { return perInstanceLayouts.load(std::memory_order_acquire); }
+bool mvr_probe_layouts_to_check() { return layoutsToCheck.load(std::memory_order_acquire); }
+uint64_t mvr_probe_layout_generation() { return layoutGeneration.load(std::memory_order_acquire); }
 
 const char* mvr_backend_name(MvrBackend backend) {
     return backend == MvrBackend::nvapi       ? "NVIDIA's multi-view rendering"

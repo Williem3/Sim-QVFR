@@ -88,6 +88,9 @@ int maskStaleThisFrame = 0;
 
 // The render thread's view of the frame (render_scene and frame_end both run on it; checked).
 unsigned long renderThread = 0;
+// xrEndFrame on another thread than the passes' (known once a pass ran): the immediate context is the render thread's,
+// so the frame end's context work waits for a frame end on it and the atlas isn't made (the eyes submitted alone).
+bool off_render_thread() { return renderThread && GetCurrentThreadId() != renderThread; }
 int pass = -1;  // this frame's pass, 0-3
 int passesThisFrame = 0;
 int eyeOfPass[4] = {-1, -1, -1, -1};
@@ -214,7 +217,7 @@ bool eyesInAtlas = false;   // this frame's eyes are in the top row while the fo
 bool frameFocusOk = false;  // this frame's focus passes rendered with their focus projections
 bool atlasReady = false;    // this frame's four views are in the atlas, until the layer takes it
 unsigned long long composedFrames = 0, refusedFrames = 0;
-bool atlasRefusalLogged = false, atlasThreadLogged = false;
+bool atlasRefusalLogged = false, atlasThreadLogged = false, frameEndThreadLogged = false;
 
 DXGI_FORMAT typeless_of(DXGI_FORMAT f) {
     switch (f) {
@@ -1410,12 +1413,19 @@ void four_passes_frame_end() {
     if (!installed)
         return;
     ++frames;
-    if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
+    const bool offThread = off_render_thread();
+    if (offThread && !frameEndThreadLogged) {
+        frameEndThreadLogged = true;
+        simqvfr::log_line("lmu qvfr: xrEndFrame isn't on the thread that rendered the views: the frame end's work on the "
+                          "game's context waits for a frame end on it (logged once)");
+    }
+    if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice && !offThread)  // the tracker sees the menus too
         if (!install_mvr(sessionDevice))
             stop_multi_view("multi-view's context hooks couldn't be installed");
     simqvfr::dlss_frame_end(frames);
     if (cfg.mvr) {
-        mvr_frame_end(frames);
+        if (!offThread)  // (skipped: the next frame end on the render thread ends the tracker's frame)
+            mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
     }
     const int passes = passesThisFrame;
@@ -1648,6 +1658,15 @@ bool four_passes_record(simqvfr::Views4Frame& frame) {
 }
 
 ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+    if (off_render_thread()) {  // the copies would race the render thread on its context: the eyes as submitted
+        if (!atlasThreadLogged) {
+            atlasThreadLogged = true;
+            simqvfr::log_line("lmu qvfr: xrEndFrame isn't on the thread that rendered the views: no atlas from it (the "
+                              "headset shows the eyes that frame)");
+        }
+        atlasReady = menuReady = false;
+        return nullptr;
+    }
     if (cfg.trackerDrives)
         learn_eye_images(eyes);  // this frame's submit copies: the next frame's eye images
     if (qvfrMode && menuReady && menuAtlas) {  // a menu frame, at native (menu_ui)
@@ -1673,10 +1692,6 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
                           d.Width, d.Height, static_cast<int>(d.Format), viewW, viewH, static_cast<int>(atlasFormat));
         }
         return nullptr;
-    }
-    if (GetCurrentThreadId() != renderThread && !atlasThreadLogged) {
-        atlasThreadLogged = true;
-        simqvfr::log_line("lmu qvfr: xrEndFrame isn't on the thread that rendered the views (the atlas copies race)");
     }
     // The eyes again, as the game submitted them: with what it drew after its eye loop (the VR UI); the focus views with
     // the UI drawn into them too (vrui_draw).

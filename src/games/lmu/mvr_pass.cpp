@@ -136,6 +136,10 @@ void realRSSetScissorRects(ID3D11DeviceContext* c, UINT n, const D3D11_RECT* rec
 void realSOSetTargets(ID3D11DeviceContext* c, UINT n, ID3D11Buffer* const* buffers, const UINT* offsets) {
     call_real<kHookSO>(c, n, buffers, offsets);
 }
+// Our own VS buffer binds (the remap at b13) past the hook, so they aren't recorded as the game's.
+void realVSSetConstantBuffers(ID3D11DeviceContext* c, UINT start, UINT n, ID3D11Buffer* const* buffers) {
+    call_real<kHookVSCB>(c, start, n, buffers);
+}
 void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
                             DXGI_FORMAT format) {
     call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
@@ -273,8 +277,15 @@ struct State {
     unsigned long long tscAtLog = 0;
     long long qpcAtLog = 0;
     ComPtr<ID3D11Buffer> remapCb;
+    // The game's own VS b13 (held: our remap sits in its place while bound) and whether the remap is bound now; the
+    // game's PS b13 as a pass began (held) and whether texture sharpening's buffer went there this pass.
+    ID3D11Buffer* gameVsCb13 = nullptr;
+    bool remapBound = false;
+    ID3D11Buffer* gamePsCb13 = nullptr;
+    bool biasCbUsed = false;
     TwoViewsFn twoViews = &nvapi_two_views;
     bool broken = false;  // single-pass stereo refused once and instancing couldn't take over: off for the session
+    bool stereoOffLogged = false;  // a failed turn-off of single-pass stereo said (it breaks MVR for the session)
     // Instancing instead of single-pass stereo (mvr_use_instanced): the instanced twins bound, the game's draws doubled,
     // no stereo switch. canInstance: it may take over when single-pass stereo is refused.
     bool instanced = false, canInstance = false;
@@ -298,8 +309,25 @@ struct State {
     UINT vpCount = 0, scCount = 0;
     D3D11_VIEWPORT vps[kMaxRects] = {};
     D3D11_RECT scs[kMaxRects] = {};
+    // The pass's scene depth (raw, compared only; learned at the scene's bind) and whether the bound depth is it: two
+    // views only into the scene's targets (a shadow atlas or mirror has its own depth). Without the tracker (tests)
+    // every depth target counts, as before.
+    ID3D11Resource* passDepth = nullptr;
+    bool sceneBound = true, notSceneLogged = false;
     // What is applied.
     ID3D11VertexShader* boundVs = nullptr;
+    // The two viewports / scissors last applied with the focus rect appended (a game's Get/Set round trip gives them
+    // back: mapped to its own one).
+    D3D11_VIEWPORT appliedVps[2] = {};
+    D3D11_RECT appliedScs[2] = {};
+    bool twoVpsApplied = false, twoScsApplied = false;
+    // Instancing: the input layout last checked by a doubled draw (raw, while bound), its kind (0 unknown, 1 per-vertex,
+    // 2 per-instance) and twin, valid for the probe's layout generation.
+    ID3D11InputLayout* layoutChecked = nullptr;
+    ID3D11InputLayout* layoutTwin = nullptr;
+    uint64_t layoutGeneration = ~0ull;
+    UINT layoutKind = 0;
+    bool layoutEyeOnlyLogged = false;
     bool on = false, stereo = false;
     // Texture sharpening (mvr_mip_bias_hooks, MvrPassView::mipBias): the game's pixel shader as it bound it, what is
     // bound, this pass's bias (from its view), and the constants (focus viewport, focus and eye bias) as uploaded.
@@ -425,7 +453,8 @@ struct State {
     const std::atomic<bool>* maskStale = nullptr;  // mvr_mask_stale
     int maskDroppedSince = 0;                       // mvr_mask_dropped
     PanelFn panelFn = nullptr;                      // mvr_panel_draws
-    // The game's latest CopySubresourceRegions (mvr_copy_source): raw, compared only; the frame count when seen.
+    // The game's latest CopySubresourceRegions (mvr_copy_source): dst raw, compared only; src held (hold: the caller
+    // queries it after the game may have released it; given back two frame ends later); the frame count when seen.
     struct CopySeen {
         ID3D11Resource* dst = nullptr;
         ID3D11Resource* src = nullptr;
@@ -1360,11 +1389,14 @@ void apply_viewports() {
             two[1] = unshifted(two[1], g.view.overlayShift[1]);
         }
         realRSSetViewports(g.context, 2, two);
+        std::memcpy(g.appliedVps, two, sizeof(two));
+        g.twoVpsApplied = true;
         ++g.stats.viewportRewrites;
     } else {
         if (g.on)
             update_bias_constants(nullptr);
         realRSSetViewports(g.context, g.vpCount, g.vps);
+        g.twoVpsApplied = false;
     }
 }
 
@@ -1372,9 +1404,12 @@ void apply_scissors() {
     if (g.on && g.scCount == 1 && g.vpCount == 1) {
         const D3D11_RECT two[2] = {g.scs[0], focus_scissor(g.scs[0])};
         realRSSetScissorRects(g.context, 2, two);
+        std::memcpy(g.appliedScs, two, sizeof(two));
+        g.twoScsApplied = true;
         ++g.stats.scissorRewrites;
     } else if (g.scCount) {
         realRSSetScissorRects(g.context, g.scCount, g.scs);
+        g.twoScsApplied = false;
     }
 }
 
@@ -1529,7 +1564,7 @@ void update_ps() {
         }
         if (rebind) {
             g.context->PSSetConstantBuffers(13, 1, g.biasCb.GetAddressOf());
-            g.biasCbBound = true;
+            g.biasCbBound = g.biasCbUsed = true;  // (the game's b13 back at the pass end)
         }
     }
     if (bind != g.boundPs) {
@@ -1548,6 +1583,8 @@ void STDMETHODCALLTYPE ps_set_shader(ID3D11DeviceContext* context, ID3D11PixelSh
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
+    if (ps && ps == g.boundPs && ps != g.gamePs)  // our twin given back (a Get/Set round trip): the game's own
+        ps = g.gamePs;
     hold(g.gamePs, ps);
     hold_instances(g.psInstances, g.psInstanceCount, instances, std::min<UINT>(count, 256));
     g.boundPs = reinterpret_cast<ID3D11PixelShader*>(~uintptr_t{0});  // the game's call always takes effect
@@ -1585,15 +1622,28 @@ using UnmapFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, 
 using IaVbFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*);
 using IaIbFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, DXGI_FORMAT, UINT);
 
+// Hooked whenever MVR is (not only for car tracking): the game's own b13 recorded, and our remap bound again over a
+// game bind of b13 while two views are on (the twins read it there).
 inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, UINT start, UINT n,
                                     ID3D11Buffer* const* buffers) {
-    if (context == g.context && !g.replaying) {
+    if (context != g.context || g.replaying) {
+        real(context, start, n, buffers);
+        return;
+    }
+    if (g.carTrack) {
         if (timeHooks)
             ++g.time.carCalls;
         for (UINT i = 0; i < n && start + i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
             g.vsCb[start + i] = buffers ? buffers[i] : nullptr;
     }
+    // (a call past the last slot is the runtime's to drop: not recorded)
+    const bool covers13 = start <= 13 && n > 13 - start && start + n <= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+    ID3D11Buffer* const b13 = covers13 && buffers ? buffers[13 - start] : nullptr;
+    if (covers13 && b13 != g.remapCb.Get())  // our remap given back (a Get/Set round trip): not the game's
+        hold(g.gameVsCb13, b13);
     real(context, start, n, buffers);
+    if (covers13 && g.on && g.pass >= 0)
+        real(context, 13, 1, g.remapCb.GetAddressOf());
 }
 
 // Map and Unmap: any resource but the per-draw buffer passes with one comparison.
@@ -1971,12 +2021,40 @@ bool take_over_with_instancing() {
     return true;
 }
 
-// Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
+// Single-pass stereo wouldn't go off: the driver's state is unknown, so MVR stops for the session (mvr_broken: the
+// frame end's fallback, the eyes alone). Logged once.
+void stereo_off_failed(const char* where) {
+    ++g.stats.stereoErrors;
+    g.broken = true;
+    if (!g.stereoOffLogged) {
+        g.stereoOffLogged = true;
+        simqvfr::logf("lmu mvr: NVIDIA's multi-view rendering couldn't be turned off (%s): off for the session", where);
+    }
+}
+
+// Is the depth target bound with these render targets the pass's scene depth? Learned at the first bind in the pass of
+// the scene's render target (is_scene_rtv) with a depth target. Per bind, not per draw.
+bool scene_bound(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    if (!tr.on)
+        return true;  // (tests without the tracker: as before)
+    if (!dsv)
+        return false;
+    ComPtr<ID3D11Resource> depth;
+    dsv->GetResource(&depth);
+    if (!g.passDepth && n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0] && is_scene_rtv(rtvs[0]))
+        g.passDepth = depth.Get();
+    return depth && depth.Get() == g.passDepth;
+}
+
+// Twin, two views and the second viewport exactly while a focus-drawing pass draws into its scene's targets (or an
+// overlay into the eye's final) with one viewport and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
-    // The scene's draws (a depth target bound) and, after the focus view's final blit, the overlays into the eye's final.
-    const bool can = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
-                     !g.hsBound && !g.dsBound && !g.soBound;
+    // The scene's draws (its depth target bound) and, after the focus view's final blit, the overlays into the eye's
+    // final. One viewport only: the focus one is appended to it (apply_viewports); with more the twin would draw into
+    // the game's own second one.
+    const bool can = g.drawFocus && !g.broken && ((g.depthBound && g.sceneBound) || g.overlayTarget) && g.vpCount == 1 &&
+                     g.gameVs && !g.gsBound && !g.hsBound && !g.dsBound && !g.soBound;
     bool want = can;
     if (want) {
         twin = twin_of(g.gameVs);
@@ -1988,8 +2066,8 @@ void update() {
     } else if (want != g.stereo) {
         Timed timed(g.time.switches);
         if (g.twoViews(g.context, want) != 0) {
-            ++g.stats.stereoErrors;
             if (want) {
+                ++g.stats.stereoErrors;
                 want = false;
                 twin = nullptr;
                 if (take_over_with_instancing() && can) {
@@ -1997,6 +2075,8 @@ void update() {
                     want = twin != nullptr;
                     g.stereo = want;
                 }
+            } else {
+                stereo_off_failed("as a draw's two views ended");
             }
         } else {
             g.stereo = want;
@@ -2013,7 +2093,8 @@ void update() {
     if (want != g.on) {
         g.on = want;
         if (want) {
-            g.context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+            realVSSetConstantBuffers(g.context, 13, 1, g.remapCb.GetAddressOf());
+            g.remapBound = true;  // (the game's b13 back at the pass end)
             g.biasCbBound = false;  // texture sharpening's buffer bound again with the next twin (the game unbinds it)
         }
         apply_viewports();
@@ -2024,6 +2105,9 @@ void update() {
 
 void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexShader* vs,
                                      ID3D11ClassInstance* const* instances, UINT count) {
+    // The twin bound in the game's shader's place given back (a VSGetShader/VSSetShader round trip): the game's own.
+    if (vs && vs == g.boundVs && vs != g.gameVs && context == g.context && !g.replaying && g.pass >= 0)
+        vs = g.gameVs;
     if (context == g.context && !g.replaying) {  // every game bind, so a draw anywhere knows its shader's role (R6)
         const TwinEntry* e = vs ? &shader_entry(vs) : nullptr;
         g.vsRole = e ? e->role : VsRole::none;
@@ -2109,18 +2193,29 @@ ID3D11DepthStencilView* scene_depth(ID3D11Resource* colour) {
 }
 
 // FSR (mvr_fsr): this pass's focus composite into the scene's target beside the eye, right after YEBIS's composite
-// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it.
-void fsr_place(int eye) {
+// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it. False: not placed.
+bool fsr_place(int eye) {
     ID3D11Texture2D* image = g.focusPost.image(eye);
     if (!image || !g.resolved[g.pass])
-        return;
+        return false;
     const MvrPassView& v = g.view;
+    // Room beside the eye in the scene's target, and the whole region in the image (else no copy: no focus final).
+    ComPtr<ID3D11Texture2D> scene;
+    D3D11_TEXTURE2D_DESC sd{}, id{};
+    image->GetDesc(&id);
+    if (SUCCEEDED(g.resolved[g.pass].As(&scene)))
+        scene->GetDesc(&sd);
+    if (!scene || v.eyeW + v.focusW > sd.Width || v.focusH > sd.Height || v.focusW > id.Width || v.focusH > id.Height) {
+        ++g.stats.focusFailures;
+        return false;
+    }
     const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
     const bool was = g.replaying;
     g.replaying = true;
     g.context->CopySubresourceRegion(g.resolved[g.pass].Get(), 0, v.eyeW, 0, 0, image, 0, &box);
     g.replaying = was;
     ++g.stats.fsrPlaced;
+    return true;
 }
 
 // FSR: a render target bind in a pass whose focus composite was placed (fsr_place). The eye's image bound: FSR has
@@ -2166,8 +2261,41 @@ void fsr_final(UINT n, ID3D11RenderTargetView* const* rtvs) {
     }
 }
 
+// Car slots: the slot target given back among the game's render targets (an OMGetRenderTargets/OMSet round trip)
+// dropped: `rtvs` then points at `own`, a copy without it, `n` its count up to the last view (the others unbound either
+// way). At most eight compares, and only while the slot target exists.
+void without_slot(UINT& n, ID3D11RenderTargetView* const*& rtvs, ID3D11RenderTargetView* (&own)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]) {
+    ID3D11RenderTargetView* const slot = g.slotRtv.Get();
+    if (!slot || !rtvs || !n || n > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+        return;
+    bool found = false;
+    for (UINT i = 0; i < n; ++i)
+        found = found || rtvs[i] == slot;
+    if (!found)
+        return;
+    for (UINT i = 0; i < n; ++i)
+        own[i] = rtvs[i] == slot ? nullptr : rtvs[i];
+    while (n > 1 && !own[n - 1])
+        --n;
+    rtvs = own;
+}
+
+// A bind in a pass: whether its depth target is the scene's (update), the first bind into another one said.
+void note_scene_target(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    g.sceneBound = scene_bound(n, rtvs, dsv);
+    if (dsv && !g.sceneBound && g.drawFocus && !g.notSceneLogged) {
+        g.notSceneLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a depth target other than the scene's bound: its draws into the eye alone "
+                      "(logged once)",
+                      g.pass);
+    }
+}
+
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
+    ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargets(context, n, rtvs, dsv);
         if (tr.on && context == g.context && !g.replaying)
@@ -2196,6 +2324,7 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         g.obsFinal = bound && bound.Get() == g.fsrEye[g.pass & 1];
     }
     g.depthBound = dsv != nullptr;
+    note_scene_target(n, rtvs, dsv);
     g.overlayTarget = overlay_target(n, rtvs);
     const bool recut = cut_rects();  // live resolution: the cut decided again for the target now bound
     update();
@@ -2210,6 +2339,9 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
                                                       ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv,
                                                       UINT uavStart, UINT uavCount,
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
         if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
@@ -2222,6 +2354,11 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
+    // The game's render targets kept, its views from slot 1 on: the slot target holds RT1 (the runtime would refuse
+    // the call), so it goes first.
+    if (n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && g.slotsBound && uavCount != D3D11_KEEP_UNORDERED_ACCESS_VIEWS &&
+        uavCount && uavStart < 2)
+        slot_unbind();
     realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
     if (tr.on && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
         track_bind(n, rtvs, dsv);
@@ -2232,42 +2369,61 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
         fsr_final(n, rtvs);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
+        note_scene_target(n, rtvs, dsv);
         g.overlayTarget = overlay_target(n, rtvs);
         update();
     }
 }
 
 void STDMETHODCALLTYPE rs_set_viewports(ID3D11DeviceContext* context, UINT n, const D3D11_VIEWPORT* vps) {
-    if (!ours(context)) {
+    // Not ours, or a call the runtime drops (no rects, too many): passed on untouched, nothing recorded.
+    if (!ours(context) || (n && !vps) || n > kMaxRects) {
         realRSSetViewports(context, n, vps);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.vpCount = std::min<UINT>(n, kMaxRects);
-    if (vps)
-        std::memcpy(g.vps, vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+    D3D11_VIEWPORT own;
+    if (g.twoVpsApplied && n == 2 && sizeCut.vpCount == 1 && std::memcmp(vps, g.appliedVps, sizeof(g.appliedVps)) == 0) {
+        own = sizeCut.vps[0];  // our two given back (a Get/Set round trip): the game's own one
+        n = 1;
+        vps = &own;
+    }
+    g.vpCount = n;
+    if (n)
+        std::memcpy(g.vps, vps, n * sizeof(D3D11_VIEWPORT));
     keep_game_vps();
     cut_rects();  // live resolution: the game's render size cut to the eye's
-    apply_viewports();
+    const bool was = g.on;
+    update();  // two views only with one viewport
+    if (g.on == was)  // (update applied them if they turned on or off)
+        apply_viewports();
 }
 
 void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n, const D3D11_RECT* rects) {
-    if (!ours(context)) {
+    if (!ours(context) || (n && !rects) || n > kMaxRects) {
         realRSSetScissorRects(context, n, rects);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.scCount = std::min<UINT>(n, kMaxRects);
-    if (rects)
-        std::memcpy(g.scs, rects, g.scCount * sizeof(D3D11_RECT));
+    D3D11_RECT own;
+    if (g.twoScsApplied && n == 2 && sizeCut.scCount == 1 && std::memcmp(rects, g.appliedScs, sizeof(g.appliedScs)) == 0) {
+        own = sizeCut.scs[0];  // our two given back: the game's own one
+        n = 1;
+        rects = &own;
+    }
+    g.scCount = n;
+    if (n)
+        std::memcpy(g.scs, rects, n * sizeof(D3D11_RECT));
     keep_game_scs();
     cut_rects();
-    if (!g.scCount)
+    if (!g.scCount) {
         realRSSetScissorRects(context, 0, nullptr);
-    else
+        g.twoScsApplied = false;
+    } else {
         apply_scissors();
+    }
 }
 
 bool copy_region(ComPtr<ID3D11Texture2D>& dst, ID3D11Resource* src, unsigned x, unsigned y, unsigned w, unsigned h);
@@ -2404,15 +2560,23 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
             dp.objectMotion = g.motionSrv.Get();
             dp.objectCount = kCarSlots;
         }
-        const bool stereo = g.stereo && !g.instanced;
-        if (stereo)
-            g.twoViews(g.context, false);
+        bool stereoOff = false;
+        if (g.stereo && !g.instanced) {
+            if (g.twoViews(g.context, false) == 0)
+                stereoOff = true;
+            else
+                stereo_off_failed("before DLSS");
+        }
         const bool was = g.replaying;
         g.replaying = true;
         simqvfr::dlss_after_resolve(context, dst, scene_depth(drawn), dp);
         g.replaying = was;
-        if (stereo)
-            g.twoViews(g.context, true);
+        if (stereoOff && g.twoViews(g.context, true) != 0) {
+            // Refused back on: off as far as we know; update() tries once more and, refused, hands over as at any
+            // refused turn-on (instancing, or the game's shader and one viewport with MVR off for the session).
+            g.stereo = false;
+            update();
+        }
     }
     if (g.keepFocus && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0) {
         g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
@@ -2675,8 +2839,8 @@ void focus_post_draw(ID3D11DeviceContext* context) {
             g.replaying = false;
         }
         g.compositeOk = ok;
-        if (ok && g.fsr)
-            fsr_place(eye);
+        if (ok && g.fsr && !fsr_place(eye))
+            g.compositeOk = false;  // not beside the eye: no focus final from FSR's image (fsr_final)
         ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
     }
 }
@@ -2745,23 +2909,61 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
 // Instancing: draw H made with twice its instances (the instanced twin bound: each instance's even copy into the eye's
 // viewport, its odd one into the focus view's); with input layouts that read per-instance data, the bound one's twin
 // (step rates doubled, mvr_probe.cpp) around it, so a pair reads its instance's data.
+// May the draw with the bound input layout be doubled? None or per-vertex data: yes. Per-instance data: only with its
+// twin (`twin`, raw: the layout holds it while bound), else a pair would read two instances' data at the game's step
+// rate. A layout the probe never saw (made before it hooked the device; a layout's elements can't be read back): not
+// known, so no. `layout`: the bound one, referenced for the caller to release. Looked at only once the probe has seen
+// a per-instance layout or missed some (mvr_probe_layouts_to_check); one cached lookup per draw then.
+bool layout_doubles(ID3D11DeviceContext* context, ID3D11InputLayout*& layout, ID3D11InputLayout*& twin) {
+    layout = twin = nullptr;
+    if (!mvr_probe_layouts_to_check())
+        return true;
+    context->IAGetInputLayout(&layout);
+    if (!layout)
+        return true;
+    // (a new layout may take a released one's address: the probe's generation changes with each made)
+    if (const uint64_t generation = mvr_probe_layout_generation(); layout != g.layoutChecked || generation != g.layoutGeneration) {
+        g.layoutChecked = layout;
+        g.layoutGeneration = generation;
+        g.layoutTwin = nullptr;
+        UINT kind = 0, size = sizeof(kind);
+        if (FAILED(layout->GetPrivateData(kMvrLayoutKindGuid, &size, &kind)) || size != sizeof(kind))
+            kind = 0;
+        if (kind == kMvrLayoutPerInstance) {
+            IUnknown* unknown = nullptr;
+            size = sizeof(unknown);
+            if (SUCCEEDED(layout->GetPrivateData(kMvrInstancedLayoutGuid, &size, &unknown)) && unknown) {
+                ComPtr<ID3D11InputLayout> t;
+                unknown->QueryInterface(IID_PPV_ARGS(&t));
+                unknown->Release();
+                g.layoutTwin = t.Get();  // raw: the game's layout holds it
+            }
+        }
+        g.layoutKind = kind;
+    }
+    twin = g.layoutTwin;
+    if (g.layoutKind == kMvrLayoutPerVertex || (g.layoutKind == kMvrLayoutPerInstance && twin))
+        return true;
+    ++g.stats.layoutEyeOnly;
+    if (!g.layoutEyeOnlyLogged) {
+        g.layoutEyeOnlyLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a draw with an input layout %s: drawn into the eye alone (counted from now on)",
+                      g.pass, g.layoutKind == kMvrLayoutPerInstance ? "of per-instance data without its twin"
+                                                                    : "the probe didn't see made");
+    }
+    return false;
+}
+
+// Instancing: draw H made with twice its instances (the instanced twin bound: each instance's even copy into the eye's
+// viewport, its odd one into the focus view's); with an input layout that reads per-instance data, its twin `twin`
+// (step rates doubled, mvr_probe.cpp) around it in place of `layout`, so a pair reads its instance's data
+// (layout_doubles decides).
 template <int H, typename... A>
-void doubled_draw(ID3D11DeviceContext* context, A... a) {
+void doubled_draw(ID3D11DeviceContext* context, ID3D11InputLayout* layout, ID3D11InputLayout* twin, A... a) {
     const std::tuple<A...> t(a...);
-    ID3D11InputLayout* layout = nullptr;
-    ComPtr<ID3D11InputLayout> twinLayout;
-    if (mvr_probe_instanced_layouts() > 0) {
-        context->IAGetInputLayout(&layout);
-        IUnknown* unknown = nullptr;
-        UINT size = sizeof(unknown);
-        if (layout && SUCCEEDED(layout->GetPrivateData(kMvrInstancedLayoutGuid, &size, &unknown)) && unknown) {
-            unknown->QueryInterface(IID_PPV_ARGS(&twinLayout));
-            unknown->Release();
-        }
-        if (twinLayout) {
-            context->IASetInputLayout(twinLayout.Get());
-            ++g.stats.layoutSwaps;
-        }
+    if (twin) {
+        context->IASetInputLayout(twin);
+        ++g.stats.layoutSwaps;
     }
     ++g.stats.doubledDraws;
     if constexpr (H == kHookDrawIndexed)
@@ -2774,19 +2976,29 @@ void doubled_draw(ID3D11DeviceContext* context, A... a) {
         call_real<H>(context, std::get<0>(t), std::get<1>(t) * 2, std::get<2>(t), std::get<3>(t));
     else
         static_assert(H == kHookDraw, "a draw with an instance count");
-    if (twinLayout)
+    if (twin)
         context->IASetInputLayout(layout);
-    if (layout)
-        layout->Release();
 }
 
-// The game's draw H in a pass as it reaches d3d11: doubled with instancing while two views are on, else as it was.
+// The game's draw H in a pass as it reaches d3d11: doubled with instancing while two views are on (its layout
+// allowing), else as it was; a draw that can't be doubled with the game's own shader, into the eye's viewport alone.
 template <int H, typename... A>
 void game_draw(ID3D11DeviceContext* context, A... a) {
-    if (g.instanced && g.on && ours(context))
-        doubled_draw<H>(context, a...);
-    else
+    if (!(g.instanced && g.on && ours(context))) {
         call_real<H>(context, a...);
+        return;
+    }
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11InputLayout* twin = nullptr;
+    if (layout_doubles(context, layout, twin)) {
+        doubled_draw<H>(context, layout, twin, a...);
+    } else {
+        realVSSetShader(context, g.gameVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
+        call_real<H>(context, a...);
+        realVSSetShader(context, g.boundVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
+    }
+    if (layout)
+        layout->Release();
 }
 
 // mvr_ui_mips: for the panel's canvas `canvas` (the draw's pixel shader input 0), a copy of it with its mips, made once a
@@ -2895,7 +3107,12 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     context->RSGetViewports(&n, vps);
     ComPtr<ID3D11GeometryShader> gs;
     context->GSGetShader(&gs, nullptr, nullptr);
-    if (!twin || gs || n != 1 || g.broken) {
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11InputLayout* twinLayout = nullptr;
+    // (instancing: a layout it can't double leaves the draw to the caller, as the game drew it)
+    if (!twin || gs || n != 1 || g.broken || (g.instanced && !layout_doubles(context, layout, twinLayout))) {
+        if (layout)
+            layout->Release();
         release();
         return false;
     }
@@ -2903,7 +3120,7 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     ID3D11Buffer* kept = nullptr;
     context->VSGetConstantBuffers(13, 1, &kept);
     context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, v.remap, 0, 0);
-    context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+    realVSSetConstantBuffers(context, 13, 1, g.remapCb.GetAddressOf());  // (not the game's: past the hook)
     bool doubled = false;
     if (g.instanced || g.twoViews(context, true) == 0) {
         const D3D11_VIEWPORT first = overlay_viewport(eye, v, vps[0]);
@@ -2917,10 +3134,11 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
         realVSSetShader(context, twin, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, 2, two);
         if (g.instanced) {
-            doubled_draw<H>(context, a...);
+            doubled_draw<H>(context, layout, twinLayout, a...);
         } else {
             call_real<H>(context, a...);
-            g.twoViews(context, false);
+            if (g.twoViews(context, false) != 0)
+                stereo_off_failed("after an overlay's doubled draw");
         }
         realVSSetShader(context, vs, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, n, vps);
@@ -2931,9 +3149,11 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
         doubled = true;
         ++g.stats.overlaysOutside;
     }
-    context->VSSetConstantBuffers(13, 1, &kept);
+    realVSSetConstantBuffers(context, 13, 1, &kept);
     if (kept)
         kept->Release();
+    if (layout)
+        layout->Release();
     release();
     return doubled;
 }
@@ -3059,7 +3279,7 @@ void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3
     }
     State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
     c.dst = dst;
-    c.src = src;
+    hold(c.src, src);  // per copy, not per draw
     c.frame = g.framesSinceInstall;
 }
 
@@ -4029,6 +4249,8 @@ void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11
         if (g.twoViews(g.context, false) == 0) {
             g.stereo = false;
             ++g.stats.toggles;
+        } else {
+            stereo_off_failed("before the game's command list");
         }
     }
     g.inList = true;
@@ -4039,7 +4261,16 @@ void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11
     if (!plain)
         return;
     if (!restore) {  // the context's state cleared to its defaults: nothing of ours (twin, cb13, two viewports) bound
+        // Nothing of ours bound now (slot target and view, blend twin, the b13 buffers): the flags as the context is,
+        // the game's b13 none.
+        g.slotsBound = g.blendSwapped = g.biasCbBound = g.biasCbUsed = g.remapBound = false;
+        g.slotViewBound = nullptr;
+        g.twoVpsApplied = g.twoScsApplied = false;
+        hold(g.gameVsCb13, static_cast<ID3D11Buffer*>(nullptr));
+        hold(g.gamePsCb13, static_cast<ID3D11Buffer*>(nullptr));
         read_bindings();
+        keep_game_vps();  // live resolution: the game's own rects are the cleared ones now
+        keep_game_scs();
         g.on = false;
     }
     update();
@@ -4158,6 +4389,8 @@ void* detour_for(int h, int n) {
 bool wanted(int h) {
     if (h == kHookPS)
         return g.biasHooks || g.slotsOn;
+    if (h == kHookVSCB)  // always: the remap at b13 kept over the game's binds of it
+        return true;
     if (is_car_hook(h))
         return g.carTrack;
     if (is_slot_hook(h))
@@ -4321,9 +4554,13 @@ void read_bindings() {
         if (ib)
             ib->Release();
     }
+    ID3D11RenderTargetView* rtv = nullptr;
     ID3D11DepthStencilView* dsv = nullptr;
-    g.context->OMGetRenderTargets(0, nullptr, &dsv);
+    g.context->OMGetRenderTargets(1, &rtv, &dsv);
     g.depthBound = dsv != nullptr;
+    g.sceneBound = scene_bound(rtv ? 1u : 0u, &rtv, dsv);  // (at a pass's start: its scene depth learned here)
+    if (rtv)
+        rtv->Release();
     if (dsv)
         dsv->Release();
     g.vpCount = kMaxRects;
@@ -4629,6 +4866,13 @@ bool mvr_pass_install(ID3D11Device* device) {
         g.canInstance = true;
     g.context = context.Get();
     context.As(&g.multithread);
+    {  // the game's VS b13 before its binds are seen
+        ID3D11Buffer* b = nullptr;
+        context->VSGetConstantBuffers(13, 1, &b);
+        hold(g.gameVsCb13, b);
+        if (b)
+            b->Release();
+    }
     hook_every_mode();
     for (int h = 0; h < kHooks; ++h)
         if (wanted(h) && !functions[h].hooked) {
@@ -4788,6 +5032,16 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     if (g.blendSwapped)  // a pass that didn't end: the game's blend state back before it is read
         apply_blend();
     g.stats.biasPasses += g.bias ? 1 : 0;
+    if (g.biasHooks && g.biasCb) {  // the game's PS b13 as the pass begins (texture sharpening's buffer may go there)
+        ID3D11Buffer* b = nullptr;
+        g.context->PSGetConstantBuffers(13, 1, &b);
+        if (b != g.biasCb.Get())
+            hold(g.gamePsCb13, b);
+        if (b)
+            b->Release();
+        g.biasCbUsed = false;
+    }
+    g.passDepth = nullptr;  // this pass's scene depth: learned from the bindings as it begins, or at its scene's bind
     read_bindings();
     keep_game_vps();
     keep_game_scs();
@@ -4837,6 +5091,19 @@ void mvr_pass_end(int pass) {
     update();  // the game's shader, one view, its own viewports
     g.bias = false;
     update_ps();  // the game's pixel shader (update() put it back if two views were on)
+    if (g.remapBound) {  // the game's VS b13 in place of our remap
+        realVSSetConstantBuffers(g.context, 13, 1, &g.gameVsCb13);
+        g.remapBound = false;
+    }
+    if (g.biasCbUsed) {  // and its PS b13, if texture sharpening's buffer is still there
+        ID3D11Buffer* b = nullptr;
+        g.context->PSGetConstantBuffers(13, 1, &b);
+        if (b == g.biasCb.Get())
+            g.context->PSSetConstantBuffers(13, 1, &g.gamePsCb13);
+        if (b)
+            b->Release();
+        g.biasCbUsed = g.biasCbBound = false;
+    }
     stamp(pass, 2);
     if (pass == 3 && g.gpuSlot >= 0) {
         g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
@@ -4973,8 +5240,8 @@ ID3D11Resource* mvr_copy_source(ID3D11Resource* dst) {
         return nullptr;
     for (unsigned i = 1; i <= State::kCopiesKept; ++i) {
         const State::CopySeen& c = g.copies[(g.copyNext - i) % State::kCopiesKept];
-        if (c.dst == dst && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's (a frame end since)
-            return c.src;
+        if (c.dst == dst && c.src && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's
+            return c.src;  // held by the ring (render thread: valid until its next copies)
     }
     return nullptr;
 }
@@ -5091,6 +5358,12 @@ void mvr_frame_end(unsigned long long frame) {
     g.shapeOk[0] = g.shapeOk[1] = false;
     for (State::SceneBind& b : g.sceneBinds)  // DLAA's: nothing of the game's held between frames
         b = State::SceneBind{};
+    for (State::CopySeen& c : g.copies)  // the copies mvr_copy_source no longer gives: their sources given back
+        if (c.src && c.frame + 1 < g.framesSinceInstall) {
+            hold(c.src, static_cast<ID3D11Resource*>(nullptr));
+            c.dst = nullptr;
+        }
+    g.sceneRtvChecked = nullptr;  // is_scene_rtv's cache: a view's address may be another's after targets are remade
     // The overlay trace (debug logs only): the frames 600, 2400 and 4200 frame ends after the install, each from the
     // frame end before.
     ++g.framesSinceInstall;
@@ -5250,9 +5523,10 @@ void mvr_frame_end(unsigned long long frame) {
                               : "plain (the two views off, their calls passed on)");
         if (g.instanced)
             simqvfr::logf("lmu mvr: instancing: %llu draws made with twice their instances (%llu with a per-instance "
-                          "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect)%s",
+                          "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect), %llu for their input "
+                          "layout%s",
                           static_cast<unsigned long long>(s.doubledDraws), static_cast<unsigned long long>(s.layoutSwaps),
-                          static_cast<unsigned long long>(s.eyeOnlyDraws),
+                          static_cast<unsigned long long>(s.eyeOnlyDraws), static_cast<unsigned long long>(s.layoutEyeOnly),
                           s.instancedTakeovers ? "; took over from NVIDIA's MVR, which the driver refused" : "");
         if (s.maskDraws || s.maskDropped || s.panelReplays || s.uiMipFrames)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "

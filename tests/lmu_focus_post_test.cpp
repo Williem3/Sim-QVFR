@@ -345,8 +345,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     lmu::mvr_set_two_views(&fake_two_views);
     lmu::mvr_focus_replay(true);  // before the install: DrawIndexed hooked too
     lmu::mvr_roles_known_for_tests(1, 1);  // the stand-ins carry their roles, as the probe marks the game's
-    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 16,
-          "the immediate context hooked, the four draws and CopySubresourceRegion among its entries (the focus post on)");
+    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 17,
+          "the immediate context hooked, the four draws, CopySubresourceRegion and VSSetConstantBuffers among its entries "
+          "(the focus post on)");
 
     // The targets: the eye 100x80 at the top-left of 256x128, its focus view 60x50 beside it at (100, 0).
     constexpr unsigned W = 256, H = 128, eyeW = 100, eyeH = 80, focusW = 60, focusH = 50, glareW = 102, glareH = 51;
