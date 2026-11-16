@@ -375,13 +375,20 @@ void menu_controllers(XrSession session, int64_t now) {
         }
         if (!gaze.attached || !gaze.menuToggle)
             return;
-        if (gaze.appSyncs == 0) {  // ACE never syncs actions: sync the layer's set alone
+        // The game syncs no actions (ACE, LMU): the layer's set needs syncing for its states to change. The gaze thread
+        // does that 250 times a second while it runs: its last sync is fresh enough for a menu button. Otherwise the
+        // menu syncs it itself, at most every kMenuSyncMs (a press or a push lasts far longer), not every frame.
+        constexpr int64_t kMenuSyncMs = 25;
+        const int64_t fresh = qpc_ms(kMenuSyncMs);
+        const bool threadSynced = gaze.threadSyncQpc && now - gaze.threadSyncQpc < fresh;
+        if (gaze.appSyncs == 0 && !threadSynced && (!gaze.menuSyncQpc || now - gaze.menuSyncQpc >= fresh)) {
             FramePartTimer part(FramePart::actionSync);
             const XrActiveActionSet active{gaze.set, XR_NULL_PATH};
             XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
             sync.countActiveActionSets = 1;
             sync.activeActionSets = &active;
             next.SyncActions(session, &sync);
+            gaze.menuSyncQpc = now;
         }
         FramePartTimer readPart(FramePart::actionRead);
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};

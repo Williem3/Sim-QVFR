@@ -319,6 +319,10 @@ struct Gaze {
     // syncs it itself before each lookup (and the settings menu before reading its controllers).
     bool syncsOwn = false;
     uint64_t appSyncs = 0;
+    // Attached alone: when the gaze thread last synced the set, and the settings menu (qpc_now; 0: never). The menu
+    // reads its controllers from the thread's sync while it is recent; it syncs at most every kMenuSyncMs itself (a
+    // runtime call of ~0.45 ms on the game's thread with Pimax's runtime, 2026-11-16, when it ran every frame).
+    int64_t threadSyncQpc = 0, menuSyncQpc = 0;
     XrSpace space = XR_NULL_HANDLE;
     XrVector3f direction{0, 0, -1};  // last tracked gaze, in the space ACE locates its views in
     XrTime directionTime = 0;
