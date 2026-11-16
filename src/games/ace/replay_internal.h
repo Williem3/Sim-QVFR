@@ -1,12 +1,18 @@
 // replay_probe.h's internals, shared by its files (replay_detail: not for other code). ACE's API path: our hooks
 // record the game's command lists (Stream), the focus replays are recorded from them into lists of ours (Replay)
 // and run with the game's; one state for the focus views, `focus` (focus.lock where its members say so).
-//   replay_probe.cpp    the recording hooks, stream recording and emit (per draw / per command: kept in one file, the
-//                       build has no LTCG), the focus setup and every pass's focus replay, the live periphery, the
-//                       start, the frame's end, stats; every extern below is defined there
-//   replay_cull.cpp     focus culling's record: ACE's instance visibility pass again for the focus views
-//   replay_samples.cpp  samples: twins and their eye references read back, saved as pictures, compared
-//   replay_shaders.h    the HLSL sources of our compute passes and our slot / descriptor layout constants
+//   replay_probe.cpp        the recording hooks, stream recording and emit, the live periphery's per-draw parts, queue
+//                           execute and GPU markers, the start, the frame's end, stats (everything called per
+//                           recorded command or per draw stays here: the build has no LTCG)
+//   replay_focus.cpp        the focus core: compile, twins and view slots, retire / prune, rebuild, prepare, the focus
+//                           scene replay (focus_record)
+//   replay_lighting.cpp     per pass: light tiles, sky, volumetric fog, deferred sun shadow, atmosphere maps
+//   replay_transparents.cpp per pass: the OIT composite, the refraction source (blur), the previous-frame colour
+//   replay_post.cpp         per pass: MSAA resolves, our DLSS, MSAA antialiasing, bloom / tonemap / fxaa
+//   replay_eye_live.cpp     the live periphery's per-frame parts: its pipeline, the constants-copy lists
+//   replay_cull.cpp         focus culling's record: ACE's instance visibility pass again for the focus views
+//   replay_samples.cpp      samples: twins and their eye references read back, saved as pictures, compared
+//   replay_shaders.h        the HLSL sources of our compute passes and our slot / descriptor layout constants
 #pragma once
 
 #include "replay_probe.h"
@@ -526,6 +532,80 @@ enum : uint8_t {
     kStepPostDlss, kStepPostTone, kStepEyeCopies, kStepCull, kStepGame, kStepCompose, kStepGap, kStepKinds
 };
 
+// ---- Types shared by the files (defined in replay_probe.cpp before the split)
+using DsvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_DEPTH_STENCIL_VIEW_DESC*,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+using RtvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_RENDER_TARGET_VIEW_DESC*,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+using SrvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_SHADER_RESOURCE_VIEW_DESC*,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+using CbvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_CONSTANT_BUFFER_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
+// replay_record_timing (diagnostic): focus_record's CPU time by phase, in QPC ticks, summed over threads.
+struct RecordTiming {
+    bool on = false;
+    std::atomic<uint64_t> lists{0}, lockWait{0}, underLock{0}, setup{0}, emit{0}, skyChecks{0}, close{0}, after{0},
+        maxList{0}, ops{0}, draws{0};
+};
+
+// What a replay changes: its viewports and scissors (all of them), root-1 addresses (by the stream's order) and the
+// targets it binds (the game's CPU handles -> ours).
+struct Substitution {
+    const D3D12_VIEWPORT* viewports = nullptr;
+    const D3D12_RECT* scissors = nullptr;
+    UINT count = 0;
+    const std::vector<D3D12_GPU_VIRTUAL_ADDRESS>* from = nullptr;
+    const std::vector<D3D12_GPU_VIRTUAL_ADDRESS>* to = nullptr;
+    const std::vector<std::pair<SIZE_T, SIZE_T>>* targets = nullptr;
+    const std::vector<std::pair<UINT64, UINT64>>* tables = nullptr;  // descriptor tables (GPU handles) -> ours
+    const std::vector<std::pair<UINT64, UINT64>>* skyTables = nullptr;  // root 4 -> ours, only around sky draws
+    int skip = 0;  // replay_cull_probe (diagnostic): 1 the indirect draws left out, 2 the direct draws
+    // Focus culling: the game's indirect command buffer -> ours, and vertex buffer views inside its visible-instances
+    // buffer -> the same place in ours.
+    ID3D12Resource* argsFrom = nullptr;
+    ID3D12Resource* argsTo = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS vbFrom = 0, vbTo = 0;
+    UINT64 vbBytes = 0;
+};
+struct SkyPatch {
+    UINT64 gameTable = 0, ourTable = 0;
+    D3D12_GPU_VIRTUAL_ADDRESS gameCbSky = 0, ourCbSky = 0;
+};
+constexpr UINT kEyeSlots = 512;
+
+struct EyeLive {
+    std::atomic<float> wanted{1.0f};   // the periphery's share of its launch size (1: off)
+    std::atomic<bool> allowed{false};  // the compositor reads the region in use (a composed frame)
+    std::atomic<uint64_t> state{0};    // taken at a frame's end: 0 off, else lw | lh << 16 | ew << 32 | eh << 48
+    // with it, when the game's DLSS upscales its eyes (Quality, Balanced, Performance): the region at the output size,
+    // as NGX is told it (focus_ngx: the output x fx, rounded), ow | oh << 16 | outW << 32 | outH << 48; 0: no upscale
+    std::atomic<uint64_t> out{0};
+    ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
+    ComPtr<ID3D12PipelineState> pso;   // kEyeShader
+    std::atomic<uint32_t> nextSlot{0};
+    std::vector<std::unique_ptr<Replay>> pool;     // under focus.lock
+    std::unordered_map<List*, Replay*> before;     // under focus.lock: the patch list each closed game list needs first
+    std::atomic<uint64_t> lists{0}, patches{0}, executed{0};
+    // what was changed, by kind (the 900-frame line): scene state applied (stereo, one eye), deferred shadows, the
+    // tile-frustum constants, tile culling, normals, packing; scene-root draws left alone for their viewport's shape
+    // (8 sharpening, 9 histogram, 10 histogramAverage, 11 by-pixel post dispatches shrunk, 12 whole-target draws clipped,
+    // 13 MSAA's resolve)
+    std::atomic<uint64_t> did[14] = {};
+    std::atomic<int> said[14] = {};  // first uses described
+    std::atomic<int> shapesSaid{0};
+    bool tried = false, ready = false;
+    int whyNot = -1;
+};
+
+struct EyeNow {
+    bool on = false;
+    float fx = 1, fy = 1, ew = 0, eh = 0, lw = 0, lh = 0;
+};
+
+// The passes after the game's DLSS work at its output size: the region there (the scene's own when it doesn't upscale).
+struct EyeOut {
+    float w = 0, h = 0, lw = 0, lh = 0;  // the eye at the output size, and the region in use of it
+};
+
 // ---- Defined in replay_probe.cpp
 extern ComPtr<ID3D12Device> device;
 extern thread_local bool inReplay;  // our own calls into a list: the hooks pass them through
@@ -534,18 +614,72 @@ extern UavFn uavViewOriginal;  // our own UAVs go straight to it (the hook takes
 extern Focus focus;
 extern FocusCull cull;
 
-std::string debug_name(ID3D12Resource* r);
-void retire(IUnknown* object);  // under focus.lock: kept alive until no list can still use it
-bool miss_allowed(int& epoch, int& count, int limit);  // the rate-limited "why not" lines
+extern DsvFn dsvOriginal;
+extern RtvFn rtvOriginal;
+extern SrvFn srvViewOriginal;
+extern CbvFn cbvViewOriginal;
+extern std::atomic<uint64_t> listsReplayed, callsReplayed, drawsReplayed, replayTicks, twinsMade, twinsRemade;
+extern RecordTiming recordTiming;
+extern thread_local uint64_t skyCheckTicks, emitOps;
+extern std::atomic<int> cullProbePhase;
+extern EyeLive eyeLive;
+
+std::string debug_name(ID3D12Resource* r);  // here: called per draw (eye_apply) and per SRV write (tile_view_kind)
 void gpu_stamp(List* l, uint8_t kind);
+void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to);  // here: per tyre draw
+int64_t now_ticks();
+int64_t emit(List* l, const Stream& s, const Substitution* sub);
+bool invert(const double (&m)[4][4], double (&out)[4][4]);
+EyeNow eye_now(uint64_t state);
+EyeOut eye_out(const EyeNow& now, uint64_t out);  // eye_now / eye_out: here, per draw and per dispatch
+
+// ---- replay_focus.cpp
+extern std::atomic<int> remakeEpoch;
+bool focus_compile();
+D3D12_CPU_DESCRIPTOR_HANDLE view_slot(bool depth, int& index);
+void retire(IUnknown* object);  // under focus.lock: kept alive until no list can still use it
+void retire_feature(focus_ngx::Feature*& feature);
+bool miss_allowed(int& epoch, int& count, int limit);  // the rate-limited "why not" lines
+size_t sweep_released(bool* used);
+bool slots_writable();
+void focus_rebuild(const char* why);
+bool focus_prepare(const Stream& s);
 Replay* acquire_replay();                         // under focus.lock
 void add_pending(List* gameList, Replay* r);      // under focus.lock
 float focus_box_y();
+uint32_t float_bits(float f);
 void focus_centres(float (&centre)[2][2]);        // under focus.lock
-void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to);
+void focus_record(List* gameList, const Stream& s, bool mono = false);
+
+// ---- replay_lighting.cpp
 D3D12_CPU_DESCRIPTOR_HANDLE game_cpu(UINT index);
 D3D12_GPU_DESCRIPTOR_HANDLE game_gpu(UINT index);
 void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlot, UINT srvSlot);
+const Twin* scene_depth_twin();
+D3D12_RESOURCE_STATES rest_of(ID3D12Resource* r, D3D12_RESOURCE_STATES otherwise);
+void focus_tiles_record(List* gameList, const Stream& s);
+std::vector<SkyPatch> focus_sky_prepare(const Stream& s);
+void focus_sky_record(List* l, const std::vector<SkyPatch>& patches, const float (&centre)[2]);
+void focus_fog_record(List* gameList, const Stream& s);
+void focus_shadow_record(List* gameList, const Stream& s);
+void focus_atmo_record(List* gameList, const Stream& s);
+
+// ---- replay_transparents.cpp
+void focus_oit_record(List* gameList, const Stream& s);
+void resolve_focus_colour(List* l);
+void focus_blur_record(List* gameList);
+void focus_prev_copy(ID3D12CommandQueue* queue);
+
+// ---- replay_post.cpp
+void focus_resolve_record(List* gameList, const Stream& s);
+void focus_post_record(List* gameList, const Stream& s);
+
+// ---- replay_eye_live.cpp
+bool eye_ready();
+Replay* eye_acquire();
+void eye_record(List* gameList, const Stream& s);
+// The region of a borrowed eye image in use (the live periphery); `output`: an image after the game's DLSS (its output size).
+void atmo_source_region(List* l, bool eyeImage, bool output = false);
 
 // ---- replay_samples.cpp
 void focus_copy_sample();
