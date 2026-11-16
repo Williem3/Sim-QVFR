@@ -8,6 +8,7 @@
 #include <atomic>
 
 #include "games/adapter.h"
+#include "log.h"
 
 namespace simqvfr::layer {
 extern std::atomic<bool> processTerminating;  // layer/state.h
@@ -15,8 +16,10 @@ extern std::atomic<bool> processTerminating;  // layer/state.h
 
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
     // Process exit: the CRT destroys this DLL's globals right after this returns, with the other threads already gone.
-    if (reason == DLL_PROCESS_DETACH && reserved)
+    if (reason == DLL_PROCESS_DETACH && reserved) {
         simqvfr::layer::processTerminating.store(true);
+        simqvfr::log_process_ending();
+    }
     if (reason == DLL_PROCESS_ATTACH) {
         wchar_t early[4] = {};
         if (GetEnvironmentVariableW(L"SIM_QVFR_EARLY", early, 4) == 1 && early[0] == L'1') {

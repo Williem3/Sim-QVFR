@@ -121,7 +121,7 @@ struct Timed {
     Timed* const parent;
     const bool takeOut;
     uint64_t excluded = 0;
-    static inline Timed* current = nullptr;  // the innermost running one (the game's render thread only)
+    static inline thread_local Timed* current = nullptr;  // this thread's innermost running one
     explicit Timed(uint64_t& s, bool takeOutOfParents = false)
         : sum(timeHooks ? &s : nullptr), t0(sum ? __rdtsc() : 0), parent(sum ? current : nullptr),
           takeOut(takeOutOfParents) {

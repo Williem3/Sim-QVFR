@@ -1,5 +1,6 @@
 #include "log.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
@@ -91,28 +92,49 @@ void run_writer() {
     }
 }
 
+// Lines keep going to the queue until the writer has written it all and ended (`on` cleared only after the join), so a
+// line logged meanwhile is never written ahead of older queued ones.
 void stop_writer() {
     std::thread thread;
     {
         std::lock_guard lock(logMutex);
-        writer.on = false;
         writer.stop = true;
         thread.swap(writer.thread);
     }
     writer.wake.notify_all();
     if (thread.joinable())
-        thread.join();  // (at a process's exit it has ended already: the join returns at once)
+        thread.join();
     std::string rest;
     {
         std::lock_guard lock(logMutex);
+        writer.on = false;
         writer.stop = false;
-        rest.swap(writer.pending);  // what an ended writer left
+        rest.swap(writer.pending);  // queued after the writer's last look
     }
     if (!rest.empty() && logFile != INVALID_HANDLE_VALUE)
         write_now(rest.data(), rest.size());
 }
 
-Writer::~Writer() { stop_writer(); }
+std::atomic<bool> processEnding{false};  // log_process_ending
+
+// At a process's end (DllMain's DLL_PROCESS_DETACH with the process ending, log_process_ending) the other threads are
+// gone, perhaps holding a mutex: nothing waited for. The writer's thread detached, what it left written only if the
+// mutexes are free.
+Writer::~Writer() {
+    if (!processEnding.load()) {
+        stop_writer();
+        return;
+    }
+    if (thread.joinable())
+        thread.detach();
+    on = false;
+    std::unique_lock lock(logMutex, std::try_to_lock);
+    std::unique_lock file(fileMutex, std::try_to_lock);
+    if (lock.owns_lock() && file.owns_lock() && !pending.empty() && logFile != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(logFile, pending.data(), static_cast<DWORD>(pending.size()), &written, nullptr);
+    }
+}
 
 void open() {
     logOpened = true;
@@ -173,6 +195,8 @@ void line(const char* message) {
 }  // namespace
 
 void log_line(const char* message) { line(message); }
+
+void log_process_ending() { processEnding.store(true); }
 
 void log_async(bool on) {
     if (!on) {

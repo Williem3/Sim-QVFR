@@ -33,5 +33,8 @@ std::wstring log_file();
 // doesn't wait on the disk. A crash can lose the lines queued in its last moment (the writer takes them at once). Off
 // (the session's end, the process's exit): what is queued is written, then each line at once again.
 void log_async(bool on);
+// DllMain at DLL_PROCESS_DETACH when the process ends: the writer's end waits for nothing then (the other threads are
+// gone, perhaps holding a mutex).
+void log_process_ending();
 
 }  // namespace simqvfr

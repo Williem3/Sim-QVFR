@@ -48,26 +48,17 @@ void track_end(const char* why) {
 // the resolve and YEBIS does that; with MSAA off only the final blit or the frame end: YEBIS draws into the scene's
 // own target then).
 void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
-    ID3D11RenderTargetView* const v0 =
-        n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0] ? rtvs[0] : nullptr;
-    if (v0 && v0 != g.bindLook.rtv) {  // a view not looked at this frame: its texture and description
-        g.bindLook = {};
-        g.bindLook.rtv = v0;
-        ComPtr<ID3D11Resource> r;
-        v0->GetResource(&r);
-        g.bindLook.resource = r.Get();  // (the bound view holds it)
-        ComPtr<ID3D11Texture2D> texture;
-        if (r && SUCCEEDED(r.As(&texture))) {
-            texture->GetDesc(&g.bindLook.desc);
-            g.bindLook.texture = true;
-        }
-    }
-    ComPtr<ID3D11Resource> r0 = v0 ? g.bindLook.resource : nullptr;
+    ComPtr<ID3D11Resource> r0;
+    if (n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0])
+        rtvs[0]->GetResource(&r0);
     bool msaa = false;
     D3D11_TEXTURE2D_DESC d{};
-    if (dsv && r0 && g.bindLook.texture) {
-        d = g.bindLook.desc;
-        msaa = d.SampleDesc.Count > 1;
+    if (dsv && r0) {
+        ComPtr<ID3D11Texture2D> texture;
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&d);
+            msaa = d.SampleDesc.Count > 1;
+        }
     }
     tr.msaaFrame = tr.msaaFrame || msaa;
     tr.msaaSinceScene = tr.msaaSinceScene || (msaa && tr.scene);
@@ -76,8 +67,11 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
                          d.Format == tr.sceneDesc.Format && d.SampleDesc.Count == tr.sceneDesc.SampleDesc.Count;
     bool multisampleTarget = msaa;  // also without depth (the tracker's own test needs both)
     if (pt.recording && r0 && !dsv) {
-        if (g.bindLook.texture) {
-            multisampleTarget = g.bindLook.desc.SampleDesc.Count > 1;
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC td{};
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&td);
+            multisampleTarget = td.SampleDesc.Count > 1;
         }
     }
     if (pt.recording && (dsv || multisampleTarget)) {

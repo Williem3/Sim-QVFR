@@ -258,20 +258,16 @@ struct State {
     ComPtr<ID3D11Buffer> slotWords;
     std::vector<ComPtr<ID3D11ShaderResourceView>> slotViews;
     ID3D11ShaderResourceView* slotViewBound = nullptr;
-    // The last render target view track_bind looked at, its texture (raw, compared only) and description; the last
-    // blend state's twin (per write mask) and depth state's writes: reset at each frame end, as sceneRtvChecked.
-    struct BindLook {
-        ID3D11RenderTargetView* rtv = nullptr;
-        ID3D11Resource* resource = nullptr;
-        bool texture = false;
-        D3D11_TEXTURE2D_DESC desc{};
-    } bindLook;
+    // The last blend state's twin (per write mask) and depth state's writes. Each holds a reference to the state it
+    // caches, so no other state can take its address while it is cached (the twin lives as the held state's private
+    // data); reset at each frame end. (Not render target views: a reference held on a swapchain's back buffer makes
+    // the game's ResizeBuffers fail, lmu_focus_post_roles_test.)
     struct BlendLook {
-        ID3D11BlendState* game = nullptr;
+        ComPtr<ID3D11BlendState> game;
         ID3D11BlendState* twin[2] = {};
     } blendLook;
     struct DepthLook {
-        ID3D11DepthStencilState* ds = nullptr;
+        ComPtr<ID3D11DepthStencilState> ds;
         bool writes = true, known = false;
     } depthLook;
     ID3D11RenderTargetView* sceneRtvChecked = nullptr;  // the last render target view checked for the scene's (raw)

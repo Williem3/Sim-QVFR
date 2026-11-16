@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include "log.h"
 
@@ -47,6 +48,25 @@ int child(const char* name) {
         simqvfr::logf("after %d", 2001);
         simqvfr::log_async(true);
         simqvfr::logf("left queued at exit %d", 2002);  // written as the process ends (the writer's own end)
+        return 0;
+    }
+    if (std::strcmp(name, "stopping") == 0) {  // another thread logs while the writer stops: its lines stay in order
+        simqvfr::log_async(true);
+        std::thread other([] {
+            for (int i = 1; i <= 3000; ++i)
+                simqvfr::logf("other %d", i);
+        });
+        for (int i = 1; i <= 200; ++i)
+            simqvfr::logf("main %d", i);
+        simqvfr::log_async(false);
+        other.join();
+        return 0;
+    }
+    if (std::strcmp(name, "ending") == 0) {  // the process ends (DllMain's flag) with lines queued: no wait, no hang
+        simqvfr::log_async(true);
+        for (int i = 1; i <= 2000; ++i)
+            simqvfr::logf("queued %d", i);
+        simqvfr::log_process_ending();
         return 0;
     }
     if (std::strcmp(name, "flood") == 0) {
@@ -117,6 +137,22 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(ordered && after != std::string::npos && last != std::string::npos && last > after,
               "log: lines through the writer thread all written, in order; a line queued at the exit too");
     }
+
+    const fs::path stopping = dir / L"stopping.log";
+    check(run_child("stopping", stopping, L"") == 0, "log: the stopping child ran");
+    {
+        const std::string s = read(stopping);
+        size_t at = 0;
+        bool ordered = true;
+        for (int k = 1; k <= 3000 && ordered; ++k) {
+            const size_t next = s.find("other " + std::to_string(k) + "\r\n", at);
+            ordered = next != std::string::npos;
+            at = ordered ? next : at;
+        }
+        check(ordered, "log: a thread's lines all written in order while the writer stops");
+    }
+    const fs::path ending = dir / L"ending.log";
+    check(run_child("ending", ending, L"") == 0, "log: a process ending with lines queued exits (nothing waited for)");
 
     const fs::path flood = dir / L"flood.log";
     check(run_child("flood", flood, L"") == 0, "log: the flooding child ran");

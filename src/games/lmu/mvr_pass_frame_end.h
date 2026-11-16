@@ -60,8 +60,7 @@ void mvr_frame_end(unsigned long long frame) {
             c.dst = nullptr;
         }
     g.sceneRtvChecked = nullptr;  // is_scene_rtv's cache: a view's address may be another's after targets are remade
-    g.bindLook = {};              // likewise track_bind's, the blend twin's and the depth state's
-    g.blendLook = {};
+    g.blendLook = {};             // likewise the blend twin's and the depth state's
     g.depthLook = {};
     // mvr_time_hooks: this frame was timed (counted for the per-frame figures); the next one is if it is 1 in 16.
     g.timedFrames += timeHooks ? 1 : 0;
