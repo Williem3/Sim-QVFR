@@ -59,7 +59,8 @@ bool ledger_game_started(const std::wstring& ledgerPath, const ProcessStamp& gam
 
 // Takes out the values the ledger lists that still hold DWORD 0; the key stays. The ledger goes when nothing it
 // lists is ours any more (taken out, gone already, or changed since); a value that couldn't be taken out (no
-// rights) stays listed for the next time. False if any couldn't.
+// rights) stays listed for the next time. False if any couldn't. Only a .json straight in one of our run folders
+// (a run-* folder beside the ledger's folder) is ever taken out; anything else a ledger lists is ignored, with a note.
 bool unregister_layers(HKEY root, const wchar_t* subkey, const std::wstring& ledgerPath, std::vector<std::wstring>& notes);
 
 // Every ledger in `folder` whose launch is over (its game gone; not started and its launcher gone): unregistered.

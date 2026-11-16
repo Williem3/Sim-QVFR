@@ -108,22 +108,6 @@ bool set_value(HKEY key, const RawValue& v) {
                           static_cast<DWORD>(v.data.size())) == ERROR_SUCCESS;
 }
 
-// Re-creates root\subkey holding `values`, in their order. Deleting and re-adding values keeps their old
-// places (Windows reuses a value's slot by name), so the key itself goes.
-bool recreate(HKEY root, const wchar_t* subkey, const std::vector<RawValue>& values) {
-    const LSTATUS deleted = RegDeleteKeyExW(root, subkey, KEY_WOW64_64KEY, 0);
-    if (deleted != ERROR_SUCCESS && deleted != ERROR_FILE_NOT_FOUND)
-        return false;
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(root, subkey, 0, nullptr, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &key, nullptr) != ERROR_SUCCESS)
-        return false;
-    bool ok = true;
-    for (const RawValue& v : values)
-        ok = ok && set_value(key, v);
-    RegCloseKey(key);
-    return ok;
-}
-
 }  // namespace
 
 // ---- With the launcher --------------------------------------------------------------------------
@@ -281,40 +265,41 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
         error = L"the installed layers changed since they were read; nothing was written";
         return false;
     }
+    // The order can't change: the loader reads values in their stored order, and re-adding a value keeps its
+    // slot, so only deleting the key (every vendor's layers) or rewriting other vendors' values would reorder.
+    // Neither is ours to do. The list as read_system_layers shows it (the Sim-QVFR layer locked first) is the
+    // key's order.
+    std::vector<SystemLayer> shown;
+    for (const RawValue& v : existing)
+        shown.push_back({v.name, machine, is_on(v), layer_name(v.name), {}});
+    lock_system_layers(shown);
+    for (size_t i = 0; i < want.size(); ++i)
+        if (!same_name(shown[i].manifest, want[i].manifest)) {
+            RegCloseKey(key);
+            error = L"the order of Windows' OpenXR layers can't be changed safely without the launcher; nothing was "
+                    L"written (on/off switches still apply)";
+            return false;
+        }
     if (!backup.empty() && !write_backup(backup, machine, subkey, existing)) {
         RegCloseKey(key);
         error = L"cannot write the backup " + backup + L"; nothing was written";
         return false;
     }
-    // Each value as it will be: a switch that changes is written as the loader's DWORD (0 on, 1 off).
-    std::vector<RawValue> values;
-    bool sameOrder = true;
-    for (size_t i = 0; i < want.size(); ++i) {
-        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, want[i].manifest); });
-        sameOrder &= same_name(existing[i].name, want[i].manifest);
-        RawValue v = was;
-        if (is_on(was) != want[i].on) {
-            const DWORD d = want[i].on ? 0 : 1;
-            v.type = REG_DWORD;
-            v.data.assign(reinterpret_cast<const BYTE*>(&d), reinterpret_cast<const BYTE*>(&d) + sizeof(d));
-        }
-        values.push_back(std::move(v));
-    }
+    // Only a switch that changes is written, in place, as the loader's DWORD (0 on, 1 off): the user's own choice.
     bool ok = true;
-    if (sameOrder) {
-        for (size_t i = 0; i < values.size(); ++i)
-            if (values[i].type != existing[i].type || values[i].data != existing[i].data)
-                ok &= set_value(key, values[i]);
-        RegCloseKey(key);
-    } else {
-        RegCloseKey(key);
-        if (!recreate(root, subkey, values)) {
-            ok = false;
-            recreate(root, subkey, existing);  // put it back as it was
-        }
+    for (const SystemLayer& w : want) {
+        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, w.manifest); });
+        if (is_on(was) == w.on)
+            continue;
+        RawValue v = was;
+        const DWORD d = w.on ? 0 : 1;
+        v.type = REG_DWORD;
+        v.data.assign(reinterpret_cast<const BYTE*>(&d), reinterpret_cast<const BYTE*>(&d) + sizeof(d));
+        ok &= set_value(key, v);
     }
+    RegCloseKey(key);
     if (!ok)
-        error = L"writing the OpenXR layer key failed; it was put back as it was (backup: " + backup + L")";
+        error = L"writing an OpenXR layer switch failed (backup of the key as it was: " + backup + L")";
     return ok;
 }
 

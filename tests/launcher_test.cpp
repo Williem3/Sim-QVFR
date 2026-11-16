@@ -1058,6 +1058,26 @@ void explicit_layers_checks() {
     RegDeleteValueW(key, lookalike.c_str());
     check(snapshot() == before, "explicit: the key back to exactly what it held");
 
+    // A ledger is a user-writable file read as administrator: only a .json straight in one of our run folders comes
+    // out, whatever else it lists at DWORD 0.
+    {
+        const std::wstring climbs = (dir / L"run-5" / L".." / L"climbs.json").wstring(),
+                           elsewhere = (dir / L"other" / L"layer.json").wstring(), notJson = (dir / L"run-5" / L"layer.dll").wstring(),
+                           relative = L"run-5\\relative.json", real = (dir / L"run-5" / L"XR_APILAYER_SIM_qvfr.json").wstring();
+        for (const std::wstring& forged : {climbs, elsewhere, notJson, relative, real})
+            put(forged, 0);
+        const std::wstring forgedLedger = (dir / L"ledgers" / L"run-5.txt").wstring();
+        write_file(forgedLedger, ledger_text(Ledger{{}, {}, {theirs, climbs, elsewhere, notJson, relative, real}}));
+        notes.clear();
+        check(unregister_layers(base, L"Explicit", forgedLedger, notes) && !value(real, v) && value(theirs, v) && v == 0 &&
+                  value(climbs, v) && value(elsewhere, v) && value(notJson, v) && value(relative, v) && !fs::exists(forgedLedger) &&
+                  std::count_if(notes.begin(), notes.end(), [](const std::wstring& n) { return n.find(L"ignored") != std::wstring::npos; }) == 5,
+              "explicit: a ledger's values outside our run folders are ignored, said, and left as they are");
+        for (const std::wstring& forged : {climbs, elsewhere, notJson, relative})
+            RegDeleteValueW(key, forged.c_str());
+        check(snapshot() == before, "explicit: the key back to exactly what it held after a forged ledger");
+    }
+
     // No key yet: created (never replaced), and it stays after, empty.
     RegCloseKey(key);
     RegDeleteTreeW(base, L"Explicit");
@@ -1162,6 +1182,26 @@ int SIM_QVFR_TEST_MAIN() {
               "a numeric implementation_version is refused, as the loader does");
     }
 
+    // A layer name becomes a file in the run folder (an elevated launch) and an XR_ENABLE_API_LAYERS entry: only
+    // plain names (A-Z, 0-9, _ . -) are taken, the rest left alone with a note.
+    for (const char* odd : {"..\\\\..\\\\escaped", "../escaped", "C:x", "A;B", "A,B", "..", "A..B", "A B"}) {
+        const std::wstring m = layer("odd", "XR_APILAYER_ODD", "DISABLE_ODD");
+        std::string text;
+        read_file(m, text);
+        text.replace(text.find("\"name\": \"XR_APILAYER_ODD\""), 25, std::string("\"name\": \"") + odd + "\"");
+        write_file(m, text);
+        std::vector<Registration> regs = registrations;
+        regs.push_back({m, true});
+        const LayerPlan p = plan_layers(regs, Options{});
+        check(names(p) == expected && std::any_of(p.notes.begin(), p.notes.end(), [](const std::string& n) {
+                  return n.find("is not a plain name") != std::string::npos;
+              }),
+              (std::string("a layer named ") + odd + " is left out, with a note").c_str());
+    }
+    check(names(plan_layers(std::vector<Registration>{{layer("plain", "XR_APILAYER_Plain-1.2", "DISABLE_PLAIN"), true}}, Options{})) ==
+              std::vector<std::string>{"XR_APILAYER_Plain-1.2"},
+          "a plain layer name with dots and dashes is taken");
+
     // mode=quad: frame generation off; off_layers: Toolkit off.
     Options quad;
     quad.frameGenerationOff = true;
@@ -1241,7 +1281,7 @@ int SIM_QVFR_TEST_MAIN() {
     }
 
     // Windows' list (layer_order.h), on a scratch key: the Sim-QVFR layer locked first, moves within a hive,
-    // switches, the rewrite in order with a backup, and a stale list refused.
+    // a new order refused, switches written in place with a backup, and a stale list refused.
     {
         HKEY base = nullptr, machine = nullptr, user = nullptr, key = nullptr;
         RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\simqvfr-launcher-test");
@@ -1270,17 +1310,35 @@ int SIM_QVFR_TEST_MAIN() {
                   move_system_layer(sys, 2, -1) && sys[1].name == kFrameGenerationLayer,
               "system: nothing moves above the Sim-QVFR layer or across hives; others swap");
         const std::vector<SystemLayer> before = read_system_layers(machine, user, L"Implicit");
-        sys[1].on = true;
+        std::wstring error;
+        // Reordering Windows' list would rewrite other vendors' values: refused, nothing written.
+        check(!write_system_hive(machine, L"Implicit", true, sys, L"", error) && error.find(L"order") != std::wstring::npos &&
+                  read_system_layers(machine, user, L"Implicit") == before,
+              "system: a new order is refused with a reason, the key untouched");
+        sys = before;    // Windows' order, the Sim-QVFR layer shown first although the key has it second
+        sys[2].on = true;  // VectorXR
         check(system_needs_admin(before, sys) && !system_needs_admin(before, before), "system: an HKLM change needs administrator rights");
         std::vector<SystemLayer> roundTrip;
         check(parse_system_request(system_request(sys), roundTrip) && roundTrip == sys, "system: the elevated request round trips");
-        std::wstring error;
         const std::wstring backup = (folder / L"backup.reg").wstring();
         check(write_system_hive(machine, L"Implicit", true, sys, backup, error) &&
                   write_system_hive(user, L"Implicit", false, sys, L"", error),
-              "system: both hives written");
+              "system: both hives' switches written (the lock's place is no reorder)");
         const std::vector<SystemLayer> after = read_system_layers(machine, user, L"Implicit");
-        check(after == sys, "system: the registry now holds that order and those switches");
+        check(after == sys, "system: the registry now holds those switches");
+        std::vector<std::wstring> stored;
+        if (RegOpenKeyExW(machine, L"Implicit", 0, KEY_READ, &key) == ERROR_SUCCESS) {
+            wchar_t valueName[2048];
+            for (DWORD i = 0;; ++i) {
+                DWORD length = static_cast<DWORD>(std::size(valueName));
+                if (RegEnumValueW(key, i, valueName, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS)
+                    break;
+                stored.emplace_back(valueName, length);
+            }
+            RegCloseKey(key);
+            key = nullptr;
+        }
+        check(stored == std::vector<std::wstring>{toolkit, ours, vxr}, "system: the key keeps its values in their order, in place");
         std::string reg;
         check(read_file(backup, reg) && reg.size() > 2 && reg[0] == '\xff' && reg[1] == '\xfe', "system: a .reg backup of the key as it was");
         sys.pop_back();
@@ -1336,6 +1394,11 @@ int SIM_QVFR_TEST_MAIN() {
           "run folder: this layer's manifest (absolute library, no disable switch) and one per moved layer");
     check(!write_run_folder((folder / L"run2").wstring(), registrations[1].manifest, L"x", plan, error),
           "a manifest that is not the Sim-QVFR layer's is refused");
+    LayerPlan escaping = plan;
+    escaping.below[0].name = "..\\escaped";
+    check(!write_run_folder((folder / L"run3").wstring(), registrations[0].manifest, ourLibrary.wstring(), escaping, error) &&
+              !fs::exists(folder / L"escaped.json"),
+          "run folder: a layer name that leaves the folder is refused, nothing written outside it");
 
     // Environment block.
     const std::wstring block = environment_block({L"=C:=C:\\x", L"Path=C:\\Windows", L"SIM_QVFR_CAPTURE=1", L"zeta=1"},

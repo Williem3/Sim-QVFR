@@ -18,10 +18,16 @@ namespace simqvfr::launcher::ui::win {
 
 // ---- OpenXR layers -----------------------------------------------------------------------------
 
+namespace {
+constexpr wchar_t kSystemOrderFixed[] =
+    L"The order of Windows’ own layers can’t be changed safely without the launcher. Their on/off switches still apply; "
+    L"Launches from here has its own order.";
+}  // namespace
+
 // Reads both profiles again; Windows' draft is kept while it has changes (`keepDraft`).
 void refresh_layers(bool keepDraft) {
     app.layerPlan = launcher_layer_plan();
-    const bool dirty = app.layersDraft != app.layersWindows || app.layersLockMoved;
+    const bool dirty = app.layersDraft != app.layersWindows;
     app.layersWindows = read_system_layers(HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER, kImplicitLayersKey, &app.layersLockMoved);
     if (!keepDraft || !dirty || app.layersDraft.size() != app.layersWindows.size())
         app.layersDraft = app.layersWindows;
@@ -83,10 +89,12 @@ void move_layer(int i, int step) {
         edit_launcher_layers([&](LauncherLayers& p) { moved = move_launcher_layer(p, app.layerPlan, name, step); });
         if (moved)
             app.layerRow = i + step;
-    } else if (move_system_layer(app.layersDraft, static_cast<size_t>(i), step)) {
-        app.layerRow = i + step;
+        app.layerMessage.clear();
+    } else {
+        // Reordering Windows' list would mean rewriting other vendors' registry values: never ours to do.
+        app.layerMessage = kSystemOrderFixed;
+        app.layerTone = 2;
     }
-    app.layerMessage.clear();
 }
 
 void apply_layers() {
@@ -205,9 +213,6 @@ Card layers_card() {
                                            : L"Windows loads these after the machine-wide ones.");
                         }
                         any = true;
-                        const bool up = i > 0 && app.layersDraft[i - 1].machine == machine && app.layersDraft[i - 1].lock.empty() &&
-                                        l.lock.empty();
-                        const bool down = i + 1 < n && app.layersDraft[i + 1].machine == machine && l.lock.empty();
                         // Its manifest's path is its switch's tip, not its line (no developer paths in the text).
                         std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock);
                         if (l.name.empty())
@@ -215,17 +220,19 @@ Card layers_card() {
                         const bool on = l.on;
                         const std::wstring name = friendly_layer(l.name, l.manifest), manifest = l.manifest;
                         b.trailing(name, desc, kLayerControlsW, 32,
-                                   [=](const Rect& r) { layer_controls(r, name, i, on, false, up, down, manifest); });
+                                   [=](const Rect& r) { layer_controls(r, name, i, on, false, false, false, manifest); });  // no moves: Windows' order is shown, not changed
                     }
                 }
                 if (app.layersDraft.empty())
                     b.chip(3, L"No OpenXR layers are registered in Windows.");
-                if (layers_dirty()) {
+                // Only switches apply here, so the lock's place alone is no change to apply.
+                if (app.layersDraft != app.layersWindows) {
                     b.chip(1, L"Changes not applied");
                     b.actions({{kLayerRevert, L"Revert"}, {kLayerApply, L"Apply", Btn::Primary}});
                 }
-                b.note(app.layersLockMoved ? L"The Sim-QVFR layer is not first in its list: applying moves it there."
-                                           : L"The current list is backed up into the logs folder before it changes.");
+                b.note(app.layersLockMoved
+                           ? L"In Windows’ list the Sim-QVFR layer is below another layer. Launches from here always load it nearest the game."
+                           : L"Only the on/off switches change here, and the current list is backed up into the logs folder first.");
             }
             b.group(L"A frame’s path");
             b.note(layer_chain());

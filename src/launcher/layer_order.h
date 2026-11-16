@@ -2,9 +2,10 @@
 //  - With the launcher: which layers each launch loads below the Sim-QVFR layer, and in what order
 //    ([launcher] layer_order, off_layers, on_layers in sim-qvfr.ini; launch_plan.h applies them).
 //    Windows' registrations are left as they are; this profile changes ACE launched from here only.
-//  - Without the launcher: Windows' own implicit layer registrations, their order and on/off. This is
-//    what every other app loads, and ACE started from Steam. Written to the registry; HKLM needs
-//    administrator rights (the launcher runs itself elevated with --apply-system-layers).
+//  - Without the launcher: Windows' own implicit layer registrations, their order (shown, not changed) and
+//    on/off. This is what every other app loads, and ACE started from Steam. Switches are written to the
+//    registry in place; HKLM needs administrator rights (the launcher runs itself elevated with
+//    --apply-system-layers).
 // Neither can break the mod or ACE's start: the Sim-QVFR layer is always nearest the game, Two-loop and
 // Cheeky's frame generation keep VectorXR's frame generation off, and with Cheeky loaded its layer
 // stays on (all for launches from here). In Windows' list an installed Sim-QVFR layer stays first.
@@ -69,10 +70,11 @@ bool move_system_layer(std::vector<SystemLayer>& layers, size_t index, int step)
 // Whether applying `want` over `current` writes HKLM (administrator rights).
 bool system_needs_admin(const std::vector<SystemLayer>& current, const std::vector<SystemLayer>& want);
 
-// Writes one hive's entries of `want` (in order, with their switches) under root\subkey. Refuses when the
-// key's value names differ from `want`'s (something was installed or removed meanwhile). A change of order
-// deletes and re-creates every value in the new order (the loader reads them in that order); on failure the
-// key is put back as it was. `backup`: a .reg file of the key as it was, written first (empty: none).
+// Writes one hive's switches of `want` under root\subkey, each changed one in place (the key is never deleted or
+// re-created, no other value touched). Refuses, writing nothing, when the key's value names differ from `want`'s
+// (something was installed or removed meanwhile) or `want` asks for another order than read_system_layers shows
+// (reordering would mean rewriting other vendors' values). `backup`: a .reg file of the key as it was, written
+// first (empty: none).
 bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std::vector<SystemLayer>& want,
                        const std::wstring& backup, std::wstring& error);
 // A .reg file at `path` of root\subkey's values as they are (`machine`: the file names HKLM, else HKCU). False if

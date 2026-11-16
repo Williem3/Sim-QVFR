@@ -24,6 +24,14 @@ bool is_variable_name(const std::string& s) {
     return std::all_of(s.begin(), s.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; });
 }
 
+// A layer name that can become a file name in the run folder and an XR_ENABLE_API_LAYERS entry: the name comes
+// from another vendor's manifest (an HKCU registration is user-writable) and the launch may run elevated, so no
+// separators, drive colons, "..", or the list's ',' and ';'.
+bool is_safe_layer_name(const std::string& s) {
+    return !s.empty() && s.find("..") == std::string::npos &&
+           std::all_of(s.begin(), s.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '-'; });
+}
+
 // The layer object of a single-layer manifest, or null.
 const json::Value* layer_of(const json::Value& manifest) {
     const json::Value* layer = manifest.find("api_layer");
@@ -148,6 +156,10 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         }
         if (name == kLayerName)
             continue;  // this layer's installed copy: silenced below, loaded explicitly instead
+        if (!is_safe_layer_name(name)) {
+            plan.notes.push_back(where + ": layer name \"" + name + "\" is not a plain name (A-Z, 0-9, _ . -), left alone");
+            continue;
+        }
         const auto same = std::find_if(candidates.begin(), candidates.end(), [&](const Candidate& c) { return c.name == name; });
         if (same != candidates.end() && (same->systemOn || !r.enabled))
             continue;  // a second registration of a layer already handled (same disable variable)
@@ -242,11 +254,19 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
         error = L"cannot write the layer manifest in " + folder;
         return false;
     }
-    for (const MovedLayer& m : plan.below)
-        if (!write_file((fs::path(folder) / (m.name + ".json")).wstring(), json::dump(m.manifest))) {
+    // Each copy lands in the run folder itself, whatever the plan holds (plan_layers already refuses odd names).
+    const fs::path run = (fs::path(folder) / L"x").lexically_normal().parent_path();  // no trailing separator
+    for (const MovedLayer& m : plan.below) {
+        const fs::path file = (run / widen(m.name + ".json")).lexically_normal();
+        if (!is_safe_layer_name(m.name) || _wcsicmp(file.parent_path().c_str(), run.c_str()) != 0) {
+            error = L"the layer name " + widen(m.name) + L" is not a plain file name; nothing of it was written";
+            return false;
+        }
+        if (!write_file(file.wstring(), json::dump(m.manifest))) {
             error = L"cannot write " + widen(m.name) + L".json in " + folder;
             return false;
         }
+    }
     return true;
 }
 
