@@ -10,6 +10,7 @@
 
 #include "log.h"
 #include "quad/compositor.h"
+#include "quad/focus_offset.h"
 #include "quad/focus_shape.h"
 #include "quad/focus_turn.h"
 #include "xr.h"
@@ -285,6 +286,52 @@ XrResult test_hidden_mask(uint32_t viewIndex, XrVisibilityMaskKHR* mask) {
          viewIndex, l, r, d, u, 2 * s);
     return XR_SUCCESS;
 }
+
+// views4_test_hidden_mask=2: what a trapezoid focus shape wastes, as a hidden area: the fixed focus box (gaze off, no
+// convergence: on the eye's forward axis, moved by the fixed offset, kept inside the eye) with its two top corners cut,
+// each a triangle from the top corner views4TestMaskCut percent of the box's width in down to the bottom corner on its
+// side. Together `cut` percent of the box. Drawn by the game with two views, the same angles in the eye (behind the box)
+// and in its focus view.
+XrResult test_focus_corner_mask(uint32_t viewIndex, XrVisibilityMaskKHR* mask) {
+    constexpr uint32_t kCount = 6;
+    mask->vertexCountOutput = kCount;
+    mask->indexCountOutput = kCount;
+    if (mask->vertexCapacityInput == 0 && mask->indexCapacityInput == 0)
+        return XR_SUCCESS;  // the size query
+    if (mask->vertexCapacityInput < kCount || mask->indexCapacityInput < kCount || !mask->vertices || !mask->indices)
+        return XR_ERROR_SIZE_INSUFFICIENT;
+    float tan[4] = {-1, 1, 1, -1};  // left, right, up, down (fov_tangents' order)
+    {
+        std::lock_guard guard(quad.mutex);
+        if (viewIndex < 2) {
+            const XrFovf& fov = quad.v4Fov[viewIndex];
+            if (fov.angleRight > fov.angleLeft && fov.angleUp > fov.angleDown)
+                fov_tangents(fov, tan);
+        }
+    }
+    double hw, hh;
+    focus_extents(tan, experiment.box_x(), experiment.box_y(), hw, hh);
+    const auto keep_in = [](double t, double lo, double hi, double half) {
+        return lo + half >= hi - half ? (lo + hi) / 2 : std::clamp(t, lo + half, hi - half);
+    };
+    const double cx = keep_in(0.0, tan[0], tan[1], hw);
+    const double cy = keep_in(experiment.fixedOffsetY ? offset_tan_y(0.0, experiment.fixedOffsetY) : 0.0, tan[3], tan[2], hh);
+    const float l = static_cast<float>(cx - hw), r = static_cast<float>(cx + hw);
+    const float d = static_cast<float>(cy - hh), u = static_cast<float>(cy + hh);
+    const float a = static_cast<float>(2 * hw * experiment.views4TestMaskCut / 100.0);
+    // Counter-clockwise (x right, y up).
+    const XrVector2f v[kCount] = {{l, d}, {l + a, u}, {l, u},    // top left
+                                  {r, d}, {r, u}, {r - a, u}};   // top right
+    std::memcpy(mask->vertices, v, sizeof(v));
+    for (uint32_t i = 0; i < kCount; ++i)
+        mask->indices[i] = i;
+    logf("views4: hidden-area mesh of view %u replaced by the focus box's cut corners (views4_test_hidden_mask=2): box "
+         "tangents %.3f/%.3f/%.3f/%.3f in the eye's %.3f/%.3f/%.3f/%.3f, top corners %d%% of its width in: %d%% of the box "
+         "hidden",
+         viewIndex, l, r, d, u, tan[0], tan[1], tan[3], tan[2], experiment.views4TestMaskCut,
+         experiment.views4TestMaskCut);
+    return XR_SUCCESS;
+}
 }  // namespace
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask) {
@@ -292,7 +339,8 @@ XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigura
         mask->vertexCapacityInput > 0)
         game->visibility_mask_taken(viewIndex);  // the mesh itself, not the size query
     if (experiment.views4TestHiddenMask && maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR && mask)
-        return test_hidden_mask(viewIndex, mask);
+        return experiment.views4TestHiddenMask == 2 ? test_focus_corner_mask(viewIndex, mask)
+                                                    : test_hidden_mask(viewIndex, mask);
     if (experiment.views4TestVisibleMask && maskType == XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR && mask)
         return test_visible_mask(mask);
     if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask) {

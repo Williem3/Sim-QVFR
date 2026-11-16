@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "../../quad/focus_mask.h"
 #include "car_motion.h"
 #include "focus_math.h"
 
@@ -101,6 +102,15 @@ void mvr_replay_lists_plain(bool on);
 void mvr_mask_stale(const std::atomic<bool>* stale);
 // The lens mask's draws dropped since the last call (four_passes' log).
 int mvr_mask_dropped();
+// lmu_mask_ab (a measurement): the lens mask's draws and the focus mask dropped while `drop` (the A/B's side without
+// them). Between passes.
+void mvr_mask_ab_drop(bool drop);
+// The focus mask (quad/focus_mask.h; [quad] focus_mask, live): in eye passes 0-1 that draw their focus view, right before
+// the first draw that tests the scene's depth (after the game cleared it), the focus view's texels outside `area`'s
+// shape by more than `marginTexels` get the nearest depth (the far one's opposite by the bound depth test: LMU's reversed
+// GREATER, or LESS), so the scene's draws skip them. Into the focus viewport alone, with its own state from a command
+// list that restores the game's (NVIDIA's single-pass stereo off around it). The eyes are never masked. Between frames.
+void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
 // R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
 // right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
 // elsewhere with mvr_redraw_panel. Null: none.
@@ -258,6 +268,10 @@ struct MvrPassStats {
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
     // draws replayed for the menus (mvr_redraw_panel).
     uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
+    uint64_t maskAbDropped = 0;  // dropped on lmu_mask_ab's side without the mask
+    // The focus mask (mvr_focus_mask): eye passes it was drawn in; its command list recorded (again); passes it was left
+    // out of for the A/B, for a depth test it doesn't know, or for a shape with nothing to mask at that size.
+    uint64_t focusMaskDraws = 0, focusMaskRecords = 0, focusMaskAbSkipped = 0, focusMaskOtherTest = 0, focusMaskEmpty = 0;
     // Instancing: the game's draws made with twice their instances; those with a per-instance layout's twin bound around
     // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double); draws into the eye
     // alone for their input layout (per-instance data without its twin, or a layout the probe didn't see made).

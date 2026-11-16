@@ -105,7 +105,10 @@ struct Experiment {
     std::atomic<int> focusQuadDistance = 100;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
-    bool views4TestHiddenMask = false;     // views4 test: a hidden-area mesh of our own (corners, centre; diagnostic)
+    // views4 test: a hidden-area mesh of our own (diagnostic): 1 the FOV's corners and a triangle straight ahead; 2 the
+    // fixed focus box's top corners cut views4TestMaskCut percent of its width in (a trapezoid's waste, measured).
+    int views4TestHiddenMask = 0;
+    int views4TestMaskCut = 30;
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
     int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (games/ace/replay_probe.h)
@@ -244,6 +247,8 @@ struct LiveSettings {
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
+    bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
+    int focusMaskMargin = 16;     // [experiment] focus_mask_margin, focus view texels
 };
 
 // views4: the outer and focus views' sizes, linear scales of the native eye (views4_layout.h), from

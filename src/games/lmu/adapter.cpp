@@ -11,6 +11,7 @@
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
 #include "../../engine/nr_views.h"
+#include "../../quad/qvfr_settings.h"
 #include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
@@ -54,6 +55,14 @@ public:
         run.qvfr = true;
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
+        if (s.ini) {  // the focus mask at launch (live from then on: qvfr_set_focus_mask)
+            const simqvfr::FocusShape shape = simqvfr::read_focus_shape(s.ini);
+            float inset[2 * simqvfr::kFocusCorners];
+            simqvfr::focus_shape_insets(simqvfr::focus_shape_bits(shape), inset);
+            const double radius = shape.corners ? 0.0 : simqvfr::ini_int(s.ini, simqvfr::kCornerRadiusPercent) / 100.0;
+            qvfr_set_focus_mask_now(simqvfr::ini_flag(s.ini, simqvfr::kFocusMask), inset, radius,
+                                    simqvfr::ini_int(s.ini, simqvfr::kFocusMaskMargin));
+        }
         // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (four_passes.h).
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
@@ -103,6 +112,10 @@ public:
                 run.backendAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_backend_ab", 0,
                                                                                       s.ini)));
                 run.mvrTiming = run.mvrTiming || run.backendAb > 0;
+                // lmu_mask_ab=N: N frames with the lens mask's draw, N without, in turn (four_passes.h).
+                run.maskAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mask_ab", 0,
+                                                                                    s.ini)));
+                run.mvrTiming = run.mvrTiming || run.maskAb > 0;
                 // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
                 run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
                                                                                   s.ini)));
@@ -194,6 +207,16 @@ public:
     void qvfr_set_live(double focus, double focusY, double, bool) override {
         if (qvfr_)
             four_passes_set_box(focus, focusY);
+    }
+    void qvfr_set_focus_mask(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) override {
+        if (qvfr_)
+            qvfr_set_focus_mask_now(on, inset, cornerRadius, marginTexels);
+    }
+    static void qvfr_set_focus_mask_now(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) {
+        simqvfr::FocusArea area;
+        std::copy(std::begin(inset), std::end(inset), area.inset);
+        area.radius = area.corners() ? 0.0f : static_cast<float>(cornerRadius);
+        four_passes_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);
     }
     // Live resolution: each pass at its own render scale inside the launch-size targets (four_passes.h). On for QVFR
     // runs; GameFeatures::liveResolution stays off until it passes its card.

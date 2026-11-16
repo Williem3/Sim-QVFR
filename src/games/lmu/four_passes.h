@@ -5,6 +5,7 @@
 // periphery's size inside their targets) is the eye passes' viewports and scissors cut at the d3d11 level (mvr_size_cut).
 #pragma once
 
+#include "../../quad/focus_mask.h"
 #include "../adapter.h"
 
 struct ID3D11Texture2D;
@@ -73,6 +74,9 @@ struct FourPassesRun {
     // an NVIDIA RTX 20+ card, where both twins are attached): N frames with NVIDIA's single-pass stereo, then N with
     // instancing, in turn; each side's CPU per pass logged apart, its GPU per pass by mvr_pass's per-mode lines.
     int backendAb = 0;
+    // What the lens mask saves ([experiment] lmu_mask_ab=N, a measurement; with views4_test_hidden_mask=2 the mask is the
+    // focus box's cut corners): N frames with the game's mask draw, N without, in turn; GPU per pass by mvr_pass's modes.
+    int maskAb = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
@@ -95,6 +99,8 @@ void four_passes_device(ID3D11Device* device);
 void four_passes_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
 // The box's share of each eye's tangent width and height (fractionY <= 0: as fractionX), from the next frame. Any thread.
 void four_passes_set_box(double fractionX, double fractionY);
+// The focus mask (mvr_pass.h mvr_focus_mask), from the next frame. Any thread.
+void four_passes_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
 // The latest composed frame's record (the eyes' and focus views' tangents, unturned); false before the first.
 bool four_passes_record(simqvfr::Views4Frame& frame);
 // A frame with eye passes but no four views (the focus views didn't come): the part of each eye's image its pass

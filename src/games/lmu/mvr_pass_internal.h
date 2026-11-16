@@ -23,6 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../../quad/focus_mask.h"
 #include "car_motion.h"
 #include "focus_post.h"
 #include "mvr_pass.h"
@@ -296,6 +297,7 @@ struct State {
     int maskDrawsLogged = 0;  // the first lens mask draws logged with their state
     const std::atomic<bool>* maskStale = nullptr;  // mvr_mask_stale
     int maskDroppedSince = 0;                       // mvr_mask_dropped
+    bool maskAbDrop = false;                        // mvr_mask_ab_drop
     PanelFn panelFn = nullptr;                      // mvr_panel_draws
     // The game's latest CopySubresourceRegions (mvr_copy_source): dst raw, compared only; src held (hold: the caller
     // queries it after the game may have released it; given back two frame ends later); the frame count when seen.
@@ -345,6 +347,33 @@ struct State {
     unsigned long long framesSinceInstall = 0;
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
+    // The focus mask (mvr_focus_mask; quad/focus_mask.h): its depth drawn into the focus viewport before the scene.
+    struct FocusMask {
+        bool on = false;
+        simqvfr::FocusArea area{};  // the shape asked for (its aspect set from the focus viewport's at the draw)
+        unsigned margin = 16;       // texels
+        // The mesh as last made, for this area, margin and focus viewport size; empty: nothing to mask there.
+        simqvfr::FocusArea meshArea{};
+        unsigned meshMargin = 0, meshW = 0, meshH = 0;
+        bool meshMade = false;
+        UINT vertices = 0;
+        uint64_t epoch = 0;  // the mesh's (a new one records the list again)
+        ComPtr<ID3D11Buffer> vb;
+        ComPtr<ID3D11VertexShader> vs;
+        ComPtr<ID3D11InputLayout> layout;
+        ComPtr<ID3D11DepthStencilState> depth;
+        ComPtr<ID3D11RasterizerState> raster;
+        ComPtr<ID3D11DeviceContext> deferred;
+        // The draw recorded once (its state restored as it runs) for these targets and viewport.
+        ComPtr<ID3D11CommandList> list;
+        ComPtr<ID3D11DepthStencilView> listDsv;
+        D3D11_VIEWPORT listVp{};
+        uint64_t listEpoch = 0;
+        bool failed = false;                   // its shader or states couldn't be made: off for the session
+        ID3D11Resource* sceneDepth[2] = {};    // each eye pass's depth target as it began (raw, compared only)
+        bool done[2] = {};                     // drawn (or decided against) in this eye pass
+        bool otherTestLogged = false;
+    } mask;
     MvrPassStats stats;
     // No destructor gives the held game objects back: g lives until the process ends, and calling into d3d11 from
     // DLL_PROCESS_DETACH risks its locks (held by threads ExitProcess already ended); the references go with the process.
