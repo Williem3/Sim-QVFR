@@ -84,12 +84,44 @@ std::string narrow(const std::wstring& wide) {
     return out;
 }
 
-bool read_file(const std::wstring& path, std::string& out) {
+bool read_file(const std::wstring& path, std::string& out, unsigned long long maxBytes) {
     std::ifstream in(fs::path(path), std::ios::binary);
     if (!in)
         return false;
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (!maxBytes) {
+        out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        return true;
+    }
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size < 0 || static_cast<unsigned long long>(size) > maxBytes)
+        return false;
+    in.seekg(0, std::ios::beg);
+    // One byte past its size: a file still growing (maybe past the cap) is refused rather than read cut.
+    out.assign(static_cast<size_t>(size) + 1, '\0');
+    in.read(out.data(), static_cast<std::streamsize>(out.size()));
+    out.resize(static_cast<size_t>(in.gcount()));
+    if (out.size() > static_cast<size_t>(size)) {
+        out.clear();
+        return false;
+    }
     return true;
+}
+
+std::wstring module_path(void* module) {
+    std::wstring path(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(static_cast<HMODULE>(module), path.data(), static_cast<DWORD>(path.size()));
+        if (n == 0)
+            return {};
+        if (n < path.size()) {  // cut paths return the buffer's size
+            path.resize(n);
+            return path;
+        }
+        if (path.size() >= 32768)  // the longest path Windows has
+            return {};
+        path.resize(path.size() * 2);
+    }
 }
 
 bool write_file(const std::wstring& path, const std::string& data) {
@@ -143,8 +175,11 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         std::string text;
         json::Value manifest;
         if (!read_file(r.manifest, text) || !json::parse(text, manifest) || !layer_of(manifest)) {
+            std::error_code ec;
+            const bool tooBig = fs::file_size(fs::path(r.manifest), ec) > kMaxReadBytes && !ec;
             if (r.enabled)
-                plan.notes.push_back(where + ": unreadable manifest, left alone");
+                plan.notes.push_back(where + (tooBig ? ": manifest larger than 1 MB, not read, left alone"
+                                                     : ": unreadable manifest, left alone"));
             continue;
         }
         const json::Value& layer = *layer_of(manifest);

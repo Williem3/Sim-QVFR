@@ -153,14 +153,13 @@ void install_done(InstallResult* r) {
         app.installError = result->error;
         return;
     }
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, path, MAX_PATH);  // the new launcher now: the old one moved into the backup
+    const std::wstring path = module_path();  // the new launcher now: the old one moved into the backup
     Sheet s;
     s.title = L"Sim-QVFR " + app.release.tag + L" is installed";
     s.text = std::to_wstring(result->replaced + result->added) + L" files installed, " + std::to_wstring(result->kept) +
              L" of yours kept. The version you had is in " + result->backup + L".";
     s.buttons = {L"Restart Now"};
-    s.done = [exe = std::wstring(path)](int, const std::wstring&) { restart_launcher(exe); };
+    s.done = [exe = path](int, const std::wstring&) { restart_launcher(exe); };
     open_sheet(std::move(s));
 }
 

@@ -5,6 +5,8 @@
 #include <iterator>
 #include <sstream>
 
+#include <bcrypt.h>
+
 namespace simqvfr::launcher {
 namespace {
 
@@ -322,9 +324,39 @@ bool parse_system_request(const std::string& text, std::vector<SystemLayer>& wan
         if (line.size() < 5 || (line[0] != 'M' && line[0] != 'U') || line[1] != '\t' || (line[2] != '0' && line[2] != '1') ||
             line[3] != '\t')
             return false;
-        want.push_back({widen(line.substr(4)), line[0] == 'M', line[2] == '1', {}, {}});
+        // A registry value name: no control characters, at most a long path's length.
+        const std::string manifest = line.substr(4);
+        if (manifest.size() > 32767 ||
+            std::any_of(manifest.begin(), manifest.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7f; }))
+            return false;
+        want.push_back({widen(manifest), line[0] == 'M', line[2] == '1', {}, {}});
+        if (want.back().manifest.empty() || narrow(want.back().manifest) != manifest)  // not valid UTF-8
+            return false;
     }
     return !want.empty();
+}
+
+std::string system_request_hash(const std::string& request) {
+    std::string hex;
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    UCHAR digest[32];
+    if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0)) &&
+        BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0)) &&
+        BCRYPT_SUCCESS(BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(request.data())),
+                                      static_cast<ULONG>(request.size()), 0)) &&
+        BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0))) {
+        static const char digits[] = "0123456789abcdef";
+        for (const UCHAR b : digest) {
+            hex += digits[b >> 4];
+            hex += digits[b & 15];
+        }
+    }
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (alg)
+        BCryptCloseAlgorithmProvider(alg, 0);
+    return hex;
 }
 
 }  // namespace simqvfr::launcher

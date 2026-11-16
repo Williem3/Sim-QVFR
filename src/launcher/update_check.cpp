@@ -1,6 +1,9 @@
 #include "update_check.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdlib>
+#include <iterator>
 #include <cwctype>
 #include <vector>
 
@@ -66,6 +69,18 @@ const json::Value* package_zip(const json::Value& release) {
 }
 
 }  // namespace
+
+bool trusted_release_page(const std::wstring& url) {
+    const size_t prefix = std::size(kReleasePagePrefix) - 1;
+    if (url.size() <= prefix || url.size() > 512 || url.compare(0, prefix, kReleasePagePrefix) != 0 ||
+        url.find(L"..") != std::wstring::npos)
+        return false;
+    // The path after the prefix: tag pages ("tag/v1.1.1-beta") and "latest"; no '%', '?', '#', '\\' or quotes.
+    return std::all_of(url.begin() + static_cast<std::ptrdiff_t>(prefix), url.end(), [](wchar_t c) {
+        return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-' ||
+               c == L'_' || c == L'.' || c == L'/' || c == L'+';
+    });
+}
 
 bool newest_release(const std::string& text, Release& release) {
     json::Value root;

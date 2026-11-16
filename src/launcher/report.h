@@ -68,8 +68,21 @@ std::string redact_dump(std::string dump, const std::vector<std::string>& ids);
 // (ACC's "loaded local account:" line) and Steam name (Steam's "user stats, user:" warning), wherever they
 // appear, and every SteamID64.
 std::string redact_game_log(std::string log);
-// Writes `files` into a new zip at `zip` (stored entries, CRC-32). Empty on success, else why.
-std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& files);
+// Who this PC's files name: %USERPROFILE%, %USERNAME%, %COMPUTERNAME% (Windows' own calls if a variable is unset).
+struct Identity {
+    std::wstring profile, user, computer;
+};
+Identity current_identity();
+// `data` without `who`, in any case, as ASCII/UTF-8 and as UTF-16: the profile folder's name in its paths (with \, /
+// or JSON's \\), the user name in paths (\Users\<name>\) and USERNAME=, the computer name after COMPUTERNAME=,
+// USERDOMAIN= and \\; a name of 4 characters or more also wherever it stands as a word. Text gets <user> and
+// <computer>; `keepSize` (a minidump: its offsets must hold, as in redact_dump) gets '0's of the same length.
+std::string redact_identity(std::string data, const Identity& who, bool keepSize);
+// Writes `files` into a new zip at `zip` (stored entries, CRC-32), each through redact_identity with `who` (a .dmp
+// keeping its size): launch.txt, the logs and the ini name the user's folders, and the zip goes into a public issue.
+// Empty on success, else why.
+std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& files,
+                       const Identity& who = current_identity());
 uint32_t crc32(const void* data, size_t size, uint32_t crc = 0);
 
 // The machine, for the issue (system_info() asks Windows; the rest only format, for the test).

@@ -1320,6 +1320,22 @@ int SIM_QVFR_TEST_MAIN() {
         check(system_needs_admin(before, sys) && !system_needs_admin(before, before), "system: an HKLM change needs administrator rights");
         std::vector<SystemLayer> roundTrip;
         check(parse_system_request(system_request(sys), roundTrip) && roundTrip == sys, "system: the elevated request round trips");
+        {
+            // The elevated copy acts only on the bytes the window hashed; a strict parse besides.
+            const std::string request = system_request(sys);
+            std::string swapped = request;
+            swapped[2] = swapped[2] == '1' ? '0' : '1';
+            const std::string hash = system_request_hash(request);
+            check(hash.size() == 64 && hash == system_request_hash(request) && hash != system_request_hash(swapped) &&
+                      system_request_hash("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                  "system: the request's SHA-256 (a changed request has another)");
+            std::vector<SystemLayer> parsed;
+            check(!parse_system_request("M\t1\tC:\\a.json\x01\n", parsed) && !parse_system_request("M\t1\tC:\\a\x1b.json\n", parsed) &&
+                      !parse_system_request("M\t1\t\xff\xfe.json\n", parsed) && !parse_system_request("X\t1\tC:\\a.json\n", parsed) &&
+                      !parse_system_request("", parsed) && parse_system_request("U\t0\tC:\\a.json\r\n", parsed) &&
+                      parsed.size() == 1 && !parsed[0].machine && !parsed[0].on,
+                  "system: a request with control characters, bad UTF-8 or a bad line is refused");
+        }
         const std::wstring backup = (folder / L"backup.reg").wstring();
         check(write_system_hive(machine, L"Implicit", true, sys, backup, error) &&
                   write_system_hive(user, L"Implicit", false, sys, L"", error),
@@ -2009,6 +2025,72 @@ int SIM_QVFR_TEST_MAIN() {
                   bytes.find("recommended_width=2584") != std::string::npos,
               "report: a stored zip of both entries, its end record counting them");
         check(!write_zip((folder / L"missing" / L"x.zip").wstring(), zipEntries).empty(), "report: an unwritable zip says why");
+
+        // The user's and computer's names out of every zipped file (launch.txt, logs, the ini, hang dumps).
+        {
+            const Identity who{L"C:\\Users\\al", L"al", L"GAMING-PC"};
+            const auto utf16 = [](const std::string& s) {
+                std::string out;
+                for (char ch : s)
+                    out += std::string(1, ch) + '\0';
+                return out;
+            };
+            const std::string idText =
+                "game: C:\\Users\\al\\Games\\x.exe; c:/users/AL/y; {\"p\": \"C:\\\\Users\\\\al\\\\z\"}; D:\\Users\\al\\w; "
+                "USERNAME=al COMPUTERNAME=GAMING-PC on gaming-pc; \\\\Gaming-PC\\share; also al stays; C:\\Users\\alice\\ "
+                "kept; GAMING-PCS kept";
+            const std::string idWant =
+                "game: C:\\Users\\<user>\\Games\\x.exe; c:/users/<user>/y; {\"p\": \"C:\\\\Users\\\\<user>\\\\z\"}; "
+                "D:\\Users\\<user>\\w; USERNAME=<user> COMPUTERNAME=<computer> on <computer>; \\\\<computer>\\share; also al "
+                "stays; C:\\Users\\alice\\ kept; GAMING-PCS kept";
+            check(redact_identity(idText, who, false) == idWant, "report: user and computer names out of text, in any case");
+            check(redact_identity(utf16("log C:\\USERS\\al\\x and GAMING-PC"), who, false) ==
+                      utf16("log C:\\USERS\\<user>\\x and <computer>"),
+                  "report: and out of UTF-16 text");
+            const Identity longName{L"C:\\Users\\alice_000", L"alice", L"PC"};
+            check(redact_identity("C:\\Users\\alice_000\\x by alice, malice kept, on PC", longName, false) ==
+                      "C:\\Users\\<user>\\x by <user>, malice kept, on PC",
+                  "report: the profile folder's own name; a longer user name anywhere as a word, a short computer name kept");
+            const std::string dump = std::string("MDMP\0\0", 6) + "C:\\Users\\al\\d " + utf16("c:\\users\\AL\\e") +
+                                     " COMPUTERNAME=GAMING-PC " + utf16("USERNAME=al");
+            const std::string redacted = redact_identity(dump, who, true);
+            check(redacted.size() == dump.size() && redacted.starts_with(std::string("MDMP\0\0", 6)) &&
+                      redacted.find("C:\\Users\\00\\d ") != std::string::npos &&
+                      redacted.find(utf16("c:\\users\\00\\e")) != std::string::npos &&
+                      redacted.find("COMPUTERNAME=000000000 ") != std::string::npos &&
+                      redacted.find(utf16("USERNAME=00")) != std::string::npos,
+                  "report: a dump's names zeroed, ASCII and UTF-16, its size kept");
+            check(redact_identity("nothing here", who, false) == "nothing here" &&
+                      redact_identity("C:\\Users\\al\\x", Identity{}, false) == "C:\\Users\\al\\x",
+                  "report: text without the names, or no names known, unchanged");
+            const std::wstring idPlan = (folder / L"report" / L"plan.txt").wstring();
+            write_file(idPlan, "layer log: C:\\Users\\al\\Sim-QVFR\\logs\\session.log on GAMING-PC");
+            const std::wstring redactedZip = (folder / L"report" / L"redacted.zip").wstring();
+            const std::vector<ReportFile> idEntries = {
+                {L"launch.txt", idPlan}, {L"hang-1.dmp", L"", std::string("MDMP") + utf16("C:\\Users\\al\\x"), 0}};
+            std::string idZipped;
+            const bool wrote = write_zip(redactedZip, idEntries, who).empty() && read_file(redactedZip, idZipped);
+            check(wrote && idZipped.find("C:\\Users\\<user>\\Sim-QVFR\\logs\\session.log on <computer>") != std::string::npos &&
+                      idZipped.find(utf16("C:\\Users\\00\\x")) != std::string::npos && idZipped.find("GAMING-PC") == std::string::npos &&
+                      idZipped.find("Users\\al\\") == std::string::npos && idZipped.find(utf16("Users\\al")) == std::string::npos,
+                  "report: the zip's files and dumps go in without the names");
+        }
+
+        // The launcher's text reads are capped (a registration can name any file); its DLL checks are not.
+        {
+            const std::wstring big = (folder / L"report" / L"big.json").wstring();
+            write_file(big, std::string(static_cast<size_t>(kMaxReadBytes) + 1, ' '));
+            const std::wstring fits = (folder / L"report" / L"fits.json").wstring();
+            write_file(fits, std::string(static_cast<size_t>(kMaxReadBytes), ' '));
+            std::string got;
+            const bool refused = !read_file(big, got) && got.empty();
+            const bool uncapped = read_file(big, got, 0) && got.size() == kMaxReadBytes + 1;
+            check(refused && uncapped && read_file(fits, got) && got.size() == kMaxReadBytes,
+                  "read_file: a file over 1 MB refused, unless uncapped; one of 1 MB read");
+            const std::wstring self = module_path();
+            check(!self.empty() && fs::exists(self) && _wcsicmp(fs::path(self).extension().c_str(), L".exe") == 0,
+                  "module_path: this exe's full path");
+        }
 
         check(windows_name(26100, L"24H2", 2314) == L"Windows 11 24H2 (build 26100.2314)" &&
                   windows_name(19045, L"22H2", 0) == L"Windows 10 22H2 (build 19045)",
@@ -2790,6 +2872,17 @@ int SIM_QVFR_TEST_MAIN() {
                   !trusted_download("https://github.com/Williem3/Sim-QVFR/releases/download/../../evil.zip") &&
                   !trusted_download("https://github.com/Williem3/Sim-QVFR/releases/download/"),
               "install: only the repository's release downloads, over HTTPS");
+        check(trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/tag/v1.1.1-beta") &&
+                  trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/latest") &&
+                  !trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/") &&
+                  !trusted_release_page(L"https://github.com/someone/else/releases/tag/v1") &&
+                  !trusted_release_page(L"http://github.com/Williem3/Sim-QVFR/releases/tag/v1") &&
+                  !trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/../../evil") &&
+                  !trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/tag/v1\r\nx") &&
+                  !trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/tag/v1 \"x\"") &&
+                  !trusted_release_page(L"https://github.com/Williem3/Sim-QVFR/releases/tag/v1%00") &&
+                  !trusted_release_page(L"file:///C:/Windows/System32/calc.exe"),
+              "update: only the repository's release pages are opened");
 
         const std::string withAsset = R"([{"tag_name": "v2026.11.4.1-alpha", "html_url": "https://github.com/x", "draft": false,
             "assets": [{"name": "notes.txt", "size": 5, "digest": "sha256:00"},

@@ -9,6 +9,12 @@ namespace simqvfr::launcher {
 
 inline constexpr wchar_t kReleasesApiHost[] = L"api.github.com";
 inline constexpr wchar_t kReleasesApiPath[] = L"/repos/Williem3/Sim-QVFR/releases?per_page=10";
+// The same repository's release pages: the only html_url the About pane opens.
+inline constexpr wchar_t kReleasePagePrefix[] = L"https://github.com/Williem3/Sim-QVFR/releases/";
+
+// `url` (a release's html_url, from the network) is one of this repository's release pages: kReleasePagePrefix, then
+// a path of plain URL characters (no control characters, spaces, "..", or anything a shell would read as more).
+bool trusted_release_page(const std::wstring& url);
 
 struct Release {
     std::wstring tag, url;  // "v2026.11.3.3-alpha", its page

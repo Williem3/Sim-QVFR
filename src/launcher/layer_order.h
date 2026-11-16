@@ -83,6 +83,11 @@ bool backup_key(HKEY root, const wchar_t* subkey, bool machine, const std::wstri
 
 // The elevated helper's request: one "M|U <tab> 1|0 <tab> manifest" line per layer, UTF-8.
 std::string system_request(const std::vector<SystemLayer>& want);
+// Strict: a malformed line, a manifest with control characters or not UTF-8, or no line at all is refused.
 bool parse_system_request(const std::string& text, std::vector<SystemLayer>& want);
+// The request's SHA-256 (lowercase hex; empty if it can't be computed). The window passes it on the elevated copy's
+// command line: the request file sits in the user-writable logs folder, so the elevated copy acts only on the bytes
+// the window wrote, not on a file swapped in after the UAC prompt.
+std::string system_request_hash(const std::string& request);
 
 }  // namespace simqvfr::launcher

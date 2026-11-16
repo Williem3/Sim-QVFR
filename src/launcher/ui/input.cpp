@@ -10,6 +10,7 @@
 #include "../launcher.h"
 #include "../game_tabs.h"
 #include "../settings.h"
+#include "../update_check.h"
 #include "../../engine/nvapi_gpus.h"
 #include "../../games/game.h"
 #include "window_state.h"
@@ -292,7 +293,8 @@ void activate(Ctl id, int option) {
         return;
     case kUpdateNow: start_update_check(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kUpdateDownload:
-        if (!app.release.url.empty() && app.release.url.rfind(L"https://github.com/", 0) == 0)
+        // The page GitHub's API named: opened only if it is one of this repository's release pages.
+        if (trusted_release_page(app.release.url))
             ShellExecuteW(app.hwnd, L"open", app.release.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return;
     case kUpdateBadge: open_panel(PanelKind::About); return;
