@@ -105,7 +105,7 @@ void mvr_frame_end(unsigned long long frame) {
                           per(g.time.hooks), per(g.time.lookups),
                           static_cast<unsigned long long>(g.stats.lookups - g.loggedLookups),
                           static_cast<unsigned long long>(g.stats.lookupMisses - g.loggedMisses), per(g.time.switches),
-                          static_cast<double>(g.time.calls) / timed, timed, frames, kTimedEvery);
+                          static_cast<double>(g.time.calls) / frames, timed, frames, kTimedEvery);  // (counted every frame)
             simqvfr::logf("lmu mvr: the pass tracker's and the frame shape's looks at the draws %.3f ms per frame (not in "
                           "the hooks' figure above; the draws passed on not included); the post-processing's start (DLSS, "
                           "the motions' upload, the focus post's window) %.3f, taken out of both figures; pixel shader "
