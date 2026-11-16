@@ -1,20 +1,22 @@
 Sim-QVFR
 ========
 
-Quad views with eye-tracked foveated rendering in VR for Assetto Corsa EVO, Assetto Corsa
-Competizione, X-Plane 12 and Le Mans Ultimate: the game renders a lower-resolution full view plus a sharp focus view
-where you look, and Sim-QVFR blends them into the headset image. Nothing is installed: the launcher
-starts the game with Sim-QVFR for that launch only.
+Quad views with eye-tracked foveated rendering in VR for Le Mans Ultimate, Assetto Corsa EVO, Assetto
+Corsa Competizione, X-Plane 12, American Truck Simulator and Euro Truck Simulator 2: the game renders a
+lower-resolution full view plus a sharp focus view where you look, and Sim-QVFR blends them into the
+headset image. Nothing is installed: the launcher starts the game with Sim-QVFR for that launch only.
 
-OFFLINE ONLY. Sim-QVFR changes how the game renders by patching it in memory. Do not use it
-in online sessions. Le Mans Ultimate's opt-in Run with anti-cheat is at your own risk (see Le Mans
-Ultimate below).
+ONLINE PLAY IS AT YOUR OWN RISK, in every game. Sim-QVFR doesn't guarantee that a game with online
+multiplayer won't kick or ban you for running it (league racing, convoys, online flying). Le Mans
+Ultimate starts offline by default; its opt-in Run with anti-cheat may get your account banned (see
+Le Mans Ultimate below, and docs/guides/online-play.md on the project page).
 
 Requirements
 ------------
-- One of the games: Assetto Corsa EVO (Steam), Assetto Corsa Competizione (Steam, its VR through
-  OpenComposite: see below), X-Plane 12 (12.4.3-r2, from Steam or elsewhere) or Le Mans Ultimate
-  (1.4.2.0, Steam).
+- One of the games: Le Mans Ultimate (1.4.2.0, Steam), Assetto Corsa EVO (Steam, its current build
+  when this release came out), Assetto Corsa Competizione (1.10.4, Steam, its VR through
+  OpenComposite: see below), X-Plane 12 (12.4.3-r2, from Steam or elsewhere), American Truck
+  Simulator (1.62.2.2, Steam) or Euro Truck Simulator 2 (1.62.3.3, Steam).
 - A PC VR headset with an OpenXR runtime. Steam running for the Steam games.
 - Eye tracking (XR_EXT_eye_gaze_interaction) for the focus area to follow your eyes; without it
   the focus area stays in the centre.
@@ -71,11 +73,12 @@ Picture
   area, 50-400%), each a percent of the headset's recommended resolution and set independently.
   Lowering them applies live; raising them past the size the game started with waits for the next
   launch, and so does any change with Foveated DLSS on.
-  Sharpening (every game, 0% = off, the default): AMD FidelityFX Contrast Adaptive Sharpening as
-  Sim-QVFR puts the views together, the same strength in the focus area and the periphery. It sharpens
-  soft detail most and edges already sharp least, and shows most on a soft image (a low focus density,
-  a lower-resolution headset); the periphery shimmers a little more with it. X-Plane runs an FSR
-  sharpening pass of its own, so start low there. It applies live, also from the headset menu.
+  Sharpening (every game, 0% = off, the default): AMD FidelityFX Contrast Adaptive Sharpening of the
+  focus area as Sim-QVFR puts the views together, fading out across the feather; the periphery isn't
+  sharpened. 1% to 100% is CAS's own sharpness range, so a percentage saved before 1.2.0-beta now
+  sharpens harder: start low. It sharpens soft detail most and edges already sharp least; too much
+  makes fine detail shimmer. X-Plane runs an FSR sharpening pass of its own, so start lower there. It
+  applies live, also from the headset menu.
   Object detail (X-Plane only): how much detail trees and objects get. 100% (the default) is the
   detail the sharp focus area needs; lower costs X-Plane's main thread less, which often limits the
   frame rate with QVFR; 0% is X-Plane's own detail for the render size. It applies live.
@@ -84,8 +87,9 @@ Picture
   = fully round ends) and Feather (softens its edge). Vertical position (fixed) or Gaze offset (eye
   tracked) moves the area up or down; Gaze dead-zone is how far your eyes move before it follows (it
   keeps still against eye-tracker noise). The shape is Rectangle, or Custom corners, each corner pulled
-  in on its own (a trapezoid, say, for more of the dash and less of the sky). Show focus outline and
-  its colour (teal, magenta, green).
+  in on its own (a trapezoid, say, for more of the dash and less of the sky). In LMU and ACE the corners
+  cut off this way, and rounded ones, aren't rendered at all, which saves GPU time. Show focus outline
+  and its colour (teal, magenta, green).
 - Preview: the focus area and the resulting view sizes, for the left eye, the right eye or both.
   Pixel sizes appear after the first launch, once the headset has reported its recommended resolution
   (runtime.ini).
@@ -104,20 +108,24 @@ Picture
   away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is
   Closed, Half or Open (its hotkey, Ctrl+Alt+V). The headset menu's Helmet page has them all. The log
   suggests the crop that matches their opening.
-- Rendering: Let the runtime compose (Pimax, Varjo; LMU only, on by default): on a Pimax or Varjo
-  OpenXR runtime, which composes quad views itself, Sim-QVFR hands it the four views and the focus area
-  reaches the display at its full resolution (sharper above 100% focus density). Sim-QVFR's resolution
-  settings apply; its focus area is drawn inside the runtime's own focus region, centred where the
-  runtime puts it (its eye tracking), so keep the runtime's focus area (Pimax Play, Varjo Base) at
-  least as large as Sim-QVFR's: Diagnostics says when it isn't. The gaze dead-zone and vertical offset
-  don't apply then. On SteamVR, with frame generation, or with another layer between Sim-QVFR and the
-  runtime, Sim-QVFR composes the image as before. Applies at the next launch; the card says what the
-  last launch did. A profile still on the legacy Two-loop method shows Rendering method here too; once
-  you switch to Quad View Foveated Rendering, Two-loop isn't offered again.
-- DLSS and DLSS-NR (LMU, NVIDIA RTX): see Le Mans Ultimate below.
-- Foveated DLSS and Frame generation (ACE and ACC): optional Cheeky Foveated DLSS (see below), its
-  runtime and OpenXR layer status, and its settings (cheaper outer views, their DLAA scale and preset,
-  the focus preset). The settings apply live; the headset menu's Foveated DLSS page has them too.
+- Rendering: how the focus views are drawn in this game (in LMU and the truck sims, multi-view
+  rendering: NVIDIA's or Sim-QVFR's own). A profile still on the legacy Two-loop method shows
+  Rendering method here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered
+  again.
+  Runtime composition (LMU, automatic, no switch): on a Pimax or Varjo OpenXR runtime with Quad-Views
+  Foveated Rendering enabled in Pimax Play or Varjo Base, Sim-QVFR hands the runtime the four views,
+  and the focus area reaches the display at its full resolution. Its focus area is drawn inside the
+  runtime's own focus region, centred where the runtime puts it (its eye tracking), so keep the
+  runtime's focus area at least as large as Sim-QVFR's: Diagnostics says when it isn't. On SteamVR,
+  with frame generation, or with another layer between Sim-QVFR and the runtime, Sim-QVFR composes the
+  image itself.
+  Above 100% focus density the image sent to the headset grows with it, so the focus area's extra
+  detail reaches the display instead of being averaged down first.
+- DLSS and DLSS-NR (LMU, NVIDIA RTX), or FSR (experimental; LMU on other cards): see Le Mans Ultimate
+  below. Assetto Corsa EVO's DLSS: see Assetto Corsa EVO below.
+- Foveated DLSS (ACC): optional Cheeky Foveated DLSS (see below), its runtime and OpenXR layer status,
+  and its settings (cheaper outer views, their DLAA scale and preset, the focus preset). The settings
+  apply live; the headset menu has them too.
 
 Headset
 - Headset menu: where the in-headset settings menu floats and its size; Show the hotkeys under the
@@ -125,9 +133,14 @@ Headset
 - Performance overlay: on/off, where it floats and its size: frame rate and pacing, CPU and GPU time
   with their headroom and which one limits the frame, VRAM, frame generation and eye tracking. In ACC
   and X-Plane the GPU tile shows the whole GPU's time (GPU (all work)); in LMU, which multi-view path
-  runs (MVR, SMVR, + DLSS). Its hotkey (Ctrl+Alt+P) turns it on and off in the game; the headset
-  menu's Overlay and menu page moves the menu and the overlay.
-- Placement: drag the menu or the overlay in the preview (the arrow keys move them too).
+  runs (MVR, SMVR, + DLSS or + FSR). Its frame bars are coloured by the refreshes the headset actually
+  showed. Its hotkey (Ctrl+Alt+P) turns it on and off in the game; the headset menu's Headset tab
+  moves the menu and the overlay.
+- Clock (off by default): the local time on a small card of its own in the headset, for when you want
+  the time without the overlay (the overlay keeps its own clock). Where it floats and its size.
+- Vision (LMU): Eye off, for a player who sees with one eye: the eye you choose shows black, and LMU
+  renders only a few pixels of it, which saves GPU time. With both eyes seeing, leave it at None.
+- Placement: drag the menu, the overlay or the clock in the preview (the arrow keys move them too).
 - Hotkeys: a table of actions with a key and a wheel, button box or controller button each: opening
   and closing the headset menu, moving through it (up, down, lower, raise), the performance overlay,
   the helmet's visor, a CPU capture and a frame capture. Click a binding, then press the keys or the
@@ -156,6 +169,12 @@ Game
   account is needed). Drag the zip's tile onto the issue form to attach it, then send. Under Other ways
   to share, Save the logs as a zip makes the same zip in the logs folder without opening an issue, for
   when someone asks you for your logs; Copy summary and Open logs folder are there too.
+- CPU (every game, off by default): Give the main thread a core of its own: the game thread that
+  finishes each frame runs alone on one core and the game's other threads use the rest. Only the
+  game's own threads move: no Windows setting or other program changes. It applies on CPUs with 6 or
+  more cores and two threads per core, and stays off if another tool (such as Process Lasso) already
+  set the game's CPU sets or affinity. Try it on and watch your frames; it applies live, also from the
+  headset menu's Game tab.
 - Diagnostics: the last session's numbers (frame rate against the headset's, slow frames against the
   frame's budget, CPU and GPU time, what limited the frame, the game's busiest threads, and how much
   of the session the headset runtime ran the game at half rate, as Varjo's motion smoothing does), to
@@ -193,19 +212,32 @@ anywhere else.
 The headset menu
 ----------------
 Ctrl+Alt+arrows (or your hotkeys) while the game has focus, or a click of the left controller stick,
-opens it; up and down select, left and right change the value; it hides after a few seconds. Its pages:
-the method's settings (with Profile first, Object detail after Focus density in X-Plane, Sharpening
-after them, and Optimize for frame rate last: Right measures while you play and finds the resolution
-that holds the frame rate, Left undoes it), Focus shape, View crop, Helmet, Foveated DLSS and Frame generation (with Cheeky
-running), and Overlay and menu. A game shows only the pages it has (X-Plane: the settings, Focus shape,
-and Overlay and menu). Changes apply at once and save to the game's settings.
+opens it; up and down select, left and right change the value. Its pages are tabs named after the
+launcher's, with its cards as sections: Picture (Resolution, the game's upscaler: DLSS or FSR and
+DLSS-NR, or Foveated DLSS; Vision), Foveation, View (View & helmet), Headset (Headset menu,
+Performance overlay, Clock) and Game (CPU). On the top line, Page, left and right go to the tab before
+or after; a long page scrolls, with arrows at its edge. A game shows only what it has. Changes apply at
+once and save to the game's settings.
+Auto-fit to headset rate (Picture tab, Resolution; QVFR, not in the truck sims): press Right and keep
+driving. It measures your GPU time a few seconds at a time and sets the periphery resolution, focus
+density and focus size to fill about 88% of the frame budget, lowering them when frames run late and
+raising them, up to the launch size, when there's headroom. Left puts back what you had. It can't help
+when the CPU limits the frame rate, and it says so.
+With the performance overlay on, the menu shows your GPU and CPU frame times and the share of missed
+frames beside its title and stays open 15 s after your last press (6 s without the overlay); the
+overlay's frame graph marks each change with a white tick, so you can see what a step did.
+Live changes can go down from what the game started with and back up to it, not above it: launch with
+your highest settings, then lower them in the headset. A value above the launch size shows in red with
+what renders now, for example "185% (160% now)".
 
-Foveated DLSS (Cheeky Foveated DLSS, optional; ACE and ACC)
------------------------------------------------------------
+Foveated DLSS (Cheeky Foveated DLSS, optional; ACC)
+---------------------------------------------------
 The DLSS features come from Cheeky Foveated DLSS by ClarkCheekyKent, integrated with his permission.
 With DLSS on in the game and the QVFR method, the outer views get a cheaper DLAA pass while the focus
-views keep full DLSS. It also offers focus-view supersampling, DLSS-NR and frame generation. It is a
-separate download (GNU GPL v3), not included. You need an NVIDIA RTX GPU.
+views keep full DLSS. It also offers focus-view supersampling and DLSS-NR. It is a separate download
+(GNU GPL v3), not included. You need an NVIDIA RTX GPU. Assetto Corsa EVO no longer uses it: Sim-QVFR
+runs the focus views' DLSS there itself (see Assetto Corsa EVO below), and Cheeky's frame generation,
+which was for ACE only, is gone with it for now.
 
 Downloads:
 - CheekyFoveatedDLSS-0.6.3-Standalone-sim-qvfr-support.zip, from
@@ -232,14 +264,32 @@ In ACC, also replace ACC's DLSS (2.2.15, too old: the focus area works but the c
 don't) with DLSS 310 or newer: nvngx_dlss.dll in
 Assetto Corsa Competizione\AC2\Plugins\DLSS\Binaries\ThirdParty\Win64 (a tool such as DLSS Swapper
 does it; Steam's Verify integrity of game files puts the original back). Launch checks tells you when
-it's too old. For DLSS-NR, put NVIDIA's nvngx_dlssnr.dll in the same CheekyFoveatedDLSS folder (ACE
-has one in its own folder; ACC doesn't come with one).
-Frame generation (experimental, ACE only for now, the card under Foveated DLSS): Cheeky's DLSS-G between the
-game's frames. Turn OpenXR Toolkit's Turbo mode off (the game crashes with it), and don't run another
-frame generator (such as VectorXR's) with it. Show the center region outlines the full-quality region.
-With DLSS on, resolution changes apply at the next launch (DLSS sizes its views when the game starts).
-The cards' other settings apply live. The headset menu's Foveated DLSS and Frame generation pages
-set them too.
+it's too old. For DLSS-NR, put NVIDIA's nvngx_dlssnr.dll in the same CheekyFoveatedDLSS folder (ACC
+doesn't come with one; a game that ships DLSS-NR has it in its folder).
+With Foveated DLSS on, resolution changes apply at the next launch (DLSS sizes its views when the game
+starts). The card's other settings apply live, also from the headset menu.
+
+Assetto Corsa EVO
+-----------------
+Pick Assetto Corsa EVO in the game list, then Launch. Turn the game's own foveated rendering off first.
+Choose MSAA or DLSS (any mode; NVIDIA RTX) in the game's settings; other upscalers such as FSR haven't
+been tested yet: if something looks wrong with one, switch to MSAA and tell us.
+New in 1.2.0-beta, Sim-QVFR works in ACE at the graphics level: the game draws its own two eyes with
+its own single-pass stereo, which Sim-QVFR turns on, and Sim-QVFR draws the focus views from the
+game's own drawing work, without changing the game's code. It uses less CPU than the earlier method
+and the same GPU time for the same picture, and the periphery's resolution can be lowered while you
+drive. Eye tracking, the focus shape, the field of view crop, the helmet overlay, sharpening, the
+headset menu and the performance overlay work in ACE.
+DLSS: with DLSS on in the game, Sim-QVFR runs its own DLSS for the focus views too. The headset menu
+sets Focus views (full resolution, or drawn smaller and upscaled) and Focus preset (leave it on its
+default unless you're curious).
+ACEvoPerf users: in acevo_perf.ini, don't set single_pass_stereo = false (leave the line out or set it
+to true); false turns off what Sim-QVFR needs and the sharp area won't appear.
+The earlier method is still there for a while: if you see a problem with Sim-QVFR on that doesn't
+happen without it, add the line ace_legacy_views4=1 under [experiment] in sim-qvfr.ini (the launcher
+closed), and tell us with Report an issue...: it will be removed in a later release.
+Finding the game's single-pass stereo setting by name follows ACEvoPerf's approach (by ecstra, MIT
+licence: licenses\ACEvoPerf-LICENSE.txt).
 
 Assetto Corsa Competizione
 --------------------------
@@ -263,6 +313,24 @@ trades scenery detail for X-Plane's main thread. Not in X-Plane: the field of vi
 overlay and Foveated DLSS (X-Plane has no DLSS). If X-Plane isn't from Steam, Launch checks asks for
 its folder.
 
+American Truck Simulator and Euro Truck Simulator 2 (experimental)
+------------------------------------------------------------------
+Pick the game in the game list, then Launch: the launcher switches the game's experimental VR on, so
+you need no launch options of your own. Use the game's normal Steam branch (no beta): Sim-QVFR
+supports American Truck Simulator 1.62.2.2 and Euro Truck Simulator 2 1.62.3.3; on any other build it
+stays off and the game runs as usual. Leave the game's own Scaling setting at 100% and raise
+Sim-QVFR's Focus density instead for a sharper dash and mirrors.
+A fresh install starts the truck sims at a periphery resolution of 40%, a focus density of 150% and a
+focus area a quarter of the view each way. Without eye tracking, make the focus area larger in
+Picture > Foveation if you notice its edge when you look at the mirrors.
+Sim-QVFR works through the OpenXR and Direct3D 11 layers alone: no game code hooked and no game memory
+written. The focus view is drawn by multi-view rendering in the game's own eye passes (NVIDIA's on RTX
+cards, Sim-QVFR's own on others; AMD and Intel cards haven't been tested yet). The menus and the
+garage show as without Sim-QVFR; the focus view starts with the first frame that draws the world.
+What works: the sharp area (following your eyes with eye tracking), the headset menu, the performance
+overlay and sharpening. Not yet: the field of view crop, the helmet overlay and Auto-fit. Mods from
+the game's mod manager are the game's own business. Online (TruckersMP, Convoy): at your own risk.
+
 Le Mans Ultimate
 ----------------
 More frames in LMU: LMU-OPTIMIZATION-GUIDE.md, in this folder, explains which settings cost CPU and GPU
@@ -270,8 +338,8 @@ time (DLSS, other cars' motion, MSAA, resolution) and what to turn down first.
 Pick LMU in the game list, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR supports LMU
 1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
 Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the
-headset menu and the performance overlay work in LMU, and menus and the HUD are drawn sharp in the
-focus area.
+headset menu, the performance overlay and Eye off work in LMU, and menus and the HUD are drawn sharp
+in the focus area.
 LEAVE LMU'S OWN VR FOV SCALE AT 100% x 100%. With any other value QVFR shows a zoomed-in picture or a
 picture inside the picture (a known bug, to be fixed). To trim the view's edges for speed, use
 Sim-QVFR's View crop instead (Picture > View & helmet, or the headset menu): if you had LMU's Y scale
@@ -281,17 +349,20 @@ focus view, so LMU renders only its own two eye passes a frame. It is the only w
 the earlier four passes, made by changing LMU's code, are gone. NVIDIA RTX 20 series and newer use
 NVIDIA's multi-view rendering; other cards (AMD, Intel, older NVIDIA) use Sim-QVFR's own, which draws
 each draw twice in one call (instancing) and needs a driver with Direct3D 11.3's viewport choice in the
-vertex shader. The performance overlay shows which runs beside its CPU heading: MVR, SMVR, + DLSS.
+vertex shader. The performance overlay shows which runs beside its CPU heading: MVR, SMVR, + DLSS or
++ FSR.
 A yellow Eyes only there means the focus views aren't being made: both eyes render at full resolution,
 a correct, sharp picture that costs more. Sim-QVFR tries again by itself, at once after you change a
 graphics setting in LMU and otherwise every 20 seconds at most (a failed try shows as a brief soft
 blink); on a card that can't do multi-view rendering it stays that way. The log says why.
 Sim-QVFR doesn't change, hook or call LMU's own code: it works through OpenXR and Direct3D 11, reads a
-few values in LMU's memory (the cameras, the eye being drawn, the render size) and writes two (the
-render scale and the eye render size).
+few values in LMU's memory (the cameras, the eye being drawn, the render scale) and writes nothing.
+Each view's resolution, and its live changes, are set in the Direct3D 11 calls: LMU renders at its own
+size and Sim-QVFR draws the eye into the part of its image the periphery's resolution needs.
 LMU's own render scale and FSR (its VR graphics settings) work with QVFR: they lower every view's
-resolution on top of Sim-QVFR's sliders, and FSR upscales each view. MFAA (NVIDIA Control Panel) works
-with multi-view rendering. Let the runtime compose (Picture > Rendering, above) applies to LMU.
+resolution on top of Sim-QVFR's sliders, and FSR upscales each view. (LMU's own FSR is separate from
+Sim-QVFR's FSR card below.) MFAA (NVIDIA Control Panel) works with multi-view rendering. Runtime
+composition (Picture > Rendering, above) applies to LMU.
 VectorXR works below Sim-QVFR in LMU (its frame generation and overlay were tested; turn it on in
 Game > OpenXR layers). Cheeky Foveated DLSS isn't for LMU (it works on a game's own DLSS).
 DLSS in LMU (experimental, NVIDIA RTX 20 series and newer): LMU has no DLSS, so Sim-QVFR runs NVIDIA
@@ -315,17 +386,22 @@ focus area only unless you turn on Periphery too. Not tested in the headset yet.
 NVIDIA's nvngx_dlss.dll is included (layer\nvngx_dlss.dll, DLSS 310.9.1). To use a newer one, Choose...
 it in a game's folder on the DLSS card (DLSS 310 or newer); Use included goes back. Launch checks says
 when the one chosen is missing or too old.
+FSR in LMU (experimental, on a PC without an NVIDIA RTX card): the launcher shows the FSR
+(experimental) card in the DLSS card's place, with the same options (Use FSR, Focus views; the
+periphery gets AMD's native AA, no upscaling). AMD FSR 4 where AMD's software offers it for your card
+(Radeon RX 9000, and newer drivers on RX 7000 and 6000), FSR 3.1 elsewhere; the card says which one
+your PC gets. AMD's FSR files are included. Tested as FSR 3.1; FSR 4 is untested, reports welcome.
 Uses NVIDIA DLSS through the NVIDIA DLSS SDK (licenses\NVIDIA-RTX-SDKs-LICENSE.txt). NVIDIA, RTX and
 DLSS are trademarks of NVIDIA Corporation; Sim-QVFR is not sponsored or endorsed by NVIDIA.
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Run with
 anti-cheat (Game > Online racing) starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
 launch; it asks you to accept the risk first. AT YOUR OWN RISK: Sim-QVFR works inside LMU while it
-runs. LMU's code stays unchanged, but Sim-QVFR hooks LMU's graphics calls and reads and writes LMU's
+runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics calls and reads LMU's
 memory. The anti-cheat may kick you or ban your account for that. Turning it on, you knowingly take
 responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off
 with it on.
 LMU-Quad-View-Mod (by Dan Suzuki, https://github.com/DSuzuki35/LMU-Quad-View-Mod) inspired this work;
-Sim-QVFR's LMU support is written separately and works differently (four views rendered in the game
+Sim-QVFR's LMU support is written separately and works differently (the views drawn inside the game
 and composed by Sim-QVFR itself, or by a Pimax or Varjo runtime, nothing else to install). Try both
 on your PC and keep the one that runs best; don't run both at once.
 
