@@ -79,8 +79,10 @@ Card cpu_card() {
                      ? L"On: the game thread that finishes each frame runs alone on one core, and the game’s other threads "
                        L"(its physics among them) use the rest, so none slows it down by sharing that core."
                      : L"Off: the game’s threads share every core, as Windows places them.");
-        b.note(L"Only the game’s own threads move: no Windows setting or other program changes. Try it off if frames get "
-               L"worse on your PC. The headset menu’s Overlay and menu page changes it too.");
+        b.note(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs with 6 "
+               L"or more cores and two threads per core, and stays off if another tool (such as Process Lasso) already "
+               L"set the game’s CPU sets. Try it off if frames get worse on your PC. The headset menu’s Overlay and menu "
+               L"page changes it too.");
     };
     c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
     return c;

@@ -3,8 +3,11 @@
 // process's default CPU sets are every other one, so no other thread of the game (its physics thread spinning a core,
 // its workers, the driver's, ours) runs on the core's other half, where it would share the core's execution units with
 // the main thread. Other processes are not touched. Only the game's own process and thread scheduling change: no game
-// code, no Windows setting.
-//   cpu_isolate=0 off (the default), 1 on, N > 1 an interleaved A/B: N frames isolated, N shared, and so on, logging the
+// code, no Windows setting. Off on a CPU with fewer than kIsolationMinCores cores or one thread per core (nothing to
+// keep free), and whenever the game already has CPU sets (its own, or a tool's such as Process Lasso): those are never
+// replaced or cleared. Turning it off takes back only what it set.
+//   The mode (layer/config.cpp): [cpu] isolate_main_thread, the players' option (1 on, the default; 0 off), unless
+// [experiment] cpu_isolate is above 0: 1 on, N > 1 an interleaved A/B: N frames isolated, N shared, and so on, logging the
 // main thread's CPU time per frame on each side (its cycles at each xrEndFrame), so one run measures the lever.
 #pragma once
 
@@ -15,10 +18,14 @@
 
 namespace simqvfr {
 
+inline constexpr int kIsolationMinCores = 6;
+
 // The core picked for the main thread: of the fastest kind (the most L3, then the highest efficiency class), the
-// highest-numbered core that is not core 0 (which takes most interrupts). Indexes into `cpus`.
+// highest-numbered core that is not core 0 (which takes most interrupts). Indexes into `cpus`. Not valid with fewer than
+// kIsolationMinCores cores or a core of one logical processor (`why` says which).
 struct IsolationPlan {
     bool valid = false;
+    const char* why = nullptr;
     int core = -1;              // LogicalCpu::core
     std::vector<int> mainCpus;  // the core's logical processors
     std::vector<int> others;    // every other logical processor
@@ -37,7 +44,7 @@ SideStats side_stats(std::vector<float> cpuMs, std::vector<float> frameMs, int o
 void cpu_isolation_mode(int mode);
 // On the render thread at each xrEndFrame: applies a change of side, measures, logs the A/B.
 void cpu_isolation_frame();
-// At the session's end: everything back as the game had it.
+// At the session's end: what isolation set taken back (nothing else touched).
 void cpu_isolation_end();
 
 }  // namespace simqvfr

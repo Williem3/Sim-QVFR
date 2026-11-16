@@ -3,6 +3,7 @@
 // live readings on this machine (every logical processor has a kind, Sleep(1) measures).
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -111,6 +112,14 @@ int SIM_QVFR_TEST_MAIN() {
         const IsolationPlan intel = isolation_plan(hybrid);
         check(intel.valid && intel.core == 7 && intel.mainCpus.size() == 2, "hybrid: the highest P-core");
         check(!isolation_plan(layout(1, 1, 32, 32)).valid, "one core: nothing to isolate");
+        const IsolationPlan four = isolation_plan(layout(4, 4, 16, 16));
+        check(!four.valid && four.why, "4 cores with SMT: off (fewer than 6 cores)");
+        check(isolation_plan(layout(6, 6, 32, 32)).valid, "6 cores with SMT: on");
+        std::vector<LogicalCpu> noSmt;
+        for (int c = 0; c < 8; ++c)
+            noSmt.push_back({0, static_cast<uint8_t>(c), c, 0, 36 * kMb, 0});
+        const IsolationPlan arrow = isolation_plan(noSmt);
+        check(!arrow.valid && arrow.why, "8 cores, one thread each (no SMT): off");
         const SideStats st = side_stats({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, {11, 11, 11, 11, 11, 11, 11, 11, 11, 20}, 5);
         check(st.frames == 10 && close_to(st.cpuMean, 5.5, 1e-9) && close_to(st.cpuP90, 10, 1e-9) &&
                   close_to(st.frameP90, 20, 1e-9) && close_to(st.onCore, 50, 1e-9),
@@ -133,7 +142,50 @@ int SIM_QVFR_TEST_MAIN() {
         const BOOL processNone = GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
         const BOOL threadNone = GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
         check(processNone && count == 0 && threadNone && threadCount == 0, "isolation off: both cleared");
+
+        // The frames move to another thread: the core goes with them, the old thread's sets taken back.
+        cpu_isolation_mode(1);
+        cpu_isolation_frame();
+        ULONG otherThread = 0, processAfterMove = 0;
+        std::thread([&] {
+            cpu_isolation_frame();
+            GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &otherThread);
+        }).join();
+        GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &processAfterMove);
+        threadCount = 99;
+        GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        check(!plan.valid || (otherThread == plan.mainCpus.size() && threadCount == 0 &&
+                              processAfterMove == plan.others.size()),
+              "the frames on another thread: the core moves to it, the first thread's sets cleared");
+        cpu_isolation_mode(0);
+        cpu_isolation_frame();  // switched off from yet another thread than the one holding the core: still taken back
+        count = 99;
+        GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
+        check(count == 0, "off after the move: the process's default taken back");
         cpu_isolation_end();
+
+        // CPU sets someone else set (the game, a tool): left as they are, isolation stays off.
+        ULONG length = 0;
+        GetSystemCpuSetInformation(nullptr, 0, &length, GetCurrentProcess(), 0);
+        std::vector<unsigned char> buffer(length);
+        ULONG someId = 0;
+        if (length && GetSystemCpuSetInformation(reinterpret_cast<SYSTEM_CPU_SET_INFORMATION*>(buffer.data()), length,
+                                                 &length, GetCurrentProcess(), 0))
+            someId = reinterpret_cast<SYSTEM_CPU_SET_INFORMATION*>(buffer.data())->CpuSet.Id;
+        SetThreadSelectedCpuSets(GetCurrentThread(), &someId, 1);
+        cpu_isolation_mode(1);
+        cpu_isolation_frame();
+        count = threadCount = 99;
+        GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
+        GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        check(someId && count == 0 && threadCount == 1, "someone else's CPU sets: kept, nothing of ours set");
+        cpu_isolation_mode(0);
+        cpu_isolation_frame();
+        threadCount = 99;
+        GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        check(threadCount == 1, "and switching off leaves them too");
+        cpu_isolation_end();
+        SetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0);
     }
     return test_result();
 }
