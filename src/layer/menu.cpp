@@ -250,15 +250,17 @@ void menu_open(int64_t now) {
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
-            // The output's largest size (quad/output_density.h): the D3D12 chain is made once at launch.
+            // The output's largest size (quad/output_density.h), before Output size: the runtime's largest image; the
+            // D3D12 chain is made once at launch.
             double cap = 0;
-            if (experiment.composing() && !nativeQuad.active && experiment.focusLayer == 0) {
-                cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
-                                         experiment.outputDensityMax.load(std::memory_order_relaxed));
+            const bool composes = experiment.composing() && !nativeQuad.active && experiment.focusLayer == 0;
+            if (composes) {
+                cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH, kOutputDensityMax.max);
                 if (!experiment.views4ComposeD3D11 && quad.outChain)
                     cap = std::min(cap, quad.outDensity.chainScale);
             }
             menu.model.launch.outputCap = cap * 100;
+            menu.model.launch.outputSize = composes;
         }
         menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
         if (!optimize.optimizer.running()) {  // a finished run's detail is not kept over a reopen
@@ -302,9 +304,9 @@ void menu_press(MenuKey key, int64_t now) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
-                     eyeOff = menu.model.launch.eyeOff,
+                     eyeOff = menu.model.launch.eyeOff, outputSize = menu.model.launch.outputSize,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, outputSize);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -313,7 +315,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, outputSize);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)
