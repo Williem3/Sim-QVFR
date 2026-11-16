@@ -11,7 +11,7 @@
 // those; at sample frames the focus region of pass 0/1's resolved scene is compared with pass 2/3's own (alignment,
 // brightness), the images saved in logs\captures. Gate D (lmu_mvr=2, mvr_keep_focus): the focus region is kept after
 // pass 0/1's resolve, and pass 2/3's resolve (in cubeDX11_ApplyPostProcess) becomes a copy of it into the top-left, so
-// their post-processing runs on the focus view the eye pass drew while they skip the scene (four_passes.cpp). The
+// their post-processing runs on the focus view the eye pass drew while they skip the scene (the four passes' code, gone 2026-11-12). The
 // eyes' post-processing reads only their own corner of the targets.
 #pragma once
 
@@ -98,9 +98,9 @@ void mvr_pass_end(int pass);
 // the list executed with the two views as they were and its replayed calls handled like the game's.
 void mvr_replay_lists_plain(bool on);
 // R6c: the lens mask's draws (its vertex shader's role, yebis_shaders.h VsRole) are drawn like the scene's, or dropped
-// while `*stale` (a live FOV crop change since the game built the mask: four_passes.cpp maskStale). Null: never dropped.
+// while `*stale` (a live FOV crop change since the game built the mask: qvfr_frame.cpp maskStale). Null: never dropped.
 void mvr_mask_stale(const std::atomic<bool>* stale);
-// The lens mask's draws dropped since the last call (four_passes' log).
+// The lens mask's draws dropped since the last call (qvfr_frame's log).
 int mvr_mask_dropped();
 // lmu_mask_ab (a measurement): the lens mask's draws and the focus mask dropped while `drop` (the A/B's side without
 // them). Between passes.
@@ -200,10 +200,10 @@ void mvr_car_slots(int level);
 // The slots' gate images (logs\captures\lmu-car-slots-*.png, up to two frames' worth, each ~250 ms on the render
 // thread): diagnostics runs only (lmu_car_vectors forced), never the player's option. Off by default.
 void mvr_car_slot_images(bool on);
-// The cars' motion this frame or not (an A/B of its cost, FourPassesRun::carAb; between frames): off, no tracking work,
+// The cars' motion this frame or not (an A/B of its cost, QvfrFrameRun::carAb; between frames): off, no tracking work,
 // no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
 void mvr_car_active(bool on);
-// One eye off ([quad] eye_off; four_passes.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
+// One eye off ([quad] eye_off; qvfr_frame.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
 // view's upscale: it draws none). Between frames.
 void mvr_eye_off(int eye);
 // Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null

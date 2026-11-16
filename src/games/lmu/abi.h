@@ -26,25 +26,9 @@ inline constexpr std::size_t kParamsFar = 0xc;   // float
 inline constexpr std::size_t kParamsView = 0x2c;        // 4x4: the view matrix SetViewParams hands YEBIS (row vectors)
 inline constexpr std::size_t kParamsProjection = 0x94;  // 4x4: the projection it hands YEBIS
 
-// The VR eye loop in the game's frame: its head hands the camera update the eye (edi), its tail counts to 2. [Eye loop]
-inline constexpr std::uintptr_t kEyeLoopHead = 0xcd15f0;
-inline constexpr std::uint8_t kEyeLoopHeadAnchor[] = {0x44, 0x8b, 0xc7, 0xb2, 0x01};  // mov r8d, edi; mov dl, 1
-inline constexpr std::uintptr_t kEyeLoopTail = 0xcd17c1;
-inline constexpr std::uint8_t kEyeLoopTailAnchor[] = {0xff, 0xc7, 0x48, 0x83, 0xc3, 0x6c,  // inc edi; add rbx, 0x6c
-                                                      0x83, 0xff, 0x02};                     // cmp edi, 2
-inline constexpr std::size_t kCameraHistorySize = 0x6c;   // rbx: this eye's record (two on the stack)
-inline constexpr std::uintptr_t kCameraHistoryCtor = 0x3695e0;
-inline constexpr std::uint8_t kCameraHistoryCtorAnchor[] = {0x33, 0xc0, 0x48, 0xc7, 0x41, 0x04, 0x00, 0x00, 0x80, 0x3f};
-
-// One eye's scene render (arg, later eye): a later eye skips the frame's shared Pre Render (shadows, cubemaps). [Scene render]
-inline constexpr std::uintptr_t kRenderScene = 0xd58a70;
-inline constexpr std::uint8_t kRenderSceneAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18};
-
-// The renderer and the eye its view params hold, its current eye target, and that texture's D3D11 object. [Eye target]
+// The renderer and the eye its view params hold. [Eye target]
 inline constexpr std::uintptr_t kRenderer = 0x1b12be8;      // cubeDirectX11*
 inline constexpr std::size_t kRendererViewEye = 0x77388;    // int: the view params' eye (SetViewParams copies them here)
-inline constexpr std::uintptr_t kGetCurrentEyeTarget = 0x5ad930;  // texture object* (cubeDirectX11*)
-inline constexpr std::uint8_t kGetCurrentEyeTargetAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01};
 
 // The per-eye projections VR_UpdateEyes writes each frame; each pass's camera update copies its eye's into the camera. [Eye projection slots]
 inline constexpr std::uintptr_t kEyeProjection = 0x1b1bf74;     // eye e at + e * kEyeSlotStride: the camera's +0x360
@@ -58,49 +42,7 @@ inline constexpr std::uintptr_t kRecommendedSize = 0x1b1c654;  // uint32 width, 
 inline constexpr std::size_t kRendererFsr = 0x1778;  // FSR object*
 inline constexpr std::size_t kFsrMethod = 0x40;      // int: UpscaleMethod (0 off)
 
-// VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
-inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;
-inline constexpr std::uint8_t kHiddenAreaDrawAnchor[] = {0x48, 0x8b, 0xc4, 0x41, 0x54, 0x41, 0x55,
-                                                         0x48, 0x83, 0xec, 0x68, 0x80};
-
-// A view's scene work before cubeDX11_ApplyPostProcess (renderer vtable 0xb00: the MSAA resolve, YEBIS, the eye final),
-// all called from Pipeline_RenderView and child views only: skipped in passes 2-3 once the eye passes drew the focus views. [MVR]
-inline constexpr std::uintptr_t kViewScene = 0x51d8a0;  // Renderer_RenderViewScene(renderer, scene, view, flags, last): every bucket's draws
-inline constexpr std::uint8_t kViewSceneAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55};
-inline constexpr std::uintptr_t kSortMeshBucket = 0x5ddc70;  // SortMesh::Process for one bucket (6 args; the count it returns unused)
-inline constexpr std::uint8_t kSortMeshBucketAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x20, 0x44, 0x88, 0x44, 0x24, 0x18};
-inline constexpr std::uintptr_t kCullItem = 0x5e1140;  // Cull_Item(item, view, ?, float): recursive, void
-inline constexpr std::uint8_t kCullItemAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x48};
-inline constexpr std::uintptr_t kCullSceneGraph = 0x614d70;  // Cull_SceneGraph(graph, view, ?): void
-inline constexpr std::uint8_t kCullSceneGraphAnchor[] = {0x4c, 0x8b, 0xdc, 0x55, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x49, 0x8d};
-
-// The VR UI (VRUI.cpp): VR_Present's draw of the HUD canvas onto a curved panel in each eye's final, after the eye loop. [VR UI]
-inline constexpr std::uintptr_t kVruiDraw = 0x617090;  // (vrui, context, eyes): eyes = {int mode; 2 kEyeSlotStride slots}
-inline constexpr std::uint8_t kVruiDrawAnchor[] = {0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8b, 0x02};
-inline constexpr std::uintptr_t kVruiDrawEye = 0x617fb0;  // (vrui, context, eyes, eye): one eye's panel
-inline constexpr std::uint8_t kVruiDrawEyeAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57};
-inline constexpr std::size_t kVruiEyeRtv = 0xd8;     // ID3D11RenderTargetView*: eye e's at + e * 8
-inline constexpr std::size_t kVruiViewport = 0xbc;   // int width, height: the panel draws' viewport (the eye targets')
-inline constexpr std::size_t kVruiEyesSize = 0xdc;   // the eyes block: mode, then each eye's projection x view slot
-inline constexpr std::size_t kVruiEyeMatrix = 8;     // eye e's 4x4 at + e * kEyeSlotStride (right-handed projection)
-
-// DriverLabels' draw callback (camera, labels), in each camera's after-post list (+0x480): its viewport is the whole eye
-// target, not the part the pass rendered (tag_viewport.h). [Driver labels]
-inline constexpr std::uintptr_t kLabelsDraw = 0xe78a90;
-inline constexpr std::uint8_t kLabelsDrawAnchor[] = {0x48, 0x8b, 0xc2, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x92, 0xc8,
-                                                     0x06, 0x00, 0x00, 0x48, 0x8b, 0x88, 0xd8, 0x06, 0x00, 0x00};
-
-// YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
-inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
-inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,
-                                                                 0x83, 0x3d, 0x8f, 0x2e, 0x0c, 0x01};
-
-// YEBIS CRenderGlare::GenerateGlare_Composite(this): a pass's glare combined into the result the tonemap adds. [Glare share]
-inline constexpr std::uintptr_t kGlareComposite = 0x994240;
-inline constexpr std::uint8_t kGlareCompositeAnchor[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70,
-                                                         0x18, 0x48, 0x89, 0x78, 0x20, 0x55, 0x41, 0x54, 0x41, 0x55,
-                                                         0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xe8, 0xfe, 0xff,
-                                                         0xff, 0x48, 0x81, 0xec, 0x30, 0x02, 0x00, 0x00};
+// YEBIS CRenderGlare: a pass's glare combined into the result the tonemap adds (read only). [Glare share]
 inline constexpr std::size_t kGlareResult = 0x308;        // CRenderTexture*: the composite's result
 inline constexpr std::size_t kRenderTextureSize = 0x60;   // uint32 width, height
 inline constexpr std::size_t kRenderTextureScale = 0x90;  // float scale x, y, offset x, y: the top-left region in use

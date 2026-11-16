@@ -1,11 +1,25 @@
 // mvr_pass.h's internals, shared by its files (detail: not for other code). One state for the whole path, `g`, with
 // the pass tracker `tr`, the live resolution's `sizeCut` and the diagnostics' `pt` and `census`: render thread only
 // (mvr_pass.cpp's opening comment), defined once in mvr_pass.cpp. The draw hooks and everything else per draw stay in
-// mvr_pass.cpp (no whole-program optimization: a call into another file isn't inlined); what they check of the
-// diagnostics is inline here (pt.recording, census_here), so with those off a draw makes no call into these files.
-//   mvr_pass.cpp          the hooks (draws, shaders, targets, viewports), the twins, the size cut, car tracking and
-//                         slots, the pass tracker, the focus post's replay, install, the passes' begin and end, the
-//                         frame's end
+// mvr_pass.cpp's translation unit (no whole-program optimization: a call into another file isn't inlined), split by
+// cluster into headers it alone includes, in order; what they check of the diagnostics is inline here (pt.recording,
+// census_here), so with those off a draw makes no call into the .cpp files below.
+//   mvr_pass.cpp          the spine: includes, the state's definitions, the cluster headers in order:
+//     _hook_table.h       the hooks' table, call_real, the real calls, the section timer, held objects
+//     _tracker.h          the pass tracker, GPU timestamps
+//     _viewports.h        focus viewport mapping, the mip bias constants, the live resolution's size cut
+//     _twins.h            VS/PS twins and their lookup, the PSSetShader hook
+//     _cars.h             car tracking and car slots
+//     _two_views.h        update() (the two views switched), the VS/GS/HS/DS/SO set hooks
+//     _binds.h            the OM and RS hooks, FSR, the resolve, the post's beginning
+//     _post.h             the focus post's replay, the final blit's replay
+//     _doubling.h         draw doubling, the overlay trace, lens mask and panel draws, the copy hook
+//     _scene_learn.h      the single-sample scene target learned (MSAA off)
+//     _post_roles.h       post-role learning by bindings, the frame's shape
+//     _hooks_entry.h      the draw hook entry points, ExecuteCommandList
+//     _hook_install.h     the detours, their installation, the bindings read at a pass's start
+//     _api.h              install, the passes' begin and end, the options
+//     _frame_end.h        the frame's end, the rest of the public API
 //   mvr_pass_trace.cpp    the pass trace (lmu_pass_trace; diagnostics, log only)
 //   mvr_pass_census.cpp   the post census (lmu_post_census; diagnostics, log only)
 //   mvr_pass_samples.cpp  sample images: regions copied, read back and compared (gates C and D, mvr_compare), the car

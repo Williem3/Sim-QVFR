@@ -1,4 +1,4 @@
-// LMU's QVFR (the file's name is from its first form, the eye loop run four times, which went on 2026-11-12): the game's
+// LMU's QVFR frame (until 2026-11-12 four_passes, the eye loop run four times; that path is gone): the game's
 // own two eye passes draw their focus views too (multi-view rendering, mvr_pass.h), found and driven at the d3d11 level
 // (the pass tracker), and the layer composes all four views from the eyes' images (the focus finals beside the eyes).
 // No game code is hooked or patched and nothing is written into the game: the live resolution (the eyes at the
@@ -13,7 +13,7 @@ struct ID3D11Texture2D;
 namespace lmu {
 
 // A run's settings ([experiment] keys, lmu/adapter.cpp).
-struct FourPassesRun {
+struct QvfrFrameRun {
     bool qvfr = false;           // QVFR: composed by the layer
     double fraction = 0.3;       // the focus box: share of each eye's tangent width
     double fractionY = 0;        // and height (<= 0: as `fraction`)
@@ -24,9 +24,8 @@ struct FourPassesRun {
     double layerWidth = 1, layerHeight = 1;
     // Multi-view rendering (mvr_pass.h): the eye passes draw their focus views too, beside the eye.
     bool mvr = false;
-    bool mvrSkip = false;
     // The focus views beside their eyes in images of the outer views' shape (Views4Layout::secondViewBeside): the eyes at
-    // one share on both axes, the focus views at their own width and height (four_passes_set_live_axes), drawn by their
+    // one share on both axes, the focus views at their own width and height (qvfr_frame_set_live_axes), drawn by their
     // eye's pass.
     bool perAxis = false;
     // The CPU in the context hooks timed and logged (lmu_mvr_timing, any A/B run).
@@ -79,51 +78,49 @@ struct FourPassesRun {
     int maskAb = 0;
 };
 
-// Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
-// into the eye targets and are set aside before the game submits, so the headset shows the eyes (gates) or, composed,
-// all four (QVFR).
-bool four_passes_start(const FourPassesRun& run);
-// Every xrEndFrame: counts the passes; gates: at a few frames on track compares passes 2-3 with eyes 0-1 (copies: pixel
-// for pixel; focus: each focus view with its eye's crop).
-void four_passes_frame_end();
+// Starts QVFR on this build (its hash checked) when the run has multi-view's room (run.trackerDrives); false and a log
+// line otherwise. The focus views are drawn beside the eyes by their eye passes and composed with them by the layer.
+bool qvfr_frame_start(const QvfrFrameRun& run);
+// Every xrEndFrame: counts the passes, multi-view's health and recovery, the frame's eye extent and the overlay's badge.
+void qvfr_frame_frame_end();
 // How the focus views were drawn as of the last frame end (the overlay's badge): NVIDIA's multi-view rendering, the
-// software multi-view (instancing, or instancing taken over from NVIDIA's), the four passes after a fallback, or none
-// (multi-view off at launch, or not running yet). Any thread.
-simqvfr::games::QvfrMultiView four_passes_multi_view();
+// software multi-view (instancing, or instancing taken over from NVIDIA's), the eyes alone, or none (multi-view off at
+// launch, or not running yet). Any thread.
+simqvfr::games::QvfrMultiView qvfr_frame_multi_view();
 // xrCreateSession with a D3D11 binding: the game's device (the pass tracker installs MVR's hooks on it at a frame end).
-void four_passes_device(ID3D11Device* device);
+void qvfr_frame_device(ID3D11Device* device);
 
 // ---- QVFR (run.qvfr) ----
 // Where each eye's focus box is centred, as tangents of that eye's view (`valid[e]` false: its forward axis), from the
 // next frame; kept inside the eye. Any thread.
-void four_passes_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
+void qvfr_frame_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
 // The box's share of each eye's tangent width and height (fractionY <= 0: as fractionX), from the next frame. Any thread.
-void four_passes_set_box(double fractionX, double fractionY);
+void qvfr_frame_set_box(double fractionX, double fractionY);
 // The focus mask (mvr_pass.h mvr_focus_mask), from the next frame. Any thread.
-void four_passes_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
+void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
 // The latest composed frame's record (the eyes' and focus views' tangents, unturned); false before the first.
-bool four_passes_record(simqvfr::Views4Frame& frame);
+bool qvfr_frame_record(simqvfr::Views4Frame& frame);
 // A frame with eye passes but no four views (the focus views didn't come): the part of each eye's image its pass
 // rendered, from the top-left, in pixels. The layer submits that part in place of the whole image, where the eye would
 // show small in a corner. False: nothing to cut (four views this frame, a frame without passes, the eyes whole). Once a
-// frame, at xrEndFrame after four_passes_frame_end.
-bool four_passes_eye_extent(unsigned (&width)[2], unsigned (&height)[2]);
+// frame, at xrEndFrame after qvfr_frame_frame_end.
+bool qvfr_frame_eye_extent(unsigned (&width)[2], unsigned (&height)[2]);
 // The frame being submitted, all four views in one texture (adapter.h qvfr_views_atlas): the game's submitted eye
 // images (`eyes`) copied into its top row, the focus views below. Null when this frame has no four views (menus,
 // loading, a focus pass refused). xrEndFrame, on the render thread.
-ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]);
+ID3D11Texture2D* qvfr_frame_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]);
 // The size every view renders at (the eye targets'), 0 before the first four-pass frame.
-void four_passes_view_size(int (&size)[2]);
+void qvfr_frame_view_size(int (&size)[2]);
 // Live resolution: the outer and focus views at these shares (0.1-1) of the launch-size targets, per axis, from the
 // next frame. LMU's render scale is set per pass, so each pass renders into the top-left of its target; the copies
 // and the atlas regions follow the sizes rendered. Any thread.
-void four_passes_set_live_scales(double outer, double focus);
-// The same per axis (FourPassesRun::perAxis): the outer and focus views' shares of the target's width and height.
-void four_passes_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight);
+void qvfr_frame_set_live_scales(double outer, double focus);
+// The same per axis (QvfrFrameRun::perAxis): the outer and focus views' shares of the target's width and height.
+void qvfr_frame_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight);
 // Every xrLocateViews: the FOV the game just located (with the layer's FOV crop). The game builds its lens mask in
-// screen space with the FOV located when it fetches the mesh (VR_Init: four_passes_mask_taken), so while the located
+// screen space with the FOV located when it fetches the mesh (VR_Init: qvfr_frame_mask_taken), so while the located
 // FOV differs from that one (a live crop change) the mask draw is skipped: it would black out what the lens shows.
-void four_passes_note_views(const XrView* views, uint32_t count);
-void four_passes_mask_taken(uint32_t viewIndex);
+void qvfr_frame_note_views(const XrView* views, uint32_t count);
+void qvfr_frame_mask_taken(uint32_t viewIndex);
 
 }  // namespace lmu
