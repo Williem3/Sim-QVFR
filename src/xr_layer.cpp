@@ -15,7 +15,7 @@
 #include "log.h"
 #include "probe/dred.h"
 #include "probe/pix_capture.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "games/ace/stereo_flag.h"
 #include "probe/focus_ngx.h"
 #include "xr.h"

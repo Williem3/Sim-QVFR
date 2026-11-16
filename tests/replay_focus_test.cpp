@@ -1,4 +1,4 @@
-// Offline check of the focus replay (probe/replay_probe.h, mode 3, every stereo list) on a WARP device: a miniature of
+// Offline check of the focus replay (games/ace/replay_probe.h, mode 3, every stereo list) on a WARP device: a miniature of
 // ACE's single-pass-stereo scene (two viewports side by side, the eye from SV_InstanceID routed by SV_ViewportArrayIndex,
 // projections read from root parameter 1 in ACE's pass-constant layout, reverse-Z): a depth-only list, a colour list
 // (R11G11B10_FLOAT, depth test EQUAL, a colour that is a smooth function of world position) and a half-width pass with
@@ -18,7 +18,7 @@
 #include <wrl/client.h>
 
 #include "games/ace/stereo_flag.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "test_util.h"
 #include "xr.h"
 

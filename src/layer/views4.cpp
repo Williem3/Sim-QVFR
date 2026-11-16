@@ -13,7 +13,7 @@
 #include "probe/d3d11_compose_timer.h"
 #include "probe/d3d11_capture.h"
 #include "probe/gpu_frame_timer.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_shape.h"
 #include "quad/focus_quad.h"

@@ -1,4 +1,4 @@
-// Offline check of the re-emission probe (probe/replay_probe.h) on a WARP device: a command list with enough draws and a
+// Offline check of the re-emission probe (games/ace/replay_probe.h) on a WARP device: a command list with enough draws and a
 // wide viewport is recorded and re-emitted at Close (never executed), one with too few draws or a narrow viewport is not;
 // the real list still executes and its draw lands in the target (the hooks forward every call).
 #include <cstdio>
@@ -8,7 +8,7 @@
 #include <wrl/client.h>
 
 #include "games/ace/stereo_flag.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "test_util.h"
 #include "xr.h"
 

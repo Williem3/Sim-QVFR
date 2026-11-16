@@ -23,7 +23,7 @@
 #include "xr.h"
 #include "layer/layer.h"
 #include "probe/focus_ngx.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 
 namespace simqvfr::layer {
 

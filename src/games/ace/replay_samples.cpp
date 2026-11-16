@@ -15,8 +15,8 @@
 #include <tuple>
 #include <vector>
 
-#include "../log.h"
-#include "d3d11_capture.h"  // write_png_bgra
+#include "../../log.h"
+#include "../../probe/d3d11_capture.h"  // write_png_bgra
 
 namespace simqvfr::replay_detail {
 namespace {

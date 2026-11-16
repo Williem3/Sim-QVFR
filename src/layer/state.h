@@ -108,7 +108,7 @@ struct Experiment {
     bool views4TestHiddenMask = false;     // views4 test: a hidden-area mesh of our own (corners, centre; diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
-    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (probe/replay_probe.h)
+    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (games/ace/replay_probe.h)
     UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
     UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
     UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 0;  // replay_save_first/_every/_count

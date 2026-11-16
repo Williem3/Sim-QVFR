@@ -20,7 +20,7 @@
 #include "probe/gpu_load.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/session_graphics.h"

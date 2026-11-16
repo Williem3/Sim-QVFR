@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "focus_ngx.h"
+#include "../../probe/focus_ngx.h"
 
 namespace simqvfr::replay_detail {
 

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "../log.h"
+#include "../../log.h"
 
 namespace simqvfr::replay_detail {
 

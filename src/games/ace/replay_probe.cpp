@@ -21,14 +21,14 @@
 
 #include <wrl/client.h>
 
-#include "../engine/code_patch.h"
-#include "../log.h"
-#include "../xr.h"
-#include "d3d11_capture.h"  // write_png_bgra
-#include "focus_ngx.h"
+#include "../../engine/code_patch.h"
+#include "../../log.h"
+#include "../../xr.h"
+#include "../../probe/d3d11_capture.h"  // write_png_bgra
+#include "../../probe/focus_ngx.h"
 #include "replay_internal.h"
 #include "replay_shaders.h"
-#include "../games/ace/stereo_flag.h"
+#include "stereo_flag.h"
 
 extern "C" size_t simqvfr_slot_SetPipelineState(void);
 extern "C" size_t simqvfr_slot_CreateConstantBufferView(void);
