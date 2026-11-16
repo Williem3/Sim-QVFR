@@ -271,7 +271,7 @@ void menu_open(int64_t now) {
         menu.visible = menu.dirty = true;
         log_line("settings menu: open");
     }
-    menu.hideAt = now + qpc_ms(kMenuHideMs);
+    menu.hideAt = now + qpc_ms(menu_hide_ms());
 }
 
 void menu_press(MenuKey key, int64_t now) {
@@ -279,7 +279,7 @@ void menu_press(MenuKey key, int64_t now) {
         menu_open(now);
         return;
     }
-    menu.hideAt = now + qpc_ms(kMenuHideMs);
+    menu.hideAt = now + qpc_ms(menu_hide_ms());
     menu.dirty = true;
     if (!menu_key(menu.model, key)) {
         menu_profile_use();
@@ -293,9 +293,15 @@ void menu_press(MenuKey key, int64_t now) {
     {  // what was set, to check against what applies ("live:", "cheeky: settings applied")
         const std::vector<MenuLine> lines = menu_lines(menu.model);
         const int i = menu.model.selected;
-        if (i >= 0 && i < static_cast<int>(lines.size()))
-            logf("settings menu: %ls: %ls -> %ls", menu_title(menu.model).c_str(), lines[i].label.c_str(),
-                 lines[i].value.c_str());
+        if (i >= 0 && i < static_cast<int>(lines.size())) {
+            // With its section (the launcher's card): a page has several "Horizontal" and "Size" lines.
+            std::wstring section;
+            for (int k = i; k >= 0 && section.empty(); --k)
+                if (lines[k].header)
+                    section = L" / " + lines[k].label;
+            logf("settings menu: %ls%ls: %ls -> %ls", menu_page_name(menu.model).c_str(), section.c_str(),
+                 lines[i].label.c_str(), lines[i].value.c_str());
+        }
     }
     // Written on the ini worker (off the render thread), to the ini the layer reloads and the launcher's
     // (the next launch starts from them); the live reload follows within a frame or two. Steps quicker than the
@@ -523,12 +529,21 @@ void menu_render() {
         std::lock_guard guard(quad.mutex);
         menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
     }
-    const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
-                                                         menu_lines(menu.model),
-                                                         menu_notes(menu.model), hint, menu_subtitle(menu.model),
-                                                         menu.model.values.hotkeyFooter
-                                                             ? hotkey_footer(menu.model.values.helmet.on && experiment.composing())
-                                                             : L"");
+    menu_frame_line();
+    const MenuResolution resolution = menu_resolution(menu.model);
+    const std::vector<MenuLine> lines = menu_lines(menu.model);
+    const std::vector<std::wstring> notes = menu_notes(menu.model);
+    const std::wstring footer = menu.model.values.hotkeyFooter
+                                    ? hotkey_footer(menu.model.values.helmet.on && experiment.composing())
+                                    : L"";
+    // The list scrolls under the page switch to keep the selected line in view (menu_panel.h).
+    menu.model.scroll = menu_first_visible(
+        lines, menu.model.scroll,
+        menu_list_height(resolution.shown, notes.size() + (resolution.capped ? 1 : 0), !footer.empty()));
+    const std::vector<uint32_t> pixels =
+        draw_menu_panel(title, resolution, menu_stats(menu.model), lines, notes, hint, menu_subtitle(menu.model), footer,
+                        menu.model.frameLine, menu.model.frameBad, menu_tabs(menu.model), menu.model.page,
+                        menu.model.scroll);
     uint32_t index = 0;
     hang_watch_stage("menu panel: xrAcquireSwapchainImage");
     // A timed-out wait leaves the image acquired, not waited for: not released, waited on again at the next draw.

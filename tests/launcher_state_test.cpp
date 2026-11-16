@@ -406,6 +406,27 @@ void session_history_checks() {
     Settings hidden = a;
     hidden.cropTop = 10;  // the crop is off: its sides don't count
     check(setting_changes(a, hidden).empty(), "sessions: a crop side with the crop off is not a change");
+    {  // Sim-QVFR's own DLSS, DLSS-NR and the CPU core: a comparison and Undo see them (the tuner review's F3)
+        Settings d = a, e = a;
+        d.dlss.on = e.dlss.on = true;
+        e.dlss.focusScale = 67;
+        e.dlss.textureSharpening = 1;
+        const std::vector<std::wstring> dlss = setting_changes(d, e);
+        check(dlss.size() == 2 && dlss[0] == L"Focus views DLAA → Quality" &&
+                  dlss[1] == L"Texture sharpening Off → Focus only",
+              "sessions: DLSS's options by the DLSS card's names");
+        check(setting_changes(a, d) == std::vector<std::wstring>{L"DLSS on"}, "sessions: DLSS on");
+        Settings f = d;
+        f.dlss.upscaler = 1;
+        check(setting_changes(d, f) == std::vector<std::wstring>{L"Upscaler DLSS → FSR"}, "sessions: DLSS to FSR");
+        Settings g = a, h = a;
+        g.nr.on = h.nr.on = true;
+        h.nr.intensity = 50;
+        h.cpuIsolateMain = !a.cpuIsolateMain;
+        const std::vector<std::wstring> rest = setting_changes(g, h);
+        check(rest.size() == 2 && rest[0] == L"DLSS-NR options" && rest[1].rfind(L"Main thread", 0) == 0,
+              "sessions: DLSS-NR's options as one line, the main thread's core");
+    }
 
     const auto session = [](const wchar_t* stamp, double fps, double p90, const wchar_t* mode = L"QVFR") {
         SessionInfo s;

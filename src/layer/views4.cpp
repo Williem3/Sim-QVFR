@@ -50,10 +50,9 @@ void views4_output_chain(OutputDensity& d) {
     d.chainScale = output_chain_scale(want, d.cap);
     d.eyeW = static_cast<uint32_t>(output_density_pixels(quad.nativeW, d.chainScale, 1, 0));
     d.eyeH = static_cast<uint32_t>(output_density_pixels(quad.nativeH, d.chainScale, 1, 0));
-    if (quad.maxW)
-        d.eyeW = std::min(d.eyeW, quad.maxW);
-    if (quad.maxH)
-        d.eyeH = std::min(d.eyeH, quad.maxH);
+    // Both eyes side by side in the chain: each at most half its largest width (quad/output_density.h).
+    d.eyeW = std::min(d.eyeW, output_eye_max_width(quad.maxW));
+    d.eyeH = std::min(d.eyeH, output_eye_max_height(quad.maxH));
     if (d.wanted <= 0)  // the first chain: the launch density until a composition measures it
         d.target = output_density_next(want, 1, d.cap);
     d.scale = std::min(d.target, d.chainScale);

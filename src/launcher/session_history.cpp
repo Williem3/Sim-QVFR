@@ -86,10 +86,32 @@ std::wstring session_run_ini(const std::wstring& log) {
 
 bool baseline_mode(const std::wstring& mode) { return mode.rfind(L"Off", 0) == 0; }
 
+std::wstring session_record_id(const SessionInfo& s) {
+    const std::wstring id = session_id(s.log);
+    if (id.empty() || s.stint <= 1)
+        return id;
+    wchar_t suffix[8];
+    swprintf_s(suffix, L"-s%02d", std::min(s.stint, 99));
+    return id + suffix;
+}
+
+std::wstring stint_text(const SessionRecord& r) {
+    std::wstring length;
+    if (r.seconds >= 0)
+        length = r.seconds < 60 ? std::to_wstring(static_cast<int>(std::lround(r.seconds))) + L" s"
+                                : std::to_wstring(static_cast<int>(std::lround(r.seconds / 60))) + L" min";
+    if (r.stint <= 1)
+        return length;
+    const std::wstring stint = L"Stint " + std::to_wstring(r.stint);
+    return length.empty() ? stint : stint + L" · " + length;
+}
+
 SessionRecord session_record(const SessionInfo& s, const std::wstring& game, const Settings& settings) {
     SessionRecord r;
-    r.id = session_id(s.log);
+    r.id = session_record_id(s);
     r.game = game;
+    r.stint = s.stint;
+    r.seconds = s.seconds;
     r.time = s.time;
     r.mode = s.mode;
     r.baseline = baseline_mode(s.mode);
@@ -125,7 +147,8 @@ bool store_session(const std::wstring& folder, const SessionRecord& r, const std
     bool ok = put(L"game", r.game) && put(L"time", r.time) && put(L"mode", r.mode) && put(L"baseline", r.baseline ? L"1" : L"0") &&
               put(L"fps", number_text(r.fps)) && put(L"frame_p50_ms", number_text(r.frameP50)) &&
               put(L"frame_p90_ms", number_text(r.frameP90)) && put(L"late_percent", number_text(r.latePercent)) &&
-              put(L"cpu_ms", number_text(r.cpuMs)) && put(L"gpu_ms", number_text(r.gpuMs)) && put(L"limited", r.limited);
+              put(L"cpu_ms", number_text(r.cpuMs)) && put(L"gpu_ms", number_text(r.gpuMs)) && put(L"limited", r.limited) &&
+              put(L"stint", std::to_wstring(r.stint)) && put(L"seconds", number_text(r.seconds));
     ok = ok && MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
     if (!ok) {
         DeleteFileW(temp.c_str());
@@ -154,6 +177,8 @@ std::vector<SessionRecord> load_sessions(const std::wstring& folder) {
         r.cpuMs = read_number(file, L"cpu_ms");
         r.gpuMs = read_number(file, L"gpu_ms");
         r.limited = read(file, L"limited");
+        r.stint = static_cast<int>(std::max(0.0, read_number(file, L"stint")));
+        r.seconds = read_number(file, L"seconds");
         r.settings = load_settings(file);
         if (r.fps > 0)
             out.push_back(std::move(r));
@@ -243,6 +268,38 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         if (!(x == d))
             out.push_back(L"Foveated DLSS options");
     }
+    // Sim-QVFR's own DLSS (LMU), or AMD FSR in its place: the switch, then each option, by the DLSS card's names. The
+    // DLL's folder isn't compared (which DLL, not a setting of the picture).
+    const DlssSettings &e = a.dlss, &f = b.dlss;
+    const auto upscaler = [](const DlssSettings& d) { return std::wstring(d.upscaler == 1 ? L"FSR" : L"DLSS"); };
+    if (e.on && f.on && e.upscaler != f.upscaler)
+        values(L"Upscaler", upscaler(e), upscaler(f));
+    on_off(upscaler(f), e.on, f.on);
+    if (e.on && f.on) {
+        const auto mode = [](const DlssSettings& d) {
+            return std::wstring(d.upscaler == 1 ? kFsrFocusModes[dlss_choice_index(kFsrFocusModes, d.focusScale, true)].name
+                                                : kDlssFocusModes[dlss_choice_index(kDlssFocusModes, d.focusScale, true)].name);
+        };
+        if (e.focusScale != f.focusScale)  // by value: DLSS and FSR name the same mode differently (DLAA, Native AA)
+            values(L"Focus views", mode(e), mode(f));
+        values(L"Focus preset", kDlssFocusPresets[dlss_choice_index(kDlssFocusPresets, e.focusPreset)].name,
+               kDlssFocusPresets[dlss_choice_index(kDlssFocusPresets, f.focusPreset)].name);
+        values(L"Periphery preset", kDlssEyePresets[dlss_choice_index(kDlssEyePresets, e.eyePreset)].name,
+               kDlssEyePresets[dlss_choice_index(kDlssEyePresets, f.eyePreset)].name);
+        values(L"Texture sharpening",
+               kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, e.textureSharpening, true)].name,
+               kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, f.textureSharpening, true)].name);
+        on_off(L"Other cars’ motion", e.carVectors, f.carVectors);
+    }
+    // DLSS-NR on those views: the switch, and one line for its options (preset, style, the sliders, the periphery).
+    on_off(L"Use DLSS-NR", a.nr.on, b.nr.on);
+    if (a.nr.on && b.nr.on) {
+        NrSettings x = a.nr;
+        x.folder = b.nr.folder;
+        if (!(x == b.nr))
+            out.push_back(L"DLSS-NR options");
+    }
+    on_off(L"Main thread’s own core", a.cpuIsolateMain, b.cpuIsolateMain);  // CPU boost: the main thread's frame time
     return out;
 }
 

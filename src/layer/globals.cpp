@@ -69,6 +69,8 @@ Pacing pacing;
 
 SessionSummary summary;
 
+std::atomic<uint32_t> stintGeneration{0};
+
 std::string layersBelow;  // the layers between this one and the runtime (log_layer_order)
 
 IDXGIAdapter3* vramAdapter = nullptr;

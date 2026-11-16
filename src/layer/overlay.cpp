@@ -60,6 +60,26 @@ void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_orde
 
 bool frame_generation_on() { return cheeky_running() && osd.cheeky.processing && osd.cheeky.fg; }
 
+int64_t menu_hide_ms() { return osd.placement.enabled ? kMenuHideOverlayMs : kMenuHideMs; }
+
+void menu_frame_line() {
+    bool bad = false;
+    OsdSummary s;
+    std::wstring line;
+    if (osd_shown(s)) {
+        line = osd_menu_line(s, bad);
+    } else if (!osd.placement.enabled) {  // on, its first numbers not in yet: nothing
+        const Hotkey& h = hotkeys[static_cast<int>(HotkeyAction::Overlay)];
+        const std::wstring key = h.key.set() ? key_text(h.key) : h.pad.set() ? L"wheel " + control_text(h.pad.control) : L"";
+        line = key.empty() ? L"Turn the overlay on for frame times" : L"Overlay off: " + key + L" for frame times";
+    }
+    if (line != menu.model.frameLine || bad != menu.model.frameBad) {
+        menu.model.frameLine = line;
+        menu.model.frameBad = bad;
+        menu.dirty = true;
+    }
+}
+
 bool osd_shown(OsdSummary& out) {
     if (!osd.placement.enabled || !osd.shownValid)
         return false;
@@ -102,6 +122,11 @@ void osd_measure(XrTime displayTime) {
         OsdFrame frame;
         frame.intervalMs = static_cast<double>(now - osd.lastEnd) * 1000.0 / static_cast<double>(qpc_ms(1000));
         frame.refreshes = refreshes;
+        // A setting changed since the last frame (the session record's stints count them, live_ini.cpp): marked.
+        static uint32_t seenGeneration = stintGeneration.load(std::memory_order_relaxed);
+        const uint32_t generation = stintGeneration.load(std::memory_order_relaxed);
+        frame.changed = generation != seenGeneration;
+        seenGeneration = generation;
         if (thread == osd.waitThread && osd.waitReturnQpc > osd.lastEnd && osd.cyclesPerMs > 0) {
             // The render thread's work for the frame: from xrWaitFrame's return, its wall time and what of it ran.
             frame.workMs = static_cast<double>(now - osd.waitReturnQpc) * 1000.0 / static_cast<double>(qpc_ms(1000));
@@ -416,6 +441,8 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         OsdInput in = osd_input(now);
         osd.shown = osd_summary(in);  // also for the log
         osd.shownValid = true;
+        if (menu.visible)
+            menu_frame_line();
         SYSTEMTIME local{};
         GetLocalTime(&local);  // the card's clock (redrawn every kOsdDrawMs: the minute turns over in time)
         osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,

@@ -18,10 +18,22 @@
 #include "probe/gpu_load.h"
 #include "probe/vram_census.h"
 #include "quad/osd.h"
+#include "quad/session_stint.h"
 #include "xr.h"
 #include "layer/layer.h"
 
 namespace simqvfr::layer {
+
+namespace {
+
+// The session record's stint (quad/session_stint.h), fed each report window: the window's frame intervals and slow
+// frames (report_pacing keeps them before it resets), and when the window began (the menu open in it drops it).
+SessionStint stint;
+std::vector<float> stintIntervals;
+uint64_t stintSlow = 0;
+int64_t stintWindowStart = 0;
+
+}  // namespace
 
 int64_t qpc_now() {
     LARGE_INTEGER t;
@@ -107,6 +119,8 @@ double report_pacing() {
              static_cast<unsigned long long>(pacing.slowFrames), static_cast<double>(pacing.slowestNs) / 1e6,
              1e9 / static_cast<double>(pacing.slowestNs),
              100.0 * static_cast<double>(pacing.sessionSlowFrames) / static_cast<double>(pacing.sessionFrames));
+    stintIntervals = pacing.interval;
+    stintSlow = pacing.slowFrames;
     pacing.slowFrames = 0;
     pacing.slowestNs = 0;
     summary.halfRatePercent = pacing.sessionFrames ? 100.0 * static_cast<double>(pacing.sessionSlowFrames) /
@@ -216,9 +230,26 @@ void report_vram() {
 // Diagnostics pane shows after the session (launcher/settings.h's SessionInfo). `layerMs`: the layer's own
 // CPU time per frame on ACE's render thread.
 void write_session_summary(double layerMs) {
-    if (summary.fps <= 0)
-        return;
-    const SessionSummary s = summary;
+    // The stint's numbers, not this window's: a window with the headset menu open in it (or the optimizer stepping)
+    // is left out, and a settings change starts a new stint (live_reload's generation).
+    const bool menuOpen = stintWindowStart == 0 || menu.visible || menu.hideAt >= stintWindowStart;
+    stintWindowStart = qpc_now();
+    stint_key_init();
+    stint.add(stintGeneration.load(std::memory_order_relaxed), menuOpen,
+              {&stintIntervals, summary.periodMs, stintSlow, summary.cpuMs, summary.gpuMs, summary.gpuBusy, summary.cores});
+    if (summary.fps <= 0 || !stint.known())
+        return;  // nothing new for the record: the last stint's numbers stay
+    const StintNumbers st = stint.numbers();
+    SessionSummary s = summary;
+    s.fps = st.fps;
+    s.frameP50 = st.frameP50;
+    s.frameP90 = st.frameP90;
+    s.latePercent = st.latePercent;
+    s.halfRatePercent = st.halfRatePercent;
+    s.cpuMs = st.cpuMs;
+    s.gpuMs = st.gpuMs;
+    s.gpuBusy = st.gpuBusy;
+    s.cores = st.cores;
     // What limits the frame: the GPU busy all the time, or the render thread near its whole budget (the
     // spinning Physics and eye-tracker threads are not counted: they look busy whatever limits the frame).
     const wchar_t* limited = s.gpuBusy >= 95                                ? L"GPU"
@@ -253,7 +284,7 @@ void write_session_summary(double layerMs) {
     GetEnvironmentVariableW(L"SIM_QVFR_LOG", log, MAX_PATH);
     const std::wstring profile = cpu_profile_last_report();
     const std::wstring layers(layersBelow.begin(), layersBelow.end());
-    ini_write_later([s, limited = std::wstring(limited), threads, time = std::wstring(time), mode, fg, gazeMs, layerMs,
+    ini_write_later([s, st, limited = std::wstring(limited), threads, time = std::wstring(time), mode, fg, gazeMs, layerMs,
                      log = std::wstring(log), profile, layers] {
         const auto number = [](double v, int digits) {
             if (v < 0)
@@ -264,6 +295,8 @@ void write_session_summary(double layerMs) {
         };
         runtime_info(L"session_time", time);
         runtime_info(L"session_mode", mode);
+        runtime_info(L"session_stint", std::to_wstring(st.index));
+        runtime_info(L"session_stint_seconds", number(st.seconds, 0));
         runtime_info(L"session_fps", number(s.fps, 1));
         runtime_info(L"session_frame_p50_ms", number(s.frameP50, 2));
         runtime_info(L"session_frame_p90_ms", number(s.frameP90, 2));

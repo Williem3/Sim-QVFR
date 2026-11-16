@@ -25,7 +25,8 @@ Card menu_card() {
         b.toggle(kHotkeyFooter, L"Show the hotkeys under the menu", app.s.hotkeyFooter,
                  L"The in-game hotkeys and their wheel buttons, on a line under it.");
         b.note(L"Ctrl+Alt+arrows (or your keys and wheel buttons below) open it while the game has focus, or a click of the "
-               L"left stick; the right stick selects and changes. It hides after a few seconds.");
+               L"left stick; the right stick selects and changes. It hides 6 s after your last press, 15 s with the performance overlay on, which "
+               L"also puts the frame times beside its title.");
     };
     c.reset = [](Settings& s) {
         const Settings d;
@@ -47,7 +48,7 @@ Card overlay_card() {
             r.sliders({kOsdYaw, L"Horizontal", app.s.osd.yaw, L"°"}, {kOsdPitch, L"Vertical", app.s.osd.pitch, L"°"});
             r.slider({kOsdSize, L"Size", app.s.osd.width, L"°"});
         });
-        b.note(L"Ctrl+Alt+P in the game turns it on and off; the headset menu’s Overlay and menu page moves it too.");
+        b.note(L"Ctrl+Alt+P in the game turns it on and off; the headset menu’s Headset page moves it too.");
     };
     c.reset = [](Settings& s) { s.osd = OsdPlacement{}; };
     return c;
@@ -63,7 +64,7 @@ Card clock_card() {
             r.sliders({kClockYaw, L"Horizontal", app.s.clock.yaw, L"°"}, {kClockPitch, L"Vertical", app.s.clock.pitch, L"°"});
             r.slider({kClockSize, L"Size", app.s.clock.width, L"°"});
         });
-        b.note(L"The performance overlay keeps its own clock; the headset menu’s Overlay and menu page turns this one on "
+        b.note(L"The performance overlay keeps its own clock; the headset menu’s Headset page turns this one on "
                L"and off and moves it too.");
     };
     c.reset = [](Settings& s) { s.clock = ClockPlacement{}; };
@@ -80,8 +81,8 @@ Card vision_card() {
         b.note(app.s.eyeOff == 0
                    ? L"For a player who sees with one eye: the eye you choose shows black, and the game stops rendering "
                      L"most of it, which saves GPU time."
-                   : L"That eye shows black, and the game renders only a few pixels of it. The headset menu’s Overlay and "
-                     L"menu page changes it too.");
+                   : L"That eye shows black, and the game renders only a few pixels of it. The headset menu’s Picture tab "
+                     L"changes it too.");
     };
     c.reset = [](Settings& s) { s.eyeOff = Settings{}.eyeOff; };
     return c;

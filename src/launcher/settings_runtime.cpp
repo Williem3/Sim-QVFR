@@ -152,6 +152,8 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     s.layersBelow = read_string(path, L"runtime", L"session_layers_below");
     s.log = read_string(path, L"runtime", L"session_log");
     s.cpuProfile = read_string(path, L"runtime", L"session_cpu_profile");
+    s.stint = read_int(path, L"runtime", L"session_stint", 0);
+    s.seconds = number(L"session_stint_seconds");
     s.fps = number(L"session_fps");
     s.frameP50 = number(L"session_frame_p50_ms");
     s.frameP90 = number(L"session_frame_p90_ms");

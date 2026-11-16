@@ -46,6 +46,9 @@ struct OsdFrame {
     // The display refreshes from the previous frame's display time to this one's (osd_refreshes_between): 1 shown on
     // its refresh, 2 or more the runtime showed a frame again in between. 0: unknown.
     int refreshes = 0;
+    // A setting that changes the picture or its cost changed just before this frame (the headset menu or the launcher):
+    // the frame graph marks it, so a step's effect lines up with the step.
+    bool changed = false;
 };
 
 // The display refreshes between two frames' display times (xrEndFrame's displayTime, ns) at the display's period
@@ -131,6 +134,10 @@ struct OsdSummary {
     OsdBound bound = OsdBound::Unknown;
 };
 OsdSummary osd_summary(const OsdInput& input);
+
+// The headset menu's frame line, from what the overlay last showed: "GPU 9.8 ms · CPU 7.1 ms · 1.3 ms left · 0% missed"
+// ("0.8 ms over" past the budget). `bad`: over the budget, or frames missing the headset (the line in red).
+std::wstring osd_menu_line(const OsdSummary& summary, bool& bad);
 
 // The colours of the card's state: macOS's system green, yellow and red, and grey.
 enum class OsdTone { Neutral, Good, Warn, Bad };

@@ -107,10 +107,10 @@ int SIM_QVFR_TEST_MAIN() {
                 !simqvfr::games::anticheat_running(ace::kGame, found) && found.empty();
             check(std::wstring(lmu::kGame.exeName) == L"Le Mans Ultimate.exe" && std::wstring(lmu::kGame.launchArgs) == L"+XR" &&
                       lmu::kGame.openComposite == nullptr && lmu::kGame.features.fovCrop && lmu::kGame.features.helmet &&
-                      !lmu::kGame.features.liveResolution && !lmu::kGame.features.foveatedDlss &&
+                      lmu::kGame.features.liveResolution && !lmu::kGame.features.foveatedDlss &&
                       simqvfr::games::game_for_exe(L"le mans ultimate.exe") == &lmu::kGame &&
                       simqvfr::games::supported_build(lmu::kGame, lmu::kBuilds[0]) && lmuAntiCheatListed,
-                  "games: Le Mans Ultimate's identity (own OpenXR, +XR, FOV crop and helmet, no live resolution flag yet, "
+                  "games: Le Mans Ultimate's identity (own OpenXR, +XR, FOV crop, helmet and live resolution, "
                   "anti-cheat listed)");
         }
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==

@@ -240,6 +240,23 @@ int SIM_QVFR_TEST_MAIN() {
         unsigned eye[2], focus[2];
         check(fits(l, live, 6812, 6502, eye, focus), "beside, no crop: the rounded passes fit side by side");
     }
+    {  // 2026-11-16: focus density asked above the launch's (161% of a 25% box, launch 40% x 40% beside a 40% periphery, a
+       // 5190 x 4168 eye): capped at the room with its slack, the focus came out 2085 beside a 2076 eye in a 4160 target
+       // and multi-view rendering stopped. Capped, it stays the launch's focus size, and fits.
+        simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.40, 0.40);
+        l.secondViewRoom = l.secondViewBeside = true;
+        const simqvfr::Views4Fit fit = simqvfr::views4_fit_one_size(l, 0.40, 0.4025, 0.4025);
+        check(fit.focusCapped && fit.focus <= 0.40 + 1e-9 && fit.focusHeight <= 0.40 + 1e-9,
+              "above the launch: the focus capped at the launch's size, the layer's slack left free");
+        const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.40, 0.4025, 0.4025);
+        unsigned eye[2], focus[2];
+        const bool ok = fits(l, live, 5190, 4168, eye, focus);
+        check(ok, "above the launch: the rounded eye and focus passes still fit side by side");
+        if (!ok)
+            std::printf("  eye %ux%u focus %ux%u\n", eye[0], eye[1], focus[0], focus[1]);
+        const simqvfr::Views4Fit at = simqvfr::views4_fit_one_size(l, 0.40, 0.40, 0.40);
+        check(!at.focusCapped && std::fabs(at.focus - 0.40) < 1e-9, "at the launch size: not capped, unchanged");
+    }
     {  // The 2026-11-09 Pimax report (issue 11): periphery 30%, focus 200% of a 20% x 20% box: focus 0.40 x 0.40 of a
        // 6812 x 6502 eye. The image was 0.80 x 0.60 (5449 x 3901): the eye rendered 2725 x 1951 (0.40 x 0.30, a third
        // wider than asked), and 2725 + 2725 overran 5449, so the eye's pass never drew its focus view.

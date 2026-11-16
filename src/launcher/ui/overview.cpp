@@ -226,10 +226,14 @@ float game_panel(float x, float y, float w, bool draw) {
     const std::vector<const SessionRecord*> sessions = game_sessions();
     if (draw) {
         cv.text(L"Last session", t::kFootnote, {x + kPad, by + 2, inner, 14}, col(app.c->label));
-        reader_text({x + kPad, by, inner, 18}, sessions.empty() ? L"Last session" : L"Last session, " + short_time(sessions.front()->time), 3);
+        // When, and how long it covers: the stint since the last settings change, the headset menu's moments left out.
+        const std::wstring when = sessions.empty() ? L""
+                                  : stint_text(*sessions.front()).empty()
+                                      ? short_time(sessions.front()->time)
+                                      : stint_text(*sessions.front()) + L" · " + short_time(sessions.front()->time);
+        reader_text({x + kPad, by, inner, 18}, sessions.empty() ? L"Last session" : L"Last session, " + when, 3);
         if (!sessions.empty())
-            cv.text(short_time(sessions.front()->time), t::kCallout, {x + kPad, by, inner, 18}, col(app.c->label_secondary),
-                    Align::Trailing);
+            cv.text(when, t::kCallout, {x + kPad, by, inner, 18}, col(app.c->label_secondary), Align::Trailing);
     }
     by += 18 + 10;
     if (sessions.empty()) {

@@ -198,6 +198,8 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
             const int refreshes = osd_refreshes(history[i], summary.budgetMs);
             const uint32_t colour = refreshes <= 1 ? kGreen : refreshes == 2 ? kYellow : kRed;
             fill(dc, left, graphBottom - 6 - h, right, graphBottom - 6, mix(kTrack, colour, 0.8));
+            if (history[i].changed)  // a settings change: a full-height tick, to line a step up with what followed
+                fill(dc, left, graphTop + 4, left + 3, graphBottom - 4, kPrimary);
         }
         if (summary.budgetMs > 0 && scale > 0) {
             const int line = graphBottom - 6 - static_cast<int>(height * summary.budgetMs / scale);

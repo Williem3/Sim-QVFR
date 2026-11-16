@@ -13,7 +13,17 @@ constexpr uint32_t kBackground = 0x16181c, kHighlight = 0x0a6e78, kLabel = 0xe8e
                    kCapped = 0xff6b5e;  // a value that did not take, and why
 constexpr uint8_t kAlpha = 0xe6;
 constexpr int kCornerRadius = 32;  // as the overlay's card
-constexpr int kMargin = 36, kLineHeight = 50, kTitleHeight = 64;
+constexpr int kMargin = 36, kLineHeight = kMenuLineHeight, kTitleHeight = 64;
+constexpr int kTabsHeight = 48, kRowHeight = 36, kNoteHeight = 34;
+constexpr uint32_t kHeading = 0x7fd4dc;  // a section's heading: the highlight's teal, lighter (readable on the panel)
+
+// The rows above the list: title, tabs, the Launch max row (or not), the stats or subtitle, the page switch.
+int list_top(bool resolutionShown) {
+    return 16 + kTitleHeight + kTabsHeight + (resolutionShown ? kRowHeight : 0) + kRowHeight + 8 + kLineHeight;
+}
+// Where the notes end: the footer's top, or the hint's.
+int notes_bottom(bool footer) { return kPanelHeight - (footer ? 96 : 56); }
+int row_height(const MenuLine& line) { return line.header ? kMenuHeaderHeight : kLineHeight; }
 
 COLORREF gdi(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
@@ -31,12 +41,55 @@ void text(HDC dc, HFONT font, const std::wstring& s, int left, int top, int righ
     DrawTextW(dc, s.c_str(), static_cast<int>(s.size()), &r, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 }
 
+int text_width(HDC dc, HFONT font, const std::wstring& s) {
+    SelectObject(dc, font);
+    SIZE size{};
+    GetTextExtentPoint32W(dc, s.c_str(), static_cast<int>(s.size()), &size);
+    return static_cast<int>(size.cx);
+}
+
 }  // namespace
+
+int menu_list_height(bool resolutionShown, size_t notes, bool footer) {
+    const int shown = static_cast<int>(std::min<size_t>(notes, 3));
+    return notes_bottom(footer) - (shown ? 6 + shown * kNoteHeight : 0) - 6 - list_top(resolutionShown);
+}
+
+int menu_first_visible(const std::vector<MenuLine>& lines, int first, int heightPx) {
+    const int n = static_cast<int>(lines.size());
+    if (n <= 1)
+        return 1;
+    first = std::clamp(first, 1, n - 1);
+    int selected = -1;
+    for (int i = 1; i < n; ++i)
+        if (lines[i].selected)
+            selected = i;
+    const auto fits = [&](int from, int to) {  // lines from..to (inclusive) in the height
+        int h = 0;
+        for (int i = from; i <= to; ++i)
+            h += row_height(lines[i]);
+        return h <= heightPx;
+    };
+    if (selected >= 1) {
+        // Up past the top: the selected line first, with its section's heading if that is right above it.
+        if (selected < first)
+            first = selected > 1 && lines[selected - 1].header ? selected - 1 : selected;
+        // Down past the bottom: as little scroll as shows it.
+        while (first < selected && !fits(first, selected))
+            ++first;
+    }
+    // No empty room at the end while lines above are hidden.
+    while (first > 1 && fits(first - 1, n - 1))
+        --first;
+    return first;
+}
 
 std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResolution& resolution,
                                       const MenuStats& stats, const std::vector<MenuLine>& lines,
                                       const std::vector<std::wstring>& notes, const std::wstring& hint,
-                                      const std::wstring& subtitle, const std::wstring& footer) {
+                                      const std::wstring& subtitle, const std::wstring& footer,
+                                      const std::wstring& frame, bool frameBad,
+                                      const std::vector<std::wstring>& tabs, int tab, int first) {
     std::vector<uint32_t> out(static_cast<size_t>(kPanelWidth) * kPanelHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -59,14 +112,38 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
         return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     };
-    HFONT titleFont = font(38, FW_SEMIBOLD), lineFont = font(34, FW_NORMAL), smallFont = font(26, FW_NORMAL);
+    HFONT titleFont = font(38, FW_SEMIBOLD), lineFont = font(34, FW_NORMAL), smallFont = font(26, FW_NORMAL),
+          tabFont = font(26, FW_SEMIBOLD), headingFont = font(24, FW_SEMIBOLD);
     SetBkMode(dc, TRANSPARENT);
     fill(dc, 0, 0, kPanelWidth, kPanelHeight, kBackground);
     text(dc, titleFont, title, kMargin, 16, kPanelWidth - kMargin, 16 + kTitleHeight, kLabel, DT_LEFT);
+    // The frame times, from the performance overlay, beside the title: a step's effect without turning to the overlay.
+    if (!frame.empty()) {  // right-aligned, after the title (the longest, "QVFR (API path) settings", leaves ~480 px)
+        SelectObject(dc, titleFont);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, title.c_str(), static_cast<int>(title.size()), &size);
+        text(dc, smallFont, frame, kMargin + static_cast<int>(size.cx) + 28, 16, kPanelWidth - kMargin, 16 + kTitleHeight,
+             frameBad ? kCapped : kDim, DT_RIGHT | DT_END_ELLIPSIS);
+    }
     int y = 16 + kTitleHeight;
+    // The pages as tabs: the current one filled, as the launcher's tab rail marks where you are.
+    {
+        int x = kMargin - 14;
+        for (size_t i = 0; i < tabs.size(); ++i) {
+            const int w = text_width(dc, tabFont, tabs[i]) + 28;
+            const bool on = static_cast<int>(i) == tab;
+            if (on)
+                fill(dc, x, y + 4, x + w, y + kTabsHeight - 8, kHighlight);
+            text(dc, tabFont, tabs[i], x, y + 4, x + w, y + kTabsHeight - 8, on ? kLabel : kDim, DT_CENTER);
+            x += w + 8;
+        }
+        if (!tabs.empty())
+            fill(dc, kMargin - 14, y + kTabsHeight - 4, kPanelWidth - kMargin + 14, y + kTabsHeight - 2, kHighlight);
+        y += kTabsHeight;
+    }
     // ACE's render target: the most this launch allows and what renders now.
     if (resolution.shown) {
-        text(dc, smallFont, L"Max  " + resolution.max, kMargin, y, kPanelWidth / 2, y + 36, kDim, DT_LEFT);
+        text(dc, smallFont, L"Launch max  " + resolution.max, kMargin, y, kPanelWidth / 2, y + 36, kDim, DT_LEFT);
         text(dc, smallFont, L"Now  " + resolution.current, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel,
              DT_RIGHT);
         y += 36;
@@ -83,22 +160,50 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
              DT_RIGHT);
     }
     y += 36 + 8;
-    for (const MenuLine& line : lines) {
+    // A setting's line: its label up to its value (the launcher's long names never run under it), the value right.
+    const auto draw_line = [&](const MenuLine& line, int top) {
         if (line.selected)
-            fill(dc, kMargin - 16, y, kPanelWidth - kMargin + 16, y + kLineHeight, kHighlight);
-        text(dc, lineFont, line.label, kMargin, y, kPanelWidth / 2 + 120, y + kLineHeight, kLabel, DT_LEFT);
+            fill(dc, kMargin - 16, top, kPanelWidth - kMargin + 16, top + kLineHeight, kHighlight);
         const std::wstring value = line.selected ? L"◀  " + line.value + L"  ▶" : line.value;
-        text(dc, lineFont, value, kPanelWidth / 2 - 120, y, kPanelWidth - kMargin, y + kLineHeight,
-             line.capped ? kCapped : kLabel, DT_RIGHT);
-        y += kLineHeight;
-    }
-    y += 6;
+        // The arrows come from a fallback font that GetTextExtentPoint32 measures narrower than it draws: room added.
+        const int valueWidth = text_width(dc, lineFont, value) + (line.selected ? 24 : 0);
+        const int valueLeft = std::max(kPanelWidth / 2 - 160, kPanelWidth - kMargin - valueWidth);
+        text(dc, lineFont, line.label, kMargin, top, valueLeft - 16, top + kLineHeight, kLabel, DT_LEFT | DT_END_ELLIPSIS);
+        text(dc, lineFont, value, valueLeft - 24, top, kPanelWidth - kMargin, top + kLineHeight, line.capped ? kCapped : kLabel,
+             DT_RIGHT);
+    };
     std::vector<std::wstring> red;
     if (resolution.capped)
         red.push_back(L"Asked for " + resolution.asked + L": more than the max");
     red.insert(red.end(), notes.begin(), notes.end());
-    for (size_t i = 0; i < red.size() && i < 3; ++i, y += 34)
-        text(dc, smallFont, red[i], kMargin, y, kPanelWidth - kMargin, y + 34, kCapped, DT_LEFT | DT_END_ELLIPSIS);
+    // The page switch, pinned; under it the list from `first`, as much as fits above the notes.
+    if (!lines.empty()) {
+        draw_line(lines[0], y);
+        y += kLineHeight;
+    }
+    const int listBottom = y + menu_list_height(resolution.shown, red.size(), !footer.empty());
+    const int from = std::clamp(first, 1, std::max(1, static_cast<int>(lines.size())));
+    if (from > 1)  // lines hidden above
+        text(dc, smallFont, L"▲", kPanelWidth - kMargin + 4, y, kPanelWidth - 6, y + 30, kDim, DT_CENTER);
+    int last = from - 1;
+    for (int i = from; i < static_cast<int>(lines.size()); ++i) {
+        const MenuLine& line = lines[i];
+        if (y + row_height(line) > listBottom)
+            break;
+        if (line.header) {  // the card's name, with a rule over it
+            fill(dc, kMargin, y + 8, kPanelWidth - kMargin, y + 9, kDim);
+            text(dc, headingFont, line.label, kMargin, y + 10, kPanelWidth - kMargin, y + kMenuHeaderHeight, kHeading, DT_LEFT);
+        } else {
+            draw_line(line, y);
+        }
+        y += row_height(line);
+        last = i;
+    }
+    if (last < static_cast<int>(lines.size()) - 1)  // lines hidden below
+        text(dc, smallFont, L"▼", kPanelWidth - kMargin + 4, listBottom - 30, kPanelWidth - 6, listBottom, kDim, DT_CENTER);
+    y = listBottom + 6;
+    for (size_t i = 0; i < red.size() && i < 3; ++i, y += kNoteHeight)
+        text(dc, smallFont, red[i], kMargin, y, kPanelWidth - kMargin, y + kNoteHeight, kCapped, DT_LEFT | DT_END_ELLIPSIS);
     if (!footer.empty())  // the in-game hotkeys, over the menu's own hint
         text(dc, smallFont, footer, kMargin, kPanelHeight - 96, kPanelWidth - kMargin, kPanelHeight - 56, kDim,
              DT_LEFT | DT_END_ELLIPSIS);
@@ -113,7 +218,7 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
             out[i] = panel_rgba(src[i], static_cast<uint8_t>(kAlpha * coverage + 0.5));
         }
     SelectObject(dc, previous);
-    for (HFONT f : {titleFont, lineFont, smallFont})
+    for (HFONT f : {titleFont, lineFont, smallFont, tabFont, headingFont})
         DeleteObject(f);
     DeleteObject(bitmap);
     DeleteDC(dc);

@@ -228,7 +228,13 @@ inline Views4Fit views4_fit_one_size(const Views4Layout& launch, double outer, d
                                      double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
-    const double layerW = launch.view_room_width(), layerH = launch.view_room_height();  // one view's most
+    // One view's most. With room for a second view the layer is kRoomSlack larger than its views need, for the game's
+    // rounding up: a focus view capped at the room alone, slack included, came out a pixel wider than fits beside its
+    // eye (2026-11-16, LMU: focus density asked above the launch's, eye 2076 + focus 2085 in a 4160 target, and
+    // multi-view rendering stopped). So the slack stays out of it: beside, the room is exactly the launch's focus size.
+    const double slackW = launch.secondViewRoom ? launch.layer_width() * Views4Layout::kRoomSlack / (1 + Views4Layout::kRoomSlack) : 0;
+    const double slackH = launch.secondViewRoom ? launch.layer_height() * Views4Layout::kRoomSlack / (1 + Views4Layout::kRoomSlack) : 0;
+    const double layerW = launch.view_room_width() - slackW, layerH = launch.view_room_height() - slackH;
     Views4Fit f;
     f.outer = std::clamp(outer, kMinLive * launch.outer,
                          std::min(launch.outer_room_width() / cw, launch.outer_room_height() / ch));

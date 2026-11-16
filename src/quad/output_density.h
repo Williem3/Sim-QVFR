@@ -26,14 +26,25 @@ inline double output_density_wanted(double focusTexels, double focusTanWidth, do
     return (focusTexels / focusTanWidth) / (nativeW / eyeTanWidth);
 }
 
-// The largest scale of the native eye: the runtime's largest image (0: unknown, no limit) and [quad]
-// output_density_max (percent; 100 = native, as before this). At least 1.
+// The largest image a D3D11 or D3D12 texture can be across or down (D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION): the
+// output chain's limit too where the runtime says none.
+inline constexpr uint32_t kOutputImageMax = 16384;
+
+// The largest output eye, in pixels across: the output chain holds both eyes side by side (session.cpp,
+// views4_d3d11.cpp: 2 x the eye wide), so half the runtime's largest image width (0: unknown, then the texture limit).
+inline uint32_t output_eye_max_width(uint32_t maxW) { return std::min(maxW ? maxW : kOutputImageMax, kOutputImageMax) / 2; }
+inline uint32_t output_eye_max_height(uint32_t maxH) { return std::min(maxH ? maxH : kOutputImageMax, kOutputImageMax); }
+
+// The largest scale of the native eye: the output chain's largest eye (output_eye_max_width: half the runtime's
+// largest image across, both eyes side by side; before 2026-11-16 the whole width, and above ~158% of a 5190 px eye
+// the chain came out wider than a texture can be and the right eye was broken) and [quad] output_density_max
+// (percent; 100 = native, as before this). At least 1.
 inline double output_density_cap(uint32_t nativeW, uint32_t nativeH, uint32_t maxW, uint32_t maxH, int maxPercent) {
     double cap = std::max(1.0, maxPercent / 100.0);
-    if (nativeW && maxW)
-        cap = std::min(cap, static_cast<double>(maxW) / nativeW);
-    if (nativeH && maxH)
-        cap = std::min(cap, static_cast<double>(maxH) / nativeH);
+    if (nativeW)
+        cap = std::min(cap, static_cast<double>(output_eye_max_width(maxW)) / nativeW);
+    if (nativeH)
+        cap = std::min(cap, static_cast<double>(output_eye_max_height(maxH)) / nativeH);
     return std::max(1.0, cap);
 }
 

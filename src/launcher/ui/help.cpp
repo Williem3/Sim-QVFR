@@ -49,10 +49,11 @@ constexpr Help kHelp[] = {
      L"its text and edges readable in light and dark mode."},
     {L"Focus width",
      L"The focus area’s width, a share of the view. Wider hides the edge between sharp and soft better; its pixels cost "
-     L"density × width × height, so a wide area at a high density costs the most."},
+     L"density × width × height, so a wide area at a high density costs the most. It changes while you drive; wider "
+     L"than the game started with (at your density) renders less dense until the next launch."},
     {L"Focus height",
      L"The focus area’s height, a share of the view. Taller covers more of the dash and mirrors; it costs pixels as the "
-     L"width does."},
+     L"width does. Taller than the game started with (at your density) renders less dense until the next launch."},
     {L"Corner radius", L"Rounds the focus area’s corners, so its edge is harder to spot. No cost: the area renders as a rectangle "
                        L"either way."},
     {L"Feather", L"The band where the focus area blends into the outer view. Wider hides the edge better; no measurable cost."},
@@ -110,7 +111,9 @@ constexpr Help kHelp[] = {
      L"refresh). Lowering resolution helps only when the GPU limits it."},
     {L"Previous session",
      L"The session before the last one for this game, and the settings changed in between, so you can see what a change "
-     L"did. Compare runs on the same track and car for a fair difference."},
+     L"did. A change while you drive (here or in the headset menu) starts a new stint, kept as its own entry; each covers "
+     L"the whole stint, with the moments the headset menu was open left out. Compare runs on the same track and car for "
+     L"a fair difference."},
     {L"Run with anti-cheat",
      L"Starts the game through its anti-cheat (Easy Anti-Cheat), as Steam does, with Sim-QVFR running, so you can join online "
      L"servers. Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it. Sim-QVFR and its "
@@ -200,9 +203,6 @@ constexpr Help kHelp[] = {
      L"Lowering it reaches a running game at once, and so does raising it back up to what the game started with. Above "
      L"that, it takes effect at the next launch. With DLSS on in the game, the views keep their launch sizes until the "
      L"next launch."},
-    {L"Focus region",
-     L"Changes reach a running game at once. A focus area wider or taller than the game started with renders at a lower "
-     L"density until the next launch, which sizes its view to fit."},
     {L"Next game start", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
                      L"what it started with."},
     {L"Show the clock",
@@ -283,7 +283,7 @@ constexpr Help kHelp[] = {
     {L"Size", L"How wide it is, in degrees of your view."},
     {L"Show the hotkeys under the menu",
      L"A line under the headset menu with the in-game hotkeys (overlay, visor, CPU capture) and their wheel buttons, as set "
-     L"in Hotkeys. Also on the menu’s Overlay and menu page."},
+     L"in Hotkeys. Also on the menu’s Headset page."},
     {L"Open or close", L"Opens the headset menu, or closes it."},
     {L"Up", L"Selects the line above in the headset menu."},
     {L"Down", L"Selects the line below in the headset menu."},

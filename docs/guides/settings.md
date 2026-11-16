@@ -65,7 +65,25 @@ Each card says when its settings apply:
 ## Changing settings while you play
 
 Press **Ctrl+Alt+arrow keys** (or the button you set in **Headset › Hotkeys**) to open the **headset menu**.
-Up and down choose a setting, left and right change it. Changes apply straight away and are saved.
+Up and down choose a setting, left and right change it. Changes apply straight away and are saved. Its pages are
+tabs, and their sections the launcher's cards, by the same names: **Picture** (Resolution, the game's upscaler:
+DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), **Foveation**, **View** (View & helmet),
+**Headset** (Headset menu, Performance overlay, Clock) and **Game** (CPU). The tabs under the title show where you are: on the
+top line, **Page**, left and right go to the page before or after. A long page scrolls; arrows at its right edge
+show there is more above or below. With the
+performance overlay on, the menu shows your GPU and CPU frame times, the time left in the frame and the share of missed
+frames beside its title, stays open 15 s after your last press (6 s without the overlay), and the overlay's frame
+graph marks each change with a white tick, so you can see what a step did.
+
+Live changes can go down from what the game started with, and back up to it, but not above it: **launch with your
+highest settings, then lower them in the headset.** A setting above the launch size shows its value in red with what
+renders now, for example "185% (160% now)".
+
+**Auto-fit to headset rate**, in the Resolution section of the headset menu's Picture tab (QVFR; not in the truck simulators), tunes
+for you: press **Right** and keep driving. It measures your GPU time for a few seconds at a time and sets the periphery
+resolution, focus density and focus size to fill about 88% of the frame budget (90 fps at 90 Hz). It lowers them when
+frames run late and raises them, up to the launch size, when there's headroom. **Left** puts back what you had. It
+can't help when the CPU limits the frame rate, and it says so.
 
 | Keys | What it does |
 | --- | --- |

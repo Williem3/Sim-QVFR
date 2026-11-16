@@ -149,6 +149,13 @@ void cheeky_apply_ini();
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
+// How long the headset menu stays after the last press: kMenuHideOverlayMs with the performance overlay on, else
+// kMenuHideMs (overlay.cpp).
+int64_t menu_hide_ms();
+// The menu's frame line from what the overlay shows (or how to see it), redrawing the menu when it changed (overlay.cpp).
+void menu_frame_line();
+// The session record's first stint: the settings the launch read, for live_reload to compare with (reports.cpp, once).
+void stint_key_init();
 
 // hotkey_watch.cpp
 void pad_watch_ensure();

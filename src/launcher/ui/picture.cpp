@@ -97,6 +97,22 @@ bool qvfr() { return app.s.mode == RenderMode::Qvfr; }
 
 std::wstring percent(double v) { return std::to_wstring(static_cast<int>(std::lround(v * 100))) + L"%"; }
 
+// What the running game started with in QVFR: live resolution goes down from it and back up to it, not above (its
+// periphery and focus view sizes, percent of the native eye). False without a QVFR game running with Sim-QVFR.
+bool running_launch(LaunchSizes& launch) {
+    if (running_live_ini(runtime_info_path()).empty())
+        return false;
+    launch = load_launch_sizes(runtime_info_path());
+    return launch.known && launch.mode == RenderMode::Qvfr && launch.outer > 0 && launch.focusWidth > 0 &&
+           launch.focusHeight > 0;
+}
+
+// The headset menu's Auto-fit to headset rate (quad/qvfr_optimizer.h): QVFR on every path but the D3D11 layer's
+// (layer/menu.cpp: the truck simulators have no optimizer).
+bool auto_fit_game() {
+    return game_has(&games::GameFeatures::liveResolution) && !game_has(&games::GameFeatures::layerMultiView);
+}
+
 template <size_t N>
 std::vector<std::wstring> names_of(const DlssChoice (&list)[N]) {
     std::vector<std::wstring> out;
@@ -114,7 +130,10 @@ std::vector<std::wstring> items_of(Ctl id) {
 // ---- Resolution --------------------------------------------------------------------------------
 
 Card resolution_card() {
-    Card c{Tab::Picture, L"Resolution", qvfr() ? Applies::LiveLowered : Applies::NextLaunch};
+    // The truck simulators' QVFR (the D3D11 layer's, GameFeatures::layerMultiView): every size live, inside the game's
+    // own render size (scssoftware/corner.h corner_set_live), no launch ceiling.
+    const bool layerSizes = game_has(&games::GameFeatures::layerMultiView);
+    Card c{Tab::Picture, L"Resolution", !qvfr() ? Applies::NextLaunch : layerSizes ? Applies::Live : Applies::LiveLowered};
     c.body = [](Body& b) {
         const Readouts ro = readouts(app.s, app.runtime);
         const bool known = app.runtime.known();
@@ -134,6 +153,28 @@ Card resolution_card() {
         b.note(known ? L"Percent of the headset’s " + std::to_wstring(app.runtime.width) + L" × " +
                            std::to_wstring(app.runtime.height) + L" per eye; the periphery and the focus are set apart."
                      : L"Percent of the headset’s resolution; pixel sizes appear after the first launch.");
+        if (qvfr() && game_has(&games::GameFeatures::layerMultiView)) {
+            b.note(L"Changes apply while you drive, inside the game’s own render size: the focus and the periphery share "
+                   L"it, so a large focus at a high Focus density leaves less room for the periphery.");
+            return;
+        }
+        if (!qvfr() || !game_has(&games::GameFeatures::liveResolution))
+            return;
+        // The live ceiling (its badge's "Now when lowered"): said before the launch, with numbers while it runs.
+        LaunchSizes launch;
+        if (running_launch(launch)) {
+            const int density = std::min(launch.focusWidth * 100 / std::max(1, app.s.width),
+                                          launch.focusHeight * 100 / std::max(1, app.s.height));
+            b.note(L"This launch allows up to Periphery resolution " + std::to_wstring(launch.outer) +
+                   L"% and Focus density " + std::to_wstring(density) +
+                   L"% at this focus size. Higher applies at the next launch.");
+        } else {
+            b.note(L"Live changes go down from what you launch with, and back up to it: launch with your highest "
+                   L"settings, then lower them in the headset.");
+        }
+        if (auto_fit_game())
+            b.note(L"In the headset, Auto-fit to headset rate sets these and the focus size to fill your GPU’s frame "
+                   L"budget while you drive (Right starts it, Left undoes it).");
     };
     c.reset = [](Settings& s) {
         const Settings d;
@@ -167,6 +208,11 @@ Card foveation_card() {
         if (eye_warning())
             b.note(L"The focus region stays centred until a tracker connects.");
         b.sliders({kWidth, L"Focus width", s.width}, {kHeight, L"Focus height", s.height});
+        // A focus larger than the running game's launch renders at a lower density until the next launch.
+        if (LaunchSizes launch; qvfr() && game_has(&games::GameFeatures::liveResolution) && running_launch(launch) &&
+                                (s.inner * s.width > launch.focusWidth * 100 + 50 ||
+                                 s.inner * s.height > launch.focusHeight * 100 + 50))
+            b.note(L"Larger than this launch allows at your Focus density: it renders less dense until the next launch.");
         b.segments(kShape, L"Shape", items_of(kShape), s.shape.corners ? 1 : 0);
         if (!s.shape.corners) {
             b.slider({kCorner, L"Corner radius", s.corner});

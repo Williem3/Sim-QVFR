@@ -20,48 +20,130 @@
 
 using namespace simqvfr;
 
+namespace {
+
+// `item`'s line on the current page (-1: not there).
+int at(const SettingsMenu& m, MenuItem item) {
+    const std::vector<MenuItem> items = menu_page_items(m);
+    const auto it = std::find(items.begin(), items.end(), item);
+    return it == items.end() ? -1 : static_cast<int>(it - items.begin());
+}
+bool has(const SettingsMenu& m, MenuItem item) { return at(m, item) >= 0; }
+// Selects `item` on the current page; false when it isn't there.
+bool pick(SettingsMenu& m, MenuItem item) {
+    const int i = at(m, item);
+    if (i < 0)
+        return false;
+    m.selected = i;
+    return true;
+}
+// `item`'s line (an empty one when it isn't on the page).
+MenuLine line_of(const SettingsMenu& m, MenuItem item) {
+    const int i = at(m, item);
+    return i < 0 ? MenuLine{} : menu_lines(m)[static_cast<size_t>(i)];
+}
+// Goes to `page`, the page switch selected; false when the menu has none.
+bool go(SettingsMenu& m, MenuPage page) {
+    const std::vector<MenuPage> pages = menu_pages(m);
+    const auto it = std::find(pages.begin(), pages.end(), page);
+    if (it == pages.end())
+        return false;
+    m.page = static_cast<int>(it - pages.begin());
+    m.selected = 0;
+    return true;
+}
+bool has_page(const SettingsMenu& m, MenuPage page) {
+    const std::vector<MenuPage> pages = menu_pages(m);
+    return std::find(pages.begin(), pages.end(), page) != pages.end();
+}
+
+}  // namespace
+
 int SIM_QVFR_TEST_MAIN() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
     check(menu_items(true).size() == 10 && menu_items(false).size() == 8 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
-    check(menu_page_items(m).size() == 12 && menu_page_items(m).front() == MenuItem::Page &&
-              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 6,
-          "the first page: the page switch, the method's items, then Optimize; six pages without Cheeky (Focus shape; QVFR: View crop, Helmet; CPU)");
+    // The tabs (the user's layout, 2026-11-16): Picture, Foveation, View, Headset, Game; their sections the launcher's cards.
+    check(menu_pages(m) == std::vector<MenuPage>{MenuPage::Picture, MenuPage::Foveation, MenuPage::View, MenuPage::Headset,
+                                                 MenuPage::Game} &&
+              menu_tabs(m) == std::vector<std::wstring>{L"Picture", L"Foveation", L"View", L"Headset", L"Game"},
+          "the pages: Picture, Foveation, View, Headset and Game");
+    {
+        const std::vector<MenuItem> items = menu_page_items(m);
+        check(items == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadResolution, MenuItem::Periphery, MenuItem::Density,
+                                             MenuItem::Optimize},
+              "Picture: the page switch, then the Resolution card, Auto-fit last");
+        const std::vector<MenuLine> lines = menu_lines(m);
+        check(lines[1].header && lines[1].label == L"Resolution" && lines[1].value.empty() && !lines[2].header,
+              "the sections' headings: the launcher's card names, no value");
+        check(menu_title(m) == L"Headset menu" && menu_page_name(m) == L"Picture" && lines[0].label == L"Page" &&
+                  lines[0].value == L"Picture  1 of 5",
+              "the title is the panel's launcher name; the page switch says which page of how many");
+        SettingsMenu f = m;
+        go(f, MenuPage::Foveation);
+        check(menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadFoveation, MenuItem::EyeTracking,
+                                                          MenuItem::Width, MenuItem::Height, MenuItem::Shape, MenuItem::Corners,
+                                                          MenuItem::Feather, MenuItem::FocusOffset, MenuItem::GazeDeadzone,
+                                                          MenuItem::Outline} &&
+                  menu_page_name(f) == L"Foveation" && line_of(f, MenuItem::HeadFoveation).label == L"Foveation",
+              "Foveation: its own tab, the launcher's Foveation card in its order");
+    }
     {
         SettingsMenu loop;
         loop.launch.qvfr = false;
-        check(menu_page_items(loop).back() == MenuItem::GazeDeadzone, "Two-loop: no Optimize");
+        go(loop, MenuPage::Foveation);
+        check(menu_page_items(loop).back() == MenuItem::Outline && menu_title(loop) == L"Headset menu · Two-loop (legacy)" &&
+                  menu_pages(loop) == std::vector<MenuPage>{MenuPage::Picture, MenuPage::Foveation, MenuPage::Headset,
+                                                            MenuPage::Game},
+              "Two-loop: no View page; Foveation as in QVFR");
+        go(loop, MenuPage::Picture);
+        check(!has(loop, MenuItem::Optimize) && !has(loop, MenuItem::HeadResolution), "Two-loop: no Resolution card or Auto-fit");
     }
 
+    // Up and Down skip the headings.
+    menu_key(m, MenuKey::Down);
+    check(m.selected == at(m, MenuItem::Periphery), "Down from the page switch skips the Resolution heading");
     menu_key(m, MenuKey::Up);
-    check(m.selected == 11, "Up from the first item wraps to the last (Optimize)");
+    check(m.selected == 0, "and Up from Periphery resolution skips it back to the page switch");
+    menu_key(m, MenuKey::Up);
+    check(m.selected == at(m, MenuItem::Optimize), "Up from the page switch wraps to the last line");
+    menu_key(m, MenuKey::Down);
+    check(m.selected == 0, "Down from the last wraps to the first");
+    check(menu_section(m) == MenuItem::HeadResolution, "the section: the page's first for the page switch");
+    {
+        SettingsMenu f = m;
+        go(f, MenuPage::Foveation);
+        check(menu_section(f) == MenuItem::HeadFoveation && (pick(f, MenuItem::Feather), menu_section(f)) == MenuItem::HeadFoveation,
+              "and the heading above a line");
+    }
     {
         SettingsMenu o = m;
+        pick(o, MenuItem::Optimize);
         const MenuValues before = o.values;
         check(!menu_key(o, MenuKey::Right) && o.optimizeRequest == 1 && o.values.periphery == before.periphery,
               "Optimize: Right asks the layer to run it, no value changes");
         check(!menu_key(o, MenuKey::Left) && o.optimizeRequest == -1, "Optimize: Left asks to undo");
-        check(menu_lines(o).back().label == L"Optimize for frame rate" && !menu_lines(o).back().value.empty(),
+        check(line_of(o, MenuItem::Optimize).label == L"Auto-fit to headset rate" &&
+                  !line_of(o, MenuItem::Optimize).value.empty(),
               "Optimize's line before a run: how to use it");
         o.optimizeStatus = L"Running…";
         o.optimizeDetail = L"Measuring… keep driving";
-        check(menu_lines(o).back().value == L"Running…" && menu_subtitle(o) == L"Measuring… keep driving",
+        check(line_of(o, MenuItem::Optimize).value == L"Running…" && menu_subtitle(o) == L"Measuring… keep driving",
               "Optimize's status on its line, its detail under the title");
     }
-    menu_key(m, MenuKey::Down);
-    check(m.selected == 0, "Down from the last wraps to the first");
-    m.selected = 1;  // periphery
+    pick(m, MenuItem::Periphery);
     bool changed = menu_key(m, MenuKey::Left);
     check(changed && m.values.periphery == 45, "periphery steps by 5");
     for (int i = 0; i < 30; ++i)
         menu_key(m, MenuKey::Left);
     check(m.values.periphery == 10 && !menu_key(m, MenuKey::Left), "periphery stops at 10%, no change reported");
-    m.selected = 3;
+    go(m, MenuPage::Foveation);
+    pick(m, MenuItem::Width);
     menu_key(m, MenuKey::Right);
     check(m.values.width == 36, "focus width steps by 1 (from the default 35)");
-    m.selected = 7;
+    pick(m, MenuItem::Outline);
     check(menu_key(m, MenuKey::Right) && m.values.outline && menu_key(m, MenuKey::Left) && !m.values.outline,
           "outline toggles either way");
 
@@ -86,10 +168,10 @@ int SIM_QVFR_TEST_MAIN() {
     check(fit.peripheryCapped && std::lround(fit.periphery) == 10 && fit.focusCapped && std::lround(fit.densityX) == 84 &&
               std::lround(fit.densityY) == 71,
           "the run's values: periphery held at 10%, density 84% x 71% in effect (as the layer logged)");
-    run.selected = 1;
-    const std::vector<MenuLine> runLines = menu_lines(run);
-    check(runLines[1].capped && runLines[1].value == L"30%  (10% now)" && runLines[2].capped &&
-              runLines[2].value == L"100%  (84% x 71% now)" && !runLines[3].capped,
+    pick(run, MenuItem::Periphery);
+    check(line_of(run, MenuItem::Periphery).capped && line_of(run, MenuItem::Periphery).value == L"30%  (10% now)" &&
+              line_of(run, MenuItem::Density).capped && line_of(run, MenuItem::Density).value == L"100%  (84% x 71% now)" &&
+              !line_of(run, MenuItem::Optimize).capped,
           "capped lines show the asked value and what is in effect");
     const std::vector<std::wstring> notes = menu_notes(run);
     check(notes.size() == 2 &&
@@ -163,7 +245,7 @@ int SIM_QVFR_TEST_MAIN() {
     run.values.height = 35;  // 84% x 43% = 36.1%: still over 36%
     check(menu_notes(run).size() == 1 && menu_fit(run).focusCapped, "a value just over the launch still flags");
     run.values.width = 42;  // 84% x 42% = 35.3%, 84% x 35% = 29.4%: fits
-    check(menu_notes(run).empty() && !menu_lines(run)[2].capped, "lowering the box makes it fit: no notes, no red");
+    check(menu_notes(run).empty() && !line_of(run, MenuItem::Density).capped, "lowering the box makes it fit: no notes, no red");
     run.launch.nativeWidth = 0;
     run.values.density = 150;
     check(menu_notes(run).size() == 1 && menu_notes(run)[0].find(L"px") == std::wstring::npos,
@@ -223,27 +305,39 @@ int SIM_QVFR_TEST_MAIN() {
     DeleteFileW(ini.c_str());
     DeleteFileW(loopIni.c_str());
 
-    // Lines and the panel image.
+    // Lines and the panel image: the launcher's names and values.
     SettingsMenu shown;
-    shown.selected = 2;
+    pick(shown, MenuItem::Density);
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 12 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
-              lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On" &&
-              lines[9].label == L"Focus up / down" && lines[9].value == L"0°",
-          "lines carry labels, values and the selection");
+    SettingsMenu shownFoveation = shown;
+    go(shownFoveation, MenuPage::Foveation);
+    check(lines[static_cast<size_t>(at(shown, MenuItem::Density))].selected && line_of(shown, MenuItem::Density).value == L"100%" &&
+              line_of(shown, MenuItem::Periphery).label == L"Periphery resolution",
+          "Picture's lines carry the launcher's labels and values, and the selection");
+    shown = shownFoveation;
+    check(line_of(shown, MenuItem::EyeTracking).label == L"Foveated mode" &&
+              line_of(shown, MenuItem::EyeTracking).value == L"Eye tracked" &&
+              line_of(shown, MenuItem::Shape).value == L"Rectangle" && line_of(shown, MenuItem::Corners).label == L"Corner radius" &&
+              line_of(shown, MenuItem::FocusOffset).label == L"Gaze offset" && line_of(shown, MenuItem::FocusOffset).value == L"0°" &&
+              line_of(shown, MenuItem::Outline).label == L"Show focus outline" && line_of(shown, MenuItem::Outline).value == L"Off",
+          "Foveation's lines carry the launcher's labels and values");
+    shown = SettingsMenu{};
+    pick(shown, MenuItem::Density);
 
     // The vertical offset: each mode keeps its own, stepped by the one item, written to [quad].
     {
         SettingsMenu o;
-        o.selected = 9;
+        go(o, MenuPage::Foveation);
+        pick(o, MenuItem::FocusOffset);
         o.values.eyeTracking = false;
         check(menu_key(o, MenuKey::Left) && menu_key(o, MenuKey::Left) && o.values.offset.fixed == -2 &&
-                  o.values.offset.gaze == 0 && menu_lines(o)[9].value == L"2° down",
-              "Focus up / down steps the fixed offset with eye tracking off");
+                  o.values.offset.gaze == 0 && line_of(o, MenuItem::FocusOffset).value == L"2° down" &&
+                  line_of(o, MenuItem::FocusOffset).label == L"Vertical position",
+              "Fixed: the line is Vertical position (the launcher's), stepping the fixed offset");
         o.values.eyeTracking = true;
         check(menu_key(o, MenuKey::Right) && o.values.offset.gaze == 1 && o.values.offset.fixed == -2 &&
-                  menu_lines(o)[9].value == L"1° up",
-              "and the gaze offset with it on, leaving the fixed one");
+                  line_of(o, MenuItem::FocusOffset).value == L"1° up" && line_of(o, MenuItem::FocusOffset).label == L"Gaze offset",
+              "Eye tracked: Gaze offset, leaving the fixed one");
         o.values.offset.gaze = kFocusOffsetMax;
         check(!menu_key(o, MenuKey::Right) && o.values.offset.gaze == kFocusOffsetMax, "clamped at the most");
         const std::wstring offsetIni = std::wstring(temp) + L"sim-qvfr-menu-test-offset.ini";
@@ -262,14 +356,17 @@ int SIM_QVFR_TEST_MAIN() {
     // The gaze dead-zone: tenths of a degree, 0.5 a step, written to [quad] gaze_deadzone as degrees.
     {
         SettingsMenu d;
-        d.selected = 10;
-        check(menu_lines(d)[10].label == L"Gaze dead-zone" && menu_lines(d)[10].value == L"1.5°", "the dead-zone at 1.5° by default");
-        check(menu_key(d, MenuKey::Right) && d.values.gazeDeadzone == 20 && menu_lines(d)[10].value == L"2.0°", "it steps by 0.5°");
+        go(d, MenuPage::Foveation);
+        pick(d, MenuItem::GazeDeadzone);
+        check(line_of(d, MenuItem::GazeDeadzone).label == L"Gaze dead-zone" && line_of(d, MenuItem::GazeDeadzone).value == L"1.5°",
+              "the dead-zone at 1.5° by default");
+        check(menu_key(d, MenuKey::Right) && d.values.gazeDeadzone == 20 && line_of(d, MenuItem::GazeDeadzone).value == L"2.0°",
+              "it steps by 0.5°");
         for (int i = 0; i < 10; ++i)
             menu_key(d, MenuKey::Left);
-        check(d.values.gazeDeadzone == 0 && menu_lines(d)[10].value == L"Off (follows every sample)", "down to 0: off");
+        check(d.values.gazeDeadzone == 0 && line_of(d, MenuItem::GazeDeadzone).value == L"Off (follows every sample)", "down to 0: off");
         d.values.eyeTracking = false;
-        check(menu_lines(d)[10].value == L"Eye tracking off", "and says so without eye tracking");
+        check(!has(d, MenuItem::GazeDeadzone), "Fixed: no dead-zone line, as the launcher hides it");
         const std::wstring deadzoneIni = std::wstring(temp) + L"sim-qvfr-menu-test-deadzone.ini";
         DeleteFileW(deadzoneIni.c_str());
         check(read_gaze_deadzone(deadzoneIni.c_str()) == kGazeDeadzoneDefault, "unset reads as the default");
@@ -284,36 +381,48 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(deadzoneIni.c_str());
     }
 
-    // The Overlay and menu page: the overlay, the clock and the menu's places, stepped and written to [osd], [clock]
-    // and [menu] for the layer to move them, then the hotkeys footer.
+    // The Headset page (the launcher's Headset tab): the Headset menu, Performance overlay and Clock cards, their places
+    // shown while they are on, stepped and written to [menu], [osd] and [clock] for the layer to move them.
     SettingsMenu moving;
-    moving.page = 5;  // after Settings, Shape, Crop, Helmet and CPU
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 12,
-          "the Overlay and menu page");
-    const std::vector<MenuLine> placeLines = menu_lines(moving);
-    check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
-              placeLines[3].value == L"25° down" && placeLines[4].value == L"19°" && placeLines[5].label == L"Clock" &&
-              placeLines[5].value == L"Off" && placeLines[6].value == L"22° right" && placeLines[7].value == L"23° down" &&
-              placeLines[8].value == L"22° left" && placeLines[9].value == L"23° down" && placeLines[10].value == L"20°",
-          "the overlay's, the clock's and the menu's places in degrees (the defaults: overlay low ahead, clock low right, "
-          "menu low left)");
-    moving.selected = 1;
-    menu_key(moving, MenuKey::Right);  // overlay on
-    moving.selected = 2;
+    check(go(moving, MenuPage::Headset) && menu_page_name(moving) == L"Headset" && menu_subtitle(moving).empty() &&
+              menu_page_items(moving) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadMenu, MenuItem::MenuYaw,
+                                                               MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter,
+                                                               MenuItem::HeadOverlay, MenuItem::Overlay, MenuItem::HeadClock,
+                                                               MenuItem::Clock},
+          "the Headset page: the menu's card, the overlay's and the clock's, their places hidden while they're off");
+    check(line_of(moving, MenuItem::MenuYaw).label == L"Horizontal" && line_of(moving, MenuItem::MenuYaw).value == L"22° left" &&
+              line_of(moving, MenuItem::MenuPitch).label == L"Vertical" && line_of(moving, MenuItem::MenuPitch).value == L"23° down" &&
+              line_of(moving, MenuItem::MenuWidth).label == L"Size" && line_of(moving, MenuItem::MenuWidth).value == L"20°" &&
+              line_of(moving, MenuItem::Overlay).label == L"Show the overlay" && line_of(moving, MenuItem::Overlay).value == L"Off" &&
+              line_of(moving, MenuItem::Clock).label == L"Show the clock" && line_of(moving, MenuItem::Clock).value == L"Off" &&
+              line_of(moving, MenuItem::HeadOverlay).label == L"Performance overlay" && line_of(moving, MenuItem::HeadClock).label == L"Clock" &&
+              line_of(moving, MenuItem::HeadMenu).label == L"Headset menu",
+          "the launcher's names: Horizontal, Vertical, Size under each card's heading");
+    pick(moving, MenuItem::Overlay);
+    menu_key(moving, MenuKey::Right);  // overlay on: its place shows
+    check(line_of(moving, MenuItem::OverlayYaw).value == L"0°" && line_of(moving, MenuItem::OverlayPitch).value == L"25° down" &&
+              line_of(moving, MenuItem::OverlayWidth).value == L"19°",
+          "the overlay on: its place in degrees (the default: low ahead)");
+    pick(moving, MenuItem::OverlayYaw);
     for (int i = 0; i < 3; ++i)
         menu_key(moving, MenuKey::Right);
-    moving.selected = 3;
+    pick(moving, MenuItem::OverlayPitch);
     menu_key(moving, MenuKey::Left);
-    moving.selected = 5;  // Clock
+    pick(moving, MenuItem::Clock);
     menu_key(moving, MenuKey::Right);
-    moving.selected = 6;  // Clock left / right
+    check(line_of(moving, MenuItem::ClockYaw).value == L"22° right" && line_of(moving, MenuItem::ClockPitch).value == L"23° down" &&
+              line_of(moving, MenuItem::ClockWidth).label == L"Size" && line_of(moving, MenuItem::ClockWidth).value == L"8°",
+          "the clock on: its place and size (the launcher's Size, new on the menu)");
+    pick(moving, MenuItem::ClockYaw);
     menu_key(moving, MenuKey::Left);
-    moving.selected = 7;  // Clock up / down
+    pick(moving, MenuItem::ClockPitch);
     menu_key(moving, MenuKey::Right);
-    moving.selected = 8;  // Menu left / right
+    pick(moving, MenuItem::ClockWidth);
+    menu_key(moving, MenuKey::Right);
+    pick(moving, MenuItem::MenuYaw);
     menu_key(moving, MenuKey::Left);
     menu_key(moving, MenuKey::Left);
-    moving.selected = 10;  // Menu size
+    pick(moving, MenuItem::MenuWidth);
     menu_key(moving, MenuKey::Right);
     const auto movingIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_moving.ini").wstring();
     write_menu_values(movingIni.c_str(), moving.values, true);
@@ -323,16 +432,24 @@ int SIM_QVFR_TEST_MAIN() {
     const MenuValues reread = read_menu_values(movingIni.c_str());
     DeleteFileW(movingIni.c_str());
     check(overlayMoved == OsdPlacement{true, 3, -26, 19} && reread.overlay == overlayMoved &&
-              menu_lines(moving)[2].value == L"3° right",
+              line_of(moving, MenuItem::OverlayYaw).value == L"3° right",
           "the overlay turns on and moves: right 3 degrees and down 1, written to [osd] and read back");
-    check(clockMoved == ClockPlacement{true, 21, -22, 8} && reread.clock == clockMoved &&
-              menu_lines(moving)[5].value == L"On" && menu_lines(moving)[6].value == L"21° right",
-          "the clock turns on and moves: left 1 degree and up 1, its size kept, written to [clock] and read back");
+    check(clockMoved == ClockPlacement{true, 21, -22, 9} && reread.clock == clockMoved &&
+              line_of(moving, MenuItem::Clock).value == L"On" && line_of(moving, MenuItem::ClockYaw).value == L"21° right",
+          "the clock turns on, moves left 1 and up 1 and grows a degree, written to [clock] and read back");
     check(moved.yaw == -24 && moved.pitch == -23 && moved.width == 21 && reread.placement == moved &&
-              menu_lines(moving)[8].value == L"24° left",
+              line_of(moving, MenuItem::MenuYaw).value == L"24° left",
           "the menu moves itself: left 2 degrees and 1 degree wider, written to [menu] and read back");
-    const std::vector<uint32_t> pixels =
-        draw_menu_panel(L"QVFR settings", menu_resolution(shown), menu_stats(shown), lines, {}, L"hint");
+    {  // Vision (a game with one eye off, LMU): the Picture page's last card.
+        SettingsMenu e;
+        e.launch.eyeOff = true;
+        const std::vector<MenuItem> items = menu_page_items(e);
+        check(items.size() >= 2 && items[items.size() - 2] == MenuItem::HeadVision && items.back() == MenuItem::EyeOff &&
+                  line_of(e, MenuItem::HeadVision).label == L"Vision" && (go(e, MenuPage::Headset), !has(e, MenuItem::EyeOff)),
+              "Eye off: under Vision, the Picture page's last card (not on Headset)");
+    }
+    const std::vector<uint32_t> pixels = draw_menu_panel(menu_title(shown), menu_resolution(shown), menu_stats(shown), lines,
+                                                         {}, L"hint", L"", L"", L"", false, menu_tabs(shown), shown.page);
     bool alpha = !pixels.empty(), highlight = false, bright = false, red = false;
     const auto alphaAt = [&](int x, int y) { return pixels[static_cast<size_t>(y) * kPanelWidth + x] >> 24; };
     // Translucent inside, rounded corners clear (and black: premultiplied).
@@ -345,12 +462,18 @@ int SIM_QVFR_TEST_MAIN() {
         red |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) < 0x90;
     }
     check(pixels.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight && alpha && highlight && bright && !red,
-          "the panel draws its background, the selected row and text; nothing red when everything fits");
+          "the panel draws its background, the tabs and the selected row and text; nothing red when everything fits");
+    {  // The tab strip: the current page's tab filled with the highlight, under the title.
+        int filled = 0;
+        for (int x = 0; x < kPanelWidth; ++x)
+            filled += (pixels[static_cast<size_t>(80 + 24) * kPanelWidth + x] & 0xffffff) == highlightRgb;
+        check(filled > 60, "the tab strip marks the current page");
+    }
     run.launch.nativeWidth = 5190;
     run.values = MenuValues{};
     run.values.periphery = 30;
     const std::vector<uint32_t> cappedPixels =
-        draw_menu_panel(L"QVFR settings", menu_resolution(run), menu_stats(run), menu_lines(run), menu_notes(run), L"hint");
+        draw_menu_panel(L"Picture", menu_resolution(run), menu_stats(run), menu_lines(run), menu_notes(run), L"hint");
     bool cappedRed = false;
     for (uint32_t p : cappedPixels)
         cappedRed |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) < 0x90;
@@ -380,30 +503,25 @@ int SIM_QVFR_TEST_MAIN() {
     check(read.yaw == -kMenuYawMax && read.pitch == -7 && read.width == MenuPlacement{}.width,
           "menu placement: [menu] reads negative degrees, clamps them and defaults the rest");
 
-    // Foveated DLSS (Cheeky running): a page switch first, then the method's items or Cheeky's.
+    // Foveated DLSS (Cheeky running): its cards on the View page, with Frame generation's.
     {
         SettingsMenu c;
         c.launch = {true, 50, 39, 39};
-        check(menu_pages(c).size() == 6 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        check(menu_pages(c).size() == 5 && menu_subtitle(c).empty(), "without Cheeky: five pages, nothing under the title");
         {
-            // A game without the FOV crop, the helmet or live resolution (ACC): no View crop or Helmet page, and a note
+            // A game without the FOV crop, the helmet or live resolution (ACC without Cheeky): no View page, and a note
             // that resolution changes apply at the next launch.
             SettingsMenu g = c;
             g.launch.cropPage = g.launch.helmetPage = g.launch.liveResolution = false;
-            bool crop = false, helmet = false;
-            for (const MenuPage p : menu_pages(g)) {
-                crop |= p == MenuPage::Crop;
-                helmet |= p == MenuPage::Helmet;
-            }
             bool next = false;
             for (const std::wstring& n : menu_notes(g))
                 next |= n.find(L"next launch") != std::wstring::npos;
-            check(menu_pages(g).size() == 4 && !crop && !helmet && next,
-                  "a game without crop, helmet or live resolution: their pages left out, resolution at the next launch");
+            check(menu_pages(g).size() == 4 && !has_page(g, MenuPage::View) && next,
+                  "a game without crop, helmet or live resolution: no View page, resolution at the next launch");
         }
         {
             // X-Plane 12, its pages from its GameFeatures as the layer sets them (xr_layer.cpp): no FOV crop, helmet or
-            // Foveated DLSS, and the layer never loads Cheeky there, so no Foveated DLSS or Frame generation page.
+            // Foveated DLSS, and the layer never loads Cheeky there, so no View page.
             SettingsMenu g = c;
             const games::GameFeatures& f = xplane::kGame.features;
             g.launch.cropPage = f.fovCrop;
@@ -411,8 +529,9 @@ int SIM_QVFR_TEST_MAIN() {
             g.launch.fgPage = f.frameGeneration;
             g.cheeky.available = f.foveatedDlss && g.cheeky.available;
             check(!f.fovCrop && !f.helmet && !f.foveatedDlss &&
-                      menu_pages(g) == std::vector<MenuPage>{MenuPage::Settings, MenuPage::Shape, MenuPage::Cpu, MenuPage::Headset},
-                  "X-Plane 12: Settings, Shape, CPU and Headset only (no crop, helmet or Foveated DLSS pages)");
+                      menu_pages(g) == std::vector<MenuPage>{MenuPage::Picture, MenuPage::Foveation, MenuPage::Headset,
+                                                             MenuPage::Game},
+                  "X-Plane 12: Picture, Foveation, Headset and Game (no View page)");
         }
         {
             // Object detail: only a game whose GameFeatures has it (X-Plane), as the layer sets launch.objectDetail.
@@ -488,6 +607,7 @@ int SIM_QVFR_TEST_MAIN() {
         {
             // focus_layer=2's test line: only with launch.focusQuads, right after Gaze dead-zone, in steps of metres.
             SettingsMenu q = c;
+            go(q, MenuPage::Foveation);
             const std::vector<MenuItem> plain = menu_page_items(q);
             check(std::find(plain.begin(), plain.end(), MenuItem::FocusQuadDistance) == plain.end(),
                   "Focus quad distance: not shown without focus_layer=2");
@@ -510,61 +630,54 @@ int SIM_QVFR_TEST_MAIN() {
             // The runtime composing the views (Pimax, Varjo): the settings page says the focus area shows inside the
             // runtime's focus region, unless the optimizer has something to say there.
             SettingsMenu n = c;
+            go(n, MenuPage::Foveation);
             check(menu_subtitle(n).empty(), "runtime composition off: no note");
             n.launch.runtimeComposes = true;
             check(menu_subtitle(n).find(L"inside its own focus region") != std::wstring::npos,
-                  "runtime composing: the settings page notes the focus area shows inside the runtime's focus region");
+                  "runtime composing: Foveation notes the focus area shows inside the runtime's focus region");
             n.optimizeDetail = L"Measuring… keep driving";
-            check(menu_subtitle(n) == L"Measuring… keep driving", "runtime composing: the optimizer's line comes first");
+            go(n, MenuPage::Picture);
+            check(menu_subtitle(n) == L"Measuring… keep driving", "the optimizer's line: on the Resolution card");
         }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         {
-            // A game without Cheeky's frame generation (ACC): its Foveated DLSS page, no Frame generation page.
+            // A game without Cheeky's frame generation (ACC): its Foveated DLSS card, no Frame generation card.
             SettingsMenu g = c;
             g.launch.fgPage = false;
-            bool dlss = false, fg = false;
-            for (const MenuPage p : menu_pages(g)) {
-                dlss |= p == MenuPage::Dlss;
-                fg |= p == MenuPage::Fg;
-            }
-            check(dlss && !fg && menu_pages(g).size() == menu_pages(c).size() - 1,
-                  "a game without frame generation: the Foveated DLSS page, not the Frame generation one");
+            check(has(g, MenuItem::HeadCheeky) && !has(g, MenuItem::HeadFg) && menu_pages(g).size() == menu_pages(c).size(),
+                  "a game without frame generation: the Foveated DLSS card, not the Frame generation one");
         }
         check(acc::kGame.features.foveatedDlss && !acc::kGame.features.frameGeneration &&
                   !ace::kGame.features.foveatedDlss && !ace::kGame.features.frameGeneration,
               "games: ACC has Foveated DLSS but not its frame generation yet; ACE neither (its API path has DLSS of its own)");
-        check(menu_pages(c).size() == 8 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
-                  menu_title(c) == L"QVFR settings",
-              "with Cheeky: eight pages, the first the QVFR items under the page switch");
-        check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"Focus shape", "then the Focus shape page");
-        check(!menu_key(c, MenuKey::Right) && c.page == 2 && menu_title(c) == L"View crop", "then the View crop page");
-        check(!menu_key(c, MenuKey::Right) && c.page == 3 && menu_title(c) == L"Helmet", "then the Helmet page");
-        check(!menu_key(c, MenuKey::Right) && c.page == 4 && c.selected == 0 && menu_page_items(c).size() == 11 &&
-                  menu_title(c) == L"Foveated DLSS" && menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3",
-              "the switch turns to the Foveated DLSS page, titled, with Cheeky's credit line and version");
-        menu_key(c, MenuKey::Down);  // Foveated DLSS on/off
+        check(menu_pages(c).size() == 5 && menu_page_items(c).front() == MenuItem::Page && menu_page_name(c) == L"Picture" &&
+                  at(c, MenuItem::HeadCheeky) > at(c, MenuItem::Optimize),
+              "with Cheeky: still five pages; Foveated DLSS on Picture, after the Resolution card");
+        check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_page_name(c) == L"Foveation" && c.selected == 0 &&
+                  (menu_key(c, MenuKey::Left), c.page == 0),
+              "the switch turns to Foveation and back");
+        check(pick(c, MenuItem::CheekyProcessing) && menu_section(c) == MenuItem::HeadCheeky &&
+                  menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && line_of(c, MenuItem::HeadCheeky).label == L"Foveated DLSS",
+              "on the Foveated DLSS card: Cheeky's credit line and version under the title");
         check(menu_key(c, MenuKey::Right) && !c.cheeky.values.processing, "Foveated DLSS turns off");
-        menu_key(c, MenuKey::Down);
-        menu_key(c, MenuKey::Down);  // outer scale
+        pick(c, MenuItem::CheekyOuterScale);
         for (int i = 0; i < 30; ++i)
             menu_key(c, MenuKey::Left);
         check(c.cheeky.values.outerScale == kCheekyScaleMin, "outer DLAA scale stops at Cheeky's minimum");
-        menu_key(c, MenuKey::Down);  // outer preset: E, J, K, L, M, never the game default
+        pick(c, MenuItem::CheekyOuterPreset);  // outer preset: E, J, K, L, M, never the game default
         bool neverDefault = true;
         for (int i = 0; i < 6; ++i) {
             menu_key(c, MenuKey::Right);
             neverDefault &= c.cheeky.values.outerPreset != 0;
         }
         check(neverDefault && c.cheeky.values.outerPreset == 10, "the outer preset cycles without the game default");
-        menu_key(c, MenuKey::Down);  // focus preset: from the game default back to M
+        pick(c, MenuItem::CheekyFocusPreset);  // focus preset: from the game default back to M
         menu_key(c, MenuKey::Left);
         check(c.cheeky.values.focusPreset == 13 && std::wstring(cheeky_preset_name(13)) == L"M",
               "the focus preset wraps from the game default to M");
-        const std::vector<MenuLine> lines = menu_lines(c);
-        check(lines.size() == 11 && lines[0].value == L"Foveated DLSS" && lines[1].value == L"Off" &&
-                  lines[3].value == L"20%" && lines[5].value == L"M" && menu_notes(c).empty() &&
-                  !menu_resolution(c).shown,
-              "the page's lines show Cheeky's values; no resolution or notes there");
+        check(line_of(c, MenuItem::CheekyProcessing).value == L"Off" && line_of(c, MenuItem::CheekyOuterScale).value == L"20%" &&
+                  line_of(c, MenuItem::CheekyFocusPreset).value == L"M" && menu_notes(c).empty() && !menu_resolution(c).shown,
+              "the card's lines show Cheeky's values; no resolution or notes there");
         const std::string set = cheeky_set_lines(c.cheeky.values, true);
         check(set.find("Enabled=0\n") == 0 && set.find("PeripheralDlaaScale=0.20") != std::string::npos &&
                   set.find("CenterPreset=13") != std::string::npos && set.find("QuadView4Role=4") != std::string::npos &&
@@ -576,17 +689,17 @@ int SIM_QVFR_TEST_MAIN() {
         const CheekySettings back = read_cheeky_settings(cheekyIni.c_str());
         DeleteFileW(cheekyIni.c_str());
         check(back == c.cheeky.values && !back.load, "[cheeky]'s live keys round-trip; enabled is the launcher's");
-        c.page = 0;
+        go(c, MenuPage::Picture);
         c.launch.dlssHeld = true;
         check(!menu_notes(c).empty() && menu_notes(c).front().find(L"DLSS") == 0,
-              "with DLSS holding the views, page 0 says resolution waits for the next launch");
+              "with DLSS holding the views, Picture says resolution waits for the next launch");
         const std::vector<uint32_t> page = draw_menu_panel(menu_title(c), menu_resolution(c), menu_stats(c),
                                                            menu_lines(c), menu_notes(c), L"hint", L"credit");
-        check(page.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight, "the panel draws 12 lines and a subtitle");
+        check(page.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight, "the panel draws its lines and a subtitle");
 
         // The experimental focus-view options: supersampling, motion-vector fix, DLSS-NR.
-        c.page = 4;
-        c.selected = 6;  // focus supersampling
+        go(c, MenuPage::Picture);
+        pick(c, MenuItem::CheekySupersampling);
         for (int i = 0; i < 30; ++i)
             menu_key(c, MenuKey::Right);
         check(c.cheeky.values.supersampling == kCheekySupersamplingMax, "focus supersampling stops at 200%");
@@ -599,10 +712,10 @@ int SIM_QVFR_TEST_MAIN() {
         menu_key(c, MenuKey::Down);
         for (int i = 0; i < 5; ++i)
             menu_key(c, MenuKey::Right);
-        const std::vector<MenuLine> more = menu_lines(c);
         check(c.cheeky.values.motionFix && c.cheeky.values.nr && c.cheeky.values.nrPreset == 2 &&
-                  c.cheeky.values.nrPasses == kCheekyNrPassesMax && more[6].value == L"200%" &&
-                  more[9].value == L"B (Faster)" && more[10].value == L"3",
+                  c.cheeky.values.nrPasses == kCheekyNrPassesMax && line_of(c, MenuItem::CheekySupersampling).value == L"200%" &&
+                  line_of(c, MenuItem::CheekyNrPreset).value == L"B (Faster)" && line_of(c, MenuItem::CheekyNrPasses).value == L"3" &&
+                  line_of(c, MenuItem::CheekyNr).label == L"DLSS-NR",
               "motion-vector fix and DLSS-NR turn on; the NR preset wraps; NR passes stop at 3");
         const std::string nrSet = cheeky_set_lines(c.cheeky.values, true);
         check(nrSet.find("CenterSupersampling=2.00") != std::string::npos && nrSet.find("FixMotionBlur=1") != std::string::npos &&
@@ -624,31 +737,33 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(nrIni.c_str());
         check(nrBack == c.cheeky.values, "the experimental keys round-trip through [cheeky]");
 
-        // Frame generation: the third page, reached either way round from the page switch.
-        c.page = 0;
-        c.selected = 0;
+        // The pages either way round from the page switch: Left from Picture wraps to Game, then Headset, View, Foveation.
+        go(c, MenuPage::Picture);
         menu_key(c, MenuKey::Left);
-        check(c.page == 7 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        check(c.page == 4 && menu_page_name(c) == L"Game", "Left from the first page wraps to Game");
         menu_key(c, MenuKey::Left);
-        check(c.page == 6 && menu_title(c) == L"CPU", "then CPU");
+        check(c.page == 3 && menu_page_name(c) == L"Headset", "then Headset");
         menu_key(c, MenuKey::Left);
-        check(c.page == 5 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 8 &&
-                  menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
-              "then Frame generation, with the credit line; no note while FG is off");
-        menu_key(c, MenuKey::Down);
+        check(c.page == 2 && menu_page_name(c) == L"View", "then View");
+        menu_key(c, MenuKey::Left);
+        check(c.page == 1 && menu_page_name(c) == L"Foveation", "then Foveation");
+        go(c, MenuPage::Picture);
+        check(has(c, MenuItem::HeadFg), "Frame generation's card on Picture, after Foveated DLSS");
+        pick(c, MenuItem::FgOn);
+        check(menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
+              "Frame generation: the credit line; no note while FG is off");
         menu_key(c, MenuKey::Right);  // FG on
-        menu_key(c, MenuKey::Down);
+        pick(c, MenuItem::FgMultiplier);
         for (int i = 0; i < 5; ++i)
             menu_key(c, MenuKey::Right);  // multiplier stops at 4x
-        menu_key(c, MenuKey::Down);
-        menu_key(c, MenuKey::Down);
+        pick(c, MenuItem::FgScale);
         for (int i = 0; i < 5; ++i)
             menu_key(c, MenuKey::Left);  // centre FG scale stops at 25%
-        const std::vector<MenuLine> fgLines = menu_lines(c);
         check(c.cheeky.values.fg && c.cheeky.values.fgMultiplier == kCheekyFgMultiplierMax &&
-                  c.cheeky.values.fgScale == 25 && fgLines[2].value == L"4x" && fgLines[4].value == L"25%" &&
-                  !menu_notes(c).empty() && menu_notes(c).front().find(L"Turbo") != std::wstring::npos,
-              "FG turns on; its multiplier and scales stop at Cheeky's limits; the page warns about Turbo mode");
+                  c.cheeky.values.fgScale == 25 && line_of(c, MenuItem::FgMultiplier).value == L"4x" &&
+                  line_of(c, MenuItem::FgScale).value == L"25%" && !menu_notes(c).empty() &&
+                  menu_notes(c).front().find(L"Turbo") != std::wstring::npos,
+              "FG turns on; its multiplier and scales stop at Cheeky's limits; the card warns about Turbo mode");
         const std::string fgSet = cheeky_set_lines(c.cheeky.values, true);
         check(fgSet.find("FgEnabled=1") != std::string::npos && fgSet.find("FgMultiplier=4") != std::string::npos &&
                   fgSet.find("FgReleasePoint=8") != std::string::npos && fgSet.find("FgWidth=0.30") != std::string::npos &&
@@ -658,15 +773,16 @@ int SIM_QVFR_TEST_MAIN() {
                   cheeky_set_lines(c.cheeky.values, true, true).find("CenterMode=1") != std::string::npos,
               "the FG region follows the eyes (CenterMode 1) only when QVFR's focus does");
         // When Cheeky releases ACE: Capture (8) by default, then Generated (3); Never (5) the other way; the set lines carry it.
-        c.selected = 6;
-        const bool captureFirst = menu_lines(c)[6].label == L"Release game" && menu_lines(c)[6].value == L"Capture (8)" &&
+        pick(c, MenuItem::FgRelease);
+        const bool captureFirst = line_of(c, MenuItem::FgRelease).label == L"Release game" &&
+                                  line_of(c, MenuItem::FgRelease).value == L"Capture (8)" &&
                                   cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=8") != std::string::npos;
         menu_key(c, MenuKey::Right);
-        const bool generated = c.cheeky.values.fgRelease == 3 && menu_lines(c)[6].value == L"Generated (3)" &&
+        const bool generated = c.cheeky.values.fgRelease == 3 && line_of(c, MenuItem::FgRelease).value == L"Generated (3)" &&
                                !menu_key(c, MenuKey::Right);  // stops at the end
         menu_key(c, MenuKey::Left);
         menu_key(c, MenuKey::Left);
-        check(captureFirst && generated && c.cheeky.values.fgRelease == 5 && menu_lines(c)[6].value == L"Never (5)" &&
+        check(captureFirst && generated && c.cheeky.values.fgRelease == 5 && line_of(c, MenuItem::FgRelease).value == L"Never (5)" &&
                   cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=5") != std::string::npos,
               "Release game: Capture (8), Generated (3), Never (5); Cheeky's FgReleasePoint follows");
         const auto releaseIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_release.ini").wstring();
@@ -678,67 +794,64 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(releaseIni.c_str());
         check(roundTrip && unknownIsCapture, "fg_release round-trips through [cheeky]; a value not offered is 8");
         c.cheeky.values.fgRelease = 8;
-        c.selected = 4;  // back on Center FG scale, where the steps above left it
         c.cheeky.values.fgBorder = true;
         check(cheeky_set_lines(c.cheeky.values, true, true).find("FgShowBorder=1") != std::string::npos &&
-                  menu_lines(c).back().label == L"Show FG region" && menu_lines(c).back().value == L"On",
-              "the FG region outline is the page's last row and reaches Cheeky as FgShowBorder");
-        menu_key(c, MenuKey::Up);
-        menu_key(c, MenuKey::Up);
-        menu_key(c, MenuKey::Up);
-        menu_key(c, MenuKey::Up);  // back on the page switch
+                  menu_lines(c).back().label == L"Show the center region" && menu_lines(c).back().value == L"On",
+              "the FG region outline is the page's last row (the launcher's Show the center region), reaching Cheeky");
+        go(c, MenuPage::Game);
         menu_key(c, MenuKey::Right);
-        menu_key(c, MenuKey::Right);
-        menu_key(c, MenuKey::Right);
-        check(c.page == 0 && menu_title(c) == L"QVFR settings",
-              "Right from Frame generation, then CPU and Overlay and menu, wraps to the first page");
+        check(c.page == 0 && menu_page_name(c) == L"Picture", "Right from Game wraps to Picture");
     }
 
-    // The View crop page (QVFR): off shows only the switch; on, four sides, each on its own, written to
-    // [crop]; the outer views shrink with it in the fit and the pixels saved.
+    // The View & helmet card (QVFR): the crop off shows only its switch; on, four sides, each on its own, written to
+    // [crop]; the outer views shrink with it in the fit and the pixels saved. Then the helmet under it.
     {
         SettingsMenu v;
         v.launch = {true, 50, 39, 39, 2000, 2000};
         v.values.width = v.values.height = 39;  // the launch's box
-        v.page = 2;
-        check(menu_title(v) == L"View crop" && menu_page_items(v).size() == 2 && menu_resolution(v).shown,
-              "View crop: off, only the switch (and the resolution)");
+        go(v, MenuPage::View);
+        check(menu_page_name(v) == L"View" &&
+                  menu_page_items(v) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadView, MenuItem::Crop, MenuItem::Helmet} &&
+                  menu_resolution(v).shown && line_of(v, MenuItem::HeadView).label == L"View & helmet" &&
+                  line_of(v, MenuItem::Helmet).label == L"Show a helmet",
+              "View & helmet: the crop's and the helmet's switches (and the resolution: the crop changes it)");
         const int savedBefore = menu_stats(v).savedPercent;
-        v.selected = 1;
-        check(menu_key(v, MenuKey::Right) && v.values.crop && menu_page_items(v).size() == 6, "View crop turns on: four sides");
-        v.selected = 2;  // top
+        pick(v, MenuItem::Crop);
+        check(menu_key(v, MenuKey::Right) && v.values.crop && menu_page_items(v).size() == 8, "the crop turns on: four sides");
+        pick(v, MenuItem::CropTop);
         for (int i = 0; i < 50; ++i)
             menu_key(v, MenuKey::Right);
-        v.selected = 4;  // outer side
+        pick(v, MenuItem::CropOuter);
         for (int i = 0; i < 10; ++i)
             menu_key(v, MenuKey::Right);
         check(v.values.cropTop == 40 && v.values.cropBottom == 0 && v.values.cropOuter == 10 && v.values.cropInner == 0,
-              "View crop: the top stops at 40%; the other sides stay as they were");
-        check(menu_stats(v).savedPercent > savedBefore && menu_lines(v)[2].value == L"40%" &&
+              "the crop: the top stops at 40%; the other sides stay as they were");
+        check(menu_stats(v).savedPercent > savedBefore && line_of(v, MenuItem::CropTop).value == L"40%" &&
                   menu_resolution(v).current == L"3360x780 (2.6 MP)",
-              "View crop: fewer pixels; 900x600 outer views beside the 780x780 focus views");
-        check(menu_notes(v).empty(),
-              "View crop: no note when it only takes more off than at launch");
+              "the crop: fewer pixels; 900x600 outer views beside the 780x780 focus views");
+        check(menu_notes(v).empty(), "the crop: no note when it only takes more off than at launch");
         v.launch.dlssHeld = true;
-        check(menu_notes(v).front().find(L"DLSS is on") == 0, "View crop with DLSS: the savings wait for the next launch");
+        check(menu_notes(v).front().find(L"DLSS is on") == 0, "the crop with DLSS: the savings wait for the next launch");
         const auto cropIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_crop.ini").wstring();
         DeleteFileW(cropIni.c_str());
         write_menu_values(cropIni.c_str(), v.values, true);
         const MenuValues back = read_menu_values(cropIni.c_str());
         DeleteFileW(cropIni.c_str());
-        check(back.crop && back.cropTop == 40 && back.cropOuter == 10 && back.cropBottom == 0, "View crop: [crop] round-trips");
-        // The Helmet page: on, its rim, corners and lighting stepped, written to [helmet].
-        v.page = 3;
-        v.selected = 1;
-        check(menu_title(v) == L"Helmet" && menu_key(v, MenuKey::Right) && v.values.helmet.on &&
-                  menu_page_items(v).size() == 6 && menu_lines(v)[1].value == L"On" && menu_notes(v).empty(),
-              "Helmet overlay turns on: rim, corners, lighting and the light diagnostic");
-        v.selected = 2;
+        check(back.crop && back.cropTop == 40 && back.cropOuter == 10 && back.cropBottom == 0, "the crop: [crop] round-trips");
+        // The helmet: on, its rim, corners and lighting stepped, written to [helmet].
+        v.launch.dlssHeld = false;
+        pick(v, MenuItem::Helmet);
+        check(menu_key(v, MenuKey::Right) && v.values.helmet.on && has(v, MenuItem::HelmetRim) && has(v, MenuItem::HelmetCorners) &&
+                  has(v, MenuItem::HelmetLight) && has(v, MenuItem::HelmetDebug) && line_of(v, MenuItem::Helmet).value == L"On" &&
+                  menu_notes(v).empty() && line_of(v, MenuItem::HelmetRim).label == L"Rim" &&
+                  line_of(v, MenuItem::HelmetLight).label == L"Lighting",
+              "the helmet turns on: rim, corners, lighting and the light diagnostic, by the launcher's names");
+        pick(v, MenuItem::HelmetRim);
         for (int i = 0; i < 30; ++i)
             menu_key(v, MenuKey::Right);
-        v.selected = 4;
+        pick(v, MenuItem::HelmetLight);
         menu_key(v, MenuKey::Left);
-        v.selected = 5;  // the light diagnostic
+        pick(v, MenuItem::HelmetDebug);  // the light diagnostic
         menu_key(v, MenuKey::Right);
         write_menu_values(cropIni.c_str(), v.values, true);
         const HelmetSettings helmetBack = read_helmet_settings(cropIni.c_str());
@@ -748,30 +861,30 @@ int SIM_QVFR_TEST_MAIN() {
               "Helmet: the rim stops at its maximum, lighting steps by 10, the light diagnostic; [helmet] round-trips");
         // With the helmet's own images: visor, size, height and depth instead of rim and corners.
         v.launch.helmetPieces = true;
-        const std::vector<MenuItem> pieceItems = menu_page_items(v);
-        check(pieceItems.size() == 9 && pieceItems[2] == MenuItem::Visor && pieceItems[3] == MenuItem::HelmetSize &&
-                  pieceItems[4] == MenuItem::HelmetHeight && pieceItems[5] == MenuItem::HelmetDepth &&
-                  pieceItems[6] == MenuItem::HelmetDetail,
+        const int h = at(v, MenuItem::Helmet);
+        check(at(v, MenuItem::Visor) == h + 1 && at(v, MenuItem::HelmetSize) == h + 2 && at(v, MenuItem::HelmetHeight) == h + 3 &&
+                  at(v, MenuItem::HelmetDepth) == h + 4 && at(v, MenuItem::HelmetDetail) == h + 5 && !has(v, MenuItem::HelmetRim),
               "Helmet with images: visor, size, height, depth and detail rows");
-        v.selected = 6;
-        const bool performance = menu_lines(v)[6].value == L"Performance";
-        check(performance && menu_key(v, MenuKey::Right) && v.values.helmet.detail && menu_lines(v)[6].value == L"Detail",
+        pick(v, MenuItem::HelmetDetail);
+        const bool performance = line_of(v, MenuItem::HelmetDetail).value == L"Performance";
+        check(performance && menu_key(v, MenuKey::Right) && v.values.helmet.detail &&
+                  line_of(v, MenuItem::HelmetDetail).value == L"Detail" && line_of(v, MenuItem::HelmetDetail).label == L"Detail",
               "Helmet detail: Performance (2048) by default, Detail (4096) at a step");
         v.values.helmet.detail = false;
-        v.selected = 2;
+        pick(v, MenuItem::Visor);
         menu_key(v, MenuKey::Right);
         menu_key(v, MenuKey::Right);
         menu_key(v, MenuKey::Right);  // stops at open
-        v.selected = 4;
+        pick(v, MenuItem::HelmetHeight);
         menu_key(v, MenuKey::Left);
-        check(v.values.helmet.visor == VisorPosition::Open && menu_lines(v)[2].value == L"Open" &&
-                  v.values.helmet.height == -1 && menu_lines(v)[4].value == L"1° down",
+        check(v.values.helmet.visor == VisorPosition::Open && line_of(v, MenuItem::Visor).value == L"Open" &&
+                  v.values.helmet.height == -1 && line_of(v, MenuItem::HelmetHeight).value == L"1° down",
               "Visor steps to Open and stops; height in degrees");
         // Depth: far, then 3 cm, 1 cm a step up close and 5 cm from 20 cm; back down to far.
-        v.selected = 5;
-        const bool startsFar = menu_lines(v)[5].value == L"Far";
+        pick(v, MenuItem::HelmetDepth);
+        const bool startsFar = line_of(v, MenuItem::HelmetDepth).value == L"Far";
         menu_key(v, MenuKey::Right);
-        const bool nearest = v.values.helmet.depth == kHelmetDepthMin && menu_lines(v)[5].value == L"3 cm";
+        const bool nearest = v.values.helmet.depth == kHelmetDepthMin && line_of(v, MenuItem::HelmetDepth).value == L"3 cm";
         for (int i = 0; i < 17; ++i)
             menu_key(v, MenuKey::Right);
         const bool twenty = v.values.helmet.depth == 20;
@@ -782,43 +895,40 @@ int SIM_QVFR_TEST_MAIN() {
         check(startsFar && nearest && twenty && coarse && v.values.helmet.depth == 0,
               "Helmet depth: Far, then 3 cm, 1 cm steps to 20 cm, then 5 cm; down again to Far");
         v.launch.helmetPieces = false;
-        v.page = 2;  // back on View crop
-        v.launch.dlssHeld = false;
+        pick(v, MenuItem::Crop);
         v.launch.cropHeight = 50;  // launched with more off: less now is softer until the next launch
-        check(!menu_notes(v).empty() && menu_notes(v).back().find(L"Less crop") == 0, "View crop: less than at launch is noted");
+        check(!menu_notes(v).empty() && menu_notes(v).back().find(L"Less crop") == 0, "the crop: less than at launch is noted");
     }
 
-    // The Focus shape page (both methods): a box by default, only the switch; corners, its eight insets,
-    // stepped by 5 up to kFocusCornerMax, written to [quad] and read back.
+    // The focus shape (both methods), on the Foveation card as in the launcher: Rectangle by default with its Corner
+    // radius; Custom corners, its eight insets in the radius's place, stepped by 5 up to kFocusCornerMax, written to
+    // [quad] and read back.
     {
         SettingsMenu f;
         f.launch.qvfr = false;
-        f.page = 1;
-        check(menu_title(f) == L"Focus shape" && menu_page_items(f).size() == 2 && menu_lines(f)[1].value == L"Box" &&
-                  !menu_notes(f).empty(),
-              "Focus shape: a box, only the switch, and a note on what Corners does");
-        f.selected = 1;
-        check(menu_key(f, MenuKey::Right) && f.values.shape.corners && menu_page_items(f).size() == 10 &&
-                  menu_lines(f)[1].value == L"Corners" && menu_lines(f)[2].label == L"Top left in",
-              "Focus shape: Corners lists each corner's insets, top left first");
-        f.selected = 2;  // top left in
+        go(f, MenuPage::Foveation);
+        pick(f, MenuItem::Shape);
+        check(line_of(f, MenuItem::Shape).value == L"Rectangle" && has(f, MenuItem::Corners) && !has(f, MenuItem::ShapeTopLeftIn) &&
+                  !menu_notes(f).empty() && menu_notes(f).front().rfind(L"Custom corners", 0) == 0,
+              "Shape: Rectangle with its corner radius, and on the line a note on what Custom corners does");
+        check(menu_key(f, MenuKey::Right) && f.values.shape.corners && !has(f, MenuItem::Corners) &&
+                  at(f, MenuItem::ShapeTopLeftIn) == at(f, MenuItem::Shape) + 1 &&
+                  line_of(f, MenuItem::Shape).value == L"Custom corners" && line_of(f, MenuItem::ShapeTopLeftIn).label == L"Top left in",
+              "Custom corners: each corner's insets right under it, top left first, the radius gone");
+        pick(f, MenuItem::ShapeTopLeftIn);
         for (int i = 0; i < 20; ++i)
             menu_key(f, MenuKey::Right);
-        f.selected = 4;  // top right in
+        pick(f, MenuItem::ShapeTopRightIn);
         for (int i = 0; i < 4; ++i)
             menu_key(f, MenuKey::Right);
-        f.selected = 9;  // bottom right up
+        pick(f, MenuItem::ShapeBottomRightUp);
         menu_key(f, MenuKey::Right);
         const FocusShape& sh = f.values.shape;
         check(sh.in[static_cast<int>(FocusCorner::TopLeft)] == kFocusCornerMax &&
                   sh.in[static_cast<int>(FocusCorner::TopRight)] == 20 &&
                   sh.vertical[static_cast<int>(FocusCorner::BottomRight)] == 5 &&
-                  sh.in[static_cast<int>(FocusCorner::BottomLeft)] == 0 && menu_lines(f)[4].value == L"20%",
-              "Focus shape: corners step by 5 and stop at 45%; the others stay");
-        f.page = 0;
-        const std::vector<MenuLine> first = menu_lines(f);
-        check(first[4].label == L"Corners" && first[4].value == L"Corner shape",
-              "the settings page's corner radius says the corner shape replaces it");
+                  sh.in[static_cast<int>(FocusCorner::BottomLeft)] == 0 && line_of(f, MenuItem::ShapeTopRightIn).value == L"20%",
+              "Custom corners: step by 5 and stop at 45%; the others stay");
         const auto shapeIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_shape.ini").wstring();
         DeleteFileW(shapeIni.c_str());
         write_menu_values(shapeIni.c_str(), f.values, false);
@@ -839,20 +949,19 @@ int SIM_QVFR_TEST_MAIN() {
         check(inset[0] == 0.45f && inset[1] == 0 && inset[2] == 0.2f && inset[5] == 0.05f && focus_shape_bits(box) == 0,
               "Focus shape: the compositor gets shares of the box; a box sends none");
         f.values.shape.corners = false;
-        f.page = 1;
-        f.selected = 1;
+        pick(f, MenuItem::Shape);
         check(menu_key(f, MenuKey::Left) && f.values.shape.corners && f.values.shape.in[0] == kFocusCornerMax,
-              "Focus shape: back to Corners keeps the corners set before");
+              "Focus shape: back to Custom corners keeps the corners set before");
     }
-    {  // The Profile line (profile/profiles.h): first on the settings page, stepping through and asking the layer.
+    {  // The Profile line (profile/profiles.h): first on the Picture page, stepping through and asking the layer.
         SettingsMenu p;
         p.launch = {true, 50, 39, 39};
         check(menu_page_items(p)[1] != MenuItem::Profile, "Profile: no line without profiles");
         p.profiles = {L"Performance", L"Balanced", L"Quality", L"Night"};
         p.selected = 1;
         check(menu_page_items(p)[1] == MenuItem::Profile && menu_lines(p)[1].label == L"Profile" &&
-                  menu_lines(p)[1].value == L"Your own",
-              "Profile: the settings page's first line; none in use shows as your own");
+                  menu_lines(p)[1].value == L"Your own" && menu_page_items(p)[2] == MenuItem::HeadResolution,
+              "Profile: Picture's first line, before the Resolution card; none in use shows as your own");
         const MenuValues before = p.values;
         check(!menu_key(p, MenuKey::Right) && p.profile == 0 && p.profileRequest == 0 && p.values.periphery == before.periphery &&
                   menu_lines(p)[1].value == L"Performance",
@@ -866,14 +975,37 @@ int SIM_QVFR_TEST_MAIN() {
         none.profile = -1;
         check(!menu_key(none, MenuKey::Left) && none.profile == 3, "Profile: Left from none takes the last");
     }
-    {  // The fullest page fits: 13 lines (the Profile line too), three notes, the footer and the hint, none over another.
+    {  // The longest page scrolls: the page switch pinned, the list from menu_first_visible, three notes, the footer and
+       // the hint, none over another.
         SettingsMenu full;
         full.launch = {true, 50, 39, 39, 4000, 3400};
+        full.launch.sharpening = true;
         full.profiles = {L"Performance", L"Balanced", L"Quality"};
-        const std::vector<MenuLine> lines = menu_lines(full);
+        full.values.shape.corners = true;  // Custom corners: eight insets in the radius's place
+        go(full, MenuPage::Foveation);
         const std::vector<std::wstring> notes = {L"note one", L"note two", L"note three"};
-        const std::vector<uint32_t> page = draw_menu_panel(menu_title(full), menu_resolution(full), menu_stats(full), lines, notes,
-                                                           L"hint", L"", L"Overlay Ctrl+Alt+P  ·  Visor Ctrl+Alt+V");
+        const std::wstring footer = L"Overlay Ctrl+Alt+P  ·  Visor Ctrl+Alt+V";
+        const int height = menu_list_height(true, notes.size(), true);
+        std::vector<MenuLine> lines = menu_lines(full);
+        int listed = 0;
+        for (size_t i = 1; i < lines.size(); ++i)
+            listed += lines[i].header ? kMenuHeaderHeight : kMenuLineHeight;
+        check(listed > height && menu_first_visible(lines, 1, height) == 1, "a page longer than the panel starts at its top");
+        full.selected = static_cast<int>(lines.size()) - 1;  // Show focus outline, the last
+        lines = menu_lines(full);
+        const int first = menu_first_visible(lines, 1, height);
+        int shownHeight = 0;
+        for (size_t i = static_cast<size_t>(first); i < lines.size(); ++i)
+            shownHeight += lines[i].header ? kMenuHeaderHeight : kMenuLineHeight;
+        check(first > 1 && shownHeight <= height && menu_first_visible(lines, first, height) == first,
+              "selecting the last line scrolls just far enough to show it, and stays");
+        full.selected = at(full, MenuItem::EyeTracking);
+        lines = menu_lines(full);
+        check(menu_first_visible(lines, first, height) == at(full, MenuItem::HeadFoveation),
+              "back up to Foveated mode: its heading shows with it");
+        const std::vector<uint32_t> page = draw_menu_panel(menu_title(full), menu_resolution(full), menu_stats(full),
+                                                           menu_lines(full), notes, L"hint", L"", footer, L"", false,
+                                                           menu_tabs(full), full.page, menu_first_visible(menu_lines(full), 1, height));
         // Rows with text: any pixel brighter than the background. The notes end above the footer's band, which has text.
         const auto row_has_text = [&page](int y) {
             for (int x = 36; x < kPanelWidth - 36; ++x)
@@ -888,67 +1020,83 @@ int SIM_QVFR_TEST_MAIN() {
         bool footerText = false;
         for (int y = kPanelHeight - 96; y < kPanelHeight - 56; ++y)
             footerText |= row_has_text(y);
-        check(lines.size() == 13 && lastNoteRow < kPanelHeight - 100 && footerText,
-              "the panel: 13 lines and three notes end above the footer, which shows");
-        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_MENU_SAVE", path, MAX_PATH)) {
-            if (FILE* f = _wfopen(path, L"wb")) {
+        check(lastNoteRow < kPanelHeight - 100 && footerText, "the panel: the list and three notes end above the footer, which shows");
+        // SIMQVFR_MENU_SAVE=<path>.bmp: this page saved there, and LMU's Picture page (DLSS, DLSS-NR, Vision) beside it
+        // as <path>-picture.bmp, to look at.
+        const auto save = [](const std::wstring& path, const std::vector<uint32_t>& pixels) {
+            if (FILE* f = _wfopen(path.c_str(), L"wb")) {
                 const int w = kPanelWidth, h = kPanelHeight;
                 BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
                                       sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
                 BITMAPINFOHEADER info{sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
                 fwrite(&file, sizeof(file), 1, f);
                 fwrite(&info, sizeof(info), 1, f);
-                for (const uint32_t p : page) {
+                for (const uint32_t p : pixels) {
                     const uint8_t bgra[4] = {static_cast<uint8_t>(p >> 16), static_cast<uint8_t>(p >> 8), static_cast<uint8_t>(p), 255};
                     fwrite(bgra, 4, 1, f);
                 }
                 fclose(f);
             }
+        };
+        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_MENU_SAVE", path, MAX_PATH)) {
+            save(path, page);
+            SettingsMenu lmu;
+            lmu.launch = {true, 40, 40, 40, 5190, 4168, 36.95};
+            lmu.launch.sharpening = lmu.launch.ownDlss = lmu.launch.ownNr = lmu.launch.eyeOff = true;
+            lmu.profiles = {L"Performance", L"Balanced", L"Quality"};
+            lmu.values.dlss.on = true;
+            pick(lmu, MenuItem::DlssFocusMode);
+            const std::vector<MenuLine> lmuLines = menu_lines(lmu);
+            const MenuResolution lmuRes = menu_resolution(lmu);
+            const std::vector<std::wstring> lmuNotes = menu_notes(lmu);
+            const int lmuFirst = menu_first_visible(lmuLines, 1, menu_list_height(lmuRes.shown, lmuNotes.size(), true));
+            std::wstring other = path;
+            other.insert(other.size() - 4, L"-picture");
+            save(other, draw_menu_panel(menu_title(lmu), lmuRes, menu_stats(lmu), lmuLines, lmuNotes, L"hint", menu_subtitle(lmu),
+                                        footer, L"GPU 9.8 ms · CPU 7.1 ms · 1.3 ms left · 0% missed", false,
+                                        menu_tabs(lmu), lmu.page, lmuFirst));
         }
     }
-    {  // The hotkeys footer ([menu] hotkey_footer): on by default, the Overlay and menu page's last line, read and written.
+    {  // The hotkeys footer ([menu] hotkey_footer): on by default, on the Headset menu card, read and written.
         SettingsMenu f;
         f.launch = {true, 50, 39, 39};
-        f.page = static_cast<int>(menu_pages(f).size()) - 1;  // Overlay and menu, the last page
-        const std::vector<MenuItem> items = menu_page_items(f);
-        f.selected = static_cast<int>(items.size()) - 1;
-        check(menu_page(f) == MenuPage::Headset && items.back() == MenuItem::HotkeyFooter && f.values.hotkeyFooter &&
-                  menu_lines(f).back().label == L"Hotkeys footer" && menu_lines(f).back().value == L"On",
-              "Hotkeys footer: on by default, the Overlay and menu page's last line");
-        check(menu_key(f, MenuKey::Right) && !f.values.hotkeyFooter && menu_lines(f).back().value == L"Off",
-              "Hotkeys footer: Right or Left turns it off and on");
+        go(f, MenuPage::Headset);
+        pick(f, MenuItem::HotkeyFooter);
+        check(menu_page(f) == MenuPage::Headset && f.values.hotkeyFooter &&
+                  line_of(f, MenuItem::HotkeyFooter).label == L"Show the hotkeys under the menu" &&
+                  line_of(f, MenuItem::HotkeyFooter).value == L"On" && at(f, MenuItem::HotkeyFooter) < at(f, MenuItem::HeadOverlay),
+              "Show the hotkeys under the menu: on by default, the Headset menu card's last line");
+        check(menu_key(f, MenuKey::Right) && !f.values.hotkeyFooter && line_of(f, MenuItem::HotkeyFooter).value == L"Off",
+              "the hotkeys footer: Right or Left turns it off and on");
         const std::wstring ini = temp_path(L"simqvfr-menu-footer.ini");
         DeleteFileW(ini.c_str());
         check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,
-              "Hotkeys footer: unset is on; written and read back");
+              "the hotkeys footer: unset is on; written and read back");
         DeleteFileW(ini.c_str());
     }
-    {  // Main thread core ([cpu] isolate_main_thread): every game, its own CPU page before Overlay and menu, off by default.
+    {  // The main thread's core ([cpu] isolate_main_thread): every game, the Game page's CPU card, off by default.
         SettingsMenu f;
         f.launch = {true, 50, 39, 39};
-        const std::vector<MenuPage> pages = menu_pages(f);
-        check(pages.size() >= 2 && pages[pages.size() - 2] == MenuPage::Cpu, "CPU page: the one before Overlay and menu");
-        f.page = static_cast<int>(pages.size()) - 2;
-        const std::vector<MenuItem> items = menu_page_items(f);
-        check(menu_title(f) == L"CPU" && items.size() == 2 && items[1] == MenuItem::CpuIsolateMain,
-              "CPU page: titled CPU, its one line Main thread core");
-        f.selected = 1;
-        check(!f.values.cpuIsolateMain && menu_lines(f)[1].label == L"Main thread core" &&
-                  menu_lines(f)[1].value == L"Shared",
-              "Main thread core: shared by default");
-        check(menu_key(f, MenuKey::Right) && f.values.cpuIsolateMain && menu_lines(f)[1].value == L"Its own",
-              "Main thread core: a step gives it its own core");
+        check(menu_pages(f).back() == MenuPage::Game && go(f, MenuPage::Game) && menu_page_name(f) == L"Game" &&
+                  menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadCpu, MenuItem::CpuIsolateMain} &&
+                  line_of(f, MenuItem::HeadCpu).label == L"CPU",
+              "Game: the last page, its CPU card");
+        pick(f, MenuItem::CpuIsolateMain);
+        check(!f.values.cpuIsolateMain && line_of(f, MenuItem::CpuIsolateMain).label == L"Give the main thread a core of its own" &&
+                  line_of(f, MenuItem::CpuIsolateMain).value == L"Off",
+              "the main thread's core: the launcher's name, off by default");
+        check(menu_key(f, MenuKey::Right) && f.values.cpuIsolateMain && line_of(f, MenuItem::CpuIsolateMain).value == L"On",
+              "a step gives it its own core");
         const std::wstring ini = temp_path(L"simqvfr-menu-cpu.ini");
         DeleteFileW(ini.c_str());
         check(!read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values, false) &&
                   read_menu_values(ini.c_str()).cpuIsolateMain,
-              "Main thread core: unset is shared; written (Two-loop too) and read back");
+              "the main thread's core: unset is off; written (Two-loop too) and read back");
         DeleteFileW(ini.c_str());
         SettingsMenu headset;
-        headset.page = static_cast<int>(menu_pages(headset).size()) - 1;
-        const std::vector<MenuItem> h = menu_page_items(headset);
-        check(std::find(h.begin(), h.end(), MenuItem::CpuIsolateMain) == h.end(), "not on the Overlay and menu page");
+        go(headset, MenuPage::Headset);
+        check(!has(headset, MenuItem::CpuIsolateMain), "not on the Headset page");
     }
 
     // Only what changed is written (ini_put.h): WritePrivateProfileString rewrites the whole ini for every key, even
@@ -1018,52 +1166,56 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(documented.c_str());
     }
 
-    // Sim-QVFR's own DLSS (engine/dlss_settings.h): its page only where the launch can run it, its choices stepped,
-    // and [dlss] in the ini, read from an older file's [experiment] lmu_dlss_* keys while [dlss] lacks its own.
+    // Sim-QVFR's own DLSS (engine/dlss_settings.h): its card on the View page only where the launch can run it, its
+    // choices stepped, and [dlss] in the ini, read from an older file's [experiment] lmu_dlss_* keys while [dlss] lacks
+    // its own.
     {
         SettingsMenu dm;
         dm.launch = {true, 50, 39, 39};
-        const auto has_page = [](const SettingsMenu& s) {
-            const std::vector<MenuPage> pages = menu_pages(s);
-            return std::find(pages.begin(), pages.end(), MenuPage::OwnDlss) != pages.end();
-        };
-        check(!has_page(dm), "DLSS page: none without a launch that can run it");
+        const auto has_dlss = [](SettingsMenu s) { return go(s, MenuPage::Picture) && has(s, MenuItem::DlssOn); };
+        check(!has_dlss(dm), "DLSS card: none without a launch that can run it");
         dm.launch.ownDlss = true;
-        check(has_page(dm) && menu_pages(dm).back() == MenuPage::Headset, "DLSS page: shown for the launch, before Overlay and menu");
+        check(has_dlss(dm), "DLSS card: shown for the launch, on the Picture page");
         dm.launch.qvfr = false;
-        check(!has_page(dm), "DLSS page: none in Two-loop");
+        check(!has_dlss(dm), "DLSS card: none in Two-loop");
         dm.launch.qvfr = true;
-        const std::vector<MenuPage> pages = menu_pages(dm);
-        dm.page = static_cast<int>(std::find(pages.begin(), pages.end(), MenuPage::OwnDlss) - pages.begin());
-        check(menu_title(dm) == L"DLSS" && menu_page_items(dm).size() == 2 && menu_page_items(dm)[1] == MenuItem::DlssOn,
-              "DLSS page: off, only its switch");
-        dm.selected = 1;
-        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.on && menu_page_items(dm).size() == 6 &&
-                  menu_lines(dm)[1].value == L"On",
-              "DLSS page: on, then the focus views' mode and preset, the eyes' preset and texture sharpening");
-        dm.selected = 2;  // Focus views: DLAA, then smaller renders; the ends hold
-        check(!menu_key(dm, MenuKey::Left) && dm.values.dlss.focusScale == 100 && menu_lines(dm)[2].value == L"DLAA",
-              "DLSS page: Left from DLAA stays at DLAA");
+        go(dm, MenuPage::Picture);
+        check(at(dm, MenuItem::HeadDlss) == at(dm, MenuItem::Optimize) + 1 && at(dm, MenuItem::DlssOn) == at(dm, MenuItem::HeadDlss) + 1 &&
+                  menu_page_items(dm).back() == MenuItem::DlssOn && line_of(dm, MenuItem::DlssOn).label == L"Use DLSS" &&
+                  line_of(dm, MenuItem::HeadDlss).label == L"DLSS",
+              "DLSS card: off, only its switch (the launcher's Use DLSS), after the Resolution card");
+        pick(dm, MenuItem::DlssOn);
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.on && has(dm, MenuItem::DlssFocusMode) &&
+                  has(dm, MenuItem::DlssFocusPreset) && has(dm, MenuItem::DlssEyePreset) && has(dm, MenuItem::DlssSharpening) &&
+                  line_of(dm, MenuItem::DlssOn).value == L"On",
+              "DLSS card: on, then the focus views' mode and preset, the eyes' preset and texture sharpening");
+        check(menu_subtitle(dm).find(L"NVIDIA DLSS") == 0, "DLSS card: what runs it, under the title");
+        pick(dm, MenuItem::DlssFocusMode);  // Focus views: DLAA, then smaller renders; the ends hold
+        check(!menu_key(dm, MenuKey::Left) && dm.values.dlss.focusScale == 100 && line_of(dm, MenuItem::DlssFocusMode).value == L"DLAA",
+              "DLSS card: Left from DLAA stays at DLAA");
         for (int i = 0; i < 4; ++i)
             menu_key(dm, MenuKey::Right);
-        check(dm.values.dlss.focusScale == 50 && menu_lines(dm)[2].value == L"Performance (50%)" &&
+        check(dm.values.dlss.focusScale == 50 && line_of(dm, MenuItem::DlssFocusMode).value == L"Performance (50%)" &&
                   !menu_key(dm, MenuKey::Right),
-              "DLSS page: Right steps to Performance (50%), the last");
-        dm.selected = 3;
-        check(menu_lines(dm)[3].value == L"Default (M)", "DLSS page: the focus preset's default named as NGX's for Performance");
-        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.focusPreset == 11 && menu_lines(dm)[3].value == L"K",
-              "DLSS page: the focus preset steps to K");
-        dm.selected = 4;
+              "DLSS card: Right steps to Performance (50%), the last");
+        pick(dm, MenuItem::DlssFocusPreset);
+        check(line_of(dm, MenuItem::DlssFocusPreset).value == L"Default (M)",
+              "DLSS card: the focus preset's default named as NGX's for Performance");
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.focusPreset == 11 && line_of(dm, MenuItem::DlssFocusPreset).value == L"K",
+              "DLSS card: the focus preset steps to K");
+        pick(dm, MenuItem::DlssEyePreset);
         check(dm.values.dlss.eyePreset == 11 && menu_key(dm, MenuKey::Right) && dm.values.dlss.eyePreset == 6 &&
-                  menu_lines(dm)[4].value == L"F (cheaper)",
-              "DLSS page: the eyes' preset K by default, F a step on");
-        dm.selected = 5;  // texture sharpening: off by default, then the focus views, then the eyes too; the ends hold
-        check(dm.values.dlss.textureSharpening == 0 && menu_lines(dm)[5].value == L"Off" && !menu_key(dm, MenuKey::Left),
-              "DLSS page: texture sharpening off by default, Left from Off stays there");
-        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.textureSharpening == 1 && menu_lines(dm)[5].value == L"Focus only" &&
-                  menu_key(dm, MenuKey::Right) && dm.values.dlss.textureSharpening == 2 &&
-                  menu_lines(dm)[5].value == L"Focus and periphery" && !menu_key(dm, MenuKey::Right),
-              "DLSS page: texture sharpening steps to Focus only, then Focus and periphery, the last");
+                  line_of(dm, MenuItem::DlssEyePreset).value == L"F (cheaper)",
+              "DLSS card: the eyes' preset K by default, F a step on");
+        pick(dm, MenuItem::DlssSharpening);  // texture sharpening: off by default, then the focus views, then the eyes too
+        check(dm.values.dlss.textureSharpening == 0 && line_of(dm, MenuItem::DlssSharpening).value == L"Off" &&
+                  !menu_key(dm, MenuKey::Left),
+              "DLSS card: texture sharpening off by default, Left from Off stays there");
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.textureSharpening == 1 &&
+                  line_of(dm, MenuItem::DlssSharpening).value == L"Focus only" && menu_key(dm, MenuKey::Right) &&
+                  dm.values.dlss.textureSharpening == 2 && line_of(dm, MenuItem::DlssSharpening).value == L"Focus and periphery" &&
+                  !menu_key(dm, MenuKey::Right),
+              "DLSS card: texture sharpening steps to Focus only, then Focus and periphery, the last");
         const auto has_note = [&](const wchar_t* start) {
             for (const std::wstring& n : menu_notes(dm))
                 if (n.rfind(start, 0) == 0)
@@ -1071,36 +1223,36 @@ int SIM_QVFR_TEST_MAIN() {
             return false;
         };
         check(has_note(L"Texture sharpening was off at launch"),
-              "DLSS page: texture sharpening turned on with it off at launch: the note says the next launch");
+              "DLSS card: texture sharpening turned on with it off at launch: the note says the next launch");
         dm.launch.sharpeningReady = true;
-        check(!has_note(L"Texture sharpening was off at launch"), "DLSS page: on at launch: no such note (its settings live)");
+        check(!has_note(L"Texture sharpening was off at launch"), "DLSS card: on at launch: no such note (its settings live)");
         {  // AMD FSR, an experiment (MenuLaunch::fsr): the Upscaler row after the switch; NGX's presets go under FSR
             SettingsMenu fm = dm;
             fm.launch.fsr = true;
-            check(menu_page_items(fm).size() == 7 && menu_page_items(fm)[2] == MenuItem::DlssUpscaler &&
-                      menu_lines(fm)[2].value == L"NVIDIA DLSS",
-                  "DLSS page with FSR allowed: the Upscaler row, NVIDIA DLSS by default");
-            fm.selected = 2;
+            check(at(fm, MenuItem::DlssUpscaler) == at(fm, MenuItem::DlssOn) + 1 &&
+                      line_of(fm, MenuItem::DlssUpscaler).value == L"NVIDIA DLSS",
+                  "DLSS card with FSR allowed: the Upscaler row, NVIDIA DLSS by default");
+            pick(fm, MenuItem::DlssUpscaler);
             fm.values.dlss.focusScale = 100;
-            const std::vector<MenuItem> items = (menu_key(fm, MenuKey::Right), menu_page_items(fm));
-            check(fm.values.dlss.upscaler == 1 && menu_lines(fm)[2].value == L"AMD FSR" && items.size() == 5 &&
-                      items[3] == MenuItem::DlssFocusMode && items[4] == MenuItem::DlssSharpening &&
-                      menu_lines(fm)[3].value == L"Native AA",
-                  "DLSS page: Right takes AMD FSR; its rows: the focus views (DLAA named Native AA) and texture sharpening");
-            check(menu_key(fm, MenuKey::Left) && fm.values.dlss.upscaler == 0 && menu_page_items(fm).size() == 7,
-                  "DLSS page: back to NVIDIA DLSS, its presets again");
-            check(menu_page_items(dm).size() == 6, "DLSS page without the experiment: no Upscaler row");
+            menu_key(fm, MenuKey::Right);
+            check(fm.values.dlss.upscaler == 1 && line_of(fm, MenuItem::DlssUpscaler).value == L"AMD FSR" &&
+                      has(fm, MenuItem::DlssFocusMode) && has(fm, MenuItem::DlssSharpening) && !has(fm, MenuItem::DlssFocusPreset) &&
+                      !has(fm, MenuItem::DlssEyePreset) && line_of(fm, MenuItem::DlssFocusMode).value == L"Native AA" &&
+                      line_of(fm, MenuItem::HeadDlss).label == L"FSR",
+                  "Right takes AMD FSR: the focus views (DLAA named Native AA) and texture sharpening; the card is FSR's");
+            check(menu_key(fm, MenuKey::Left) && fm.values.dlss.upscaler == 0 && has(fm, MenuItem::DlssFocusPreset),
+                  "back to NVIDIA DLSS, its presets again");
+            check(!has(dm, MenuItem::DlssUpscaler), "DLSS card without the experiment: no Upscaler row");
         }
-        {  // A PC without an NVIDIA RTX card: AMD FSR runs the views; the page is FSR's, no presets, no Upscaler row
+        {  // A PC without an NVIDIA RTX card: AMD FSR runs the views; the card is FSR's, no presets, no Upscaler row
             SettingsMenu am = dm;
             am.launch.fsrPc = true;
             am.launch.fsr = true;  // the RTX test's key changes nothing here
             am.values.dlss.focusScale = 100;
-            const std::vector<MenuItem> items = menu_page_items(am);
-            check(menu_title(am) == L"FSR" && items.size() == 4 && items[1] == MenuItem::DlssOn &&
-                      items[2] == MenuItem::DlssFocusMode && items[3] == MenuItem::DlssSharpening &&
-                      menu_lines(am)[1].label == L"FSR" && menu_lines(am)[2].value == L"Native AA",
-                  "FSR page without an RTX card: titled FSR, its switch FSR, Native AA, no presets or Upscaler row");
+            check(line_of(am, MenuItem::HeadDlss).label == L"FSR" && !has(am, MenuItem::DlssUpscaler) && !has(am, MenuItem::DlssFocusPreset) &&
+                      at(am, MenuItem::DlssFocusMode) == at(am, MenuItem::DlssOn) + 1 &&
+                      line_of(am, MenuItem::DlssOn).label == L"Use FSR" && line_of(am, MenuItem::DlssFocusMode).value == L"Native AA",
+                  "FSR without an RTX card: the card FSR's, its switch Use FSR, Native AA, no presets or Upscaler row");
         }
 
         const std::wstring ini = temp_path(L"simqvfr-menu-dlss.ini");
@@ -1148,79 +1300,74 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(ini.c_str());
     }
 
-    // DLSS-NR on those views (engine/nr_settings.h): its page only where the launch can run it (the player's
+    // DLSS-NR on those views (engine/nr_settings.h): its card only where the launch can run it (the player's
     // nvngx_dlssnr.dll there), its switches and sliders stepped within their ranges, [dlss_nr] read with the menu's values.
     {
         SettingsMenu nm;
         nm.launch = {true, 50, 39, 39};
         nm.launch.ownDlss = true;
-        const auto page_at = [](const SettingsMenu& s) {
-            const std::vector<MenuPage> pages = menu_pages(s);
-            return static_cast<int>(std::find(pages.begin(), pages.end(), MenuPage::OwnNr) - pages.begin());
-        };
-        check(page_at(nm) == static_cast<int>(menu_pages(nm).size()), "DLSS-NR page: none without the player's DLL at launch");
+        const auto has_nr = [](SettingsMenu s) { return go(s, MenuPage::Picture) && has(s, MenuItem::NrOn); };
+        check(!has_nr(nm), "DLSS-NR card: none without the player's DLL at launch");
         nm.launch.ownNr = true;
-        const std::vector<MenuPage> pages = menu_pages(nm);
-        check(page_at(nm) < static_cast<int>(pages.size()) && pages[page_at(nm) - 1] == MenuPage::OwnDlss &&
-                  pages.back() == MenuPage::Headset,
-              "DLSS-NR page: shown for the launch, after the DLSS page");
+        check(has_nr(nm), "DLSS-NR card: shown for the launch");
         nm.launch.ownDlss = false;
-        check(page_at(nm) == static_cast<int>(menu_pages(nm).size()), "DLSS-NR page: none without Sim-QVFR's own DLSS");
+        check(!has_nr(nm), "DLSS-NR card: none without Sim-QVFR's own DLSS");
         nm.launch.ownDlss = true;
-        nm.page = page_at(nm);
-        check(menu_title(nm) == L"DLSS-NR" && menu_page_items(nm).size() == 2 && menu_page_items(nm)[1] == MenuItem::NrOn,
-              "DLSS-NR page: off, only its switch");
-        nm.selected = 1;
-        check(menu_key(nm, MenuKey::Right) && nm.values.nr.on && menu_page_items(nm).size() == 13 && menu_lines(nm)[1].value == L"On",
-              "DLSS-NR page: on, then the model's settings, the order, the focus working size, the edge blend, the periphery");
-        const auto at = [&](MenuItem item) {
-            const std::vector<MenuItem> items = menu_page_items(nm);
-            return static_cast<int>(std::find(items.begin(), items.end(), item) - items.begin());
-        };
-        nm.selected = at(MenuItem::NrIntensity);
+        go(nm, MenuPage::Picture);
+        check(at(nm, MenuItem::HeadNr) > at(nm, MenuItem::DlssOn) && menu_page_items(nm).back() == MenuItem::NrOn &&
+                  line_of(nm, MenuItem::NrOn).label == L"Use DLSS-NR" && line_of(nm, MenuItem::HeadNr).label == L"DLSS-NR",
+              "DLSS-NR card: after the DLSS card, off, only its switch (the launcher's Use DLSS-NR)");
+        pick(nm, MenuItem::NrOn);
+        check(menu_key(nm, MenuKey::Right) && nm.values.nr.on && has(nm, MenuItem::NrIntensity) && has(nm, MenuItem::NrPeriphery) &&
+                  !has(nm, MenuItem::NrPeripheryScale) && line_of(nm, MenuItem::NrOn).value == L"On",
+              "DLSS-NR card: on, then the model's settings, the order, the focus working size, the edge blend, the periphery");
+        check(menu_subtitle(nm).find(L"neural rendering") != std::wstring::npos, "DLSS-NR card: what it is, under the title");
+        pick(nm, MenuItem::NrIntensity);
         check(!menu_key(nm, MenuKey::Right) && nm.values.nr.intensity == 100 && menu_key(nm, MenuKey::Left) &&
-                  nm.values.nr.intensity == 95 && menu_lines(nm)[nm.selected].value == L"95%",
-              "DLSS-NR page: intensity stops at 100%, steps down by 5");
-        nm.selected = at(MenuItem::NrStyle);
-        check(menu_lines(nm)[nm.selected].value == L"Standard" && menu_key(nm, MenuKey::Right) && menu_key(nm, MenuKey::Right) &&
-                  menu_lines(nm)[nm.selected].value == L"Cinematic" && !menu_key(nm, MenuKey::Right),
-              "DLSS-NR page: style steps Standard, Natural, Cinematic, the last");
-        nm.selected = at(MenuItem::NrPreset);
-        check(menu_lines(nm)[nm.selected].value == L"Default" && menu_key(nm, MenuKey::Right) && nm.values.nr.preset == 1 &&
-                  menu_lines(nm)[nm.selected].value == L"A (original)",
-              "DLSS-NR page: preset steps from the runtime's default to A");
-        nm.selected = at(MenuItem::NrLocalTone);
+                  nm.values.nr.intensity == 95 && line_of(nm, MenuItem::NrIntensity).value == L"95%",
+              "DLSS-NR card: intensity stops at 100%, steps down by 5");
+        pick(nm, MenuItem::NrStyle);
+        check(line_of(nm, MenuItem::NrStyle).value == L"Standard" && menu_key(nm, MenuKey::Right) && menu_key(nm, MenuKey::Right) &&
+                  line_of(nm, MenuItem::NrStyle).value == L"Cinematic" && !menu_key(nm, MenuKey::Right),
+              "DLSS-NR card: style steps Standard, Natural, Cinematic, the last");
+        pick(nm, MenuItem::NrPreset);
+        check(line_of(nm, MenuItem::NrPreset).value == L"Default" && menu_key(nm, MenuKey::Right) && nm.values.nr.preset == 1 &&
+                  line_of(nm, MenuItem::NrPreset).value == L"A (original)",
+              "DLSS-NR card: preset steps from the runtime's default to A");
+        pick(nm, MenuItem::NrLocalTone);
         for (int i = 0; i < 12; ++i)
             menu_key(nm, MenuKey::Right);
-        check(nm.values.nr.localTone == 200 && menu_lines(nm)[nm.selected].value == L"200%", "DLSS-NR page: local tone stops at 200%");
-        nm.selected = at(MenuItem::NrOrder);
-        check(menu_lines(nm)[nm.selected].value == L"After DLSS" && menu_key(nm, MenuKey::Right) && nm.values.nr.beforeDlss &&
-                  menu_lines(nm)[nm.selected].value == L"Before DLSS",
-              "DLSS-NR page: it runs after DLSS by default, before it a step on");
-        nm.selected = at(MenuItem::NrFocusScale);
+        check(nm.values.nr.localTone == 200 && line_of(nm, MenuItem::NrLocalTone).value == L"200%",
+              "DLSS-NR card: local tone stops at 200%");
+        pick(nm, MenuItem::NrOrder);
+        check(line_of(nm, MenuItem::NrOrder).value == L"After DLSS" && menu_key(nm, MenuKey::Right) && nm.values.nr.beforeDlss &&
+                  line_of(nm, MenuItem::NrOrder).value == L"Before DLSS",
+              "DLSS-NR card: it runs after DLSS by default, before it a step on");
+        pick(nm, MenuItem::NrFocusScale);
         for (int i = 0; i < 20; ++i)
             menu_key(nm, MenuKey::Left);
-        check(nm.values.nr.focusScale == kNrScaleMin, "DLSS-NR page: the focus working size stops at its minimum");
-        nm.selected = at(MenuItem::NrLimit);
-        check(menu_lines(nm)[nm.selected].value == L"1.0 MP a view" && menu_key(nm, MenuKey::Right) && nm.values.nr.workingLimit == 11 &&
-                  menu_lines(nm)[nm.selected].value == L"1.1 MP a view",
-              "DLSS-NR page: the working size limit is 1.0 megapixel a view by default, a tenth a step");
-        nm.selected = at(MenuItem::NrPeriphery);
-        check(!nm.values.nr.periphery && menu_key(nm, MenuKey::Right) && nm.values.nr.periphery && menu_page_items(nm).size() == 15 &&
+        check(nm.values.nr.focusScale == kNrScaleMin, "DLSS-NR card: the focus working size stops at its minimum");
+        pick(nm, MenuItem::NrLimit);
+        check(line_of(nm, MenuItem::NrLimit).value == L"1.0 MP a view" && menu_key(nm, MenuKey::Right) &&
+                  nm.values.nr.workingLimit == 11 && line_of(nm, MenuItem::NrLimit).value == L"1.1 MP a view",
+              "DLSS-NR card: the working size limit is 1.0 megapixel a view by default, a tenth a step");
+        pick(nm, MenuItem::NrPeriphery);
+        check(!nm.values.nr.periphery && menu_key(nm, MenuKey::Right) && nm.values.nr.periphery &&
                   menu_page_items(nm).back() == MenuItem::NrPeripheryCoverage,
-              "DLSS-NR page: the periphery off by default; on, its working size and coverage follow");
-        nm.selected = at(MenuItem::NrPeripheryCoverage);
-        check(menu_lines(nm)[nm.selected].value == L"100%" && menu_key(nm, MenuKey::Left) && nm.values.nr.peripheryCoverage == 90,
-              "DLSS-NR page: the periphery covered steps down from all of it");
+              "DLSS-NR card: the periphery off by default; on, its working size and coverage follow");
+        pick(nm, MenuItem::NrPeripheryCoverage);
+        check(line_of(nm, MenuItem::NrPeripheryCoverage).value == L"100%" && menu_key(nm, MenuKey::Left) &&
+                  nm.values.nr.peripheryCoverage == 90,
+              "DLSS-NR card: the periphery covered steps down from all of it");
         const auto has_note = [&](const wchar_t* start) {
             for (const std::wstring& n : menu_notes(nm))
                 if (n.rfind(start, 0) == 0)
                     return true;
             return false;
         };
-        check(has_note(L"Runs with DLSS on"), "DLSS-NR page: with DLSS off the note says it runs with DLSS on");
+        check(has_note(L"Runs with DLSS on"), "DLSS-NR card: with DLSS off the note says it runs with DLSS on");
         nm.values.dlss.on = true;
-        check(!has_note(L"Runs with DLSS on"), "DLSS-NR page: with DLSS on, no such note");
+        check(!has_note(L"Runs with DLSS on"), "DLSS-NR card: with DLSS on, no such note");
 
         const std::wstring ini = temp_path(L"simqvfr-menu-nr.ini");
         DeleteFileW(ini.c_str());

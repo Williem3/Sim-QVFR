@@ -54,7 +54,7 @@ void optimize_start(int64_t now) {
     optimize.note.clear();
     // It measures what each step does, so the views must resize live (with DLSS: views4_dlss_live).
     if (game->qvfr_dlss_held()) {
-        optimize.note = L"DLSS holds the view sizes until the next launch (DLAA, or views4_dlss_live=0): it can't measure live";
+        optimize.note = L"DLSS keeps this launch's view sizes, so it can't measure live: set them for the next launch";
         return;
     }
     int nativeW = 0;
@@ -151,7 +151,7 @@ void optimize_tick(int64_t now) {
     }
     if (o.running()) {
         if (menu.visible)  // shown until it is done
-            menu.hideAt = std::max(menu.hideAt, now + qpc_ms(kMenuHideMs));
+            menu.hideAt = std::max(menu.hideAt, now + qpc_ms(menu_hide_ms()));
         if (now >= optimize.nextWindow) {
             optimize.nextWindow = now + qpc_ms(kOptimizeWindowMs);
             if (const QvfrAction a = o.feed(optimize_window()); a.apply)
