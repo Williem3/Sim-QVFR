@@ -73,17 +73,17 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <circle cx="48" cy="353" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="357" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="t" x="66" y="348">Render scale</text>
-<text class="ms" x="66" y="366">0x199cc18 · float</text>
+<text class="ms" x="66" y="366">game value · float</text>
 <rect x="28" y="386" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="411" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="415" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="t" x="66" y="406">Recommended size</text>
-<text class="ms" x="66" y="424">0x1b1c654 · width, height</text>
+<text class="ms" x="66" y="424">game value · width, height</text>
 <rect x="28" y="444" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="469" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="473" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="t" x="66" y="464">Eye projections</text>
-<text class="ms" x="66" y="482">0x1b1bf74, 0x1b1c04c</text>
+<text class="ms" x="66" y="482">game values · left eye, right eye</text>
 <rect x="28" y="502" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="527" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="531" text-anchor="middle" fill="var(--group-bg)">R</text>
