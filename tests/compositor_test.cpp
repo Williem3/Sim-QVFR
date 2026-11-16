@@ -795,7 +795,7 @@ int SIM_QVFR_TEST_MAIN() {
 
     // Sharpening on D3D12 (ACE): the same shader and root constants as the D3D11 compositor's (cas_sharpen_test checks
     // the filter itself). Flat views at 100% give the plain composition's pixels exactly; mid-grey stripes in the outer
-    // view (4 texels each, upscaled 2x) come out with more contrast, the stripes' middles unchanged.
+    // view (4 texels each, upscaled 2x) come out as bilinear's: the periphery is never sharpened.
     {
         clear_eyes(gpu, frameA.Get(), red, blue);
         bool same = compositor.capture_outer(frameA.Get());
@@ -824,21 +824,14 @@ int SIM_QVFR_TEST_MAIN() {
             composed = composed && compositor.compose(frameB.Get(), output.Get(), pass ? sharp : eyes);
             rows[pass] = read_back(gpu, output.Get());
         }
-        // Eye 0's row 6, above its focus box: all outer view.
+        // Eye 0's row 6, above its focus box: all outer view, as bilinear's at 100%.
         const UINT y = 6;
-        int variation[2] = {}, middleOff = 0;
-        for (int pass = 0; pass < 2; ++pass)
-            for (UINT x = 1; x < kOutW / 2; ++x)
-                variation[pass] += std::abs(static_cast<int>(rows[pass].at(x, y)[1]) - static_cast<int>(rows[pass].at(x - 1, y)[1]));
-        // The output pixels between a stripe's second and third texels (x = 2s + 3, 2s + 4 for a stripe from s): all
-        // their taps inside the stripe, so CAS leaves them as bilinear does.
-        for (UINT s = 8; s + 8 < kAppW / 2; s += 8)
-            for (const UINT x : {2 * s + 3, 2 * s + 4})
-                middleOff = std::max(middleOff, std::abs(static_cast<int>(rows[1].at(x, y)[1]) - static_cast<int>(rows[0].at(x, y)[1])));
+        int off = 0;
+        for (UINT x = 0; x < kOutW / 2; ++x)
+            off = std::max(off, std::abs(static_cast<int>(rows[1].at(x, y)[1]) - static_cast<int>(rows[0].at(x, y)[1])));
         char what[160];
-        std::snprintf(what, sizeof(what), "sharpening (D3D12): stripes' contrast up (variation %d against %d), their middles "
-                      "as bilinear's (off by %d at most)", variation[1], variation[0], middleOff);
-        check(composed && variation[1] > variation[0] * 11 / 10 && middleOff <= 1, what);
+        std::snprintf(what, sizeof(what), "sharpening (D3D12): the periphery's stripes as bilinear's at 100%% (off by %d)", off);
+        check(composed && off == 0, what);
     }
 
     compositor.shutdown();

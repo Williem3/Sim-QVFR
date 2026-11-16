@@ -57,7 +57,8 @@ struct EyeComposition {
     // The visor: 0 auto (a tint when its image has no transparency, else blended as drawn), 1 always a tint
     // (the scene filtered by its colour, like glass), 2 always blended as drawn.
     int visorBlend;
-    // Sharpening (compose_shader.h's cas_sample, AMD's CAS): 0 off (the views resampled bilinear, as before), 1 the most.
+    // Sharpening of the focus view (compose_shader.h's cas_peak, AMD's CAS): CAS's own sharpness 0..1 (lobe -1/8..-1/5)
+    // above 0; 0 off (bilinear). The periphery is never sharpened.
     float sharpness = 0;
 };
 

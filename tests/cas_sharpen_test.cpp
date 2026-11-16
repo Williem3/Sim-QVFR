@@ -1,7 +1,7 @@
 // Offline check of the compositor's sharpening (compose_shader.h's cas_sample, AMD's CAS) on a WARP device: flat
-// views stay exactly as they are, the taps never reach a neighbouring view in the image, a view copied texel for texel
-// (draw_view_copies) is CAS's sharpening filter to within a step of 255 of a CPU reference, and the periphery's upscale
-// comes out steeper at an edge than bilinear's while away from the edge it is unchanged.
+// views stay exactly as they are, the taps never reach a neighbouring view in the image, the focus view drawn texel for
+// texel (the focus layer) is CAS's sharpening filter at CAS's own sharpness to within a step of 255 of a CPU reference,
+// the periphery is never sharpened, and the focus view's sharpening fades out across the feather.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -86,6 +86,11 @@ void eyes_for(EyeComposition (&eyes)[2], float sharpness) {
     }
 }
 
+// CAS's lobe for its own sharpness 0..1 (ffx_cas.h: -1/lerp(8, 5, sharpness)); 0 off (compose_shader.h's cas_peak).
+float cas_peak(float sharpness) {
+    return sharpness > 0 ? -1.0f / (8.0f - 3.0f * std::min(sharpness, 1.0f)) : 0.0f;
+}
+
 // CAS's sharpening at texel (x, y) of `v` (one to one: its cross of neighbours, clamped to the region x0..x1, y0..y1),
 // as compose_shader.h's cas_sample gives it on a texel centre; `sharpness` 0..1. One channel, 0..255.
 int cas_reference(const std::vector<uint32_t>& v, int x, int y, int x0, int y0, int x1, int y1, int c, float sharpness) {
@@ -97,7 +102,7 @@ int cas_reference(const std::vector<uint32_t>& v, int x, int y, int x0, int y0, 
     const float b = at(x, y - 1), e = at(x - 1, y), f = at(x, y), g = at(x + 1, y), j = at(x, y + 1);
     const float mn = std::min({b, e, f, g, j}), mx = std::max({b, e, f, g, j});
     const float amp = std::sqrt(std::clamp(std::min(mn, 1 - mx) / std::max(mx, 1e-5f), 0.0f, 1.0f));
-    const float w = -0.2f * sharpness * amp;
+    const float w = cas_peak(sharpness) * amp;
     const float out = std::clamp((f + w * (b + e + g + j)) / (1 + 4 * w), 0.0f, 1.0f);
     return static_cast<int>(std::lround(out * 255));
 }
@@ -159,8 +164,9 @@ int SIM_QVFR_TEST_MAIN() {
         }
     }
 
-    // 2. Texel for texel (draw_view_copies, the periphery's copy when the runtime composes): a pattern of mid-tone
-    // values, each channel its own, against the CPU's CAS within a step of 255 (the GPU's rounding); 0% is a plain copy.
+    // 2. Texel for texel (the focus layer, the runtime composing: each focus view at its own size, the feather a hair so
+    // every texel is at full weight): a pattern of mid-tone values, each channel its own, against the CPU's CAS at CAS's
+    // own sharpness within a step of 255 (the GPU's rounding); 0% is a plain copy.
     {
         std::vector<uint32_t> pixels(kW * kH);
         uint32_t seed = 12345;
@@ -177,23 +183,27 @@ int SIM_QVFR_TEST_MAIN() {
                 pixels[y * kW + x] = 0xff000000u | (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(g) << 8) |
                                      static_cast<uint32_t>(r);
             }
-        ComPtr<ID3D11Texture2D> views = texture(device.Get(), kW, kH, &pixels), target = texture(device.Get(), 256, 128, nullptr);
-        const float sources[2][4] = {{0, 0, 0.5f, 128.0f / kH}, {0.5f, 0, 0.5f, 128.0f / kH}};
-        const int rects[2][4] = {{0, 0, 128, 128}, {128, 0, 128, 128}};
-        for (float sharpness : {0.0f, 0.5f, 1.0f}) {
-            check(compositor.draw_view_copies(views.Get(), target.Get(), sources, rects, sharpness), "copies: drawn");
+        ComPtr<ID3D11Texture2D> views = texture(device.Get(), kW, kH, &pixels), target = texture(device.Get(), 256, 64, nullptr);
+        const int rects[2][4] = {{0, 0, 128, 64}, {128, 0, 128, 64}};
+        for (float sharpness : {0.0f, 0.05f, 0.5f, 1.0f}) {
+            EyeComposition eyes[2];
+            eyes_for(eyes, sharpness);
+            for (EyeComposition& e : eyes)
+                e.feather = 0.001f;
+            check(compositor.draw_focus_layer(views.Get(), target.Get(), eyes, rects), "texel for texel: drawn");
             const Image out = read_image(device.Get(), context.Get(), target.Get());
             int worst = 0, changed = 0;
             UINT worstX = 0, worstY = 0;
-            for (UINT y = 0; y < 128; ++y)
+            for (UINT y = 0; y < 64; ++y)
                 for (UINT x = 0; x < 256; ++x) {
                     const int x0 = x < 128 ? 0 : 128;
+                    const UINT sy = 128 + y;  // the focus views' rows of the image
                     for (int c = 0; c < 3; ++c) {
                         const int want = sharpness > 0
-                                             ? cas_reference(pixels, static_cast<int>(x), static_cast<int>(y), x0, 0, x0 + 127, 127, c, sharpness)
-                                             : static_cast<int>((pixels[y * kW + x] >> (8 * c)) & 0xff);
+                                             ? cas_reference(pixels, static_cast<int>(x), static_cast<int>(sy), x0, 128, x0 + 127, 191, c, sharpness)
+                                             : static_cast<int>((pixels[sy * kW + x] >> (8 * c)) & 0xff);
                         const int d = std::abs(out.channel(x, y, c) - want);
-                        changed += out.channel(x, y, c) != static_cast<int>((pixels[y * kW + x] >> (8 * c)) & 0xff);
+                        changed += out.channel(x, y, c) != static_cast<int>((pixels[sy * kW + x] >> (8 * c)) & 0xff);
                         if (d > worst) {
                             worst = d;
                             worstX = x;
@@ -202,15 +212,14 @@ int SIM_QVFR_TEST_MAIN() {
                     }
                 }
             char what[160];
-            std::snprintf(what, sizeof(what), "copies at %.0f%%: CAS's filter within one step (worst %d at %u,%u; %d values "
+            std::snprintf(what, sizeof(what), "texel for texel at %.0f%%: CAS's filter within one step (worst %d at %u,%u; %d values "
                           "changed)", sharpness * 100, worst, worstX, worstY, changed);
-            check(worst <= 1 && (sharpness > 0 ? changed > 10000 : changed == 0), what);
+            check(worst <= 1 && (sharpness > 0 ? changed > 5000 : changed == 0), what);
         }
     }
 
-    // 3. The periphery upscaled 2x (128 texels into 256 pixels per eye) across a soft edge at a quarter of the view,
-    // outside the focus box: sharpened, the transition is steeper and spreads apart (darker below the edge, lighter
-    // above it); away from it the image is the same as bilinear's.
+    // 3. The periphery upscaled 2x (128 texels into 256 pixels per eye) across a soft edge at a quarter of the view:
+    // never sharpened, so at 100% it is bilinear's exactly outside the focus box.
     {
         std::vector<uint32_t> pixels(kW * kH);
         for (UINT y = 0; y < kH; ++y)
@@ -222,31 +231,21 @@ int SIM_QVFR_TEST_MAIN() {
         ComPtr<ID3D11Texture2D> views = texture(device.Get(), kW, kH, &pixels), output = texture(device.Get(), 512, 256, nullptr);
         EyeComposition eyes[2];
         eyes_for(eyes, 0.0f);
-        check(compositor.compose(views.Get(), output.Get(), eyes), "edge: compose, bilinear");
+        check(compositor.compose(views.Get(), output.Get(), eyes), "periphery: compose, bilinear");
         const Image plain = read_image(device.Get(), context.Get(), output.Get());
         eyes_for(eyes, 1.0f);
-        check(compositor.compose(views.Get(), output.Get(), eyes), "edge: compose, sharpening 100%");
+        check(compositor.compose(views.Get(), output.Get(), eyes), "periphery: compose, sharpening 100%");
         const Image sharp = read_image(device.Get(), context.Get(), output.Get());
-        const UINT y = 20;  // above the focus box (it spans rows 77-179)
-        int plainSlope = 0, sharpSlope = 0, below = 0, above = 0;
-        bool sameAway = true;
-        for (UINT x = 1; x < 256; ++x) {
-            plainSlope = std::max(plainSlope, plain.channel(x, y, 0) - plain.channel(x - 1, y, 0));
-            sharpSlope = std::max(sharpSlope, sharp.channel(x, y, 0) - sharp.channel(x - 1, y, 0));
-            if (x >= 50 && x < 64)  // just below the ramp (output 62..68)
-                below += plain.channel(x, y, 0) - sharp.channel(x, y, 0);
-            if (x > 68 && x <= 80)
-                above += sharp.channel(x, y, 0) - plain.channel(x, y, 0);
-            if ((x < 40 || (x > 90 && x < 150)) && sharp.at(x, y) != plain.at(x, y))
-                sameAway = false;
-        }
-        char what[160];
-        std::snprintf(what, sizeof(what), "edge: steeper sharpened (largest step %d against bilinear's %d)", sharpSlope,
-                      plainSlope);
-        check(sharpSlope > plainSlope, what);
-        std::snprintf(what, sizeof(what), "edge: darker below it (%d in all), lighter above it (%d in all)", below, above);
-        check(below > 0 && above > 0, what);
-        check(sameAway, "edge: away from it, the same as bilinear's");
+        int off = 0;
+        for (UINT y = 0; y < 256; ++y)
+            for (UINT x = 0; x < 512; ++x) {
+                const UINT ex = x % 256;
+                const bool box = ex >= 70 && ex < 186 && y >= 70 && y < 186;  // the focus box (77-179) with a margin
+                off += !box && sharp.at(x, y) != plain.at(x, y);
+            }
+        char what[128];
+        std::snprintf(what, sizeof(what), "periphery: at 100%%, bilinear's exactly outside the focus box (%d pixels off)", off);
+        check(off == 0, what);
     }
 
     // 4. A supersampled focus view, two texels per output pixel each way (128 x 64 texels into a 64 x 32 box: eyes of
@@ -276,7 +275,7 @@ int SIM_QVFR_TEST_MAIN() {
     };
     const auto cas_of = [](float e, float b, float d, float f, float h, float sharpness) {
         const float mn = std::min({b, d, e, f, h}), mx = std::max({b, d, e, f, h});
-        const float w = -0.2f * sharpness * std::sqrt(std::clamp(std::min(mn, 1 - mx) / std::max(mx, 1e-5f), 0.0f, 1.0f));
+        const float w = cas_peak(sharpness) * std::sqrt(std::clamp(std::min(mn, 1 - mx) / std::max(mx, 1e-5f), 0.0f, 1.0f));
         return std::clamp((e + w * (b + d + f + h)) / (1 + 4 * w), 0.0f, 1.0f);
     };
     {
@@ -344,6 +343,50 @@ int SIM_QVFR_TEST_MAIN() {
                       "on them (sharpened at the display's scale), %.0f%% sharpened at the texels' own", 100 * kept[1] / wanted,
                       100 * kept[0] / wanted);
         check(kept[1] / wanted > 0.6 && kept[1] > 1.3 * kept[0], what);
+    }
+
+    // 6. The fade: the focus view one to one (128 x 64 texels into a 128 x 64 box: eyes of 320 x 160) over a black
+    // outer view, vertical stripes, a wide feather (30%). Across the feather the sharpening's change on the composed
+    // pixels falls off as the blend weight squared (the blend times the fade), not as the weight alone.
+    {
+        std::vector<uint32_t> pixels(kW * kH);
+        for (UINT y = 0; y < kH; ++y)
+            for (UINT x = 0; x < kW; ++x)
+                pixels[y * kW + x] = grey(y < 128 ? 0 : 70 + static_cast<int>((x / 2) % 2) * 60 + static_cast<int>((x / 5) % 3) * 20);
+        ComPtr<ID3D11Texture2D> views = texture(device.Get(), kW, kH, &pixels), output = texture(device.Get(), 640, 160, nullptr);
+        Image out[2];
+        for (int pass = 0; pass < 2; ++pass) {
+            EyeComposition eyes[2];
+            eyes_for(eyes, pass ? 1.0f : 0.0f);
+            for (EyeComposition& e : eyes)
+                e.feather = 0.3f;
+            check(compositor.compose(views.Get(), output.Get(), eyes), "fade: compose");
+            out[pass] = read_image(device.Get(), context.Get(), output.Get());
+        }
+        // Eye 0's box: pixels 96..223 x 48..111; its middle columns (f.x 0.35..0.65), so the weight follows the row.
+        const auto row = [&](UINT y, double& change, double& level) {
+            change = level = 0;
+            for (UINT x = 96 + 45; x < 96 + 83; ++x) {
+                change += std::abs(out[1].channel(x, y, 0) - out[0].channel(x, y, 0));
+                level += out[0].channel(x, y, 0);
+            }
+        };
+        double core = 0, coreLevel = 0;
+        row(80, core, coreLevel);  // the box's middle row: full weight
+        int checked = 0, steeper = 0;
+        for (UINT y = 49; y < 70; ++y) {  // the top of the box, inside the feather
+            double change = 0, level = 0;
+            row(y, change, level);
+            const double w = level / coreLevel;  // the blend weight (the outer view is black)
+            if (w < 0.3 || w > 0.7)
+                continue;
+            ++checked;
+            steeper += change / core < 0.8 * w;
+        }
+        char what[128];
+        std::snprintf(what, sizeof(what), "fade: the change falls off faster than the blend across the feather (%d of %d rows)",
+                      steeper, checked);
+        check(core > 0 && checked >= 2 && steeper == checked, what);
     }
 
     compositor.shutdown();

@@ -20,9 +20,10 @@ In Le Mans Ultimate on Pimax and Varjo, Sim-QVFR can instead hand all four views
 which puts the focus view on the display at its full resolution
 ([runtime composition](headsets.md#pimax-and-varjo)). In every other game it puts the picture together itself.
 
-**Sharpening** is AMD FidelityFX Contrast Adaptive Sharpening, applied as Sim-QVFR puts the views together: each
-pixel is sharpened by how much contrast room it has, so soft detail gains most. Both views get the same strength,
-so the focus area's edge stays even. With runtime composition, the periphery is sharpened on a copy.
+**Sharpening** is AMD FidelityFX Contrast Adaptive Sharpening, applied to the focus area as Sim-QVFR puts the views
+together: each pixel is sharpened by how much contrast room it has, so soft detail gains most. The periphery is left
+as it is (side vision sees shimmer more than detail), and the sharpening fades out across the focus area's feather, so
+its edge stays even. The percentage is CAS's own sharpness, as other CAS sharpeners show it.
 
 Sim-QVFR works through OpenXR, as an **API layer**: a small add-on that sits between the game and your headset's
 software. It is loaded only when you start a game from the launcher.

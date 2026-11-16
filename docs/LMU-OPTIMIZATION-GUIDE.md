@@ -209,9 +209,9 @@ Use these freely to make the picture look better:
 | --- | --- | --- |
 | **Feather**, **Corner radius**, **Focus shape** | Picture tab, Foveation | None. They hide the edge of the sharp area. |
 | **Gaze dead-zone**, **Gaze offset**, **Vertical position** | Picture tab, Foveation | None. |
-| **Sharpening** | Picture tab, Resolution | A little GPU time. Crisper edges; too much makes the periphery shimmer. |
+| **Sharpening** | Picture tab, Resolution | A little GPU time. Crisper edges in the focus area; too much makes it shimmer. |
 | **Show a helmet** | Picture tab, View & helmet | Nothing for the game; the headset composites one extra layer. |
-| **Let the runtime compose** | Picture tab, Rendering (Pimax, Varjo) | Usually a sharper focus area for the same settings. With **Sharpening** on, the periphery is sharpened on a copy, which costs a little more. |
+| **Let the runtime compose** | Picture tab, Rendering (Pimax, Varjo) | Usually a sharper focus area for the same settings. |
 | **Show focus outline** | Picture tab, Foveation | None, but turn it off to drive. |
 
 ---

@@ -80,7 +80,7 @@ These are off until you turn them on.
 - **Performance overlay** (all games): a small panel in your headset with your frame rate and how hard the GPU and
   CPU work. **Ctrl+Alt+P** in the game turns it on and off at any time, or the launcher's **Headset › Performance
   overlay**.
-- **Sharpening** (all games; **Picture › Resolution** or the headset menu): a crisper picture. If the view looks soft,
+- **Sharpening** (all games; **Picture › Resolution** or the headset menu): a crisper focus area. If the view looks soft,
   start low and raise it a little at a time while you play; too much makes it shimmer. X-Plane 12 sharpens on its own too, so start lower there.
 - **View crop** (Le Mans Ultimate, Assetto Corsa EVO, Assetto Corsa Competizione): stops the game drawing the edges
   of your view that a helmet would hide anyway, for extra frames.
