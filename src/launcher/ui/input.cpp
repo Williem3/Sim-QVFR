@@ -283,6 +283,7 @@ void activate(Ctl id, int option) {
         }
         return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
+    case kClockOn: app.s.clock.enabled = !app.s.clock.enabled; changed(); return;
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kCpuIsolateMain: app.s.cpuIsolateMain = !app.s.cpuIsolateMain; changed(); return;
     case kUpdateCheck:
@@ -492,6 +493,7 @@ bool space_control(Ctl id) {
     case kDlssEyePreset:
     case kDlssSharpening:
     case kOsdOn:
+    case kClockOn:
     case kHotkeyFooter:
     case kCpuIsolateMain:
     case kUpdateCheck:
@@ -687,7 +689,8 @@ void on_key(WPARAM key) {
         break;
     }
     case kMenuPanel:
-    case kOsdPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
+    case kOsdPanel:
+    case kClockPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
         const int step = key == VK_PRIOR || key == VK_NEXT ? 10 : 1;
         const int dx = key == VK_RIGHT ? step : key == VK_LEFT ? -step : 0;
         const int dy = key == VK_UP || key == VK_PRIOR ? step : key == VK_DOWN || key == VK_NEXT ? -step : 0;

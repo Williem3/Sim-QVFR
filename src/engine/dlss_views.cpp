@@ -18,6 +18,7 @@
 
 #include "../log.h"
 #include "d3d11_kit.h"
+#include "d3d11_state.h"
 #include "dlss_math.h"
 #include "dlss_views_shaders.h"
 #include "fsr_upscale.h"
@@ -529,186 +530,24 @@ void note_projection(int eye, const M4& projection, const Jitter& asked) {
 }
 
 // The immediate context's state the module's draws and NGX's evaluation may change, read before the work and put back
-// after it, call by call. (Not a context state swap, ID3D11DeviceContext1::SwapDeviceContextState: in the run of
-// 2026-11-10 15:53 the multi-view pass tracker then saw each eye pass end right after its resolve and no focus view
-// was made.) Everything here happens inside the caller's window, in which its hooks pass calls through.
-class StateGuard {
-public:
-    explicit StateGuard(ID3D11DeviceContext* c) : c_(c) {
-        c->QueryInterface(IID_PPV_ARGS(&c1_));  // ranged constant buffer binds (D3D11.1) read and put back as they were
-        c->IAGetInputLayout(&layout_);
-        c->IAGetPrimitiveTopology(&topology_);
-        c->IAGetVertexBuffers(0, kBuffers, vb_, strides_, offsets_);
-        c->IAGetIndexBuffer(&ib_, &ibFormat_, &ibOffset_);
-        vsInstances_ = psInstances_ = csInstances_ = kInstances;
-        c->VSGetShader(&vs_, vsI_, &vsInstances_);
-        c->PSGetShader(&ps_, psI_, &psInstances_);
-        c->CSGetShader(&cs_, csI_, &csInstances_);
-        c->GSGetShader(&gs_, nullptr, nullptr);
-        c->HSGetShader(&hs_, nullptr, nullptr);
-        c->DSGetShader(&ds_, nullptr, nullptr);
-        if (c1_) {
-            c1_->VSGetConstantBuffers1(0, kCbs, vsCb_, vsFirst_, vsCount_);
-            c1_->PSGetConstantBuffers1(0, kCbs, psCb_, psFirst_, psCount_);
-            c1_->CSGetConstantBuffers1(0, kCbs, csCb_, csFirst_, csCount_);
-        } else {
-            c->VSGetConstantBuffers(0, kCbs, vsCb_);
-            c->PSGetConstantBuffers(0, kCbs, psCb_);
-            c->CSGetConstantBuffers(0, kCbs, csCb_);
-        }
-        c->VSGetShaderResources(0, kSrvs, vsSrv_);
-        c->PSGetShaderResources(0, kSrvs, psSrv_);
-        c->CSGetShaderResources(0, kSrvs, csSrv_);
-        c->VSGetSamplers(0, kSamplers, vsSamp_);
-        c->PSGetSamplers(0, kSamplers, psSamp_);
-        c->CSGetSamplers(0, kSamplers, csSamp_);
-        c->CSGetUnorderedAccessViews(0, kUavs, csUav_);
-        c->OMGetRenderTargetsAndUnorderedAccessViews(kTargets, rtv_, &dsv_, 0, kUavs, omUav_);
-        c->OMGetBlendState(&blend_, blendFactor_, &sampleMask_);
-        c->OMGetDepthStencilState(&depthState_, &stencilRef_);
-        c->SOGetTargets(kStreamOut, so_);
-        c->GetPredication(&predicate_, &predicateValue_);
-        c->RSGetState(&raster_);
-        viewports_ = scissors_ = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        c->RSGetViewports(&viewports_, vp_);
-        c->RSGetScissorRects(&scissors_, sc_);
-        // Neither the game's predicate nor its stream-out targets may skip or capture our draws and NGX's.
-        if (predicate_)
-            c->SetPredication(nullptr, FALSE);
-        ID3D11Buffer* noSo[kStreamOut] = {};
-        c->SOSetTargets(kStreamOut, noSo, nullptr);
-    }
-    ~StateGuard() {
-        ID3D11DeviceContext* c = c_;
-        // Ours and NGX's inputs and outputs off first, so nothing put back meets a texture still bound the other way.
-        ID3D11ShaderResourceView* noSrv[kSrvs] = {};
-        ID3D11UnorderedAccessView* noUav[kUavs] = {};
-        c->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, kUavs, noUav, nullptr);
-        c->CSSetUnorderedAccessViews(0, kUavs, noUav, nullptr);
-        c->VSSetShaderResources(0, kSrvs, noSrv);
-        c->PSSetShaderResources(0, kSrvs, noSrv);
-        c->CSSetShaderResources(0, kSrvs, noSrv);
-        c->IASetInputLayout(layout_);
-        c->IASetPrimitiveTopology(topology_);
-        c->IASetVertexBuffers(0, kBuffers, vb_, strides_, offsets_);
-        c->IASetIndexBuffer(ib_, ibFormat_, ibOffset_);
-        c->VSSetShader(vs_, vsI_, vsInstances_);
-        c->PSSetShader(ps_, psI_, psInstances_);
-        c->CSSetShader(cs_, csI_, csInstances_);
-        c->GSSetShader(gs_, nullptr, 0);
-        c->HSSetShader(hs_, nullptr, 0);
-        c->DSSetShader(ds_, nullptr, 0);
-        if (c1_) {
-            c1_->VSSetConstantBuffers1(0, kCbs, vsCb_, vsFirst_, vsCount_);
-            c1_->PSSetConstantBuffers1(0, kCbs, psCb_, psFirst_, psCount_);
-            c1_->CSSetConstantBuffers1(0, kCbs, csCb_, csFirst_, csCount_);
-        } else {
-            c->VSSetConstantBuffers(0, kCbs, vsCb_);
-            c->PSSetConstantBuffers(0, kCbs, psCb_);
-            c->CSSetConstantBuffers(0, kCbs, csCb_);
-        }
-        c->VSSetSamplers(0, kSamplers, vsSamp_);
-        c->PSSetSamplers(0, kSamplers, psSamp_);
-        c->CSSetSamplers(0, kSamplers, csSamp_);
-        c->RSSetState(raster_);
-        c->RSSetViewports(viewports_, vp_);
-        c->RSSetScissorRects(scissors_, sc_);
-        c->OMSetBlendState(blend_, blendFactor_, sampleMask_);
-        c->OMSetDepthStencilState(depthState_, stencilRef_);
-        // The output merger's UAVs take the slots after its render targets (UAVStartSlot >= NumRTVs).
-        UINT targets = 0;
-        for (UINT i = 0; i < kTargets; ++i)
-            if (rtv_[i])
-                targets = i + 1;
-        const UINT uavStart = (std::min)(targets, kUavs);
-        c->OMSetRenderTargetsAndUnorderedAccessViews(targets, rtv_, dsv_, uavStart, kUavs - uavStart, omUav_ + uavStart, nullptr);
-        c->CSSetUnorderedAccessViews(0, kUavs, csUav_, nullptr);
-        c->VSSetShaderResources(0, kSrvs, vsSrv_);
-        c->PSSetShaderResources(0, kSrvs, psSrv_);
-        c->CSSetShaderResources(0, kSrvs, csSrv_);
-        // Stream-out offsets can't be read back: -1 appends where each buffer's filled size left off.
-        UINT soOffsets[kStreamOut];
-        for (UINT& o : soOffsets)
-            o = static_cast<UINT>(-1);
-        c->SOSetTargets(kStreamOut, so_, soOffsets);
-        c->SetPredication(predicate_, predicateValue_);
-        release(layout_), release(ib_), release(vs_), release(ps_), release(cs_), release(gs_), release(hs_), release(ds_);
-        release(dsv_), release(blend_), release(depthState_), release(raster_), release(predicate_);
-        release_all(vb_), release_all(vsCb_), release_all(psCb_), release_all(csCb_), release_all(vsSrv_);
-        release_all(psSrv_), release_all(csSrv_), release_all(vsSamp_), release_all(psSamp_), release_all(csSamp_);
-        release_all(csUav_), release_all(omUav_), release_all(rtv_), release_all(so_);
-        for (UINT i = 0; i < vsInstances_ && i < kInstances; ++i)
-            release(vsI_[i]);
-        for (UINT i = 0; i < psInstances_ && i < kInstances; ++i)
-            release(psI_[i]);
-        for (UINT i = 0; i < csInstances_ && i < kInstances; ++i)
-            release(csI_[i]);
-    }
-    StateGuard(const StateGuard&) = delete;
-    StateGuard& operator=(const StateGuard&) = delete;
-
-private:
-    // Every slot NGX's evaluation could bind: all API constant buffer and sampler slots, all vertex buffers; 32 of the
-    // 128 resource slots and feature level 11.0's 8 UAV slots.
-    static constexpr UINT kBuffers = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, kCbs = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT,
-                          kSrvs = 32, kSamplers = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, kUavs = D3D11_PS_CS_UAV_REGISTER_COUNT,
-                          kTargets = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, kStreamOut = D3D11_SO_BUFFER_SLOT_COUNT,
-                          kInstances = 256;
-    template <class T> static void release(T*& p) {
-        if (p)
-            p->Release();
-        p = nullptr;
-    }
-    template <class T, size_t N> static void release_all(T* (&a)[N]) {
-        for (T*& p : a)
-            release(p);
-    }
-    ID3D11DeviceContext* c_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> c1_;
-    ID3D11InputLayout* layout_ = nullptr;
-    D3D11_PRIMITIVE_TOPOLOGY topology_ = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-    ID3D11Buffer* vb_[kBuffers] = {};
-    UINT strides_[kBuffers] = {}, offsets_[kBuffers] = {};
-    ID3D11Buffer* ib_ = nullptr;
-    DXGI_FORMAT ibFormat_ = DXGI_FORMAT_UNKNOWN;
-    UINT ibOffset_ = 0;
-    ID3D11VertexShader* vs_ = nullptr;
-    ID3D11PixelShader* ps_ = nullptr;
-    ID3D11ComputeShader* cs_ = nullptr;
-    ID3D11GeometryShader* gs_ = nullptr;
-    ID3D11HullShader* hs_ = nullptr;
-    ID3D11DomainShader* ds_ = nullptr;
-    ID3D11ClassInstance* vsI_[kInstances] = {};
-    ID3D11ClassInstance* psI_[kInstances] = {};
-    ID3D11ClassInstance* csI_[kInstances] = {};
-    UINT vsInstances_ = 0, psInstances_ = 0, csInstances_ = 0;
-    ID3D11Buffer* vsCb_[kCbs] = {};
-    ID3D11Buffer* psCb_[kCbs] = {};
-    ID3D11Buffer* csCb_[kCbs] = {};
-    UINT vsFirst_[kCbs] = {}, vsCount_[kCbs] = {}, psFirst_[kCbs] = {}, psCount_[kCbs] = {}, csFirst_[kCbs] = {}, csCount_[kCbs] = {};
-    ID3D11ShaderResourceView* vsSrv_[kSrvs] = {};
-    ID3D11ShaderResourceView* psSrv_[kSrvs] = {};
-    ID3D11ShaderResourceView* csSrv_[kSrvs] = {};
-    ID3D11SamplerState* vsSamp_[kSamplers] = {};
-    ID3D11SamplerState* psSamp_[kSamplers] = {};
-    ID3D11SamplerState* csSamp_[kSamplers] = {};
-    ID3D11UnorderedAccessView* csUav_[kUavs] = {};
-    ID3D11UnorderedAccessView* omUav_[kUavs] = {};
-    ID3D11RenderTargetView* rtv_[kTargets] = {};
-    ID3D11DepthStencilView* dsv_ = nullptr;
-    ID3D11BlendState* blend_ = nullptr;
-    FLOAT blendFactor_[4] = {};
-    UINT sampleMask_ = 0xffffffff;
-    ID3D11DepthStencilState* depthState_ = nullptr;
-    UINT stencilRef_ = 0;
-    ID3D11Buffer* so_[kStreamOut] = {};
-    ID3D11Predicate* predicate_ = nullptr;
-    BOOL predicateValue_ = FALSE;
-    ID3D11RasterizerState* raster_ = nullptr;
-    UINT viewports_ = 0, scissors_ = 0;
-    D3D11_VIEWPORT vp_[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
-    D3D11_RECT sc_[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
-};
+// after it, call by call (d3d11_state.h). (Not a context state swap, ID3D11DeviceContext1::SwapDeviceContextState: in
+// the run of 2026-11-10 15:53 the multi-view pass tracker then saw each eye pass end right after its resolve and no
+// focus view was made.) Everything here happens inside the caller's window, in which its hooks pass calls through.
+// Every slot NGX's evaluation could bind: all API constant buffer and sampler slots, all vertex buffers; 32 of the 128
+// resource slots and feature level 11.0's 8 UAV slots. Ours and NGX's inputs and outputs off first (unbindFirst).
+d3d11_state::Spec full_state() {
+    using G = D3D11StateGuard;
+    d3d11_state::Spec s;
+    s.parts = d3d11_state::kAll;
+    s.vsCb = s.psCb = s.csCb = {0, G::kCbs};
+    s.vsSrv = s.psSrv = s.csSrv = {0, G::kSrvs};
+    s.vsSamplers = s.psSamplers = s.csSamplers = {0, G::kSamplers};
+    s.csUavs = {0, G::kUavs};
+    s.instances = true;
+    s.emptyRects = true;
+    s.unbindFirst = true;
+    return s;
+}
 
 void draw_triangle(ID3D11DeviceContext* context, ID3D11PixelShader* ps, unsigned w, unsigned h) {
     const D3D11_VIEWPORT vp{0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
@@ -979,7 +818,7 @@ void stretch_focus(ID3D11DeviceContext* context, ID3D11Resource* resolved, unsig
     }
     if (!d.stretchSrv || !d.stretchRtv)
         return;
-    StateGuard guard(context);
+    const D3D11StateGuard guard(context, full_state());
     context->GSSetShader(nullptr, nullptr, 0);
     context->HSSetShader(nullptr, nullptr, 0);
     context->DSSetShader(nullptr, nullptr, 0);
@@ -1264,7 +1103,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
                       static_cast<int>(sd.Format), depthW, depthH, d.depthMs ? "multisample" : "1");
     }
 
-    StateGuard guard(context);  // the game's state back when this returns
+    const D3D11StateGuard guard(context, full_state());  // the game's state back when this returns
     // A plain pipeline for our draws: the game's other stages, states and scissors out of the way.
     context->GSSetShader(nullptr, nullptr, 0);
     context->HSSetShader(nullptr, nullptr, 0);

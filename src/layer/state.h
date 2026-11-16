@@ -637,6 +637,7 @@ struct IniSnapshot {
     MenuValues menu;
     MenuPlacement menuPlacement;
     OsdPlacement osd;
+    ClockPlacement clock;
     Hotkeys hotkeys;
     std::wstring restartKeys;
     uint64_t writesBefore = 0;  // ini_write_later's writes done before it was read (menu_values_changed)
@@ -775,6 +776,22 @@ struct Osd {
     bool shownValid = false;
 };
 
+// ---- Clock -----------------------------------------------------------------------------------
+// [clock] (quad/osd.h): the local time on a small head-locked card of its own, placed as the overlay's card. Redrawn
+// (on a worker, like the overlay's card) when the minute turns over.
+struct Clock {
+    ClockPlacement placement;  // [clock] when last read
+    bool read = false, failed = false, uploaded = false;
+    XrSpace view = XR_NULL_HANDLE;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    std::vector<void*> images;  // the session API's textures
+    PendingImage pending;       // chain's image left acquired by a timed-out wait
+    std::unique_ptr<PanelUpload> upload;
+    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    std::wstring shown;  // the time on the card (or being drawn)
+    std::future<std::vector<uint32_t>> drawing;
+};
+
 // A notice in the performance overlay's card, for the first kNoticeMs of the session's frames, when the layer
 // could not do what it was asked: views4 refused, an ACE build it does not know (the game updated). Without
 // it the game would just look as it always does, and nothing would say why. Straight ahead, a little low.
@@ -874,6 +891,7 @@ extern Hotkeys hotkeys;
 extern PadWatch padWatch;
 extern Menu menu;
 extern Osd osd;
+extern Clock clockCard;
 extern Notice notice;
 extern bool visorHotkeyHeld;
 extern bool cpuProfileHotkeyHeld;

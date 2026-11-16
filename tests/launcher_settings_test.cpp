@@ -2,6 +2,7 @@
 // reloads, the mode switch, other keys left alone, the runtime report, the kit's readouts, the live settings, and
 // every setting the launcher shows surviving a load and save (the UI overhaul's round trip).
 #include "launcher_test_kit.h"
+#include "quad/settings_menu.h"
 
 #include "quad/focus_mask.h"
 
@@ -306,6 +307,15 @@ int SIM_QVFR_TEST_MAIN() {
         dlssLive.osd = {true, -15, 22, 30};
         save_live_settings(ini, dlssLive);
         check(load_settings(ini).osd == dlssLive.osd, "settings: [osd] (the performance overlay) round-trips, live");
+        dlssLive.clock = {true, -18, 14, 12};
+        save_live_settings(ini, dlssLive);
+        check(load_settings(ini).clock == dlssLive.clock && load_settings(ini).osd == dlssLive.osd,
+              "settings: [clock] round-trips, live, beside [osd]");
+        check(!per_game_key(L"clock", L"yaw"), "settings: the clock's place is every game's, as the overlay's");
+        const simqvfr::MenuPlacement layerMenu;
+        check(Settings{}.menuYaw == layerMenu.yaw && Settings{}.menuPitch == layerMenu.pitch &&
+                  Settings{}.menuWidth == layerMenu.width,
+              "settings: the launcher's default menu place is the layer's");
         Settings cropSave = load_settings(ini);
         cropSave.mode = RenderMode::Qvfr;
         cropSave.crop = true;

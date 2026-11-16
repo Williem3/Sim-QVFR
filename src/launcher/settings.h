@@ -59,13 +59,14 @@ struct Settings {
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
     // right and up of straight ahead, and the panel's width in degrees.
-    int menuYaw = 0;          // [menu] yaw
-    int menuPitch = -4;       // [menu] pitch
-    int menuWidth = 33;       // [menu] width
+    int menuYaw = -22;        // [menu] yaw
+    int menuPitch = -23;      // [menu] pitch
+    int menuWidth = 20;       // [menu] width
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
     // [cpu] isolate_main_thread (probe/cpu_isolation.h): the game's main thread gets a core to itself (live).
     bool cpuIsolateMain = kCpuIsolateMain.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
+    ClockPlacement clock;     // [clock]: the clock's card, on or off, its place and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
     // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.
     bool crop = false;        // [crop] enabled

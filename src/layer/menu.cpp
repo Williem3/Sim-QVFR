@@ -313,6 +313,7 @@ void menu_press(MenuKey key, int64_t now) {
                 write_nr_settings(target.c_str(), values.nr);
             if (target != settings) {  // the panels' places and the overlay are every game's: the launcher's ini
                 write_osd_placement(settings.c_str(), values.overlay);
+                write_clock_placement(settings.c_str(), values.clock);
                 ini_put(settings.c_str(), L"menu", L"yaw", values.placement.yaw);
                 ini_put(settings.c_str(), L"menu", L"pitch", values.placement.pitch);
                 ini_put(settings.c_str(), L"menu", L"width", values.placement.width);
@@ -471,7 +472,7 @@ bool menu_resources(XrSession session) {
         return false;
     }
     XrCompositionLayerQuad& l = menu.layer;
-    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied pixels (panel_rgba)
     l.space = menu.view;
     l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
     l.subImage.swapchain = menu.chain;
@@ -580,14 +581,17 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     if (showMenu && menu.dirty)
         menu_render();
     showMenu = showMenu && menu.uploaded;
-    const XrCompositionLayerBaseHeader* card;
+    const XrCompositionLayerBaseHeader *card, *clock;
     {
         FramePartTimer part(FramePart::overlay);
         card = osd_frame(session, now);
+        clock = clock_frame(session);
     }
-    if (!showMenu && !card)
+    if (!showMenu && !card && !clock)
         return info;
     layers.assign(info->layers, info->layers + info->layerCount);
+    if (clock)
+        layers.push_back(clock);
     if (card)
         layers.push_back(card);
     if (showMenu)  // the menu over the card

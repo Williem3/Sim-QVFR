@@ -199,6 +199,7 @@ IniSnapshot read_snapshot(const wchar_t* ini) {
     s.menu = read_menu_values(ini);
     s.menuPlacement = read_menu_placement(ini);
     s.osd = read_osd_placement(ini);
+    s.clock = read_clock_placement(ini);
     s.hotkeys = read_hotkeys(ini);
     s.restartKeys = restart_keys(ini, experiment.views4);
     return s;
@@ -327,6 +328,7 @@ void live_reload() {
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);
+    clock_placement_changed(s->clock);
     hotkeys_changed(s->hotkeys);
     if (s->restartKeys != live.restartKeys) {
         logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());

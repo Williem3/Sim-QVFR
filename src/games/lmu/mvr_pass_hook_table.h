@@ -105,6 +105,39 @@ void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds
                             DXGI_FORMAT format) {
     call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
 }
+// A state guard's setters past the hooks (simqvfr::d3d11_state::Guard<RealCalls>): every setter hooked here goes to
+// the original, so a restore isn't seen as the game's; the rest (VSSetConstantBuffers1 too: not hooked) as is.
+struct RealCalls : simqvfr::d3d11_state::DirectCalls {
+    static void IASetVertexBuffers(C* c, UINT s, UINT n, ID3D11Buffer* const* b, const UINT* st, const UINT* o) {
+        call_real<kHookIAVB>(c, s, n, b, st, o);
+    }
+    static void IASetIndexBuffer(C* c, ID3D11Buffer* b, DXGI_FORMAT f, UINT o) { call_real<kHookIAIB>(c, b, f, o); }
+    static void VSSetShader(C* c, ID3D11VertexShader* s, ID3D11ClassInstance* const* i, UINT n) { realVSSetShader(c, s, i, n); }
+    static void PSSetShader(C* c, ID3D11PixelShader* s, ID3D11ClassInstance* const* i, UINT n) { realPSSetShader(c, s, i, n); }
+    static void GSSetShader(C* c, ID3D11GeometryShader* s) {
+        call_real<kHookGS>(c, s, static_cast<ID3D11ClassInstance* const*>(nullptr), 0u);
+    }
+    static void HSSetShader(C* c, ID3D11HullShader* s) {
+        call_real<kHookHS>(c, s, static_cast<ID3D11ClassInstance* const*>(nullptr), 0u);
+    }
+    static void DSSetShader(C* c, ID3D11DomainShader* s) {
+        call_real<kHookDS>(c, s, static_cast<ID3D11ClassInstance* const*>(nullptr), 0u);
+    }
+    static void VSSetConstantBuffers(C* c, UINT s, UINT n, ID3D11Buffer* const* b) { realVSSetConstantBuffers(c, s, n, b); }
+    static void OMSetRenderTargets(C* c, UINT n, ID3D11RenderTargetView* const* r, ID3D11DepthStencilView* d) {
+        realOMSetRenderTargets(c, n, r, d);
+    }
+    static void OMSetRenderTargetsAndUnorderedAccessViews(C* c, UINT n, ID3D11RenderTargetView* const* r,
+                                                          ID3D11DepthStencilView* d, UINT us, UINT un,
+                                                          ID3D11UnorderedAccessView* const* u, const UINT* k) {
+        realOMSetRenderTargetsAndUavs(c, n, r, d, us, un, u, k);
+    }
+    static void OMSetBlendState(C* c, ID3D11BlendState* b, const FLOAT f[4], UINT m) { call_real<kHookBlend>(c, b, f, m); }
+    static void OMSetDepthStencilState(C* c, ID3D11DepthStencilState* d, UINT r) { call_real<kHookDepth>(c, d, r); }
+    static void RSSetViewports(C* c, UINT n, const D3D11_VIEWPORT* v) { realRSSetViewports(c, n, v); }
+    static void RSSetScissorRects(C* c, UINT n, const D3D11_RECT* r) { realRSSetScissorRects(c, n, r); }
+    static void SOSetTargets(C* c, UINT n, ID3D11Buffer* const* b, const UINT* o) { realSOSetTargets(c, n, b, o); }
+};
 
 // mvr_time_hooks: the sections are timed in 1 frame in kTimedEvery (timeHooks that frame), so the timing's own cost
 // (two time-stamp reads per section, thousands of sections a frame) stays off the other frames; the log's figures are

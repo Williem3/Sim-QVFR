@@ -16,7 +16,8 @@ namespace simqvfr {
 
 inline constexpr int kPanelWidth = 1024, kPanelHeight = 1072;  // up to 13 lines, 3 notes, the footer and the hint
 
-// RGBA8 pixels (sRGB-encoded, straight alpha), kPanelWidth x kPanelHeight, rows top to bottom.
+// RGBA8 pixels (sRGB-encoded, premultiplied alpha: osd.h's panel_rgba), kPanelWidth x kPanelHeight, rows top to
+// bottom, a translucent panel with rounded corners.
 // `title`, then ACE's render target (max and now, QVFR), the centre PPD and pixels saved (or, when
 // `subtitle` is set, that line instead: the Foveated DLSS page's credit), the lines
 // (capped values in red), then up to three red lines (what the values ask for when it is more than

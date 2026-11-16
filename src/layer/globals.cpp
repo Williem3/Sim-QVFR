@@ -91,6 +91,8 @@ Menu menu;
 
 Osd osd;
 
+Clock clockCard;
+
 Notice notice;
 
 bool visorHotkeyHeld = false;

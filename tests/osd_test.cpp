@@ -320,7 +320,8 @@ int SIM_QVFR_TEST_MAIN() {
     {
         const std::wstring ini = (std::filesystem::temp_directory_path() / L"simqvfr_osd_test.ini").wstring();
         DeleteFileW(ini.c_str());
-        check(read_osd_placement(ini.c_str()) == OsdPlacement{}, "no [osd]: off, above the centre, 26 degrees");
+        check(read_osd_placement(ini.c_str()) == OsdPlacement{} && OsdPlacement{}.pitch == -25 && OsdPlacement{}.width == 19,
+              "no [osd]: off, 25 degrees below the centre, 19 degrees");
         const OsdPlacement p{true, -20, -8, 22};
         check(write_osd_placement(ini.c_str(), p) && read_osd_placement(ini.c_str()) == p,
               "[osd] round trip, negative degrees included");
@@ -328,7 +329,38 @@ int SIM_QVFR_TEST_MAIN() {
         check(read_osd_placement(ini.c_str()).width == kOsdWidthMax, "the width is clamped");
         WritePrivateProfileStringW(L"osd", L"yaw", L"-90", ini.c_str());
         check(read_osd_placement(ini.c_str()).yaw == -kOsdYawMax, "and so is the yaw");
+        // The clock: its own section, off by default, low on the right.
+        check(read_clock_placement(ini.c_str()) == ClockPlacement{} && !ClockPlacement{}.enabled && ClockPlacement{}.yaw > 0,
+              "no [clock]: off, low on the right");
+        const ClockPlacement c{true, -30, 12, 10};
+        check(write_clock_placement(ini.c_str(), c) && read_clock_placement(ini.c_str()) == c &&
+                  read_osd_placement(ini.c_str()).yaw == -kOsdYawMax,
+              "[clock] round trip, [osd] untouched");
+        WritePrivateProfileStringW(L"clock", L"width", L"1", ini.c_str());
+        WritePrivateProfileStringW(L"clock", L"pitch", L"80", ini.c_str());
+        const ClockPlacement clamped = read_clock_placement(ini.c_str());
+        check(clamped.width == kClockWidthMin && clamped.pitch == kClockPitchMax, "the clock's width and pitch are clamped");
         DeleteFileW(ini.c_str());
+    }
+    {
+        // The clock's card: the time in white on the translucent card, its corners clear.
+        const std::vector<uint32_t> pixels = draw_clock_panel(osd_clock(21, 47));
+        bool white = false;
+        for (uint32_t p : pixels)
+            white |= (p & 0xff) > 0xe0 && ((p >> 8) & 0xff) > 0xe0 && ((p >> 16) & 0xff) > 0xe0;
+        const auto alpha = [&](int x, int y) { return pixels[static_cast<size_t>(y) * kClockWidth + x] >> 24; };
+        bool clearIsBlack = true;  // premultiplied: no colour where nothing shows (the corners)
+        for (uint32_t p : pixels)
+            clearIsBlack &= (p >> 24) != 0 || (p & 0xffffff) == 0;
+        const int w = kClockWidth - 1, h = kClockHeight - 1;
+        check(pixels.size() == static_cast<size_t>(kClockWidth) * kClockHeight && white && alpha(0, 0) == 0 &&
+                  alpha(w, 0) == 0 && alpha(0, h) == 0 && alpha(w, h) == 0 && clearIsBlack &&
+                  alpha(kClockWidth / 2, kClockHeight / 2) > 0xc0 && (kClockWidth * 4) % 256 == 0,
+              "the clock's card: white text, all four corners clear and black, opaque middle; its rows fit the D3D12 "
+              "copy's pitch");
+        check(panel_rgba(0xffffff, 0xff) == 0xffffffff && panel_rgba(0x1c1c1e, 0) == 0 &&
+                  (panel_rgba(0xffffff, 0x80) & 0xff) > 0x80 && (panel_rgba(0xffffff, 0x80) >> 24) == 0x80,
+              "panel_rgba: opaque kept, clear is black, half alpha premultiplied in linear light (brighter than half in sRGB)");
     }
     // SIMQVFR_OSD_SAVE=<file.bmp>: the card with every cell filled, as a bitmap to look at.
     if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_OSD_SAVE", path, MAX_PATH)) {
@@ -439,7 +471,8 @@ int SIM_QVFR_TEST_MAIN() {
             }
         for (int y = 132; y < 220; ++y)  // the first paragraph: white
             for (int x = 64; x < 600; ++x)
-                white |= (pixels[static_cast<size_t>(y) * kOsdWidth + x] & 0xffffff) == 0xf7f5f5;
+                white |= (pixels[static_cast<size_t>(y) * kOsdWidth + x] & 0xffffff) ==
+                         (panel_rgba(0xf5f5f7, 0xd9) & 0xffffff);  // kPrimary on the card, premultiplied
         check(pixels.size() == static_cast<size_t>(kOsdWidth) * kOsdHeight && (pixels[0] >> 24) == 0 && yellow && white,
               "the notice card: a yellow title, the first paragraph in white, rounded corners");
         if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_NOTICE_SAVE", path, MAX_PATH))

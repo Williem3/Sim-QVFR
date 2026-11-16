@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "../../engine/d3d11_state.h"
+
 namespace lmu {
 namespace {
 
@@ -288,21 +290,14 @@ bool FocusPost::blit_final(ID3D11DeviceContext* context, int eye, UINT vertexCou
     if (!v.composited || !v.focus.srv || v.focus.width != focus.width || v.focus.height != focus.height)
         return false;
     v.composited = false;
-    // What this changes, kept: the pixel shader, t0, b0, the viewports and scissors.
-    ID3D11PixelShader* ps = nullptr;
-    ID3D11ClassInstance* instances[256] = {};
-    UINT instanceCount = 256;
-    context->PSGetShader(&ps, instances, &instanceCount);
-    ID3D11ShaderResourceView* srv = nullptr;
-    context->PSGetShaderResources(0, 1, &srv);
-    ID3D11Buffer* cb = nullptr;
-    context->PSGetConstantBuffers(0, 1, &cb);
-    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-    UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-    context->RSGetViewports(&vpCount, vps);
-    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-    UINT scCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-    context->RSGetScissorRects(&scCount, scs);
+    // What this changes, kept and put back when this returns: the pixel shader (with its class instances), t0, b0
+    // (with its range), the viewports and scissors (a count of 0 set back as 0).
+    simqvfr::d3d11_state::Spec spec;
+    spec.parts = simqvfr::d3d11_state::kPS | simqvfr::d3d11_state::kViewports | simqvfr::d3d11_state::kScissors;
+    spec.psSrv = spec.psCb = {0, 1};
+    const simqvfr::D3D11StateGuard keep(context, spec);
+    const UINT vpCount = keep.viewport_count();
+    const D3D11_VIEWPORT* vps = keep.viewports();
     bool ok = vpCount >= 1;
     if (ok) {
         // The game's quad covers the eye's region of the target through its viewport: the same viewport scaled about the
@@ -322,18 +317,6 @@ bool FocusPost::blit_final(ID3D11DeviceContext* context, int eye, UINT vertexCou
         context->RSSetScissorRects(1, &sc);
         context->Draw(vertexCount, startVertex);
     }
-    // The game's state back.
-    context->PSSetShader(ps, instanceCount ? instances : nullptr, instanceCount);
-    context->PSSetShaderResources(0, 1, &srv);
-    context->PSSetConstantBuffers(0, 1, &cb);
-    context->RSSetViewports(vpCount, vps);
-    context->RSSetScissorRects(scCount, scCount ? scs : nullptr);
-    for (IUnknown* u : {static_cast<IUnknown*>(ps), static_cast<IUnknown*>(srv), static_cast<IUnknown*>(cb)})
-        if (u)
-            u->Release();
-    for (UINT i = 0; i < instanceCount && i < 256; ++i)
-        if (instances[i])
-            instances[i]->Release();
     if (ok)
         ++v.blits;
     return ok;
