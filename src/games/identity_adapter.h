@@ -1,5 +1,5 @@
 // The adapter of a game without QVFR (adapter.h): any other process (`game` null), or a game known by its identity
-// alone while it is reverse engineered. The layer then only logs: QVFR never starts and nothing changes what the game
+// alone while it is being integrated. The layer then only logs: QVFR never starts and nothing changes what the game
 // renders. A game at that stage can derive from it to add log-only probes (lmu/adapter.cpp).
 #pragma once
 
@@ -9,8 +9,8 @@ namespace simqvfr::games {
 
 class IdentityAdapter : public GameAdapter {
 public:
-    // `analysis`: a game being reverse engineered (the image dump and the game's probes may run); false in a launch its
-    // anti-cheat protects, where nothing of ours runs.
+    // `analysis`: the game's log-only probes may run (local analysis builds only); false in a launch its anti-cheat
+    // protects, where nothing of ours runs.
     explicit IdentityAdapter(const GameInfo* game, unsigned hangWatchSeconds = 30, bool analysis = true)
         : game_(game), hangWatchSeconds_(hangWatchSeconds), analysis_(analysis) {}
     const GameInfo* info() const override { return game_; }
