@@ -12,6 +12,8 @@
 #include "cheeky/cheeky_host.h"
 #include "log.h"
 #include "probe/cpu_load.h"
+#include "probe/cpu_placement.h"
+#include "probe/cpu_isolation.h"
 #include "probe/d3d11_capture.h"
 #include "probe/d3d11_compose_timer.h"
 #include "probe/d3d12_trace.h"
@@ -128,6 +130,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 if (LUID adapter{}; graphics.adapter_luid(adapter))
                     gpu_load_start(static_cast<uint32_t>(adapter.HighPart), adapter.LowPart);
                 cpu_load_start();
+                cpu_placement_start();
                 if (experiment.views4ComposeD3D11)
                     d3d11_compose_timer_start(device);
             }
@@ -207,6 +210,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 const LUID adapter = d3d12->device->GetAdapterLuid();
                 gpu_load_start(static_cast<uint32_t>(adapter.HighPart), adapter.LowPart);
                 cpu_load_start();
+                cpu_placement_start();
             }
             cheeky_session(d3d12->device, d3d12->queue);
         } else if (experiment.quad) {
@@ -293,6 +297,8 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     measuredEyeChain = XR_NULL_HANDLE;  // the session's swapchain
     gpu_load_stop();
     cpu_load_stop();
+    cpu_placement_stop();
+    cpu_isolation_end();
     pad_watch_stop();
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it

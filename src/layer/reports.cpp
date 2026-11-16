@@ -11,6 +11,7 @@
 #include "games/game.h"
 #include "log.h"
 #include "probe/cpu_load.h"
+#include "probe/cpu_placement.h"
 #include "probe/cpu_profile.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
@@ -169,6 +170,7 @@ void report_load(double frameMs) {
     }
     if (!list.empty())
         logf("views4 threads: %s (of one core each)", list.c_str());
+    cpu_placement_report(threadLoads);  // where they ran and what Windows gave the process (read only)
 }
 
 namespace {

@@ -11,6 +11,7 @@
 #include <thread>
 #include <utility>
 
+#include "probe/cpu_isolation.h"
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "input/hotkeys.h"
@@ -93,6 +94,11 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
+    if (experiment.cpuSettings && experiment.cpuIsolate != l.cpuIsolate) {
+        logf("live: main thread core %s", l.cpuIsolate == 1 ? "its own" : l.cpuIsolate > 1 ? "A/B" : "shared");
+        experiment.cpuIsolate = l.cpuIsolate;
+        cpu_isolation_mode(l.cpuIsolate);
+    }
     if (eye_off() != l.eyeOff) {
         set_eye_off(l.eyeOff);
         logf("live: %s", eye_off_name(l.eyeOff));

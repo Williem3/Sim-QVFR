@@ -59,6 +59,8 @@ struct Settings {
     int menuPitch = -4;       // [menu] pitch
     int menuWidth = 33;       // [menu] width
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
+    // [cpu] isolate_main_thread (probe/cpu_isolation.h): the game's main thread gets a core to itself (live).
+    bool cpuIsolateMain = kCpuIsolateMain.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
     // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.
