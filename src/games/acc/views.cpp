@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 #include <windows.h>
 
@@ -98,10 +99,19 @@ std::atomic<std::uint64_t> temporalDiffered{0};
 std::atomic<int> temporalFrameDelta{0}, temporalSampleDelta{0};
 void share_temporal_state(const int* rect) {
     auto* right = reinterpret_cast<unsigned char*>(const_cast<int*>(rect)) - kViewRect;
+    // Only a four-view family whose views are this array, this view last (as record_rendered checks): another family's
+    // right side view (a reflection capture's) has no three FViewInfos before it to read.
+    const auto* family = *reinterpret_cast<const unsigned char* const*>(right);  // FSceneView::Family
+    const auto* const* familyViews =
+        family ? *reinterpret_cast<const unsigned char* const* const*>(family) : nullptr;  // Views.Data
+    if (!familyViews || *reinterpret_cast<const int*>(family + 8) != kViews) {  // Views.Num
+        temporalMissed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     unsigned char* views[4];
     for (int v = 0; v < 4; ++v) {
         views[v] = right - static_cast<std::ptrdiff_t>(3 - v) * kViewInfoSize;
-        if (*reinterpret_cast<const int*>(views[v] + kViewStereoPass) != kPassLeft + v) {
+        if (familyViews[v] != views[v] || *reinterpret_cast<const int*>(views[v] + kViewStereoPass) != kPassLeft + v) {
             temporalMissed.fetch_add(1, std::memory_order_relaxed);
             return;
         }
@@ -518,6 +528,46 @@ bool right_eye_picks_match() {
     return true;
 }
 
+// What views_start wrote (code and vtable slots), oldest first, with the bytes it replaced: a start that fails part
+// way puts them all back, so the game never runs half patched. Every site is anchor-checked (readable) beforehand.
+struct Undo {
+    std::uintptr_t rva;
+    std::vector<std::uint8_t> bytes;
+};
+std::vector<Undo> undo;
+std::vector<std::uint8_t> bytes_at(std::uintptr_t rva, std::size_t size) {
+    const auto* p = reinterpret_cast<const std::uint8_t*>(simqvfr::module_base() + rva);
+    return std::vector<std::uint8_t>(p, p + size);
+}
+bool patch_write(std::uintptr_t rva, const void* bytes, std::size_t size) {
+    std::vector<std::uint8_t> before = bytes_at(rva, size);
+    if (!simqvfr::code_write(rva, bytes, size))
+        return false;
+    undo.push_back({rva, std::move(before)});
+    return true;
+}
+bool patch_redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
+                    std::size_t stubSize) {
+    if (!simqvfr::code_redirect(rva, anchor, size, stub, stubSize))
+        return false;
+    undo.push_back({rva, std::vector<std::uint8_t>(anchor, anchor + size)});  // the anchor: the bytes replaced
+    return true;
+}
+bool patch_slot(std::uintptr_t slotRva, std::uintptr_t expectedRva, const void* replacement) {
+    std::vector<std::uint8_t> before = bytes_at(slotRva, sizeof(void*));
+    if (!simqvfr::vtable_slot_replace(slotRva, expectedRva, replacement))
+        return false;
+    undo.push_back({slotRva, std::move(before)});
+    return true;
+}
+// Newest first. A redirect's stub stays allocated (unreached once its jump is gone).
+void undo_patches() {
+    for (auto it = undo.rbegin(); it != undo.rend(); ++it)
+        if (!simqvfr::code_write(it->rva, it->bytes.data(), it->bytes.size()))
+            simqvfr::logf("acc views: putting back 0x%llx failed", static_cast<unsigned long long>(it->rva));
+    undo.clear();
+}
+
 // Each kRightEyePicks site: edx = (al, or eax) ? (View.StereoPass + 1) & ~1 : 0.
 bool pair_right_views() {
     bool ok = true;
@@ -544,7 +594,7 @@ bool pair_right_views() {
         stub[jz] = static_cast<std::uint8_t>(n - (jz + 1));
         stub[n++] = 0x33;  // zero: xor edx, edx
         stub[n++] = 0xd2;
-        ok = simqvfr::code_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
+        ok = patch_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
     }
     return ok;
 }
@@ -609,8 +659,8 @@ bool width_per_pair_match() {
 bool width_per_pair() {
     bool ok = true;
     for (const WidthRead& r : kInstancedWidthReads)
-        ok = (r.viewSize == r.size ? simqvfr::code_write(r.rva, r.view, r.size)
-                                   : simqvfr::code_redirect(r.rva, r.anchor, r.size, r.view, r.viewSize)) && ok;
+        ok = (r.viewSize == r.size ? patch_write(r.rva, r.view, r.size)
+                                   : patch_redirect(r.rva, r.anchor, r.size, r.view, r.viewSize)) && ok;
     // HMDEyePaddingOffset = (right.Max.X - left.Min.X - (right.Min.X - left.Max.X)) / (right.Max.X - left.Min.X), from
     // Family->Views[0] and [1] for every view (rax: Views.Data, r14: the view): a focus view's from Views[2] and [3],
     // in a family of four.
@@ -625,8 +675,8 @@ bool width_per_pair() {
         0xeb, 0x07,                                      // jmp done
         0x48, 0x8b, 0x50, 0x08,                          // eyes: mov rdx, [rax + 8] (Views[1])
         0x48, 0x8b, 0x08};                               // mov rcx, [rax]           (Views[0]); done
-    ok = simqvfr::code_redirect(kEyePaddingViews, kEyePaddingViewsAnchor, sizeof(kEyePaddingViewsAnchor), pairViews,
-                              sizeof(pairViews)) && ok;
+    ok = patch_redirect(kEyePaddingViews, kEyePaddingViewsAnchor, sizeof(kEyePaddingViewsAnchor), pairViews,
+                        sizeof(pairViews)) && ok;
     return ok;
 }
 
@@ -637,17 +687,17 @@ bool pairs_per_draw() {
         const std::uint8_t reg = (r.bytes[r.size - 2] >> 3) & 7;  // ModRM reg
         const std::uint8_t three[3] = {0x6a, 0x02, static_cast<std::uint8_t>(0x58 + reg)};        // push 2; pop r64
         const std::uint8_t four[4] = {0x6a, 0x02, 0x41, static_cast<std::uint8_t>(0x58 + reg)};   // push 2; pop r8-r15
-        ok = simqvfr::code_write(r.rva, r.size == 3 ? three : four, r.size) && ok;
+        ok = patch_write(r.rva, r.size == 3 ? three : four, r.size) && ok;
     }
     // cmp ecx, 2; jle +5; mov ecx, 2; then the moved `mov rdi, [rbp + 0xe8]`.
     const std::uint8_t clamp[] = {0x83, 0xf9, 0x02, 0x7e, 0x05, 0xb9, 0x02, 0x00, 0x00, 0x00,
                                   0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
-    ok = simqvfr::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
-                              sizeof(clamp)) && ok;
+    ok = patch_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
+                        sizeof(clamp)) && ok;
     // StereoPassIndex: the eye within its pair (and eax, 1; then the moved store).
     const std::uint8_t pairEye[] = {0x83, 0xe0, 0x01, 0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
-    ok = simqvfr::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
-                              pairEye, sizeof(pairEye)) && ok;
+    ok = patch_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
+                        pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
     simqvfr::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
                                       "StereoPassIndex the eye within its pair, 12 right-eye picks per pair)"
@@ -666,31 +716,31 @@ bool catalogue_fixes() {
     const std::uint8_t primary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x9e, 0xc0};    // cmp [rcx+ad0],1; setle al
     if (fixes.exposure) {
         // Exposure (abi.h): every view but the left eye takes its exposure, and only the left eye computes it.
-        ok = simqvfr::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor),
-                                    secondary, sizeof(secondary)) && ok;
+        ok = patch_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor),
+                            secondary, sizeof(secondary)) && ok;
         for (int i = 0; i < 2; ++i)
-            ok = simqvfr::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]),
-                                        primary, sizeof(primary)) && ok;
+            ok = patch_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]),
+                                primary, sizeof(primary)) && ok;
         // Pre-exposure (abi.h): the left eye's reaches every other view.
-        ok = simqvfr::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
-                                    secondary, sizeof(secondary)) && ok;
+        ok = patch_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
+                            secondary, sizeof(secondary)) && ok;
         for (int i = 0; i < 2; ++i)
-            ok = simqvfr::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i],
-                                        sizeof(kPreExposurePrimaryAnchor[i]), primary, sizeof(primary)) && ok;
+            ok = patch_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i],
+                                sizeof(kPreExposurePrimaryAnchor[i]), primary, sizeof(primary)) && ok;
     }
     if (fixes.vignette) {
         // No tonemapper vignette (abi.h): `xor al, al` and an 8-byte nop in place of the test.
         const std::uint8_t noVignette[] = {0x32, 0xc0, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
-        ok = simqvfr::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
+        ok = patch_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
     }
     if (fixes.shadows) {
         // The sun's cascades (abi.h): only the left eye creates them, and every view projects them.
         const std::uint8_t leftEyeCascades[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x96, 0xc0};
-        ok = simqvfr::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
-        ok = simqvfr::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
-                                    sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
-        ok = simqvfr::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor,
-                                    sizeof(kShadowVisibilityPrimaryAnchor), primary, sizeof(primary)) && ok;
+        ok = patch_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
+        ok = patch_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+                            sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
+        ok = patch_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor,
+                            sizeof(kShadowVisibilityPrimaryAnchor), primary, sizeof(primary)) && ok;
     }
     if (fixes.foliageCull) {
         // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
@@ -701,12 +751,12 @@ bool catalogue_fixes() {
         const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
                                       0x48, 0x83, 0xc0, 0x02,        // add rax, 2
                                       0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
-        ok = simqvfr::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
-                                    sizeof(gate)) && ok;
-        ok = simqvfr::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
-                                    sizeof(left)) && ok;
-        ok = simqvfr::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
-                                    sizeof(right)) && ok;
+        ok = patch_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
+                            sizeof(gate)) && ok;
+        ok = patch_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
+                            sizeof(left)) && ok;
+        ok = patch_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
+                            sizeof(right)) && ok;
     }
     if (fixes.foliageLod) {
         // Foliage LOD distances from the left eye's projection in the focus views, on the CPU and in the shader (abi.h).
@@ -718,16 +768,16 @@ bool catalogue_fixes() {
                                        0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views[0])
                                        0x49, 0x81, 0xc0, 0x80, 0x02, 0x00, 0x00};       // add r8, 0x280
         for (std::uintptr_t rva : kFoliageLodProjection)
-            ok = simqvfr::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
-                                        sizeof(cpuLod)) && ok;
+            ok = patch_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
+                                sizeof(cpuLod)) && ok;
         const std::uint8_t shaderLod[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
                                           0x72, 0x09,                                      // jb own
                                           0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Family)
                                           0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views.Data)
                                           0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views[0])
                                           0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};       // own: add r14, 0x280
-        ok = simqvfr::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
-                                    sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
+        ok = patch_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+                            sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
     }
     if (fixes.temporal) {
         // The view state's counters where this build has them (abi.h [Temporal state]): read and written in
@@ -837,7 +887,9 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY, const
     auto* subPrimitiveQueries = reinterpret_cast<volatile std::int32_t*>(base + kAllowSubPrimitiveQueries);
     simqvfr::logf("acc views: r.AllowSubPrimitiveQueries %d -> 0 (foliage occlusion per proxy, not per cluster)",
                 static_cast<int>(*subPrimitiveQueries));
+    const std::int32_t subPrimitiveQueriesBefore = *subPrimitiveQueries;
     *subPrimitiveQueries = 0;
+    undo.clear();
     layout = l;
     {
         std::lock_guard guard(liveLayouts.mutex);
@@ -856,29 +908,29 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY, const
         ok = width_per_pair() && ok;
         pairWidths.store(ok, std::memory_order_relaxed);  // before final_view_rect is in its slot
     }
-    ok = ok && simqvfr::vtable_slot_replace(kHasVisibleAreaMesh.rva, kHasVisibleAreaMesh.function,
-                                         reinterpret_cast<void*>(&no_visible_area_mesh));
+    ok = ok && patch_slot(kHasVisibleAreaMesh.rva, kHasVisibleAreaMesh.function,
+                          reinterpret_cast<void*>(&no_visible_area_mesh));
     if (ok)
         simqvfr::log_line("acc views: the HMD's visible-area mesh off (it holds two views; post-processing draws "
                           "rectangles)");
-    ok = ok && simqvfr::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
-                                         reinterpret_cast<void*>(&eye_pose));
-    ok = ok && simqvfr::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
-                                          reinterpret_cast<void*>(&projection));
-    ok = ok && simqvfr::vtable_slot_replace(kAdjustViewRect.rva, kAdjustViewRect.function,
-                                          reinterpret_cast<void*>(&adjust_view_rect));
-    ok = ok && simqvfr::vtable_slot_replace(kSetFinalViewRect.rva, kSetFinalViewRect.function,
-                                          reinterpret_cast<void*>(&final_view_rect));
-    ok = ok && simqvfr::vtable_slot_replace(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
-                                          reinterpret_cast<void*>(&primary_view));
-    ok = ok && simqvfr::vtable_slot_replace(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
-                                          reinterpret_cast<void*>(&primary));
-    ok = ok && simqvfr::vtable_slot_replace(kGetViewIndexForPass.rva, kGetViewIndexForPass.function,
-                                          reinterpret_cast<void*>(&pass_view));
-    ok = ok && simqvfr::vtable_slot_replace(kGetViewPassForIndex.rva, kGetViewPassForIndex.function,
-                                          reinterpret_cast<void*>(&view_pass));
-    ok = ok && simqvfr::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
-                                          reinterpret_cast<void*>(&desired_views));
+    ok = ok && patch_slot(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
+                          reinterpret_cast<void*>(&eye_pose));
+    ok = ok && patch_slot(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
+                          reinterpret_cast<void*>(&projection));
+    ok = ok && patch_slot(kAdjustViewRect.rva, kAdjustViewRect.function,
+                          reinterpret_cast<void*>(&adjust_view_rect));
+    ok = ok && patch_slot(kSetFinalViewRect.rva, kSetFinalViewRect.function,
+                          reinterpret_cast<void*>(&final_view_rect));
+    ok = ok && patch_slot(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
+                          reinterpret_cast<void*>(&primary_view));
+    ok = ok && patch_slot(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
+                          reinterpret_cast<void*>(&primary));
+    ok = ok && patch_slot(kGetViewIndexForPass.rva, kGetViewIndexForPass.function,
+                          reinterpret_cast<void*>(&pass_view));
+    ok = ok && patch_slot(kGetViewPassForIndex.rva, kGetViewPassForIndex.function,
+                          reinterpret_cast<void*>(&view_pass));
+    ok = ok && patch_slot(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
+                          reinterpret_cast<void*>(&desired_views));
     simqvfr::logf("acc views: %s; eye columns: outer views %.3f and focus views %.3f of the column wide (%s), outer rows "
                 "%.3f of its height",
                 ok ? (boxX > 0 ? (fixes.turnFocus ? "four views patched in (views 2-3 focus views, centred, turned)"
@@ -889,6 +941,18 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY, const
                 l.sharedColumnWidth ? "one width for all four views, acc_shared_width=1"
                                     : "instanced stereo width per pair, HMD eye padding per pair",
                 l.outer_height() / l.column_eye_height());
+    if (!ok) {  // everything this start did put back: the game runs as it shipped, two views
+        pairWidths.store(false, std::memory_order_relaxed);
+        temporalShare.store(false, std::memory_order_relaxed);
+        if (contactOffIn)
+            views_set_diag(3, false);
+        contactOffIn = false;
+        undo_patches();
+        *subPrimitiveQueries = subPrimitiveQueriesBefore;
+        simqvfr::logf("acc views: a patch failed: every patch put back, r.AllowSubPrimitiveQueries back to %d",
+                      static_cast<int>(subPrimitiveQueriesBefore));
+    }
+    undo.clear();
     started.store(ok);
     return ok;
 }
@@ -1001,7 +1065,8 @@ void hold_diag_cvars() {
         auto* data = *reinterpret_cast<int* const*>(simqvfr::module_base() + c.data);
         if (!data)
             continue;
-        if (diagOff[i].load(std::memory_order_relaxed)) {
+        // Held only while QVFR runs (views_start succeeded): a switch or launch hold-off never outlasts it.
+        if (started.load(std::memory_order_relaxed) && diagOff[i].load(std::memory_order_relaxed)) {
             if (!diagHeld[i]) {
                 diagSaved[i][0] = data[0];
                 diagSaved[i][1] = data[1];
