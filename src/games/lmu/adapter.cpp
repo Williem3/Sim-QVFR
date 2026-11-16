@@ -218,7 +218,7 @@ public:
         qvfr_frame_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);
     }
     // Live resolution: each pass at its own render scale inside the launch-size targets (qvfr_frame.h). On for QVFR
-    // runs; GameFeatures::liveResolution stays off until it passes its card.
+    // runs (GameFeatures::liveResolution too, for the launcher).
     bool qvfr_live_resolution() const override { return has_qvfr(); }
     // `live`: views4_live_one_size's layout (each view's share of its layer, halved). LMU scales both axes together, so
     // each view takes the larger share: at least the density asked on both axes.

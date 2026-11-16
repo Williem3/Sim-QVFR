@@ -26,11 +26,21 @@ int SIM_QVFR_TEST_MAIN() {
           "wanted: unknown inputs mean native");
 
     check(near_(output_density_cap(2000, 2000, 0, 0, 400), 4.0), "cap: no runtime limit, output_density_max 400%");
-    check(near_(output_density_cap(2000, 2000, 5000, 8000, 400), 2.5), "cap: the runtime's largest width");
-    check(near_(output_density_cap(2000, 2000, 8000, 3000, 400), 1.5), "cap: the runtime's largest height");
-    check(near_(output_density_cap(2000, 2000, 8000, 8000, 150), 1.5), "cap: output_density_max 150%");
-    check(near_(output_density_cap(2000, 2000, 8000, 8000, 100), 1.0), "cap: 100% is native, as before");
+    check(near_(output_density_cap(2000, 2000, 10000, 8000, 400), 2.5),
+          "cap: half the runtime's largest width (both eyes side by side in the chain)");
+    check(near_(output_density_cap(2000, 2000, 16000, 3000, 400), 1.5), "cap: the runtime's largest height");
+    check(near_(output_density_cap(2000, 2000, 16000, 8000, 150), 1.5), "cap: output_density_max 150%");
+    check(near_(output_density_cap(2000, 2000, 16000, 8000, 100), 1.0), "cap: 100% is native, as before");
     check(near_(output_density_cap(2000, 2000, 1500, 1500, 400), 1.0), "cap: never below native");
+    // 2026-11-16, LMU on SteamVR: a 5190 x 4168 eye, the runtime's largest image 16384 x 16384. The chain is two eyes
+    // across: 200% made it 20760 wide, past what a texture can be, and the right eye was broken.
+    const double lmu = output_density_cap(5190, 4168, 16384, 16384, 400);
+    check(2 * std::lround(5190 * lmu) <= 16384 && lmu > 1.5, "cap: two eyes at the cap fit the runtime's largest image");
+    check(2 * std::lround(5190 * output_density_cap(5190, 4168, 0, 0, 400)) <= 16384,
+          "cap: with no runtime limit, the texture limit");
+    check(output_eye_max_width(16384) == 8192 && output_eye_max_width(0) == 8192 && output_eye_max_width(40000) == 8192 &&
+              output_eye_max_height(0) == 16384,
+          "the chain's eye: half the largest width, at most the texture limit");
     check(kOutputDensityMax.def == 400 && kOutputDensityMax.min == 100 && kOutputDensityMax.clamp(50) == 100,
           "the ini key: default 400, at least 100");
 

@@ -76,7 +76,18 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
     unsigned long long beforeFrame = 0;
     bool haveBefore = false;
     unsigned long long runs = 0;  // frames this view went through DLAA at this size
+    // A live size change waiting to settle (ensure): the size asked and since when (GetTickCount64), and whether this
+    // frame's view was left as drawn for it (not a failure).
+    unsigned waitW = 0, waitH = 0, waitOW = 0, waitOH = 0;
+    unsigned long long waitSince = 0;
+    bool waiting = false;
 };
+
+// A view's feature is made again for a new size only once that size has held this long. Making one takes 40-250 ms on
+// the game's render thread (2026-11-16, LMU, 2000-2600 px focus views), and every step of the headset menu's Focus
+// density or size made both focus views' again: a 80-330 ms freeze per press, more with a key held. Settled, a run of
+// steps costs one. Until then the view shows as drawn (no DLAA for that moment; super resolution: stretched).
+constexpr unsigned long long kResizeSettleMs = 500;
 
 struct State {
     DlssRun cfg;
@@ -131,7 +142,10 @@ struct State {
     int jitterHeldLogged = 0;  // "no jitter until it is processed" lines so far (a few)
     bool jitterHeld = false;   // in a stretch of frames with a view failing (logged at its start)
     unsigned long long failuresAtFrameEnd = 0;  // `failures` at the last frame end: a frame's own failures
+    unsigned long long resizeWaitsAtFrameEnd = 0;  // `resizeWaits` likewise: a view left as drawn holds the jitter too
     unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0, stretched = 0;
+    unsigned long long resizeWaits = 0;  // views left as drawn while a new size settled (ensure, kResizeSettleMs)
+    unsigned long long resizedFrame = 0;  // the frame a view's feature was last made again for a new size: one a frame
     unsigned long long objectViews = 0;  // views whose vectors took moving objects' motion (DlssPass::objectSlots)
     unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
@@ -358,9 +372,26 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
     // NGX's presets (the eyes are views 0-1); FSR has none.
     const int preset = amd ? 0 : index < 2 && d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset;
     const bool infinite = amd && d.cameraInfinite;
+    s.waiting = false;
     if (s.width == w && s.height == h && s.outWidth == ow && s.outHeight == oh && s.format == format &&
         s.inverted == inverted && s.preset == preset && s.backend == d.backend && s.infinite == infinite)
         return s.feature != nullptr || s.fsrView != nullptr;
+    // Only its size changed (live resolution): made again once the size has settled (kResizeSettleMs).
+    if ((s.feature || s.fsrView) && s.format == format && s.inverted == inverted && s.preset == preset &&
+        s.backend == d.backend && s.infinite == infinite) {
+        const unsigned long long now = GetTickCount64();
+        if (s.waitW != w || s.waitH != h || s.waitOW != ow || s.waitOH != oh) {
+            s.waitW = w, s.waitH = h, s.waitOW = ow, s.waitOH = oh;
+            s.waitSince = now;
+        }
+        // Settled: one view's feature a frame, so the two focus views' rebuilds are two short hitches, not one long one.
+        if (now - s.waitSince < kResizeSettleMs || d.resizedFrame == d.frame) {
+            s.waiting = true;
+            ++d.resizeWaits;
+            return false;
+        }
+        d.resizedFrame = d.frame;
+    }
     if (s.feature || s.fsrView) {
         release_slot(s);
         ++d.recreated;
@@ -631,7 +662,8 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
               const DlssPass& pass, const Camera& camera) {
     Slot& s = d.slots[index];
     if (!ensure(context, s, index, w, h, ow, oh, format, inverted)) {
-        ++d.failures;
+        if (!s.waiting)  // a size settling isn't a failure (counted as resizeWaits)
+            ++d.failures;
         return false;
     }
     const bool history = s.haveBefore && s.beforeFrame + 1 == d.frame;
@@ -1356,12 +1388,13 @@ void dlss_frame_end(unsigned long long frame) {
         // Logged once a stretch of frames in which a view was tried and failed (not a frame without passes: menus,
         // loading), a few stretches a session.
         const bool failedNow = d.failures != d.failuresAtFrameEnd;
+        const bool settlingNow = d.resizeWaits != d.resizeWaitsAtFrameEnd;  // a new size waiting (kResizeSettleMs)
         if (failedNow && !d.jitterHeld && d.cfg.jitter && !d.off && d.jitterHeldLogged < 3) {
             ++d.jitterHeldLogged;
             say("frame %llu: a view wasn't processed (eyes %d %d, focus views %d %d): no jitter on it until it is", d.frame,
                 d.evaluated[0] ? 1 : 0, d.evaluated[1] ? 1 : 0, d.focusEvaluated[0] ? 1 : 0, d.focusEvaluated[1] ? 1 : 0);
         }
-        d.jitterHeld = failedNow || (d.jitterHeld && !(d.lastFrameOk && d.focusOk[0] && d.focusOk[1]));
+        d.jitterHeld = failedNow || settlingNow || (d.jitterHeld && !(d.lastFrameOk && d.focusOk[0] && d.focusOk[1]));
         d.evaluated[0] = d.evaluated[1] = d.focusEvaluated[0] = d.focusEvaluated[1] = false;
     }
     ++d.frame;
@@ -1377,10 +1410,11 @@ void dlss_frame_end(unsigned long long frame) {
                 else
                     std::snprintf(focusSizes[i], sizeof(focusSizes[i]), "%ux%u", s.width, s.height);
             }
-            say("%llu evaluations, %llu failed, %llu features made again, %llu frames with jitter, %llu focus views "
+            say("%llu evaluations, %llu failed, %llu features made again (%llu views left as drawn while a new size "
+                "settled), %llu frames with jitter, %llu focus views "
                 "stretched, %llu views with moving objects' motion since the last line; views %ux%u %ux%u, focus %s %s; "
                 "jitter sign %s",
-                d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.stretched, d.objectViews, d.slots[0].width,
+                d.evaluations, d.failures, d.recreated, d.resizeWaits, d.jitteredFrames, d.stretched, d.objectViews, d.slots[0].width,
                 d.slots[0].height,
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
@@ -1393,9 +1427,10 @@ void dlss_frame_end(unsigned long long frame) {
                     ms[3], fsr::provider_in_use().c_str(), d.frameMs);
             }
         }
-        d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = d.objectViews = 0;
+        d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = d.objectViews = d.resizeWaits = 0;
     }
     d.failuresAtFrameEnd = d.failures;
+    d.resizeWaitsAtFrameEnd = d.resizeWaits;
 }
 
 }  // namespace simqvfr

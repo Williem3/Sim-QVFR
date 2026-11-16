@@ -25,7 +25,9 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // NVIDIA multi-view rendering (mvr_pass.h), runtime-composed quad views on a Pimax or Varjo runtime, sharpening, and
     // Sim-QVFR's own DLSS on its views (engine/dlss_views.h; with multi-view), and one eye off (qvfr_frame.cpp: that
     // eye's pass with no focus view, its scene cut to a few pixels, no DLSS), and the focus mask (mvr_pass_focus_mask.h).
-    {false, true, false, true, false, false, true, true, true, true, false, true, true},
+    // Live resolution on (the adapter's qvfr_live_resolution: every QVFR run), so the launcher's Resolution and Foveation
+    // cards say what the launch size allows, as for the other games.
+    {false, true, true, true, false, false, true, true, true, true, false, true, true},
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet
