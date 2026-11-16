@@ -518,7 +518,7 @@ void load_experiment() {
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze, ini.c_str());
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
     if (game_features().sharpening)
-        logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS as the views are composed)" : " (off)");
+        logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS on the focus views as they are composed)" : " (off)");
     if (experiment.composing())
         logf("experiment: output density up to %d%% of the native eye%s", settings.outputDensityMax,
              settings.outputDensityMax <= 100 ? " (composed at native size, [quad] output_density_max=100)"

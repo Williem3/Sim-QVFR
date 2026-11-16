@@ -207,7 +207,7 @@ struct Experiment {
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
     std::atomic<uint64_t> focusShape = 0;  // the focus area's pulled-in corners (focus_shape.h's bits; 0 = the box)
-    // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS as the views are composed
+    // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS on the focus views as they are composed
     // (EyeComposition::sharpness), percent; 0 off.
     std::atomic<int> sharpen = 0;
     // [quad] output_density_max (quad/output_density.h): the most the composed output grows past the native eye for
@@ -532,7 +532,7 @@ struct V4D3D11 {
     std::map<XrSwapchain, Chain> chains;  // the game's
     XrSwapchain outChain = XR_NULL_HANDLE;
     std::vector<ID3D11Texture2D*> outImages;
-    PendingImage outPending, focusPending, peripheryPending;  // each chain's image left acquired by a timed-out wait
+    PendingImage outPending, focusPending;  // each chain's image left acquired by a timed-out wait
     uint32_t outW = 0, outH = 0;  // one eye's size in it
     OutputDensity outDensity;     // its scale of the native eye; grown live (v4d3d11_resources)
     // A chain replaced by a larger one: destroyed once the runtime is surely done with its last image.
@@ -546,13 +546,6 @@ struct V4D3D11 {
     std::vector<ID3D11Texture2D*> focusImages;
     uint32_t focusW = 0, focusH = 0;
     bool focusFailed = false;  // its swapchain failed: composed as without focus_layer
-    // Sharpening with focus_layer (native quad views): the periphery's sharpened copy (the game's format, the focus
-    // chain's size), made the first time sharpening is on.
-    XrSwapchain peripheryChain = XR_NULL_HANDLE;
-    std::vector<ID3D11Texture2D*> peripheryImages;
-    bool peripheryFailed = false;      // its swapchain failed: the periphery goes unsharpened
-    bool peripheryDrawFailed = false;  // the last copy failed (logged once)
-    bool peripherySharpened = false;   // the last layered frame's periphery was the sharpened copy
     float loggedTexelsPerPixel = 0;    // the focus views' texels per display pixel last logged (sharpening)
     uint64_t layered = 0;      // frames submitted as two layers
     // Native quad views: race frames whose views 2-3 covered the runtime's focus views (FocusLayerPS's region), how

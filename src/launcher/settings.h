@@ -34,8 +34,8 @@ struct Settings {
     int outer = kPeripheryScale.def;  // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
     int inner = kFocusDensity.def;    // focus_density (QVFR): focus pixel density, percent of recommended
     int objectDetail = kObjectDetail.def;  // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
-    // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening as the views are composed,
-    // 0 off (the default) to 100 the strongest (live).
+    // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening of the focus views as
+    // they are composed (CAS's own sharpness), 0 off (the default) to 100 the strongest (live).
     int sharpen = kSharpenPercent.def;
     // [quad] eye_off (a game with GameFeatures::eyeOff: LMU; quad/eye_off.h): 0 both eyes on (the default), 1 the left
     // eye off, 2 the right. The headset shows that eye black and the game renders little of it (live).

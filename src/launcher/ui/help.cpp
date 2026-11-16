@@ -37,13 +37,13 @@ constexpr Help kHelp[] = {
      L"for it, renders only a few pixels of its scene and skips DLSS on it, so the GPU does much less. The game still prepares "
      L"that eye’s frame, so the CPU saves little. With both eyes seeing, a black eye is uncomfortable: leave it at None."},
     {L"Sharpening",
-     L"Crisper edges and text; too much makes the picture shimmer. Raise it a little if the view looks soft (0% is off); it "
-     L"costs a little GPU time and changes while you drive. How: AMD FidelityFX Contrast Adaptive Sharpening, applied as "
-     L"Sim-QVFR resamples the outer and focus views for the headset "
-     L"(when the runtime composes them, on a copy of the outer view). Each pixel is sharpened by how much contrast room it "
-     L"has, so soft detail gains the most and edges already sharp gain little. Both views get the same strength, so the focus "
-     L"area’s edge stays even. It costs a little GPU time, and a low periphery resolution shimmers more with it. 0% is off; "
-     L"it changes while you drive."},
+     L"Crisper edges and text in the focus area; too much makes it shimmer. Raise it a little if the view looks soft (0% is "
+     L"off); it costs a little GPU time and changes while you drive. How: AMD FidelityFX Contrast Adaptive Sharpening, "
+     L"applied as Sim-QVFR resamples the focus view for the headset. Each pixel is sharpened by how much contrast room it "
+     L"has, so soft detail gains the most and edges already sharp gain little. The percentage is CAS’s own sharpness, as "
+     L"other CAS sharpeners show it: any setting above 0% already sharpens. Only the focus area is sharpened, fading out "
+     L"across its feather so its edge stays even: your side vision sees shimmer more than detail. 0% is off; it changes "
+     L"while you drive."},
     {L"Brightness",
      L"How light or dark the game’s colour is. The wheel picks its hue and how strong it is; the launcher keeps "
      L"its text and edges readable in light and dark mode."},
