@@ -456,6 +456,8 @@ void dump_large_range(unsigned n);
 // when it hangs. A marker's number: its kind (top 4 bits), the frame (28 bits), and the kind's own value.
 enum MarkKind : uint64_t { kMarkDraw = 1, kMarkReplay = 2, kMarkReplayDone = 3, kMarkRelease = 4, kMarkReleaseDone = 5, kMarkFrameEnd = 6 };
 void mark(MarkKind kind, uint32_t value);
+// The scene draws marked: the first and every kMarkEveryDraws-th after (a marker before draw n: the GPU got to n or past).
+constexpr uint32_t kMarkEveryDraws = 64;
 void marker_name(uint64_t code, char* out, unsigned size);
 void poll_diag_keys();
 void poll_diag_hotkeys();

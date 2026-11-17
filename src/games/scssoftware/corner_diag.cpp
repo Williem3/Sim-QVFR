@@ -541,8 +541,8 @@ void marker_name(uint64_t code, char* out, unsigned size) {
     const uint32_t v = static_cast<uint32_t>(code);
     switch (kind) {
         case kMarkDraw:
-            snprintf(out, size, "frame %llu, before eye-pass draw %u (%s%s)", frame, v & 0xFFFFFF,
-                     (v >> 24) & 1 ? "indexed: the scene" : "non-indexed: a full-screen pass", (v >> 25) & 1 ? ", with the focus view" : "");
+            snprintf(out, size, "frame %llu, before eye-pass draw %u (%s%s; scene draws are marked every %u)", frame, v & 0xFFFFFF,
+                     (v >> 24) & 1 ? "indexed: the scene" : "non-indexed: a full-screen pass", (v >> 25) & 1 ? ", with the focus view" : "", kMarkEveryDraws);
             break;
         case kMarkReplay: snprintf(out, size, "frame %llu, before the focus replay %u (pixel range %u vectors)", frame, v >> 16, v & 0xFFFF); break;
         case kMarkReplayDone: snprintf(out, size, "frame %llu, after the focus replay %u", frame, v >> 16); break;

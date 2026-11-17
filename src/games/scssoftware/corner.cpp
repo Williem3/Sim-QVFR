@@ -333,7 +333,8 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
-        mark(kMarkDraw, (++g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));
+        if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
+            mark(kMarkDraw, (g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));
         if (focusDraw) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
@@ -346,7 +347,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     }
     if (entry != ch::kDraw && entry != ch::kDrawInstanced)
         return;
-    mark(kMarkDraw, ++g.frameDraw & 0xFFFFFF);
+    mark(kMarkDraw, ++g.frameDraw & 0xFFFFFF);  // the full-screen passes: few, each marked
     two_views(false);  // the full-screen passes: one view
     if (g.focusPercent && g.boundSwapchain && g.burstFramesLeft > 0 && count == 3) {  // the eye's final image, whole
         ID3D11ShaderResourceView* v = nullptr;
