@@ -270,7 +270,7 @@ void write_session_summary(double layerMs) {
     GetLocalTime(&now);
     wchar_t time[32];
     swprintf_s(time, L"%04u-%02u-%02u %02u:%02u", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
-    const std::wstring mode = experiment.views4                       ? L"QVFR"
+    const std::wstring mode = experiment.views4 || experiment.ownQvfr ? L"QVFR"
                               : experiment.quad || experiment.twoLoops ? L"Two-loop"
                                                                        : L"Off (the game's own two views)";
     const bool fg = frame_generation_on();

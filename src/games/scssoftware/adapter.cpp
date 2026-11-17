@@ -40,16 +40,8 @@ public:
         // scs_corner / scs_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
         // ([experiment] periphery_scale, focus_percent) take over at the first live read.
         wchar_t iniMode[32] = L"";
-        if (ini)
-            GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
-        const bool qvfr = analysis() && ini && _wcsicmp(iniMode, L"off") != 0 &&
-                          GetPrivateProfileIntW(L"experiment", L"scs_qvfr", 1, ini) != 0;
+        cornerPercent_ = launch_corner(ini, iniMode);
         const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;
-        cornerPercent_ = qvfr ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_corner",
-                                                                        sizes.periphery > 0 ? sizes.periphery : 70, ini))
-                              : 0;
-        if (cornerPercent_ <= 0 || cornerPercent_ >= 100)
-            cornerPercent_ = 0;
         focusPercent_ = cornerPercent_ ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_focus",
                                                                                  sizes.focusWidth > 0 ? sizes.focusWidth : 30, ini))
                                        : 0;
@@ -65,6 +57,11 @@ public:
                       "shader %s",
                       cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
                       shaderProbe_ ? "on" : "off");
+    }
+    // The layer's own reports and CPU settings: QVFR runs here whenever the corner will (read from the ini at load).
+    bool own_qvfr(const wchar_t* ini) const override {
+        wchar_t iniMode[32] = L"";
+        return launch_corner(ini, iniMode) > 0;
     }
     bool observes_d3d11() const override { return passProbe_ || shaderProbe_ || cornerPercent_; }
     // The focus box follows the gaze: where it points on each eye's screen (x right, y down, 0..1), from the eye's
@@ -146,6 +143,21 @@ public:
     }
 
 private:
+    // The corner's launch share in percent, 0 when QVFR is off: the launcher's QVFR switch ([experiment] mode other than
+    // off), [experiment] scs_qvfr (default 1) and a corner inside 1..99 ([experiment] scs_corner, default the game's
+    // periphery size). `iniMode`: the ini's mode, for the log.
+    int launch_corner(const wchar_t* ini, wchar_t (&iniMode)[32]) const {
+        if (ini)
+            GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
+        if (!analysis() || !ini || _wcsicmp(iniMode, L"off") == 0 ||
+            GetPrivateProfileIntW(L"experiment", L"scs_qvfr", 1, ini) == 0)
+            return 0;
+        const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;
+        const int corner = static_cast<int>(
+            GetPrivateProfileIntW(L"experiment", L"scs_corner", sizes.periphery > 0 ? sizes.periphery : 70, ini));
+        return corner > 0 && corner < 100 ? corner : 0;
+    }
+
     bool passProbe_ = false, shaderProbe_ = false;
     int cornerPercent_ = 0, focusPercent_ = 0;
     bool liveSeen_ = false;
