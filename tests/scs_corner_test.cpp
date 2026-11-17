@@ -18,6 +18,7 @@
 
 #include "engine/dxbc_patch.h"
 #include "games/scssoftware/corner.h"
+#include "games/scssoftware/corner_internal.h"
 #include "games/lmu/mvr_probe.h"
 #include "games/scssoftware/corner_rules.h"
 #include "test_util.h"
@@ -589,7 +590,27 @@ void warp_checks() {
 
 }  // namespace
 
+// The eye's shape: its targets and their halvings only, not every texture of its proportions (a near-square Pimax eye
+// let small squares through, 2026-11-17).
+void eye_shape_checks() {
+    using scs::detail::eye_shaped;
+    using scs::detail::g;
+    g.eyeW = 6240, g.eyeH = 6280;  // Pimax Crystal Super, ATS at 100% Scaling
+    check(eye_shaped(6240, 6280) && eye_shaped(3120, 3140) && eye_shaped(1560, 1570) && eye_shaped(780, 785) &&
+              eye_shaped(390, 392) && eye_shaped(390, 393) && eye_shaped(195, 196),
+          "the eye's targets and their halvings are eye-shaped");
+    check(!eye_shaped(128, 128) && !eye_shaped(64, 64) && !eye_shaped(156, 157) && !eye_shaped(2272, 2288) &&
+              !eye_shaped(4096, 4122),
+          "small squares, twins and other sizes of the eye's proportions are not");
+    g.eyeW = 5192, g.eyeH = 4168;  // ATS on another headset: the headset's images within a few texels count
+    check(eye_shaped(5190, 4166) && eye_shaped(2596, 2084) && eye_shaped(649, 521) && !eye_shaped(5180, 4158) &&
+              !eye_shaped(2590, 2079),
+          "the headset's images within 8 texels at full size, halvings within a pixel");
+    g.eyeW = g.eyeH = 0;  // as before the first session
+}
+
 int SIM_QVFR_TEST_MAIN() {
+    eye_shape_checks();
     rules_checks();
     warp_checks();
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
