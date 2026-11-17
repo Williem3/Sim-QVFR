@@ -270,13 +270,16 @@ void v4d3d11_region_note() {
 // it, and `copy` pointed there with that FOV. The runtime may draw views 0-1 over its eye whatever FOV they carry
 // (issue 29: Pimax stretched the cropped periphery over the whole eye, a picture in the picture). False: `copy` as it
 // was (no crop, the runtime's eyes unknown, or a chain, view or copy that failed or wasn't ready this frame).
-bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<XrCompositionLayerProjectionView>& copy) {
+// `device` the session's (sessionGraphics.d3d11): read by the caller, which may hold quad.mutex (the race path does), so
+// this takes no lock but v4d3d11.mutex's, held by the caller too.
+bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<XrCompositionLayerProjectionView>& copy,
+                           ID3D11Device* device) {
     if (v4d3d11.padRetired && --v4d3d11.padRetiredFrames <= 0) {
         next.DestroySwapchain(v4d3d11.padRetired);
         v4d3d11.padRetired = XR_NULL_HANDLE;
     }
     float runtimeEyes[2][4];
-    if (v4d3d11.padFailed || copy.size() < 2 || !runtime_eye_tangents(displayTime, runtimeEyes))
+    if (!device || v4d3d11.padFailed || copy.size() < 2 || !runtime_eye_tangents(displayTime, runtimeEyes))
         return false;
     RegionImage pad[2];
     bool any = false;
@@ -375,11 +378,6 @@ bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<Xr
                                          "native quad views: pad image wait");
     if (waited != XR_SUCCESS)
         return false;  // timed out: waited on again at the next frame
-    ID3D11Device* device;
-    {
-        std::lock_guard guard(quad.mutex);
-        device = sessionGraphics.d3d11;
-    }
     if (index >= v4d3d11.padImages.size() || index >= v4d3d11.padTargets.size() || !device) {
         next.ReleaseSwapchainImage(v4d3d11.padChain, &release);
         return false;
@@ -532,7 +530,8 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         focus[v].subImage.imageArrayIndex = 0;
     }
     // Native quad views with the FOV crop: the periphery padded out to the runtime's eyes (issue 29).
-    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, displayTime, copy);
+    // Under quad.mutex (v4d3d11_compose): the device read here, not inside (a second lock of it threw: issue 29).
+    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, displayTime, copy, sessionGraphics.d3d11);
     if (nativeQuad.active) {
         if (overRegion) {
             ++v4d3d11.regionFrames;
@@ -581,7 +580,12 @@ bool v4d3d11_pad_eyes(XrSession session, std::vector<XrCompositionLayerProjectio
     if (!nativeQuad.active)
         return false;
     std::lock_guard guard(v4d3d11.mutex);
-    if (!v4d3d11_pad_periphery(session, displayTime, copy))
+    ID3D11Device* device;
+    {
+        std::lock_guard quadGuard(quad.mutex);  // after v4d3d11.mutex, as v4d3d11_compose takes them
+        device = sessionGraphics.d3d11;
+    }
+    if (!v4d3d11_pad_periphery(session, displayTime, copy, device))
         return false;
     for (int e = 0; e < 2; ++e)
         copy[e].next = nullptr;  // the game's depth info would describe its own image, not the pad
