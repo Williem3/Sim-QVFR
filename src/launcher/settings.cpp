@@ -72,6 +72,7 @@ Settings load_settings(const std::wstring& ini) {
     s.antiCheat = read_int(ini, L"launcher", L"anticheat", 0) != 0;
     s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
     s.updateAsked = read_int(ini, L"launcher", L"update_asked", 0) != 0;
+    s.updateSkip = read_string(ini, L"launcher", L"update_skip");
     s.hiddenGames = read_string(ini, L"launcher", L"hidden_games");
     s.shownGames = read_string(ini, L"launcher", L"shown_games");
     {
@@ -126,6 +127,7 @@ Settings restored_defaults(const Settings& current) {
     s.hotkeys = current.hotkeys;  // the Hotkeys pane's own Reset hotkeys
     s.updateCheck = current.updateCheck;
     s.updateAsked = current.updateAsked;
+    s.updateSkip = current.updateSkip;
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
@@ -163,6 +165,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"launcher", L"anticheat", s.antiCheat ? L"1" : L"0");  // at the next launch
     ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"update_asked", s.updateAsked ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"update_skip", s.updateSkip);
     ok &= write(ini, L"launcher", L"hidden_games", s.hiddenGames);
     ok &= write(ini, L"launcher", L"shown_games", s.shownGames);
     {

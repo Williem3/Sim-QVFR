@@ -106,6 +106,10 @@ enum Ctl {
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
     // The About pane's language ([launcher] language; lang.h): a pop-up of Windows' language, English and lang\*.ini.
     kLanguage,
+    // The About pane's Go back: the version the last install replaced put back (install.h's restore_backup).
+    kUpdateRollback,
+    // The About pane's Skip this version and Don't skip ([launcher] update_skip).
+    kUpdateSkip, kUpdateUnskip,
     // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
     // (option the same), the colour wheel, its brightness, and the game's own colour back.
     kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset, kAntiCheat,
@@ -186,7 +190,8 @@ inline constexpr UINT kAccessMenuMessage = WM_APP + 7;
 inline constexpr UINT kFsrProbedMessage = WM_APP + 8;
 
 // Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
-enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
+// Skipped: a newer release the user chose to skip ([launcher] update_skip): shown in About, no badge.
+enum class Update { Off, Checking, UpToDate, Available, Skipped, Dev, Failed };
 
 struct UpdateResult {
     bool ok = false;
@@ -197,6 +202,10 @@ struct UpdateResult {
 // An install (install.h), done on a worker: its progress and its outcome, each message a new InstallProgress or
 // InstallResult.
 inline constexpr UINT kInstallProgressMessage = WM_APP + 3, kInstallDoneMessage = WM_APP + 4;
+
+// Going back to the version an install replaced (install.h's restore_backup), done on a worker: its progress as
+// kInstallProgressMessage, its outcome a new InstallResult.
+inline constexpr UINT kRestoreDoneMessage = WM_APP + 9;
 
 // The Hotkeys pane catching a wheel or controller button: polled this often.
 inline constexpr UINT_PTR kCaptureTimer = 2;
@@ -409,6 +418,11 @@ struct App {
     bool installing = false;
     InstallProgress installProgress;
     std::wstring installError;
+    // Go back: the backup the last install left (refresh_backup), going back to it (its progress in installProgress,
+    // `installing` set too, so neither starts while the other runs), or how the last try failed.
+    std::optional<Backup> backup;
+    bool restoring = false;
+    std::wstring restoreError;
     // The help under the pointer (kHelp's index, -1: none) and the ⓘ it belongs to, as last drawn.
     int tip = -1;
     Rect tipAnchor;
@@ -552,6 +566,10 @@ bool installable();
 bool game_running();
 void start_install();
 void install_done(InstallResult* r);
+void refresh_backup();
+void skip_release(bool skip);
+void start_restore();
+void restore_done(InstallResult* r);
 
 // help.cpp
 extern const Help kHelp[];

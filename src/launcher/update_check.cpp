@@ -40,6 +40,10 @@ std::vector<int> numbers(const std::wstring& version) {
 
 bool known_version(const std::wstring& version) { return !numbers(version).empty(); }
 
+bool skipped_release(const std::wstring& tag, const std::wstring& skip) {
+    return known_version(tag) && known_version(skip) && compare_versions(tag, skip) == 0;
+}
+
 int compare_versions(const std::wstring& a, const std::wstring& b) {
     const std::vector<int> x = numbers(a), y = numbers(b);
     if (x.empty() || y.empty())

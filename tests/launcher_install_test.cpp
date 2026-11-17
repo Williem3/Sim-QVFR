@@ -17,6 +17,10 @@ int SIM_QVFR_TEST_MAIN() {
               "update: versions by their numbers, a suffix or commit ignored, 10 after 9");
         check(known_version(L"2026.11.3.3-alpha (abc)") && !known_version(L"dev") && !known_version(L""),
               "update: a development build has no version to compare");
+        check(skipped_release(L"v1.2.0-beta", L"1.2.0-beta") && skipped_release(L"v1.2.0-beta", L"v1.2.0-beta") &&
+                  !skipped_release(L"v1.2.1-beta", L"1.2.0-beta") && !skipped_release(L"v1.2.0-beta", L"") &&
+                  !skipped_release(L"dev", L"dev"),
+              "update: a skipped release is that version only; a newer one, or none skipped, is offered");
         const auto zip = [](const char* name) {
             return std::string(R"("assets": [{"name": ")") + name +
                    R"(", "size": 3, "digest": "sha256:00", "browser_download_url": "u"}])";
@@ -196,6 +200,80 @@ int SIM_QVFR_TEST_MAIN() {
         put(staged / "layer/sim-qvfr.dll", "tampered");
         const InstallResult tampered = install_staged(app.wstring(), staged.wstring(), L"2", [](const InstallProgress&) {});
         check(!tampered.ok && tampered.error.find(L"SHA256") != std::wstring::npos, "install: a file that doesn't match its list stops it");
+
+        // Go back (restore_backup): what each file does, then backup-1 put back over release 2 and forward again.
+        {
+            const std::map<std::wstring, std::string> mine = {{L"a.dll", hexA}, {L"b.png", hexA}, {L"new.txt", hexA},
+                                                              {L"changed.txt", hexA}, {L"sim-qvfr.ini", hexA}};
+            const std::map<std::wstring, std::string> previous = {{L"a.dll", hexB}, {L"b.png", hexB}, {L"gone.txt", hexB}};
+            const std::map<std::wstring, std::string> now = {{L"a.dll", hexA}, {L"b.png", hexC}, {L"new.txt", hexA},
+                                                             {L"changed.txt", hexC}, {L"sim-qvfr.ini", hexC}, {L"gone.txt", hexB}};
+            const auto plan = plan_restore(
+                previous, mine, [](const std::wstring& p) { return p == L"a.dll" || p == L"b.png"; },
+                [&](const std::wstring& p) {
+                    const auto it = now.find(p);
+                    return it == now.end() ? std::string() : it->second;
+                });
+            const auto act = [&](const wchar_t* p) {
+                for (const RestoreStep& s : plan)
+                    if (s.path == p)
+                        return static_cast<int>(s.action);
+                return -1;
+            };
+            check(act(L"a.dll") == static_cast<int>(RestoreAction::Restore) && act(L"b.png") == static_cast<int>(RestoreAction::Keep) &&
+                      act(L"new.txt") == static_cast<int>(RestoreAction::Remove) &&
+                      act(L"changed.txt") == static_cast<int>(RestoreAction::Keep) && act(L"sim-qvfr.ini") == -1 &&
+                      act(L"gone.txt") == -1,
+                  "go back: the backup's files back, added ones removed, the user's changes and settings kept");
+        }
+        Backup backup;
+        check(find_backup(app.wstring(), backup) && backup.version == L"1" &&
+                  fs::equivalent(backup.folder, app / "update/backup-1"),
+              "go back: the newest backup found, its version from its VERSION.txt");
+        put(app / "layer/helmet/top.png", "my top");  // changed by the user after the update
+
+        HANDLE inUse = CreateFileW((app / "layer/sim-qvfr.dll").c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        const InstallResult blocked = restore_backup(app.wstring(), backup, L"2 (def)", [](const InstallProgress&) {});
+        CloseHandle(inUse);
+        check(!blocked.ok && blocked.error.find(L"sim-qvfr.dll") != std::wstring::npos &&
+                  read_file((app / "sim-qvfr-launcher.exe").wstring(), readBack) && readBack == "new launcher" &&
+                  read_file((app / "update/backup-1/sim-qvfr-launcher.exe").wstring(), readBack) && readBack == "old launcher" &&
+                  fs::exists(app / "README.txt") && !fs::exists(app / "update/backup-2"),
+              "go back: a file in use stops it, and everything moved goes back");
+
+        const InstallResult back = restore_backup(app.wstring(), backup, L"2 (def)", [](const InstallProgress&) {});
+        std::string version;
+        read_file((app / "sim-qvfr-launcher.exe").wstring(), launcher);
+        read_file((app / "layer/sim-qvfr.dll").wstring(), layer);
+        read_file((app / "layer/helmet/top.png").wstring(), top);
+        read_file((app / "layer/helmet/visor.png").wstring(), visor);
+        read_file((app / "sim-qvfr.ini").wstring(), ini);
+        read_file((app / "VERSION.txt").wstring(), version);
+        check(back.ok && launcher == "old launcher" && layer == "old layer" && version == "Sim-QVFR 1" &&
+                  !fs::exists(app / "README.txt") &&
+                  !parse_sha256_list((read_file((app / "SHA256.txt").wstring(), readBack), readBack)).count(L"README.txt"),
+              "go back: the old release's files and SHA256.txt back, the file release 2 added gone");
+        check(top == "my top" && visor == "my visor" && ini == "[mine]" && fs::exists(app / "profiles/Night.ini") && back.kept == 1,
+              "go back: the user's settings, profiles and changed files kept");
+        Backup forward;
+        check(!fs::exists(app / "update/backup-1") && find_backup(app.wstring(), forward) && forward.version == L"2" &&
+                  back.backup == (app / "update" / "backup-2").wstring(),
+              "go back: release 2 is now the backup");
+
+        const InstallResult again = restore_backup(app.wstring(), forward, L"1", [](const InstallProgress&) {});
+        read_file((app / "sim-qvfr-launcher.exe").wstring(), launcher);
+        read_file((app / "VERSION.txt").wstring(), version);
+        check(again.ok && launcher == "new launcher" && version == "Sim-QVFR 2" && fs::exists(app / "README.txt") &&
+                  find_backup(app.wstring(), backup) && backup.version == L"1",
+              "go back: going back is undone the same way");
+
+        put(app / "update/backup-1/layer/sim-qvfr.dll", "tampered");
+        const InstallResult damaged = restore_backup(app.wstring(), backup, L"2", [](const InstallProgress&) {});
+        check(!damaged.ok && damaged.error.find(L"SHA256") != std::wstring::npos &&
+                  read_file((app / "sim-qvfr-launcher.exe").wstring(), readBack) && readBack == "new launcher",
+              "go back: a backup file that doesn't match its list stops it");
+        check(!restore_backup(app.wstring(), backup, L"1", [](const InstallProgress&) {}).ok,
+              "go back: never into the backup it reads from");
     }
 
     fs::remove_all(folder, ec);

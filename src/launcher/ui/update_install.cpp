@@ -45,7 +45,17 @@ void update_done(UpdateResult* r) {
     const std::wstring mine = widen(SIM_QVFR_VERSION);
     app.update = !known_version(mine)                              ? Update::Dev
                  : compare_versions(result->release.tag, mine) <= 0 ? Update::UpToDate
+                 : skipped_release(result->release.tag, app.s.updateSkip) ? Update::Skipped
                                                                     : Update::Available;
+}
+
+// Skip this version / Don't skip: the newest release found, skipped or offered again.
+void skip_release(bool skip) {
+    if (app.update != (skip ? Update::Available : Update::Skipped))
+        return;
+    app.s.updateSkip = skip ? app.release.tag : std::wstring();
+    app.update = skip ? Update::Skipped : Update::Available;
+    changed();
 }
 
 // The first start: whether to check for updates when the launcher starts, asked once ([launcher] update_asked keeps the
@@ -156,6 +166,7 @@ void install_done(InstallResult* r) {
         return;
     }
     const std::wstring path = module_path();  // the new launcher now: the old one moved into the backup
+    refresh_backup();
     Sheet s;
     s.title = trf(L"Sim-QVFR {version} is installed", {{L"version", app.release.tag}});
     s.text = trf(L"{installed} files installed, {kept} of yours kept. The version you had is in {folder}.",
@@ -184,5 +195,96 @@ void restart_launcher(const std::wstring& exe) {
 }
 
 }  // namespace
+
+// Go back is offered for the backup an install left (install.h's find_backup), in a packaged install.
+void refresh_backup() {
+    Backup backup;
+    if (packaged_install(launcher_folder()) && find_backup(launcher_folder(), backup))
+        app.backup = backup;
+    else
+        app.backup.reset();
+}
+
+// Go back: asked first, in a sheet; then on a worker, as an install is.
+void start_restore() {
+    if (app.installing || !app.backup)
+        return;
+    refresh_checks();
+    if (game_running()) {
+        notify(trf(L"Close {game} first", {{L"game", game_name()}}),
+               tr(L"Sim-QVFR’s layer is in use while the game runs, so it can’t be replaced yet."));
+        return;
+    }
+    // Back to the version the last update replaced, or (after going back) forward to the one it was.
+    const bool newer = compare_versions(app.backup->version, widen(SIM_QVFR_VERSION)) > 0;
+    Sheet s;
+    s.title = newer ? trf(L"Return to Sim-QVFR {version}?", {{L"version", app.backup->version}})
+                    : trf(L"Go back to Sim-QVFR {version}?", {{L"version", app.backup->version}});
+    const std::wstring mine = widen(SIM_QVFR_VERSION);
+    s.text = newer ? trf(L"The launcher puts back the version you went back from and restarts. Your settings, profiles, "
+                         L"logs and any file you changed stay. The version you have now ({version}) is kept in the "
+                         L"update folder, so you can switch back the same way.",
+                         {{L"version", mine}})
+                   : trf(L"The launcher puts back the version you had before the last update and restarts. Your settings, "
+                         L"profiles, logs and any file you changed stay. The version you have now ({version}) is kept in "
+                         L"the update folder, so you can switch back the same way. The update check won’t offer it "
+                         L"again, only a newer release.",
+                         {{L"version", mine}});
+    s.buttons = {tr(L"Cancel"), newer ? tr(L"Return") : tr(L"Go Back")};
+    s.done = [](int button, const std::wstring&) {
+        if (button != 1 || !app.backup)
+            return;
+        app.installing = app.restoring = true;
+        app.restoreError.clear();
+        app.installProgress = {tr(L"Starting"), 0};  // About shows its step
+        std::thread([hwnd = app.hwnd, folder = launcher_folder(), backup = *app.backup, version = widen(SIM_QVFR_VERSION)] {
+            std::wstring lastStep;
+            int lastPercent = -1;
+            auto* result = new InstallResult(restore_backup(folder, backup, version, [&](const InstallProgress& p) {
+                const int percent = static_cast<int>(p.share * 100);
+                if (p.step == lastStep && percent == lastPercent)
+                    return;
+                lastStep = p.step;
+                lastPercent = percent;
+                auto* copy = new InstallProgress(p);
+                if (!PostMessageW(hwnd, kInstallProgressMessage, 0, reinterpret_cast<LPARAM>(copy)))
+                    delete copy;
+            }));
+            if (!PostMessageW(hwnd, kRestoreDoneMessage, 0, reinterpret_cast<LPARAM>(result)))
+                delete result;
+        }).detach();
+    };
+    open_sheet(std::move(s));
+}
+
+// Going back's outcome: on success a sheet says so, then the old launcher starts and this one closes.
+void restore_done(InstallResult* r) {
+    const std::unique_ptr<InstallResult> result(r);
+    app.installing = app.restoring = false;
+    const std::wstring version = app.backup ? app.backup->version : std::wstring();
+    refresh_backup();
+    if (!result->ok) {
+        app.restoreError = result->error;
+        return;
+    }
+    // Going back from this version: the update check doesn't offer it again (a newer one it does). Returning to it:
+    // offered again.
+    const std::wstring mine = widen(SIM_QVFR_VERSION);
+    if (compare_versions(version, mine) < 0)
+        app.s.updateSkip = mine.substr(0, mine.find(L' '));
+    else if (skipped_release(version, app.s.updateSkip))
+        app.s.updateSkip.clear();
+    changed();
+    const std::wstring path = module_path();  // the old launcher now: this one moved into the update folder
+    Sheet s;
+    s.title = trf(L"Sim-QVFR {version} is back", {{L"version", version}});
+    s.text = trf(L"{restored} files put back, {kept} of yours kept. The version you had is in {folder}.",
+                 {{L"restored", std::to_wstring(result->replaced)},
+                  {L"kept", std::to_wstring(result->kept)},
+                  {L"folder", result->backup}});
+    s.buttons = {tr(L"Restart Now")};
+    s.done = [exe = path](int, const std::wstring&) { restart_launcher(exe); };
+    open_sheet(std::move(s));
+}
 
 }  // namespace simqvfr::launcher::ui::win

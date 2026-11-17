@@ -75,6 +75,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         install_done(reinterpret_cast<InstallResult*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case kRestoreDoneMessage:
+        restore_done(reinterpret_cast<InstallResult*>(lParam));
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
     case kFsrProbedMessage: {
         const std::unique_ptr<fsr::Offer> offer(reinterpret_cast<fsr::Offer*>(lParam));
         app.fsrOffer = *offer;
@@ -404,6 +408,7 @@ int run_window(HINSTANCE instance, int show) {
     app.themeChoice = read_theme_choice();  // before the window's first apply_theme
     read_language();  // before anything is drawn or measured
     clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup
+    refresh_backup();                                                               // About's Go back
     if (app.iniFound) {
         // Per-game settings: a game without its own copy yet (the first start after the update, or a new game)
         // starts from the settings in use, so updating changes nothing until a game's settings are changed.

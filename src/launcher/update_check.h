@@ -32,6 +32,10 @@ bool newest_release(const std::string& json, Release& release);
 int compare_versions(const std::wstring& a, const std::wstring& b);
 bool known_version(const std::wstring& version);
 
+// A release the user skipped ([launcher] update_skip): `tag` is the same version as `skip` ("v1.2.0-beta" and
+// "1.2.0-beta (1a2b3c4)" are). A newer one isn't, and nothing is when `skip` has no version.
+bool skipped_release(const std::wstring& tag, const std::wstring& skip);
+
 // GETs the releases JSON (WinHTTP). False with `error` set on failure.
 bool fetch_releases(std::string& body, std::wstring& error);
 

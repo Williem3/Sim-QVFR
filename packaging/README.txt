@@ -201,8 +201,12 @@ first start asks once): it asks GitHub for the newest release, nothing else, and
 one is available; Check now is there too. Install puts a newer release in place for you (close the
 game first): the launcher downloads it from GitHub, checks it, replaces its own files and restarts.
 Your settings, profiles, logs, Cheeky's folder and any file you changed (your own helmet images) stay;
-the version you had is kept in the update folder, to copy back by hand if you ever need it. Download
-opens the release's page instead.
+the version you had is kept in the update folder. If the new version doesn't work well for you, Go back
+to <version> (under Updates, close the game first) puts the version you had back and restarts, your
+settings and changed files kept as an install keeps them; the newer one is then kept the same way, and
+Return to <version> brings it back. Going back also skips that version: the update check doesn't offer
+it again, only a newer release. Skip this version does the same without going back; Don't skip undoes
+it. Download opens the release's page instead.
 
 After Launch the status follows the game: starting, running with Sim-QVFR, started without Sim-QVFR
 (with the OpenXR loader's reason), crashed or stopped responding (opens Report an issue), or closed

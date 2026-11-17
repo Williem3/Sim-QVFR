@@ -108,6 +108,7 @@ void settings_round_trip_checks() {
     s.antiCheat = true;
     s.updateCheck = true;
     s.updateAsked = true;
+    s.updateSkip = L"v1.2.0-beta";
     s.hiddenGames = L"xplane";
     s.shownGames = L"lmu";
     s.gameColors[L"ace"] = 0x123456;

@@ -90,6 +90,11 @@ float about_pane(float x, float y, float w, bool draw) {
             status.desc += L" " + std::wstring(tr(L"Download it by hand: this copy can’t install it itself (a development "
                                                   L"build, or the release has no checked zip)."));
         break;
+    case Update::Skipped:
+        status.label = trf(L"{version} skipped", {{L"version", app.release.tag}});
+        status.desc = trf(L"You have {version}. You chose not to install this one; a newer release is offered again.",
+                          {{L"version", mine}});
+        break;
     case Update::Dev:
         status.label = trf(L"Newest release: {version}", {{L"version", app.release.tag}});
         status.desc = trf(L"This is a development build ({version}).", {{L"version", mine}});
@@ -97,17 +102,19 @@ float about_pane(float x, float y, float w, bool draw) {
     case Update::Failed: status.label = tr(L"Couldn’t check"); status.desc = app.updateError + L"."; break;
     }
     // The buttons in a row of their own under it (the status's text keeps the row's width): Install (primary) where
-    // this copy can install the release, Download (its page; the primary without Install), Check now. None while
-    // installing.
+    // this copy can install the release, Download (its page; the primary without Install), Skip this version or Don't
+    // skip ([launcher] update_skip), Check now. None while installing.
     std::vector<Row> updateRows = {autoCheck, status};
     if (!app.installing) {
         const bool install = installable();
-        const bool download = (app.update == Update::Available || app.update == Update::Dev) && trusted_release_page(app.release.url);
+        const bool download = (app.update == Update::Available || app.update == Update::Skipped || app.update == Update::Dev) &&
+                              trusted_release_page(app.release.url);
+        const Update update = app.update;
         const std::wstring installLabel = app.installError.empty() ? trf(L"Install {version}", {{L"version", app.release.tag}})
                                                                    : std::wstring(tr(L"Try again"));
         Row actions;
         actions.fullHeight = [](float) { return t::kControlHeight; };
-        actions.full = [install, download, installLabel](const Rect& r) {
+        actions.full = [install, download, installLabel, update](const Rect& r) {
             float bx = r.x;
             const auto add = [&bx, &r](Ctl id, const std::wstring& label, bool primary) {
                 const float bw = button_width(label);
@@ -118,9 +125,39 @@ float about_pane(float x, float y, float w, bool draw) {
                 add(kUpdateInstall, installLabel, true);
             if (download)
                 add(kUpdateDownload, tr(L"Download"), !install);
+            if (update == Update::Available)
+                add(kUpdateSkip, tr(L"Skip this version"), false);
+            else if (update == Update::Skipped)
+                add(kUpdateUnskip, tr(L"Don’t skip"), false);
             add(kUpdateNow, tr(L"Check now"), false);
         };
         updateRows.push_back(actions);
+    }
+    // Go back (install.h's restore_backup): the version the last install replaced, while its backup is there. After
+    // going back the newer one is the backup, so the same row returns to it.
+    if (app.backup) {
+        const std::wstring other = app.backup->version;
+        const bool newer = compare_versions(other, mine) > 0;
+        Row previous;
+        previous.label = newer ? trf(L"You went back from {version}", {{L"version", other}})
+                               : trf(L"Previous version: {version}", {{L"version", other}});
+        previous.desc = newer ? tr(L"It is kept in the update folder, if you want it again.")
+                              : tr(L"Kept from the last update. If this version doesn’t work well for you, go back to it.");
+        if (app.restoring)
+            previous.desc = app.installProgress.step + L"… " + std::to_wstring(static_cast<int>(app.installProgress.share * 100)) + L"%";
+        else if (!app.restoreError.empty())
+            previous.desc = trf(L"Going back stopped: {error}. Nothing was changed.", {{L"error", app.restoreError}});
+        updateRows.push_back(previous);
+        if (!app.installing) {
+            const std::wstring label = newer ? trf(L"Return to {version}", {{L"version", other}})
+                                             : trf(L"Go back to {version}", {{L"version", other}});
+            Row action;
+            action.fullHeight = [](float) { return t::kControlHeight; };
+            action.full = [label](const Rect& r) {
+                button(kUpdateRollback, {r.x, r.y, button_width(label), t::kControlHeight}, label, false);
+            };
+            updateRows.push_back(action);
+        }
     }
     h += section(x, y + h, w, tr(L"Updates"), updateRows,
                  tr(L"Install keeps your settings, profiles and changed files; Download opens the release’s page."), draw);
