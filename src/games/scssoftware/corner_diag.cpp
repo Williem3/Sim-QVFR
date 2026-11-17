@@ -40,6 +40,9 @@ void perf_line() {
         g.ticks[b] = 0, g.timed[b] = 0;
     if (g.gpuTimes)
         gpu_times_line();
+    if (g.largeReplays)
+        simqvfr::logf("scs focus: large replays (pixel range over %u vectors) so far: %llu, skipped %llu", kLargeRange,
+                      static_cast<unsigned long long>(g.largeReplays), static_cast<unsigned long long>(g.largeSkipped));
 }
 
 // The diagnostic hotkeys, Ctrl+Alt with: B a burst from the next release; K the focus view composed or not; J bursts at

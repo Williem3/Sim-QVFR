@@ -262,6 +262,11 @@ struct State {
     bool diagNoDraws = false, diagNoReplays = false;
     uint64_t replaySkip = 0;
     bool gpuTimes = false;  // [experiment] scs_gpu_times (gpu_replay_begin)
+    // [experiment] scs_replay_skip_large=1: the replays whose pixel range is over kLargeRange vectors skipped (their
+    // numbers move from frame to frame); counted either way, the first few logged.
+    bool diagSkipLarge = false;
+    uint64_t largeReplays = 0, largeSkipped = 0;
+    unsigned largeLogged = 0;
     unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
     uint64_t replayLogFrame = 0;  // the frame whose replays are each logged once (300 cornered frames in)
     bool occlusionKeyDown = false, ownOcclusion = false;  // Ctrl+Alt+A: the half-size passes replayed for the focus view
@@ -318,6 +323,7 @@ struct State {
 extern State g;
 
 constexpr int kBurstFrames = 20;
+constexpr UINT kLargeRange = 128;  // a replay's pixel range this large: the light list's size, not a pass's few vectors
 constexpr uint64_t kEvictFrames = 900;  // twins unused this long are let go (evict_unused)
 
 struct Timed {  // a bucket's time, for as long as it lives

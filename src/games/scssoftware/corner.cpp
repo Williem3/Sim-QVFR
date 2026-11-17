@@ -409,7 +409,18 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
     if (entry == ch::kDraw && count == 3 && focus_on() && g.active && g.cut &&
         (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
         const unsigned n = ++g.frameReplay;
-        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1));
+        const bool large = psCount > kLargeRange;
+        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge);
+        if (large) {
+            ++g.largeReplays;
+            g.largeSkipped += skip ? 1 : 0;
+            if (g.largeLogged < 12) {
+                ++g.largeLogged;
+                simqvfr::logf("scs focus: a large replay at frame %llu: replay %u of the frame into %ux%u, vertex range %u+%u, "
+                              "pixel range %u+%u%s", static_cast<unsigned long long>(g.stats.frames), n, g.boundW, g.boundH,
+                              vsFirst, vsCount, psFirst, psCount, skip ? ": SKIPPED" : "");
+            }
+        }
         if (g.stats.frames == g.replayLogFrame)
             simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u%s", n,
                           g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", vsFirst, vsCount, psFirst,
@@ -790,8 +801,9 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     return true;
 }
 
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes) {
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge) {
     g.gpuTimes = gpuTimes;
+    g.diagSkipLarge = skipLarge;
     g.diagNoDraws = noDraws;
     g.diagNoReplays = noReplays;
     g.replaySkip = replaySkip;
