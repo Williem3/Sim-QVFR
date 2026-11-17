@@ -12,6 +12,7 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../lmu/mvr_probe.h"
 #include "../../log.h"
+#include "../../probe/hang_watch.h"
 #include "corner_rules.h"
 #include "pass_probe.h"
 
@@ -42,6 +43,8 @@ void take_frame_end() {
     if (ends == g.seenEndFrames)
         return;
     g.seenEndFrames = ends;
+    if (g.gpuTimes)
+        gpu_times_frame_end();  // before the frame count moves on: the slot is this frame's
     ++g.stats.frames;
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
@@ -282,6 +285,8 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         g.thisFrameCornered = true;
         g.cornerNow.store(true, std::memory_order_release);
         g.activeNow.store(true, std::memory_order_relaxed);
+        if (g.gpuTimes)
+            gpu_pass_begin();
         if (!g.mirrorsOff)
             swap_bound(true);  // the binds made before this one, to our rewritten copies
     }
@@ -409,7 +414,11 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
                           g.ps.first, g.ps.count, skip ? ": SKIPPED (scs_focus_replays / scs_replay_skip)" : "");
         if (!skip) {
             const Timed t(State::kTimeReplays);
+            if (g.gpuTimes)
+                gpu_replay_begin();
             replay(count, start);  // into the headset's image too: its final blit
+            if (g.gpuTimes)
+                gpu_replay_end();
         }
     }
     if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
@@ -526,6 +535,7 @@ bool session_ending() {
 void release_all() {
     if (g.context)
         two_views(false);
+    gpu_times_reset();
     if (g.gameVs) {
         g.gameVs->Release();
         g.gameVs = nullptr;
@@ -675,6 +685,7 @@ bool install_now(ID3D11Device* device, int percent, int focusPercent) {
         return false;
     }
     g.percent = static_cast<float>(percent);
+    simqvfr::hang_watch_on_fire(&hang_check);  // a frame stuck inside the runtime still logs the device's state
     ch::Observers o;
     o.targets = &on_targets;
     o.draw = &on_draw;
@@ -777,7 +788,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     return true;
 }
 
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip) {
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes) {
+    g.gpuTimes = gpuTimes;
     g.diagNoDraws = noDraws;
     g.diagNoReplays = noReplays;
     g.replaySkip = replaySkip;

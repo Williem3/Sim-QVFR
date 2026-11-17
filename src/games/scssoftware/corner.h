@@ -49,8 +49,9 @@ struct CornerStats {
 bool corner_install(ID3D11Device* device, int percent, int focusPercent = 0);
 // Bisection switches for a GPU hang (before the session; [experiment] keys, all off by default): the focus view's
 // scene draws off (`noDraws`), its replayed full-screen passes off (`noReplays`), or the frame's nth replay skipped for
-// each bit n-1 of `replaySkip`. The log names each replay of one frame, 300 frames into driving.
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip);
+// each bit n-1 of `replaySkip`. The log names each replay of one frame, 300 frames into driving. `gpuTimes`: the replays and
+// eye passes timed on the GPU (corner_internal.h's gpu_replay_begin).
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes = false);
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame
 // just drawn had its eyes in it; `info` itself otherwise. The copies live until the next call.

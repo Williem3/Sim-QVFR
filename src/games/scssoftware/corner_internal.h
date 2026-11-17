@@ -261,6 +261,7 @@ struct State {
     // frame's nth replay) skipped. Set before the session, kept across sessions.
     bool diagNoDraws = false, diagNoReplays = false;
     uint64_t replaySkip = 0;
+    bool gpuTimes = false;  // [experiment] scs_gpu_times (gpu_replay_begin)
     unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
     uint64_t replayLogFrame = 0;  // the frame whose replays are each logged once (300 cornered frames in)
     bool occlusionKeyDown = false, ownOcclusion = false;  // Ctrl+Alt+A: the half-size passes replayed for the focus view
@@ -427,6 +428,18 @@ void perf_line();
 // Every xrEndFrame: a removed GPU device logged once, with its reason and the VRAM (read every 90 frames).
 void device_watch();
 void device_watch_reset();  // release_all: the next install reads its own adapter and peak
+// The hang watch fired (its thread): the device asked why, logged with the GPU's newest finished frame.
+void hang_check();
+// The GPU's time for the focus view's replays and the eye passes (g.gpuTimes; [experiment] scs_gpu_times, on by default
+// in dev builds): timestamps around each replay and from the eye pass's start to the frame's end, read back a few frames
+// later without waiting; a line with each perf line, and one at once for a frame with a replay over 5 ms or passes over
+// 40 ms (a pass that runs away before a GPU hang names itself). All on the render thread.
+void gpu_pass_begin();  // the eye pass's first G-buffer bind
+void gpu_replay_begin();
+void gpu_replay_end();
+void gpu_times_frame_end();  // take_frame_end
+void gpu_times_line();       // with perf_line
+void gpu_times_reset();      // release_all (the queries are the device's)
 void poll_diag_keys();
 void poll_diag_hotkeys();
 

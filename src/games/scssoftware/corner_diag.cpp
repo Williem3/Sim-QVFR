@@ -4,6 +4,8 @@
 #include <dxgi1_4.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 
 #include "../../dev_build.h"
 #include "../../log.h"
@@ -36,6 +38,8 @@ void perf_line() {
     g.perfFrame = g.stats.frames;
     for (int b = 0; b < State::kTimes; ++b)
         g.ticks[b] = 0, g.timed[b] = 0;
+    if (g.gpuTimes)
+        gpu_times_line();
 }
 
 // The diagnostic hotkeys, Ctrl+Alt with: B a burst from the next release; K the focus view composed or not; J bursts at
@@ -112,7 +116,246 @@ struct DeviceWatch {
     uint64_t readFrame = 0;                          // g.stats.frames of the last reading
 };
 DeviceWatch dw;
-bool removedLogged = false;  // once per process: a removed device stays removed
+std::atomic<bool> removedLogged{false};  // once per process: a removed device stays removed (two threads may see it)
+
+// The focus view's GPU times (gpu_replay_begin and on): a ring of frames' queries, each read back once the GPU is done
+// with it (its disjoint query answers; a few frames later), never waited for.
+constexpr int kGpuSlots = 4;
+constexpr unsigned kGpuReplays = 64;
+struct ReplayInfo {
+    unsigned n = 0;             // the frame's replay number (as scs_replay_skip counts them)
+    unsigned w = 0, h = 0;      // the target
+    UINT psFirst = 0, psCount = 0;  // the pixel shader's constant range (tells the passes apart)
+    bool swapchain = false;     // the headset's image (the final blit)
+};
+struct GpuSlot {
+    ComPtr<ID3D11Query> disjoint, passStart, frameEnd, begin[kGpuReplays], end[kGpuReplays];
+    ReplayInfo info[kGpuReplays];
+    unsigned replays = 0;  // timed this frame
+    bool open = false, pass = false, pending = false;
+    uint64_t frame = 0;
+};
+struct GpuWindow {  // since the last gpu_times_line
+    double sum[kGpuReplays] = {}, max[kGpuReplays] = {};
+    unsigned count[kGpuReplays] = {};
+    ReplayInfo info[kGpuReplays];
+    double passSum = 0, passMax = 0;
+    unsigned frames = 0, passFrames = 0, late = 0, disjointed = 0;
+};
+GpuSlot gpuSlots[kGpuSlots];
+int gpuCur = 0;
+GpuWindow gw;
+unsigned gpuSpikes = 0;
+// What the hang watch's thread reads (hang_check): the newest frame the GPU finished, as read back.
+std::atomic<uint64_t> gpuDoneFrame{0};
+std::atomic<float> gpuDonePassMs{0}, gpuDoneReplayMs{0};
+std::atomic<unsigned> gpuDoneReplays{0};
+constexpr double kSpikeReplayMs = 5, kSpikePassMs = 40;
+constexpr unsigned kMaxSpikeLines = 30;
+
+ID3D11Query* query(ComPtr<ID3D11Query>& q, D3D11_QUERY type) {
+    if (!q) {
+        const D3D11_QUERY_DESC d = {type, 0};
+        g.device->CreateQuery(&d, &q);
+    }
+    return q.Get();
+}
+
+// The frame's queries opened at its first timestamp (the disjoint query brackets them).
+GpuSlot* open_slot() {
+    GpuSlot& s = gpuSlots[gpuCur];
+    if (s.open)
+        return &s;
+    if (s.pending) {  // not read back in kGpuSlots frames: dropped
+        s.pending = false;
+        ++gw.late;
+    }
+    ID3D11Query* d = query(s.disjoint, D3D11_QUERY_TIMESTAMP_DISJOINT);
+    if (!d)
+        return nullptr;
+    g.context->Begin(d);
+    s.open = true;
+    s.pass = false;
+    s.replays = 0;
+    s.frame = g.stats.frames;
+    return &s;
+}
+
+double ms(uint64_t a, uint64_t b, uint64_t frequency) { return b > a ? (b - a) * 1000.0 / frequency : 0; }
+
+// One finished frame's times into the window; false: not ready yet.
+bool read_slot(GpuSlot& s) {
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+    if (g.context->GetData(s.disjoint.Get(), &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+        return false;
+    s.pending = false;
+    if (dj.Disjoint || !dj.Frequency) {
+        ++gw.disjointed;
+        return true;
+    }
+    const auto stamp = [](ID3D11Query* q, uint64_t& t) {
+        return q && g.context->GetData(q, &t, sizeof(t), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+    };
+    ++gw.frames;
+    double passMs = 0, replayMs = 0, slowest = 0;
+    unsigned slowIndex = 0;
+    uint64_t a = 0, b = 0;
+    if (s.pass && stamp(s.passStart.Get(), a) && stamp(s.frameEnd.Get(), b)) {
+        passMs = ms(a, b, dj.Frequency);
+        gw.passSum += passMs;
+        gw.passMax = std::max(gw.passMax, passMs);
+        ++gw.passFrames;
+    }
+    for (unsigned i = 0; i < s.replays; ++i) {
+        if (!stamp(s.begin[i].Get(), a) || !stamp(s.end[i].Get(), b))
+            continue;
+        const double t = ms(a, b, dj.Frequency);
+        replayMs += t;
+        const unsigned k = s.info[i].n >= 1 && s.info[i].n <= kGpuReplays ? s.info[i].n - 1 : i;
+        gw.sum[k] += t;
+        gw.max[k] = std::max(gw.max[k], t);
+        ++gw.count[k];
+        gw.info[k] = s.info[i];
+        if (t > slowest)
+            slowest = t, slowIndex = i;
+    }
+    gpuDoneFrame.store(s.frame, std::memory_order_relaxed);
+    gpuDonePassMs.store(static_cast<float>(passMs), std::memory_order_relaxed);
+    gpuDoneReplayMs.store(static_cast<float>(replayMs), std::memory_order_relaxed);
+    gpuDoneReplays.store(s.replays, std::memory_order_relaxed);
+    if ((slowest > kSpikeReplayMs || passMs > kSpikePassMs) && gpuSpikes < kMaxSpikeLines) {
+        ++gpuSpikes;
+        const ReplayInfo& r = s.info[slowIndex];
+        simqvfr::logf("scs gpu: SLOW frame %llu: the eye passes and ours %.2f ms, its %u replays %.2f ms, the slowest replay "
+                      "%u of the frame %.2f ms (into %ux%u%s, pixel range %u+%u)%s",
+                      static_cast<unsigned long long>(s.frame), passMs, s.replays, replayMs, r.n, slowest, r.w, r.h,
+                      r.swapchain ? ", the headset's image" : "", r.psFirst, r.psCount,
+                      gpuSpikes == kMaxSpikeLines ? " (no more of these lines this session)" : "");
+    }
+    return true;
+}
+
+}  // namespace
+
+void gpu_pass_begin() {
+    GpuSlot* s = open_slot();
+    if (!s || s->pass)
+        return;
+    if (ID3D11Query* q = query(s->passStart, D3D11_QUERY_TIMESTAMP)) {
+        g.context->End(q);
+        s->pass = true;
+    }
+}
+
+namespace {
+bool gpuInReplay = false;  // gpu_replay_begin issued its timestamp
+}
+
+void gpu_replay_begin() {
+    gpuInReplay = false;
+    GpuSlot* s = open_slot();
+    if (!s || s->replays >= kGpuReplays)
+        return;
+    const unsigned i = s->replays;
+    ID3D11Query* q = query(s->begin[i], D3D11_QUERY_TIMESTAMP);
+    if (!q || !query(s->end[i], D3D11_QUERY_TIMESTAMP))
+        return;
+    g.context->End(q);
+    s->info[i] = {g.frameReplay, g.boundW, g.boundH, g.ps.first, g.ps.count, g.boundSwapchain};
+    gpuInReplay = true;
+}
+
+void gpu_replay_end() {
+    GpuSlot& s = gpuSlots[gpuCur];
+    if (!gpuInReplay || !s.open)
+        return;
+    gpuInReplay = false;
+    g.context->End(s.end[s.replays].Get());
+    ++s.replays;
+}
+
+void gpu_times_frame_end() {
+    GpuSlot& s = gpuSlots[gpuCur];
+    if (s.open) {
+        if (s.pass) {
+            if (ID3D11Query* q = query(s.frameEnd, D3D11_QUERY_TIMESTAMP))
+                g.context->End(q);
+            else
+                s.pass = false;
+        }
+        g.context->End(s.disjoint.Get());
+        s.open = false;
+        s.pending = true;
+        gpuCur = (gpuCur + 1) % kGpuSlots;
+    }
+    for (int i = 1; i < kGpuSlots; ++i) {  // the older frames, oldest first
+        GpuSlot& old = gpuSlots[(gpuCur + i) % kGpuSlots];
+        if (old.pending && !read_slot(old))
+            break;  // the GPU does them in order: the newer ones aren't done either
+    }
+}
+
+// With each perf line: the window's eye passes and every replay that took 0.05 ms or more at its slowest.
+void gpu_times_line() {
+    if (!gw.frames) {
+        if (gw.late)
+            simqvfr::logf("scs gpu: no frame read back in time (%u dropped)", gw.late);
+        gw = {};
+        return;
+    }
+    std::string list;
+    double total = 0;
+    for (unsigned i = 0; i < kGpuReplays; ++i) {
+        if (!gw.count[i])
+            continue;
+        total += gw.sum[i] / gw.frames;
+        if (gw.max[i] < 0.05)
+            continue;
+        char one[128];
+        snprintf(one, sizeof(one), "%s#%u %ux%u%s p%u+%u %.2f/%.2f", list.empty() ? "" : ", ", i + 1, gw.info[i].w,
+                 gw.info[i].h, gw.info[i].swapchain ? "(hmd)" : "", gw.info[i].psFirst, gw.info[i].psCount,
+                 gw.sum[i] / gw.count[i], gw.max[i]);
+        list += one;
+    }
+    simqvfr::logf("scs gpu: %u frames read back (%u late, %u disjoint): the eye passes and ours %.2f ms a frame (slowest "
+                  "%.2f), the focus view's replays %.2f ms a frame; replays (#n target, pixel range, average/slowest ms): %s",
+                  gw.frames, gw.late, gw.disjointed, gw.passFrames ? gw.passSum / gw.passFrames : 0, gw.passMax, total,
+                  list.empty() ? "none over 0.05 ms" : list.c_str());
+    gw = {};
+}
+
+void gpu_times_reset() {
+    for (GpuSlot& s : gpuSlots)
+        s = {};
+    gpuCur = 0;
+    gw = {};
+}
+
+namespace {
+
+const char* removed_reason(HRESULT hr);
+
+void log_removed(HRESULT hr, const char* seen) {
+    simqvfr::logf("scs corner: the GPU device was REMOVED (0x%08lX, %s), seen %s at frame %llu (%llu with the eyes in the "
+                  "corner; the GPU's newest frame read back %llu: eye passes %.2f ms, %u replays %.2f ms); the focus view %s, "
+                  "the corner %.0f%%, the box %d%% x %d%% at %.0f%% density, eye targets %ux%u; twins %zu (%.0f MB at most), "
+                  "mirrors %zu; this frame's eye pass %s; VRAM %llu MB used of a %llu MB budget (at frame %llu), the "
+                  "session's highest %llu MB",
+                  static_cast<unsigned long>(hr), removed_reason(hr), seen, static_cast<unsigned long long>(g.stats.frames),
+                  static_cast<unsigned long long>(g.stats.cornerFrames),
+                  static_cast<unsigned long long>(gpuDoneFrame.load(std::memory_order_relaxed)),
+                  gpuDonePassMs.load(std::memory_order_relaxed), gpuDoneReplays.load(std::memory_order_relaxed),
+                  gpuDoneReplayMs.load(std::memory_order_relaxed),
+                  !g.focusPercent ? "off"
+                  : g.focusOff     ? "OFF (Ctrl+Alt+G)"
+                  : g.instanced && (g.preferInstanced || !g.mvr) ? "by instancing"
+                  : g.mvr          ? "by NVIDIA's multi-view rendering"
+                                   : "passes only",
+                  g.percent, g.focusPercent, g.focusPercentY, g.density * 100, g.eyeW, g.eyeH, g.texes.size(),
+                  g.twinBytes / 1048576.0, g.mirrors.size(), g.active ? "under way" : "not under way",
+                  static_cast<unsigned long long>(dw.usedMb), static_cast<unsigned long long>(dw.budgetMb),
+                  static_cast<unsigned long long>(dw.readFrame), static_cast<unsigned long long>(dw.peakMb));
+}
 
 const char* removed_reason(HRESULT hr) {
     switch (static_cast<uint32_t>(hr)) {
@@ -150,7 +393,7 @@ void read_vram() {
 // on its next allocation with nothing in this log: the first failure is logged once with its reason, what the focus
 // view was doing and the VRAM, so a run says whether it was a hang, a fault or memory. The VRAM is read every 90 frames.
 void device_watch() {
-    if (!g.device || removedLogged)
+    if (!g.device || removedLogged.load(std::memory_order_relaxed))
         return;
     const HRESULT hr = g.device->GetDeviceRemovedReason();
     if (SUCCEEDED(hr)) {
@@ -158,26 +401,36 @@ void device_watch() {
             read_vram();
         return;
     }
-    removedLogged = true;
+    if (removedLogged.exchange(true))
+        return;
     read_vram();  // the adapter's numbers outlive the device
-    simqvfr::logf("scs corner: the GPU device was REMOVED (0x%08lX, %s), seen at frame %llu (%llu with the eyes in the "
-                  "corner); the focus view %s, the corner %.0f%%, the box %d%% x %d%% at %.0f%% density, eye targets %ux%u; "
-                  "twins %zu (%.0f MB at most), mirrors %zu; this frame's eye pass %s; VRAM %llu MB used of a %llu MB budget "
-                  "(at frame %llu), the session's highest %llu MB",
-                  static_cast<unsigned long>(hr), removed_reason(hr), static_cast<unsigned long long>(g.stats.frames),
-                  static_cast<unsigned long long>(g.stats.cornerFrames),
-                  !g.focusPercent ? "off"
-                  : g.focusOff     ? "OFF (Ctrl+Alt+G)"
-                  : g.instanced && (g.preferInstanced || !g.mvr) ? "by instancing"
-                  : g.mvr          ? "by NVIDIA's multi-view rendering"
-                                   : "passes only",
-                  g.percent, g.focusPercent, g.focusPercentY, g.density * 100, g.eyeW, g.eyeH, g.texes.size(),
-                  g.twinBytes / 1048576.0, g.mirrors.size(), g.active ? "under way" : "not under way",
-                  static_cast<unsigned long long>(dw.usedMb), static_cast<unsigned long long>(dw.budgetMb),
-                  static_cast<unsigned long long>(dw.readFrame), static_cast<unsigned long long>(dw.peakMb));
+    log_removed(hr, "at xrEndFrame");
 }
 
 void device_watch_reset() { dw = {}; }
+
+// The hang watch fired (its own thread: no xrEndFrame for its seconds): the device asked from here, since a frame stuck
+// inside the runtime's xrEndFrame never reaches device_watch. Only the device's own free-threaded call; the context,
+// which the stuck thread may be inside, is left alone, and the rest is read without a lock (a log line).
+void hang_check() {
+    ID3D11Device* device = g.device.Get();
+    if (!device) {
+        simqvfr::log_line("scs corner: hang watch: the corner has no device now");
+        return;
+    }
+    const HRESULT hr = device->GetDeviceRemovedReason();
+    if (SUCCEEDED(hr)) {
+        simqvfr::logf("scs corner: hang watch: the GPU device is fine (not removed): the stall is not a GPU reset; the "
+                      "CPU at frame %llu, the GPU's newest frame read back %llu (eye passes %.2f ms, %u replays %.2f ms)",
+                      static_cast<unsigned long long>(g.stats.frames),
+                      static_cast<unsigned long long>(gpuDoneFrame.load(std::memory_order_relaxed)),
+                      gpuDonePassMs.load(std::memory_order_relaxed), gpuDoneReplays.load(std::memory_order_relaxed),
+                      gpuDoneReplayMs.load(std::memory_order_relaxed));
+        return;
+    }
+    if (!removedLogged.exchange(true))
+        log_removed(hr, "by the hang watch");
+}
 
 // The diagnostic hotkeys exist in development builds only (dev_build.h): a release reads no key here.
 void poll_diag_hotkeys() {

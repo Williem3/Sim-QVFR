@@ -206,6 +206,8 @@ void warp_checks() {
     }
 
     // The install is asked for at xrCreateSession and done at the session's first xrEndFrame (the render thread's).
+    // The GPU timing on, as in dev builds: its queries run beside everything checked below.
+    scs::corner_set_diag(false, false, 0, true);
     check(scs::corner_install(device.Get(), 50, 30) && !scs::corner_on(), "corner install asked for, nothing done yet");
     check(scs::corner_frame_end(nullptr, &fake_enumerate) == nullptr && scs::corner_on(),
           "corner installed (50%, focus 30%) on a WARP device at the first xrEndFrame");

@@ -161,8 +161,8 @@ private:
         return corner > 0 && corner < 100 ? corner : 0;
     }
 
-    // The GPU-hang bisection keys (corner_set_diag), read at launch: scs_focus_draws=0, scs_focus_replays=0, and
-    // scs_replay_skip=<the frame's replays to skip, 1-based, comma-separated, e.g. 3,7,12>.
+    // The GPU-hang bisection keys (corner_set_diag), read at launch: scs_focus_draws=0, scs_focus_replays=0,
+    // scs_replay_skip=<the frame's replays to skip, 1-based, comma-separated, e.g. 3,7,12>, and scs_gpu_times.
     static void read_diag(const wchar_t* ini) {
         const bool noDraws = GetPrivateProfileIntW(L"experiment", L"scs_focus_draws", 1, ini) == 0;
         const bool noReplays = GetPrivateProfileIntW(L"experiment", L"scs_focus_replays", 1, ini) == 0;
@@ -180,7 +180,11 @@ private:
                 skip |= 1ull << (n - 1);
             p = end;
         }
-        corner_set_diag(noDraws, noReplays, skip);
+        // The GPU's times for the replays: on by default in dev builds (a few timestamp queries a frame).
+        const bool gpuTimes = GetPrivateProfileIntW(L"experiment", L"scs_gpu_times", simqvfr::kDevBuild ? 1 : 0, ini) != 0;
+        corner_set_diag(noDraws, noReplays, skip, gpuTimes);
+        if (gpuTimes)
+            simqvfr::log_line("scs gpu: timing the focus view's replays and the eye passes on the GPU (scs_gpu_times)");
         if (noDraws || noReplays || skip)
             simqvfr::logf("scs focus: bisection: the focus view's scene draws %s, its replayed passes %s%s%ls",
                           noDraws ? "OFF (scs_focus_draws=0)" : "on", noReplays ? "OFF (scs_focus_replays=0)" : "on",
