@@ -177,7 +177,8 @@ std::wstring hotkey_footer(bool helmetOn) {
                              {HotkeyAction::Visor, I18N(L"Visor"), helmetOn},
                              {HotkeyAction::CpuCapture, I18N(L"CPU capture"), experiment.cpuProfile},
                              {HotkeyAction::FrameCapture, I18N(L"Frame capture"),
-                              experiment.d3d11CaptureHotkey || experiment.pixCaptureHotkey}};
+                              experiment.d3d11CaptureHotkey || experiment.pixCaptureHotkey},
+                             {HotkeyAction::ShowcaseStock, I18N(L"Stock / QVFR"), game_features().showcase}};
     std::wstring out;
     for (const Entry& e : entries) {
         const Hotkey& h = hotkeys[static_cast<int>(e.action)];

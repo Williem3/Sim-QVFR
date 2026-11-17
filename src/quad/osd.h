@@ -17,6 +17,7 @@ namespace simqvfr {
 struct OsdPlacement {
     bool enabled = false;
     int yaw = 0, pitch = -25, width = 19;
+    bool abTable = false;  // [osd] ab_table: the card shows the showcase's A/B table (showcase.h) instead
     bool operator==(const OsdPlacement&) const = default;
 };
 inline constexpr int kOsdYawMax = 35, kOsdPitchMax = 30, kOsdWidthMin = 12, kOsdWidthMax = 45;
@@ -69,7 +70,7 @@ enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost, Runtime, Runtime
 
 // How the game's focus views are drawn (games/adapter.h QvfrMultiView): the card's badge, by the CPU tile's label.
 // None: no badge.
-enum class OsdMultiView { None, Mvr, Smvr, Fallback, EyesOnly };
+enum class OsdMultiView { None, Mvr, Smvr, Fallback, EyesOnly, Stock };
 
 // Everything one card shows, gathered over the last window (about half a second).
 struct OsdInput {

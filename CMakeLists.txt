@@ -130,7 +130,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/d3d12_vtable_index.c
   src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/replay_probe.cpp src/games/ace/replay_focus.cpp src/games/ace/replay_lighting.cpp src/games/ace/replay_transparents.cpp src/games/ace/replay_post.cpp src/games/ace/replay_eye_live.cpp src/games/ace/replay_fixation.cpp src/games/ace/replay_samples.cpp src/games/ace/replay_cull.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/xplane/spirv_module.cpp src/games/xplane/spirv_patch_eyes.cpp src/games/xplane/spirv_patch_focus.cpp src/games/xplane/spirv_patch_rays.cpp src/games/xplane/spirv_patch_view_rects.cpp src/games/xplane/spirv_patch_diag.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/games/scssoftware/corner_mirror_diag.cpp src/games/scssoftware/corner_anomaly.cpp src/games/scssoftware/fixation.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/d3d11_fixation.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
-  src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
+  src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/showcase.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(sim_qvfr_core PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -589,6 +589,13 @@ target_include_directories(osd_test PRIVATE src)
 target_compile_definitions(osd_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(osd_test PRIVATE /utf-8)
 target_link_libraries(osd_test PRIVATE sim_qvfr_core)
+
+# Offline check of the showcase: the A/B table's sums and rows, its card, the menu's Showcase section (tests/showcase_test.cpp).
+sim_qvfr_test(showcase_test tests/showcase_test.cpp)
+target_include_directories(showcase_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(showcase_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(showcase_test PRIVATE /utf-8)
+target_link_libraries(showcase_test PRIVATE sim_qvfr_core)
 
 # Offline check of the settings menu's QVFR optimizer against a simulated GPU (tests/qvfr_optimizer_test.cpp).
 sim_qvfr_test(qvfr_optimizer_test tests/qvfr_optimizer_test.cpp)

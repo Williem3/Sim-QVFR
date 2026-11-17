@@ -455,6 +455,8 @@ std::vector<Tile> headset_tiles() {
     for (int a = 0; a < kHotkeyActions; ++a) {
         if (static_cast<HotkeyAction>(a) == HotkeyAction::Visor && !game_has(&games::GameFeatures::helmet))
             continue;  // the visor's key only where there is a helmet
+        if (static_cast<HotkeyAction>(a) == HotkeyAction::ShowcaseStock && !game_has(&games::GameFeatures::showcase))
+            continue;  // Stock / QVFR only where the game has the showcase
         pads += app.s.hotkeys[a].pad.set() ? 1 : 0;
         clash = clash || hotkey_clash(app.s.hotkeys, static_cast<HotkeyAction>(a), false) >= 0 ||
                 hotkey_clash(app.s.hotkeys, static_cast<HotkeyAction>(a), true) >= 0;

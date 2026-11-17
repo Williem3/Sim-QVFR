@@ -21,5 +21,8 @@ std::wstring experiment_ini();
 // generation): read before the instance exists, to ask for XR_VARJO_quad_views. `why`: the reason, for the log.
 bool native_quad_wanted(std::string* why);
 void load_experiment();
+// Why the showcase's Stock can't run now (quad/showcase.h), null when it can: it is the whole native eye, so not with the
+// FOV crop on, nor on ACE's API path launched below the native size (ACE sizes its targets once).
+const char* stock_refusal();
 
 }  // namespace simqvfr::layer

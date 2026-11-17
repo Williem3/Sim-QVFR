@@ -293,6 +293,9 @@ bool mvr_car_light_block_cost(unsigned serial, CarLightBlock& out);
 // One eye off ([quad] eye_off; qvfr_frame.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
 // view's upscale: it draws none). Between frames.
 void mvr_eye_off(int eye);
+// The showcase's Stock (quad/showcase.h; qvfr_frame.cpp): no DLSS on either eye pass (its pass view, kept from the last
+// frame with focus views, is not this frame's size), so no jitter the frame after. Between frames.
+void mvr_stock(bool on);
 // Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null
 // before its first bind).
 void mvr_test_scene_target(ID3D11Resource* scene);

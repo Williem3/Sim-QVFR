@@ -201,6 +201,8 @@ Card hotkeys_card() {
         if (game_has(&games::GameFeatures::helmet))  // the visor steps the helmet overlay
             inGame.push_back(HotkeyAction::Visor);
         inGame.insert(inGame.end(), {HotkeyAction::CpuCapture, HotkeyAction::FrameCapture});
+        if (game_has(&games::GameFeatures::showcase))  // the showcase: Stock or QVFR, live
+            inGame.push_back(HotkeyAction::ShowcaseStock);
         hotkey_rows(b, inGame);
         b.note(pads_found());
     };

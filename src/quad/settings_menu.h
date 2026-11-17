@@ -81,10 +81,13 @@ enum class MenuItem {
     // The Foveation section's road focus ([quad] focus_corridor; MenuLaunch::focusCorridor, fixed foveation), its width.
     FocusCorridor, FocusCorridorPreset, FocusCorridorWidth, FocusCorridorHeight, FocusCorridorSpread, FocusCorridorBlend,
     FocusCorridorShow,
+    // The Headset page's Showcase section, for a game with it (MenuLaunch::showcase): Stock or QVFR ([quad] stock), and
+    // the overlay's card as the A/B table ([osd] ab_table; quad/showcase.h).
+    ShowcaseStock, AbTable,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
-    HeadVision, HeadCpu, HeadColor, HeadCarLight
+    HeadVision, HeadShowcase, HeadCpu, HeadColor, HeadCarLight
 };
 // A section header (HeadResolution .. HeadCarLight): drawn as a heading, skipped by Up and Down.
 inline bool menu_item_is_header(MenuItem item) {
@@ -141,6 +144,7 @@ struct MenuValues {
     ColorGrade color;         // [quad] color_correction and its values (QVFR, a game with sharpening; the Colour page)
     CarLighting carLight;     // [quad] car_light and its values (QVFR, a game with it; the Colour page's Night cars)
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
+    bool stock = false;       // [quad] stock (a game with the showcase): Stock, else QVFR (showcase.h)
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
     NrSettings nr;            // [dlss_nr]: DLSS-NR on those views (the DLSS-NR page)
@@ -183,6 +187,9 @@ struct MenuLaunch {
     // Night car lighting on the Colour page (GameFeatures::carLighting, QVFR), and whether it was on at launch (its
     // hooks in: its values live; off at launch, turning it on applies at the next launch, the page says so).
     bool carLighting = false, carLightReady = false;
+    // The Showcase section on the Headset page (GameFeatures::showcase), as objectDetail; why Stock can't run now, if so.
+    bool showcase = false;
+    std::wstring stockBlocked;
     // The game masks its focus views (GameFeatures::focusMask): the pixels saved leave out what the mask skips.
     bool focusMask = false;
     // Road focus on the Foveation page (GameFeatures::focusCorridor, QVFR), as objectDetail.
@@ -286,7 +293,7 @@ MenuValues read_menu_values(const wchar_t* ini);
 // that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
                        bool focusQuads = false, bool sharpening = false, bool eyeOff = false, bool carLighting = false,
-                       bool focusCorridor = false, bool textureMatch = false);
+                       bool focusCorridor = false, bool textureMatch = false, bool showcase = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus
@@ -329,7 +336,10 @@ MenuResolution menu_resolution(const SettingsMenu& menu);
 // (percent; negative: that much more).
 struct MenuStats {
     int centerPpd = 0;
+    int peripheryPpd = 0;  // the outer views' pixels per degree at the centre (QVFR; 0: unknown)
     int savedPercent = 0;
+    // Both eyes' pixels as rendered and at the native size (0: the native size unknown): the A/B table's (showcase.h).
+    double renderedPixels = 0, nativePixels = 0;
 };
 MenuStats menu_stats(const SettingsMenu& menu);
 

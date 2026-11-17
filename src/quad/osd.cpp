@@ -19,6 +19,7 @@ OsdPlacement read_osd_placement(const wchar_t* ini) {
     p.yaw = std::clamp(read(L"yaw", p.yaw), -kOsdYawMax, kOsdYawMax);
     p.pitch = std::clamp(read(L"pitch", p.pitch), -kOsdPitchMax, kOsdPitchMax);
     p.width = std::clamp(read(L"width", p.width), kOsdWidthMin, kOsdWidthMax);
+    p.abTable = read(L"ab_table", 0) != 0;
     return p;
 }
 
@@ -26,7 +27,8 @@ bool write_osd_placement(const wchar_t* ini, const OsdPlacement& p) {
     const auto put = [ini](const wchar_t* key, int value) {
         return ini_put(ini, L"osd", key, value);
     };
-    return put(L"enabled", p.enabled ? 1 : 0) && put(L"yaw", p.yaw) && put(L"pitch", p.pitch) && put(L"width", p.width);
+    return put(L"enabled", p.enabled ? 1 : 0) && put(L"yaw", p.yaw) && put(L"pitch", p.pitch) && put(L"width", p.width) &&
+           put(L"ab_table", p.abTable ? 1 : 0);
 }
 
 ClockPlacement read_clock_placement(const wchar_t* ini) {
@@ -440,6 +442,7 @@ OsdRow osd_badge(const OsdInput& in) {
     case OsdMultiView::Smvr: r.value = L"SMVR"; r.tone = OsdTone::Good; break;
     case OsdMultiView::Fallback: r.value = lang::tr(L"Fallback"); r.tone = OsdTone::Warn; break;
     case OsdMultiView::EyesOnly: r.value = lang::tr(L"Eyes only"); r.tone = OsdTone::Warn; break;
+    case OsdMultiView::Stock: r.value = lang::tr(L"Stock"); break;  // the showcase's (showcase.h): grey, a choice, not a fault
     }
     if (in.dlss && !r.value.empty())  // only while it runs: a pass the tracker lost has no DLSS either
         r.value += L" + " + (in.upscaler.empty() ? std::wstring(L"DLSS") : in.upscaler);

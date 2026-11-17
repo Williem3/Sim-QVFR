@@ -19,7 +19,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     nullptr,                   // OpenXR of its own
     nullptr,                   // no DLSS
     // QVFR through the D3D11 layer, the focus view by multi-view rendering (layerMultiView); nothing else yet.
-    {false, false, false, false, false, false, false, false, false, false, true},
+    {false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, true},  // ..., the showcase
     kBuilds, std::size(kBuilds),
     false,                     // no early load
     nullptr, nullptr, nullptr, // no crash reporter of its own, no anti-cheat

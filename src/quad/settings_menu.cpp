@@ -89,6 +89,8 @@ constexpr Spec kSpecs[] = {
     {MenuItem::ShapePointX, I18N(L"Left/Right"), -kFocusPointReach, kFocusPointReach, 1},
     // The performance overlay's place, degrees (the launcher's sliders).
     {MenuItem::Overlay, I18N(L"Show the overlay"), 0, 1, 1},
+    {MenuItem::ShowcaseStock, I18N(L"Rendering"), 0, 1, 1},
+    {MenuItem::AbTable, I18N(L"A/B table"), 0, 1, 1},
     {MenuItem::OverlayYaw, I18N(L"Horizontal"), -kOsdYawMax, kOsdYawMax, 1},
     {MenuItem::OverlayPitch, I18N(L"Vertical"), -kOsdPitchMax, kOsdPitchMax, 1},
     {MenuItem::OverlayWidth, I18N(L"Size"), kOsdWidthMin, kOsdWidthMax, 1},
@@ -175,6 +177,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HeadOverlay, I18N(L"Performance overlay"), 0, 0, 0},
     {MenuItem::HeadClock, I18N(L"Clock"), 0, 0, 0},
     {MenuItem::HeadVision, I18N(L"Vision"), 0, 0, 0},
+    {MenuItem::HeadShowcase, I18N(L"Showcase"), 0, 0, 0},
     {MenuItem::HeadCpu, L"CPU", 0, 0, 0},
     {MenuItem::HeadColor, I18N(L"Color"), 0, 0, 0},
     {MenuItem::HeadCarLight, I18N(L"Night cars"), 0, 0, 0},
@@ -327,6 +330,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         add({MenuItem::HeadClock, MenuItem::Clock});
         if (v.clock.enabled)
             add({MenuItem::ClockYaw, MenuItem::ClockPitch, MenuItem::ClockWidth});
+        if (l.showcase)  // a game with it: Stock or QVFR, and the overlay's A/B table
+            add({MenuItem::HeadShowcase, MenuItem::ShowcaseStock, MenuItem::AbTable});
     } else if (page == MenuPage::Game) {
         add({MenuItem::HeadCpu, MenuItem::CpuIsolateMain});
     } else if (page == MenuPage::Color) {  // the launcher's Colour card: the switch, its values while it is on
@@ -682,9 +687,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         item == MenuItem::ColorOn || item == MenuItem::CarLightOn || item == MenuItem::CarLightShadows ||
         item == MenuItem::CarLightDetail || item == MenuItem::CarLightReflections ||
         item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision ||
-        item == MenuItem::FocusCorridorShow) {
+        item == MenuItem::FocusCorridorShow || item == MenuItem::ShowcaseStock || item == MenuItem::AbTable) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
                      : item == MenuItem::FocusCorridorShow ? menu.values.focusCorridorShow
+                     : item == MenuItem::ShowcaseStock ? menu.values.stock
+                     : item == MenuItem::AbTable     ? menu.values.overlay.abTable
                      : item == MenuItem::ColorOn     ? menu.values.color.on
                      : item == MenuItem::CarLightOn  ? menu.values.carLight.on
                      : item == MenuItem::CarLightShadows ? menu.values.carLight.shadows
@@ -704,6 +711,8 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
                      : item == MenuItem::Clock       ? menu.values.clock.enabled
                                                      : menu.values.overlay.enabled;
         flag = !flag;
+        if (item == MenuItem::AbTable && flag)  // the table is the overlay's card: on with it
+            menu.values.overlay.enabled = true;
         return true;
     }
     const Spec& s = spec(item);
@@ -756,6 +765,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.color = read_color_grade(ini);
     v.carLight = read_car_lighting(ini);
     v.eyeOff = ini_int(ini, kEyeOff);
+    v.stock = ini_flag(ini, kStock);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
     v.nr = read_nr_settings(ini);
@@ -763,8 +773,10 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool textureMatch) {
+                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool textureMatch, bool showcase) {
     bool ok = true;
+    if (showcase)
+        ok &= write(ini, kStock, v.stock ? 1 : 0);
     if (qvfr && textureMatch)
         ok &= write(ini, kPeripheryTextureMatch, kPeripheryTextureMatch.clamp(v.textureMatch));
     if (qvfr && focusCorridor) {
@@ -928,6 +940,8 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     const double density = l.qvfr ? f.densityX : l.twoLoopScale * 100 / menu.values.width;
     if (l.nativePpd > 0)
         s.centerPpd = static_cast<int>(std::lround(l.nativePpd * (l.outputCap > 0 ? std::min(density, l.outputCap) : density) / 100));
+    if (l.nativePpd > 0 && l.qvfr)
+        s.peripheryPpd = static_cast<int>(std::lround(l.nativePpd * f.periphery / 100));
     // Rendered against both native eyes, in pixels when the native size is known (as the launcher).
     // The focus mask (a game with it, QVFR): the share of the focus views' pixels it skips, at their size in pixels (a
     // nominal 2000-wide native eye while the native size is unknown: only the margin depends on it).
@@ -948,6 +962,8 @@ MenuStats menu_stats(const SettingsMenu& menu) {
                                  area(f.focusWidth, f.focusHeight) * (1 - masked))
                           : 4 * area(l.twoLoopScale, l.twoLoopScale);
         native = 2.0 * l.nativeWidth * l.nativeHeight;
+        s.renderedPixels = rendered;
+        s.nativePixels = native;
     } else {
         rendered = l.qvfr ? 2 * (f.periphery * f.periphery * menu.values.crop_width() * menu.values.crop_height() / 1e4 +
                                  f.focusWidth * f.focusHeight * (1 - masked))
@@ -962,6 +978,14 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     std::vector<std::wstring> notes;
     const MenuPage page = menu_page(menu);
     const MenuItem section = menu_section(menu);
+    if (section == MenuItem::HeadShowcase) {
+        if (menu.values.stock && !menu.launch.stockBlocked.empty())
+            notes.push_back(L"Stock can't run: " + menu.launch.stockBlocked);
+        notes.push_back(L"Stock: the game's eyes at full resolution, no focus views; each launch starts in QVFR");
+        if (menu.values.overlay.abTable)
+            notes.push_back(L"The table counts each side from its first 1.5 s on: turn it off and on to start again");
+        return notes;
+    }
     if (page == MenuPage::Headset || page == MenuPage::Game)
         return notes;
     if (page == MenuPage::Color && section == MenuItem::HeadCarLight) {
@@ -1234,6 +1258,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = w.t(v.eyeTracking ? I18N(L"Eye tracked") : I18N(L"Fixed"));
         else if (items[i] == MenuItem::Overlay)
             line.value = on_off(v.overlay.enabled);
+        else if (items[i] == MenuItem::ShowcaseStock)
+            line.value = w.t(v.stock ? I18N(L"Stock") : I18N(L"QVFR"));
+        else if (items[i] == MenuItem::AbTable)
+            line.value = on_off(v.overlay.abTable);
         else if (items[i] == MenuItem::Clock)
             line.value = on_off(v.clock.enabled);
         else if (items[i] == MenuItem::HotkeyFooter)

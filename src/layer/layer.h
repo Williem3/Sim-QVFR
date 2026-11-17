@@ -14,6 +14,7 @@
 #include "quad/osd.h"
 #include "quad/session_graphics.h"
 #include "quad/settings_menu.h"
+#include "quad/showcase.h"
 #include "xr.h"
 #include "layer/state.h"
 #include "layer/config.h"
@@ -189,8 +190,12 @@ void menu_press(MenuKey key, int64_t now);
 const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, XrFrameEndInfo& storage,
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers);
 void menu_shutdown();
+// The A/B table's pixel rows (quad/showcase.h) for the menu's values, as the menu's pixel counts have them.
+AbPixels ab_pixels(const MenuValues& values);
 
 // overlay.cpp
+// The menu's values from the latest live reload: the A/B table's pixel rows follow them.
+void ab_values_changed(const MenuValues& values);
 void notice_set(std::wstring title, std::vector<std::wstring> lines);
 bool notice_pending();
 void osd_waited(XrDuration period);

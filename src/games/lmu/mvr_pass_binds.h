@@ -582,7 +582,7 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
     // was set up: it stretches what DLSS can't upscale.
     const bool smaller = (g.view.focusRenderW && g.view.focusRenderW < g.view.focusW) ||
                          (g.view.focusRenderH && g.view.focusRenderH < g.view.focusH);
-    if (g.pass < 2 && g.pass != g.eyeOff && (simqvfr::dlss_wanted() || smaller) && g.view.eyeW && g.view.eyeH) {
+    if (g.pass < 2 && g.pass != g.eyeOff && !g.stock && (simqvfr::dlss_wanted() || smaller) && g.view.eyeW && g.view.eyeH) {
         // DLAA on the eye (and its focus view beside it) before anything reads the resolved scene. Its draws and copies
         // pass these hooks untouched; single-pass stereo is off meanwhile (the scene's last shader may have left it on).
         simqvfr::DlssPass dp;

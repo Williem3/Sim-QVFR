@@ -377,6 +377,7 @@ struct State {
     int slotsLevel = 0;
     bool carActive = true;  // mvr_car_active (an A/B's side)
     int eyeOff = -1;        // mvr_eye_off: the eye pass (0-1) whose DLSS is left out; -1 none
+    bool stock = false;     // mvr_stock: the showcase's Stock, no DLSS
     bool slotsOn = false, slotsBound = false, slotsCleared = false;
     ComPtr<ID3D11DeviceContext1> context1;
     ComPtr<ID3D11Texture2D> slotTex;

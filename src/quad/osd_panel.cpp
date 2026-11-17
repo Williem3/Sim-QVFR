@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include "osd.h"
+#include "showcase.h"
 
 namespace simqvfr {
 namespace {
@@ -253,6 +254,91 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
         }
     SelectObject(dc, previous);
     for (HFONT f : {labelFont, bigFont, unitFont, detailFont, valueFont, badgeFont})
+        DeleteObject(f);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return out;
+}
+
+std::vector<uint32_t> draw_ab_panel(const AbHeading& heading, const std::vector<AbLine>& lines) {
+    std::vector<uint32_t> out(static_cast<size_t>(kOsdWidth) * kOsdHeight, 0);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = kOsdWidth;
+    bi.bmiHeader.biHeight = -kOsdHeight;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (!bitmap || !bits) {
+        if (dc)
+            DeleteDC(dc);
+        return out;
+    }
+    HGDIOBJ previous = SelectObject(dc, bitmap);
+    const auto font = [](int height, int weight) {
+        return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    };
+    HFONT titleFont = font(32, FW_SEMIBOLD), labelFont = font(21, FW_NORMAL), valueFont = font(26, FW_SEMIBOLD),
+          badgeFont = font(22, FW_SEMIBOLD);
+    SetBkMode(dc, TRANSPARENT);
+    fill(dc, 0, 0, kOsdWidth, kOsdHeight, kCard);
+
+    // The title, and a pill on the right: the side showing now (yellow while its first frames settle).
+    text(dc, titleFont, L"Stock vs " + heading.qvfrName, kMargin, 22, kOsdWidth / 2 + 120, 66, kPrimary, DT_LEFT);
+    {
+        const std::wstring now = std::wstring(L"Now: ") + (heading.stockNow ? L"Stock" : heading.qvfrName) +
+                                 (heading.settling ? L" · settling" : L"");
+        SelectObject(dc, badgeFont);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, now.c_str(), static_cast<int>(now.size()), &size);
+        const int right = kOsdWidth - kMargin, left = right - static_cast<int>(size.cx) - 32, top = 26, bottom = 62;
+        const uint32_t colour = heading.settling ? kYellow : heading.stockNow ? kSecondary : kGreen;
+        rounded(dc, left, top, right, bottom, bottom - top, mix(kCard, colour, 0.22));
+        text(dc, badgeFont, now, left + 16, top, right - 16, bottom, colour, DT_CENTER);
+    }
+
+    // The columns: label, Stock, QVFR, the difference; each side's heading with its seconds sampled.
+    const int labelLeft = kMargin, stockLeft = 316, qvfrLeft = 530, deltaLeft = 744, right = kOsdWidth - kMargin;
+    const auto seconds = [](double s) {
+        if (s <= 0)
+            return std::wstring(L"no frames yet");
+        const int whole = static_cast<int>(std::lround(s));
+        return whole >= 60 ? std::to_wstring(whole / 60) + L" min " + std::to_wstring(whole % 60) + L" s"
+                           : std::to_wstring(whole) + L" s";
+    };
+    const int headTop = 80, headBottom = 132;
+    text(dc, labelFont, L"Stock", stockLeft, headTop, qvfrLeft - 12, headTop + 26, kSecondary, DT_LEFT);
+    text(dc, labelFont, seconds(heading.stockSeconds), stockLeft, headTop + 24, qvfrLeft - 12, headBottom, kSecondary, DT_LEFT);
+    text(dc, labelFont, heading.qvfrName, qvfrLeft, headTop, deltaLeft - 12, headTop + 26, kSecondary, DT_LEFT);
+    text(dc, labelFont, seconds(heading.qvfrSeconds), qvfrLeft, headTop + 24, deltaLeft - 12, headBottom, kSecondary, DT_LEFT);
+    text(dc, labelFont, L"Difference", deltaLeft, headTop, right, headTop + 26, kSecondary, DT_LEFT);
+    fill(dc, kMargin, headBottom + 6, right, headBottom + 7, kSeparator);
+
+    const int rowTop = headBottom + 14, rowHeight = std::min(46, (kOsdHeight - 24 - rowTop) / std::max<int>(1, static_cast<int>(lines.size())));
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const AbLine& line = lines[i];
+        const int top = rowTop + static_cast<int>(i) * rowHeight, bottom = top + rowHeight;
+        if (i % 2)  // every other row on a faint band, so the eye follows it across
+            rounded(dc, kMargin - 12, top + 2, right + 12, bottom - 2, 14, mix(kCard, kTrack, 0.6));
+        text(dc, labelFont, line.label, labelLeft, top, stockLeft - 12, bottom, kSecondary, DT_LEFT);
+        text(dc, valueFont, line.stock, stockLeft, top, qvfrLeft - 12, bottom, kPrimary, DT_LEFT);
+        text(dc, valueFont, line.qvfr, qvfrLeft, top, deltaLeft - 12, bottom, kPrimary, DT_LEFT);
+        const uint32_t colour = line.tone == OsdTone::Good ? kGreen : line.tone == OsdTone::Neutral ? kPrimary : tone_colour(line.tone, true);
+        text(dc, valueFont, line.delta, deltaLeft, top, right, bottom, colour, DT_LEFT);
+    }
+    GdiFlush();
+    const auto* src = static_cast<const uint32_t*>(bits);
+    for (int py = 0; py < kOsdHeight; ++py)
+        for (int px = 0; px < kOsdWidth; ++px) {
+            const size_t i = static_cast<size_t>(py) * kOsdWidth + px;
+            out[i] = panel_rgba(src[i], card_alpha(px, py));
+        }
+    SelectObject(dc, previous);
+    for (HFONT f : {titleFont, labelFont, valueFont, badgeFont})
         DeleteObject(f);
     DeleteObject(bitmap);
     DeleteDC(dc);

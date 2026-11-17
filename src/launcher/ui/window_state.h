@@ -233,7 +233,7 @@ inline constexpr UINT kCaptureMs = 30;
 // The hotkeys' names, in HotkeyAction's order.
 inline constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {
     I18N(L"Open or close"), I18N(L"Up"),          I18N(L"Down"),        I18N(L"Left"),         I18N(L"Right"),
-    I18N(L"Overlay"),       I18N(L"Helmet visor"), I18N(L"CPU capture"), I18N(L"Frame capture")};
+    I18N(L"Overlay"),       I18N(L"Helmet visor"), I18N(L"CPU capture"), I18N(L"Frame capture"), I18N(L"Stock / QVFR")};
 
 struct Hit {
     Ctl id;
