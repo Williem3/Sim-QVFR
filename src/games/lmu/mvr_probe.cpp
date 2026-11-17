@@ -426,9 +426,10 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         uint32_t checksum[4];
         if (dxbc_checksum(code, size, checksum))
             (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);
-        if (dump)
-            save(static_cast<const uint8_t*>(code), size, "PS");
     }
+    // Every pixel shader too (the SCS games' GPU hang: an Aftermath dump names the hung shader by its bytecode's hash).
+    if (dump && code)
+        save(static_cast<const uint8_t*>(code), size, "PS");
     // Texture sharpening (mvr_pass.cpp): the mip bias twin, one per distinct bytecode, made when it is first seen.
     if (attach && makeBiasTwins && !inProbe && role == YebisRole::none && code && size) {
         const auto* bytes = static_cast<const uint8_t*>(code);
