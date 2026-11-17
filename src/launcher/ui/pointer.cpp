@@ -147,6 +147,8 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     } else if (owner == kDiagKind) {
         items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
         selected = app.reportKind;
+    } else if (owner == kLanguage) {
+        selected = language_items(items);
     } else if (owner == kHelmetDetail) {
         items = {L"Performance", L"Detail"};  // 2048 or 4096 a side: the help says so
         selected = app.s.helmet.detail ? 1 : 0;
@@ -319,6 +321,10 @@ void choose(Ctl owner, int option) {
     }
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
+        return;
+    }
+    if (owner == kLanguage) {  // the launcher's, in no profile
+        choose_language(option);
         return;
     }
     if (owner == kOverviewProfile) {  // a preset used, or the profile menu

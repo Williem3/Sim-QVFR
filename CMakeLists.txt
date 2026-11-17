@@ -674,6 +674,19 @@ foreach(piece top bottom visor)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_if_missing.cmake)
 endforeach()
 
+# The launcher's languages (lang/*.ini, src/lang.h) beside it, as package.ps1 ships them: ours, so always the repository's.
+file(GLOB SIM_QVFR_LANG_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/lang/*.ini)
+add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:sim_qvfr_launcher>/lang
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SIM_QVFR_LANG_FILES} $<TARGET_FILE_DIR:sim_qvfr_launcher>/lang)
+
+# Offline check of the language files and their lookup (tests/lang_test.cpp): every shipped lang/*.ini reads clean.
+sim_qvfr_test(lang_test tests/lang_test.cpp)
+target_include_directories(lang_test PRIVATE src)
+target_compile_definitions(lang_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+                          SIM_QVFR_LANG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/lang")
+target_compile_options(lang_test PRIVATE /W4 /permissive- /utf-8)
+
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
 sim_qvfr_test(launcher_test tests/launcher_test.cpp)
 target_include_directories(launcher_test PRIVATE src)

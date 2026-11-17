@@ -214,6 +214,11 @@ try {
     foreach ($source in $files.Keys) {
         Copy-Item -LiteralPath (Join-Path $work $source) -Destination (Join-Path $stage $files[$source])
     }
+    # The launcher's languages (src/lang.h): each lang\<code>.ini and the template translators start from.
+    New-Item -ItemType Directory -Path (Join-Path $stage 'lang') | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $work 'lang') -Filter '*.ini' | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage "lang\$($_.Name)")
+    }
     # DLSS: the layer has NGX in it exactly when it was asked for (NGX's library names its entry points in its own
     # strings, which Sim-QVFR's code never spells out), and NVIDIA's licence goes with it (the RTX SDKs licence's
     # distribution terms; THIRD_PARTY_NOTICES.md).

@@ -128,7 +128,8 @@ bool popup_ctl(Ctl id) {
     case kDlssSharpening:
     case kNrStyle:
     case kNrPreset:
-    case kDiagKind: return true;
+    case kDiagKind:
+    case kLanguage: return true;
     default: return false;
     }
 }
@@ -144,7 +145,8 @@ std::wstring own_name(const Hit& h) {
     case kText: return h.name;
     case kSearch: return L"Find a setting (Ctrl+K)";
     case kProfileMenu: return L"Profile menu";
-    case kThemeToggle: return L"Theme";
+    case kThemeToggle: return tr(L"Theme");
+    case kLanguage: return tr(L"Language");
     case kLaunch: return L"Launch " + game_name();
     case kVersion: return L"About Sim-QVFR";
     case kSupport: return L"Support Sim-QVFR on Ko-fi";

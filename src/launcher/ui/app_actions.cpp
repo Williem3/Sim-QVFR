@@ -80,6 +80,62 @@ void cycle_theme() {
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+namespace {
+
+// lang\ beside the launcher (sim-qvfr.ini's folder): a release's and a development build's alike.
+std::filesystem::path language_folder() { return lang::folder_near(std::filesystem::path(settings_path()).parent_path()); }
+
+// The language a choice shows in: the file's own name, or English.
+std::wstring language_name(const std::wstring& code) {
+    for (const lang::Info& l : app.languages)
+        if (_wcsicmp(l.code.c_str(), code.c_str()) == 0)
+            return l.name;
+    return L"English";
+}
+
+}  // namespace
+
+// [launcher] language: auto (the default: Windows' display language when a file has it, else English), en, or a
+// lang\ file's code. One for every game, as ui_theme.
+void read_language() {
+    app.languages = lang::available(language_folder());
+    if (app.iniFound) {
+        app.languageChoice = ini_get(app.ini.c_str(), L"launcher", L"language", L"auto");
+        if (app.languageChoice.empty())
+            app.languageChoice = L"auto";
+    }
+    app.languageInUse = lang::select(language_folder(), app.languageChoice);
+}
+
+// The pop-up: Windows' language (and what it shows in), English, then each file. Returns the one chosen.
+int language_items(std::vector<std::wstring>& items) {
+    items.clear();
+    const bool automatic = _wcsicmp(app.languageChoice.c_str(), L"auto") == 0;
+    items.push_back(trf(L"Windows language ({language})",
+                        {{L"language", language_name(lang::resolve(L"auto", app.languages))}}));
+    items.push_back(L"English");
+    int selected = automatic ? 0 : 1;
+    for (size_t i = 0; i < app.languages.size(); ++i) {
+        items.push_back(app.languages[i].name);
+        if (!automatic && _wcsicmp(app.languages[i].code.c_str(), app.languageChoice.c_str()) == 0)
+            selected = static_cast<int>(i) + 2;
+    }
+    return selected;
+}
+
+// A choice from the pop-up: saved, the file loaded, the window redrawn in it (every text is looked up as it draws).
+void choose_language(int option) {
+    if (option < 0 || option >= static_cast<int>(app.languages.size()) + 2)
+        return;
+    app.languageChoice = option == 0 ? L"auto" : option == 1 ? L"en" : app.languages[static_cast<size_t>(option) - 2].code;
+    if (app.iniFound) {
+        ini_put(app.ini.c_str(), L"launcher", L"language", app.languageChoice.c_str());
+        app.iniText = ini_text();  // not a change follow_ini needs to read back
+    }
+    app.languageInUse = lang::select(language_folder(), app.languageChoice);
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 COLORREF colorref(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
 // A game tab's palette (tokens.json "games"), for the theme in use; the kit's default accent for a game without one.

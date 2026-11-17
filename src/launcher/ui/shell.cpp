@@ -84,9 +84,9 @@ void theme_glyph(const Rect& r, Color c) {
 
 const wchar_t* theme_tip() {
     switch (app.themeChoice) {
-    case ThemeChoice::Light: return L"Theme: light. Click for dark.";
-    case ThemeChoice::Dark: return L"Theme: dark. Click to follow Windows.";
-    default: return L"Theme: following Windows. Click for light.";
+    case ThemeChoice::Light: return tr(L"Theme: light. Click for dark.");
+    case ThemeChoice::Dark: return tr(L"Theme: dark. Click to follow Windows.");
+    default: return tr(L"Theme: following Windows. Click for light.");
     }
 }
 
@@ -113,12 +113,12 @@ std::wstring plural(size_t n, const wchar_t* one, const wchar_t* many) {
 
 std::wstring launch_word(LaunchState state) {
     switch (state) {
-    case LaunchState::Starting: return L"Starting…";
-    case LaunchState::Running: return L"Running";
-    case LaunchState::NotLoaded: return L"Not loaded yet";
-    case LaunchState::NoLayer: return L"No Sim-QVFR";
-    case LaunchState::Crashed: return L"Stopped";
-    default: return L"Closed";
+    case LaunchState::Starting: return tr(L"Starting…");
+    case LaunchState::Running: return tr(L"Running");
+    case LaunchState::NotLoaded: return tr(L"Not loaded yet");
+    case LaunchState::NoLayer: return tr(L"No Sim-QVFR");
+    case LaunchState::Crashed: return tr(L"Stopped");
+    default: return tr(L"Closed");
     }
 }
 

@@ -24,12 +24,16 @@
 #include "../../games/game.h"
 #include "../../input/hotkeys.h"
 #include "../../input/pad_input.h"
+#include "../../lang.h"
 #include "canvas.h"
 #include "theme_tokens.h"
 
 namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
+// The launcher's text in the chosen language (lang.h): tr(L"English"), trf(L"… {name} …", {{L"name", value}}).
+using lang::tr;
+using lang::trf;
 
 // The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
 // headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
@@ -98,6 +102,8 @@ enum Ctl {
     kCpuIsolateMain,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
+    // The About pane's language ([launcher] language; lang.h): a pop-up of Windows' language, English and lang\*.ini.
+    kLanguage,
     // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
     // (option the same), the colour wheel, its brightness, and the game's own colour back.
     kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset, kAntiCheat,
@@ -347,6 +353,11 @@ struct App {
     // Report an issue: the kind (kIssueKinds) and the description, a native multi-line edit over the canvas
     // at reportEditRect (empty when this frame drew none), with its font and background brush.
     int reportKind = 0;
+    // The launcher's language ([launcher] language: auto, en or a lang\ file's code), the files found when the
+    // launcher started (read_language) and the code in use ("" for English).
+    std::wstring languageChoice = L"auto";
+    std::vector<lang::Info> languages;
+    std::wstring languageInUse;
     HWND reportEdit = nullptr;
     Rect reportEditRect;
     HFONT reportFont = nullptr;
@@ -509,6 +520,11 @@ COLORREF colorref(uint32_t rgb);
 t::Accent builtin_accent(const games::GameInfo& game);
 t::Accent game_accent(const games::GameInfo& game);
 ThemeChoice read_theme_choice();
+// [launcher] language read and its lang\ file made current (at start-up), and the About pane's pop-up: its items
+// (Windows' language, English, each file in its own name) and the choice saved and applied at once.
+void read_language();
+int language_items(std::vector<std::wstring>& items);
+void choose_language(int option);
 void cycle_theme();
 void apply_theme();
 bool eye_warning();

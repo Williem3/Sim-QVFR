@@ -159,7 +159,8 @@ void activate(Ctl id, int option) {
         open_sheet(std::move(s));
         return;
     }
-    case kDiagKind: open_popup(id); return;
+    case kDiagKind:
+    case kLanguage: open_popup(id); return;
     case kDiagDescription:
         if (app.panel != PanelKind::Report)
             return;
@@ -506,6 +507,7 @@ bool space_control(Ctl id) {
     case kDiagBaseline:
     case kDiagDebugLogs:
     case kDiagKind:
+    case kLanguage:
     case kGameShown:
     case kAntiCheat:
     case kColorGame: return true;
