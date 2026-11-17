@@ -1,0 +1,57 @@
+# Feature requests: new features, new games, changes to existing ones.
+# Not one of the launcher's Report an issue kinds (src/launcher/report.cpp's kIssueTemplates), so it needs
+# none of the ids the launcher fills.
+name: Feature request
+description: An idea for Sim-QVFR, a game you'd like supported, or a change to how something works.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please search the open issues first: if someone asked for the same thing,
+        a 👍 on their issue helps more than a new one.
+  - type: dropdown
+    id: area
+    attributes:
+      label: What is it about?
+      options:
+        - "A new game"
+        - "Image quality or the focus area"
+        - "Performance"
+        - "Eye tracking"
+        - "The headset menu or overlay"
+        - "The launcher"
+        - "A headset or VR runtime"
+        - "Something else"
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Which game?
+      description: The game this is for, or the one you'd like supported.
+      placeholder: e.g. Le Mans Ultimate, or "all of them"
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe the feature or change, and how you'd use it.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What it would solve or make better for you. What do you do today instead?
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: Headset, GPU and VR runtime, if the idea depends on them.
+      placeholder: e.g. Pimax Crystal, RTX 4080, Pimax Play
+  - type: textarea
+    id: files
+    attributes:
+      label: Anything else
+      description: Screenshots, links or examples from other apps.
