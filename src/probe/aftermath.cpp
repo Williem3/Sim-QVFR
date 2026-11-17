@@ -21,7 +21,7 @@ namespace simqvfr::aftermath {
 
 bool built() { return false; }
 bool enable_dumps() { return false; }
-bool attach(ID3D11Device*, ID3D11DeviceContext*) { return false; }
+bool attach(ID3D11Device*, ID3D11DeviceContext*, bool) { return false; }
 void mark(uint64_t) {}
 bool marking() { return false; }
 void set_marker_names(void (*)(uint64_t, char*, unsigned)) {}
@@ -223,10 +223,13 @@ bool enable_dumps() {
     return dumpsOn;
 }
 
-bool attach(ID3D11Device* device, ID3D11DeviceContext* immediate) {
+bool attach(ID3D11Device* device, ID3D11DeviceContext* immediate, bool shaderErrors) {
     if (!loaded || context || !device || !immediate)
         return context != nullptr;
-    const uint32_t flags = GFSDK_Aftermath_FeatureFlags_EnableMarkers | GFSDK_Aftermath_FeatureFlags_EnableShaderErrorReporting;
+    // Markers only by default: the shader error reporting changes how the GPU runs shaders, and the hang under
+    // study needs the GPU's normal timing (two runs with it on didn't hang, 2026-11-17).
+    const uint32_t flags = GFSDK_Aftermath_FeatureFlags_EnableMarkers |
+                           (shaderErrors ? GFSDK_Aftermath_FeatureFlags_EnableShaderErrorReporting : 0);
     const GFSDK_Aftermath_Result r = api.dx11Initialize(GFSDK_Aftermath_Version_API, flags, device);
     if (r != GFSDK_Aftermath_Result_Success && r != GFSDK_Aftermath_Result_FAIL_AlreadyInitialized) {
         logf("aftermath: not on the game's device (%s, 0x%08x)", result_text(r), static_cast<unsigned>(r));
@@ -239,8 +242,8 @@ bool attach(ID3D11Device* device, ID3D11DeviceContext* immediate) {
         return false;
     }
     markers = true;
-    log_line("aftermath: on the game's device, markers on its immediate context (they reach the dump only while NVIDIA's "
-             "Aftermath monitor runs)");
+    logf("aftermath: on the game's device, markers on its immediate context%s (they reach the dump only while NVIDIA's "
+         "Aftermath monitor runs)", shaderErrors ? ", shader error reporting on" : "");
     return true;
 }
 

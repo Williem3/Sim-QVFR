@@ -22,8 +22,9 @@ bool built();
 // False: not built in, the library missing, or Aftermath refused (logged).
 bool enable_dumps();
 // The game's device and its immediate context (the context's thread): Aftermath initialised on the device with
-// markers, and a context handle for them. False: off (logged).
-bool attach(ID3D11Device* device, ID3D11DeviceContext* context);
+// markers (and the driver's shader error reporting with shaderErrors), and a context handle for them. False: off
+// (logged).
+bool attach(ID3D11Device* device, ID3D11DeviceContext* context, bool shaderErrors = false);
 // A marker into the attached context's command stream (its thread only). Nothing when off.
 void mark(uint64_t code);
 bool marking();
