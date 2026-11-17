@@ -273,6 +273,11 @@ def placeholders(s):
     return sorted(re.findall(r'\{([A-Za-z0-9_]{1,32})\}', s))
 
 
+def same(a, b):
+    """Equal text whatever the line endings (git may check the files out with LF or CRLF)."""
+    return b is not None and a.replace('\r\n', '\n') == b.replace('\r\n', '\n')
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ''
     if mode not in ('', '--sync', '--check'):
@@ -281,7 +286,7 @@ def main(argv):
     os.makedirs(LANG, exist_ok=True)
     bad = False
     text, old = write_lang(TEMPLATE, '', '', entries, {})
-    if text != old:
+    if not same(text, old):
         if mode == '--check':
             print('lang/_template.ini is out of date: run python tools/lang_extract.py --sync')
             bad = True
@@ -304,7 +309,7 @@ def main(argv):
         bad |= bool(wrong) and mode == '--check'
         if mode in ('--sync', '--check'):
             new, current = write_lang(path, code, own, entries, pairs, stale)
-            if new != current:
+            if not same(new, current):
                 if mode == '--check':
                     print(f'  lang/{name} is out of step with the template: run --sync')
                     bad = True
