@@ -546,6 +546,20 @@ struct V4D3D11 {
     std::vector<ID3D11Texture2D*> focusImages;
     uint32_t focusW = 0, focusH = 0;
     bool focusFailed = false;  // its swapchain failed: composed as without focus_layer
+    // Native quad views with the FOV crop (v4d3d11_pad_periphery): each eye's periphery as rendered copied texel for
+    // texel into a chain of the game's format over the runtime's whole eye, black around it (eye e from x = e x padW),
+    // since the runtime may draw views 0-1 over its eye whatever FOV they carry (issue 29). Made at the first such race
+    // frame, again larger when a frame needs more (the old one destroyed a few frames later).
+    XrSwapchain padChain = XR_NULL_HANDLE;
+    std::vector<ID3D11Texture2D*> padImages;
+    std::vector<ID3D11RenderTargetView*> padTargets;  // per image, made at its first use; owned
+    int64_t padFormat = 0;
+    uint32_t padW = 0, padH = 0;
+    PendingImage padPending;
+    XrSwapchain padRetired = XR_NULL_HANDLE;
+    int padRetiredFrames = 0;
+    bool padFailed = false;  // a chain, view or copy that can't be made: views 0-1 as rendered from then on
+    uint64_t padded = 0;     // race frames padded
     float loggedTexelsPerPixel = 0;    // the focus views' texels per display pixel last logged (sharpening)
     uint64_t layered = 0;      // frames submitted as two layers
     // Native quad views: race frames whose views 2-3 covered the runtime's focus views (FocusLayerPS's region), how
@@ -860,6 +874,7 @@ struct NativeQuad {
     struct Located {
         XrTime time = 0;
         float tan[2][4] = {};
+        float eyeTan[2][4] = {};  // the runtime's eyes (views 0-1) as located: tangents left, right, up, down
         bool valid = false;
     };
     std::mutex regionMutex;
@@ -870,6 +885,10 @@ struct NativeQuad {
     // Render thread: copy frames whose copies were cut to the runtime's focus views; frames that took the latest
     // located views (none at their display time).
     uint64_t croppedFrames = 0, regionMisses = 0;
+    // Render thread: frames whose views 0-1 reached the runtime narrower than its located eyes (the FOV crop, where
+    // nothing padded them out: native_quad.h eye_pad_image), logged at the first and counted for the session's end.
+    uint64_t narrowFrames = 0;
+    bool loggedNarrow = false;
 };
 
 // The globals (globals.cpp).

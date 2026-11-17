@@ -117,8 +117,8 @@ Picture
   and the focus area reaches the display at its full resolution. Its focus area is drawn inside the
   runtime's own focus region, centred where the runtime puts it (its eye tracking), so keep the
   runtime's focus area at least as large as Sim-QVFR's: Diagnostics says when it isn't. On SteamVR,
-  with frame generation, or with another layer between Sim-QVFR and the runtime, Sim-QVFR composes the
-  image itself.
+  with frame generation, or with another layer between Sim-QVFR and the runtime (OpenKneeboard
+  excepted), Sim-QVFR composes the image itself.
   Above 100% focus density the image sent to the headset grows with it, so the focus area's extra
   detail reaches the display instead of being averaged down first.
 - DLSS and DLSS-NR (LMU, NVIDIA RTX), or FSR (experimental; LMU on other cards): see Le Mans Ultimate

@@ -255,7 +255,21 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.focusImages.clear();
         v4d3d11.focusW = v4d3d11.focusH = 0;
         v4d3d11.focusFailed = false;
-        v4d3d11.outPending = v4d3d11.focusPending = {};  // gone with their chains
+        for (ID3D11RenderTargetView* t : v4d3d11.padTargets)
+            if (t)
+                t->Release();
+        v4d3d11.padTargets.clear();
+        v4d3d11.padChain = v4d3d11.padRetired = XR_NULL_HANDLE;  // the session's
+        v4d3d11.padImages.clear();
+        v4d3d11.padFormat = 0;
+        v4d3d11.padW = v4d3d11.padH = 0;
+        v4d3d11.padRetiredFrames = 0;
+        v4d3d11.padFailed = false;
+        if (v4d3d11.padded)
+            logf("native quad views: %llu race frames with the periphery padded out to the runtime's eyes",
+                 static_cast<unsigned long long>(v4d3d11.padded));
+        v4d3d11.padded = 0;
+        v4d3d11.outPending = v4d3d11.focusPending = v4d3d11.padPending = {};  // gone with their chains
         v4d3d11.loggedTexelsPerPixel = 0;
         v4d3d11.layered = 0;
     }

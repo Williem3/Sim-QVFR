@@ -216,6 +216,10 @@ bool runtime_gaze(XrSpace space, XrTime time, XrVector3f& direction);
 // (tangents left, right, up, down); the latest located when none was for `time` (`exact` false). False: none located
 // (no quad view session, or before its first locate). Views 2-3 go to the runtime over exactly these.
 bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact = nullptr);
+// A quad view session: the runtime's eyes (views 0-1) as located for `time` (the latest located when none was), each
+// eye's FOV in tangents (left, right, up, down). Views 0-1 go to the runtime over at least these (native_quad.h
+// eye_union): it may draw them over its own eyes whatever FOV they carry. False: none located.
+bool runtime_eye_tangents(XrTime time, float (&tan)[2][4]);
 // With the extension on the instance (nativeQuad.extension): the wrappers into `next`, after it is loaded.
 void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
 // At xrCreateSession: whether the session will be begun as a quad view one (the system has it, the run wants it).

@@ -265,6 +265,163 @@ void v4d3d11_region_note() {
     v4d3d11.regionShareMin = 1;
 }
 
+// Native quad views with the FOV crop, a race frame (under v4d3d11.mutex): each eye's periphery as rendered (`copy`,
+// the game's own image) copied texel for texel into the pad chain over the runtime's whole located eye, black around
+// it, and `copy` pointed there with that FOV. The runtime may draw views 0-1 over its eye whatever FOV they carry
+// (issue 29: Pimax stretched the cropped periphery over the whole eye, a picture in the picture). False: `copy` as it
+// was (no crop, the runtime's eyes unknown, or a chain, view or copy that failed or wasn't ready this frame).
+bool v4d3d11_pad_periphery(XrSession session, const EyeComposition (&eyes)[2], XrTime displayTime,
+                           std::vector<XrCompositionLayerProjectionView>& copy) {
+    if (v4d3d11.padRetired && --v4d3d11.padRetiredFrames <= 0) {
+        next.DestroySwapchain(v4d3d11.padRetired);
+        v4d3d11.padRetired = XR_NULL_HANDLE;
+    }
+    float runtimeEyes[2][4];
+    if (v4d3d11.padFailed || copy.size() < 2 || !runtime_eye_tangents(displayTime, runtimeEyes))
+        return false;
+    RegionImage pad[2];
+    bool any = false;
+    for (int e = 0; e < 2; ++e) {
+        const XrExtent2Di ext = copy[e].subImage.imageRect.extent;
+        if (narrower_than_eye(eyes[e].outerTan, runtimeEyes[e]) &&
+            eye_pad_image(eyes[e].outerTan, ext.width, ext.height, runtimeEyes[e], pad[e])) {
+            any = true;
+            continue;
+        }
+        std::memcpy(pad[e].tan, eyes[e].outerTan, sizeof(pad[e].tan));  // this eye as it is, in the pad chain too
+        pad[e].width = ext.width;
+        pad[e].height = ext.height;
+        pad[e].boxX = pad[e].boxY = 0;
+    }
+    if (!any)
+        return false;
+    const auto fail = [](const char* why) {
+        logf("native quad views: the FOV crop's periphery can't be padded out to the runtime's eyes (%s): views 0-1 as "
+             "rendered (the runtime may stretch them)",
+             why);
+        v4d3d11.padFailed = true;
+        return false;
+    };
+    ID3D11Texture2D* source[2] = {};
+    int64_t format = 0;
+    for (int e = 0; e < 2; ++e) {
+        const auto it = v4d3d11.chains.find(copy[e].subImage.swapchain);
+        if (it == v4d3d11.chains.end() || it->second.acquired >= it->second.images.size())
+            return false;  // not this frame
+        source[e] = it->second.images[it->second.acquired];
+        if (e == 1 && it->second.format != format)
+            return fail("the eyes' images in different formats");
+        format = it->second.format;
+    }
+    D3D11_TEXTURE2D_DESC sourceDesc;
+    source[0]->GetDesc(&sourceDesc);
+    if (sourceDesc.SampleDesc.Count > 1)
+        return fail("multisampled eye images");
+    const uint32_t needW = static_cast<uint32_t>(std::max(pad[0].width, pad[1].width));
+    const uint32_t needH = static_cast<uint32_t>(std::max(pad[0].height, pad[1].height));
+    if (!v4d3d11.padChain || needW > v4d3d11.padW || needH > v4d3d11.padH || format != v4d3d11.padFormat) {
+        // Not while its image is left acquired (a timed-out wait) or the last old chain is still waiting to go.
+        if (v4d3d11.padChain && (v4d3d11.padPending.acquired || v4d3d11.padRetired))
+            return false;
+        XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+        info.format = format;
+        info.sampleCount = info.faceCount = info.arraySize = info.mipCount = 1;
+        // A few texels to spare, for live resolution's small changes.
+        const uint32_t eyeW = std::min<uint32_t>(8192, needW + 16), eyeH = std::min<uint32_t>(16384, needH + 16);
+        info.width = 2 * eyeW;
+        info.height = eyeH;
+        XrSwapchain chain = XR_NULL_HANDLE;
+        XrResult r = next.CreateSwapchain(session, &info, &chain);
+        uint32_t count = 0;
+        if (XR_SUCCEEDED(r))
+            r = next.EnumerateSwapchainImages(chain, 0, &count, nullptr);
+        std::vector<XrSwapchainImageD3D11KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+        if (XR_SUCCEEDED(r) && count)
+            r = next.EnumerateSwapchainImages(chain, count, &count,
+                                              reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+        if (XR_FAILED(r) || !count) {
+            if (chain)
+                next.DestroySwapchain(chain);
+            logf("native quad views: the periphery's pad chain %ux%u failed (%d)", info.width, info.height, r);
+            return fail("its swapchain failed");
+        }
+        if (v4d3d11.padChain) {
+            // The old chain's last image went out with an earlier frame; the runtime may still read it for a few.
+            v4d3d11.padRetired = v4d3d11.padChain;
+            v4d3d11.padRetiredFrames = 8;
+        }
+        for (ID3D11RenderTargetView* t : v4d3d11.padTargets)  // the old images' views (the runtime never sees them)
+            if (t)
+                t->Release();
+        v4d3d11.padTargets.assign(count, nullptr);
+        v4d3d11.padChain = chain;
+        v4d3d11.padImages.clear();
+        for (const auto& image : images)
+            v4d3d11.padImages.push_back(image.texture);
+        v4d3d11.padFormat = format;
+        v4d3d11.padW = eyeW;
+        v4d3d11.padH = eyeH;
+        v4d3d11.padPending = {};
+        logf("native quad views: the periphery padded out to the runtime's eyes in a chain of its own %ux%u (%u images, "
+             "format %lld; eye 0: its %dx%d texels at %d,%d of %dx%d over tangents %.3f %.3f %.3f %.3f, black around)",
+             info.width, info.height, count, static_cast<long long>(format), copy[0].subImage.imageRect.extent.width,
+             copy[0].subImage.imageRect.extent.height, pad[0].boxX, pad[0].boxY, pad[0].width, pad[0].height,
+             pad[0].tan[0], pad[0].tan[1], pad[0].tan[2], pad[0].tan[3]);
+    }
+    uint32_t index = 0;
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    const XrResult waited = acquire_wait(v4d3d11.padChain, v4d3d11.padPending, kImageWaitNs, kImageWaitTries, index,
+                                         "native quad views: pad image wait");
+    if (waited != XR_SUCCESS)
+        return false;  // timed out: waited on again at the next frame
+    ID3D11Device* device;
+    {
+        std::lock_guard guard(quad.mutex);
+        device = sessionGraphics.d3d11;
+    }
+    if (index >= v4d3d11.padImages.size() || index >= v4d3d11.padTargets.size() || !device) {
+        next.ReleaseSwapchainImage(v4d3d11.padChain, &release);
+        return false;
+    }
+    ID3D11Texture2D* target = v4d3d11.padImages[index];
+    if (!v4d3d11.padTargets[index]) {
+        D3D11_RENDER_TARGET_VIEW_DESC rtv{};
+        rtv.Format = static_cast<DXGI_FORMAT>(format);
+        rtv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        if (FAILED(device->CreateRenderTargetView(target, &rtv, &v4d3d11.padTargets[index]))) {
+            v4d3d11.padTargets[index] = nullptr;
+            next.ReleaseSwapchainImage(v4d3d11.padChain, &release);
+            return fail("no render target view of its image");
+        }
+    }
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    const float black[4] = {0, 0, 0, 1};
+    context->ClearRenderTargetView(v4d3d11.padTargets[index], black);
+    for (int e = 0; e < 2; ++e) {
+        D3D11_TEXTURE2D_DESC d;
+        source[e]->GetDesc(&d);
+        const XrRect2Di rect = copy[e].subImage.imageRect;
+        const D3D11_BOX box{static_cast<UINT>(rect.offset.x), static_cast<UINT>(rect.offset.y), 0,
+                            static_cast<UINT>(rect.offset.x + rect.extent.width),
+                            static_cast<UINT>(rect.offset.y + rect.extent.height), 1};
+        context->CopySubresourceRegion(target, 0, static_cast<UINT>(e * v4d3d11.padW + pad[e].boxX),
+                                       static_cast<UINT>(pad[e].boxY), 0, source[e],
+                                       D3D11CalcSubresource(0, copy[e].subImage.imageArrayIndex, d.MipLevels), &box);
+    }
+    context->Release();
+    next.ReleaseSwapchainImage(v4d3d11.padChain, &release);
+    for (int e = 0; e < 2; ++e) {
+        copy[e].fov = tangents_fov(pad[e].tan);
+        copy[e].subImage.swapchain = v4d3d11.padChain;
+        copy[e].subImage.imageRect = {{static_cast<int32_t>(e * v4d3d11.padW), 0}, {pad[e].width, pad[e].height}};
+        copy[e].subImage.imageArrayIndex = 0;
+    }
+    ++v4d3d11.padded;
+    return true;
+}
+
 // focus_layer, for a frame with four views (under v4d3d11.mutex and quad.mutex): each focus view drawn texel for
 // texel into the focus chain, its feather in alpha, and `focus` pointed at them with the focus cameras' poses and
 // FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV (never
@@ -374,6 +531,8 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
         focus[v].subImage.imageArrayIndex = 0;
     }
+    // Native quad views with the FOV crop: the periphery padded out to the runtime's eyes (issue 29).
+    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, eyes, displayTime, copy);
     if (nativeQuad.active) {
         if (overRegion) {
             ++v4d3d11.regionFrames;
@@ -402,13 +561,13 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     }
     if (v4d3d11.layered++ == 0 || v4d3d11.lastFallback) {
         logf("views4 d3d11: %s (eye 0: periphery %dx%d of the game's image at %d,%d, FOV tangents %.3f %.3f %.3f %.3f; "
-             "focus %dx%d over tangents %.3f %.3f %.3f %.3f, feather %.0f%%)",
+             "focus %dx%d over tangents %.3f %.3f %.3f %.3f, feather %.0f%%)%s",
              nativeQuad.active ? "native quad views: the eyes and the focus views as one four-view layer"
                                : "focus_layer: two layers",
              outer[0].width, outer[0].height, copy[0].subImage.imageRect.offset.x, copy[0].subImage.imageRect.offset.y,
              eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], rects[0][2],
              rects[0][3], eyes[0].focusTan[0], eyes[0].focusTan[1], eyes[0].focusTan[2], eyes[0].focusTan[3],
-             experiment.feather * 100);
+             experiment.feather * 100, padded ? "; the periphery padded out to the runtime's eyes" : "");
         v4d3d11.lastFallback = nullptr;
     }
     return true;
