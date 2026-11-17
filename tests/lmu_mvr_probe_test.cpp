@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -62,6 +63,18 @@ int SIM_QVFR_TEST_MAIN() {
     }
     check(shaderCode != nullptr, "d3d11.dll's code read before the probe");
     check(lmu::mvr_probe_install(nullptr, true), "installed at instance creation (twins attached, as for multi-view)");
+    // Another tool's throwaway device first, on a thread of its own, released (an overlay finding Present: issue 29,
+    // OpenKneeboard): the game's device, made after it, is still hooked.
+    {
+        bool made = false;
+        std::thread other([&made] {
+            ComPtr<ID3D11Device> throwaway;
+            made = SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
+                                               &throwaway, nullptr, nullptr)) && throwaway;
+        });
+        other.join();
+        check(made, "another tool's device made and released before the game's");
+    }
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,

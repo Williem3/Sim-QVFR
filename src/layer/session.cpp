@@ -266,9 +266,12 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.padRetiredFrames = 0;
         v4d3d11.padFailed = false;
         if (v4d3d11.padded)
-            logf("native quad views: %llu race frames with the periphery padded out to the runtime's eyes",
-                 static_cast<unsigned long long>(v4d3d11.padded));
+            logf("native quad views: %llu frames with views 0-1 padded out to the runtime's eyes (%llu of them without "
+                 "focus views)",
+                 static_cast<unsigned long long>(v4d3d11.padded),
+                 static_cast<unsigned long long>(v4d3d11.paddedEyesOnly));
         v4d3d11.padded = 0;
+        v4d3d11.paddedEyesOnly = 0;
         v4d3d11.outPending = v4d3d11.focusPending = v4d3d11.padPending = {};  // gone with their chains
         v4d3d11.loggedTexelsPerPixel = 0;
         v4d3d11.layered = 0;

@@ -270,8 +270,7 @@ void v4d3d11_region_note() {
 // it, and `copy` pointed there with that FOV. The runtime may draw views 0-1 over its eye whatever FOV they carry
 // (issue 29: Pimax stretched the cropped periphery over the whole eye, a picture in the picture). False: `copy` as it
 // was (no crop, the runtime's eyes unknown, or a chain, view or copy that failed or wasn't ready this frame).
-bool v4d3d11_pad_periphery(XrSession session, const EyeComposition (&eyes)[2], XrTime displayTime,
-                           std::vector<XrCompositionLayerProjectionView>& copy) {
+bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<XrCompositionLayerProjectionView>& copy) {
     if (v4d3d11.padRetired && --v4d3d11.padRetiredFrames <= 0) {
         next.DestroySwapchain(v4d3d11.padRetired);
         v4d3d11.padRetired = XR_NULL_HANDLE;
@@ -283,12 +282,13 @@ bool v4d3d11_pad_periphery(XrSession session, const EyeComposition (&eyes)[2], X
     bool any = false;
     for (int e = 0; e < 2; ++e) {
         const XrExtent2Di ext = copy[e].subImage.imageRect.extent;
-        if (narrower_than_eye(eyes[e].outerTan, runtimeEyes[e]) &&
-            eye_pad_image(eyes[e].outerTan, ext.width, ext.height, runtimeEyes[e], pad[e])) {
+        float tan[4];
+        fov_tangents(copy[e].fov, tan);  // the FOV the view was rendered over
+        if (narrower_than_eye(tan, runtimeEyes[e]) && eye_pad_image(tan, ext.width, ext.height, runtimeEyes[e], pad[e])) {
             any = true;
             continue;
         }
-        std::memcpy(pad[e].tan, eyes[e].outerTan, sizeof(pad[e].tan));  // this eye as it is, in the pad chain too
+        std::memcpy(pad[e].tan, tan, sizeof(pad[e].tan));  // this eye as it is, in the pad chain too
         pad[e].width = ext.width;
         pad[e].height = ext.height;
         pad[e].boxX = pad[e].boxY = 0;
@@ -532,7 +532,7 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         focus[v].subImage.imageArrayIndex = 0;
     }
     // Native quad views with the FOV crop: the periphery padded out to the runtime's eyes (issue 29).
-    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, eyes, displayTime, copy);
+    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, displayTime, copy);
     if (nativeQuad.active) {
         if (overRegion) {
             ++v4d3d11.regionFrames;
@@ -574,6 +574,20 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
 }
 
 }  // namespace
+
+// A frame that goes out with the game's own views 0-1 (no four views: menus, loading, or multi-view without its focus
+// views) under native quad views with the FOV crop: padded out to the runtime's eyes as a race frame's periphery is.
+bool v4d3d11_pad_eyes(XrSession session, std::vector<XrCompositionLayerProjectionView>& copy, XrTime displayTime) {
+    if (!nativeQuad.active)
+        return false;
+    std::lock_guard guard(v4d3d11.mutex);
+    if (!v4d3d11_pad_periphery(session, displayTime, copy))
+        return false;
+    for (int e = 0; e < 2; ++e)
+        copy[e].next = nullptr;  // the game's depth info would describe its own image, not the pad
+    ++v4d3d11.paddedEyesOnly;
+    return true;
+}
 
 // Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
 // points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.

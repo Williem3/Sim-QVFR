@@ -135,6 +135,9 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
 void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4Layout& layout);
 // Composes both eyes of `proj` into the D3D11 output chain and points `copy` at it; false: nothing changed. With
 // focus_layer (`focus` given): the periphery in `copy`, the focus views' layer in `focus`, `*layered` true.
+// Native quad views with the FOV crop, a frame with the game's own views 0-1: padded out to the runtime's eyes (`copy`
+// pointed at the pad chain). False: `copy` as it was.
+bool v4d3d11_pad_eyes(XrSession session, std::vector<XrCompositionLayerProjectionView>& copy, XrTime displayTime);
 bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
                      std::vector<XrCompositionLayerProjectionView>& copy,
                      XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr,

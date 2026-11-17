@@ -559,7 +559,8 @@ struct V4D3D11 {
     XrSwapchain padRetired = XR_NULL_HANDLE;
     int padRetiredFrames = 0;
     bool padFailed = false;  // a chain, view or copy that can't be made: views 0-1 as rendered from then on
-    uint64_t padded = 0;     // race frames padded
+    uint64_t padded = 0;     // frames padded
+    uint64_t paddedEyesOnly = 0;  // of them, frames without focus views (v4d3d11_pad_eyes)
     float loggedTexelsPerPixel = 0;    // the focus views' texels per display pixel last logged (sharpening)
     uint64_t layered = 0;      // frames submitted as two layers
     // Native quad views: race frames whose views 2-3 covered the runtime's focus views (FocusLayerPS's region), how
