@@ -3,6 +3,7 @@
 #include "corner_internal.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "../lmu/mvr_probe.h"
@@ -149,9 +150,13 @@ Mirror* learn(ID3D11Buffer* b) {
 // makes new buffers at level loads, and each mirror holds the game's old one alive with our copy (256 KB and more
 // each). At the frame's end, outside the corner (our copies swapped back out); one still bound anyway is kept, so
 // game_of can still map it back.
-void evict_mirrors() {
+// `orphans`: only those whose game buffer the game has let go (ours the last reference), whenever they were used: every
+// frame (release_orphans), so the slots come back as soon as the game remakes its buffers, not 900 frames later.
+void evict_mirrors(bool orphans) {
     if (g.active || g.mirrors.empty())
         return;
+    if (orphans && std::none_of(g.mirrors.begin(), g.mirrors.end(), [](const Mirror& m) { return only_ours(m.game.Get()); }))
+        return;  // the usual frame: nothing to look up in the context
     constexpr UINT n = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
     ID3D11Buffer* bound[2][n] = {};
     g.context->VSGetConstantBuffers(0, n, bound[0]);
@@ -166,7 +171,7 @@ void evict_mirrors() {
     const uint64_t now = g.stats.frames;
     size_t gone = 0;
     for (auto it = g.mirrors.begin(); it != g.mirrors.end();)
-        if (now - it->usedFrame > kEvictFrames && !held(*it)) {
+        if ((orphans ? only_ours(it->game.Get()) : now - it->usedFrame > kEvictFrames) && !held(*it)) {
             if (it->id >= 0)  // first: other threads stop matching it (before the game's buffer, and its address, go)
                 g.mirrorIds[it->id].store(nullptr, std::memory_order_release);
             it = g.mirrors.erase(it);
@@ -181,10 +186,15 @@ void evict_mirrors() {
     if (gone) {
         g.mirrorsEvicted += gone;
         g.mirrorNoIdLogged = false;  // a buffer left unmirrored is logged again if it still finds no slot
-        simqvfr::logf("scs corner: %zu mirrors unused for %llu frames let go (%zu left; %llu let go, %llu binds left "
-                      "unmirrored for want of a slot so far)",
-                      gone, static_cast<unsigned long long>(kEvictFrames), g.mirrors.size(),
-                      static_cast<unsigned long long>(g.mirrorsEvicted), static_cast<unsigned long long>(g.mirrorNoId));
+        char why[64];
+        if (orphans)
+            snprintf(why, sizeof(why), "whose game buffers are gone");
+        else
+            snprintf(why, sizeof(why), "unused for %llu frames", static_cast<unsigned long long>(kEvictFrames));
+        simqvfr::logf("scs corner: %zu mirrors %s let go (%zu left; %llu let go, %llu binds left unmirrored for want of a "
+                      "slot so far)",
+                      gone, why, g.mirrors.size(), static_cast<unsigned long long>(g.mirrorsEvicted),
+                      static_cast<unsigned long long>(g.mirrorNoId));
     }
 }
 

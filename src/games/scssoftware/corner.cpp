@@ -125,6 +125,7 @@ void take_frame_end() {
     }
     if (g.stats.frames % kEvictFrames == 0)
         evict_mirrors();  // after our copies were swapped back out (above)
+    release_orphans();    // every frame: what the game let go since the last
     g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch ? 0
                 : g.focusOff ? 3
                 : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,

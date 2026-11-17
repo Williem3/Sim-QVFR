@@ -373,7 +373,19 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
             UINT groups);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
-void evict_mirrors();
+// The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last
+// reference; one still bound in a context counts the binding too, so it stays). Free-threaded: the count, not the object.
+inline bool only_ours(IUnknown* p) {
+    if (!p)
+        return false;
+    p->AddRef();
+    return p->Release() == 1;
+}
+void evict_mirrors(bool orphans = false);
+// Every frame's end, outside the eye passes: the mirrors, twins and twin views whose game object is gone, let go at
+// once (ETS2 and ATS remake their targets and 2 MB constant buffers at loads and menus: 2026-11-16, the 16 mirror slots
+// stayed full for up to 900 frames, 3.5 million binds unmirrored and not rewritten for the corner).
+void release_orphans();
 void swap_bound(bool on);
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);

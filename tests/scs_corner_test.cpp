@@ -533,6 +533,51 @@ void warp_checks() {
         boundPs->Release();
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
 
+    // The game remakes its large constant buffers (a load, a menu: ATS 2026-11-16 filled all 16 mirror slots and left
+    // 3.5 million binds unmirrored): once it lets the old ones go, the next frame mirrors the new ones.
+    {
+        const auto bound_is_copy = [&](ID3D11Buffer* b) {
+            ID3D11Buffer* const one[] = {b};
+            context->PSSetConstantBuffers1(1, 1, one, &bigPs, &num);
+            ID3D11Buffer* got = nullptr;
+            UINT gf = 0, gn = 0;
+            context->PSGetConstantBuffers1(1, 1, &got, &gf, &gn);
+            const bool copy = got && got != b;
+            if (got)
+                got->Release();
+            return copy;
+        };
+        const auto make_set = [&](std::vector<ComPtr<ID3D11Buffer>>& set) {
+            set.clear();
+            for (int i = 0; i < 15; ++i) {  // with bigCb's, all 16 slots
+                ComPtr<ID3D11Buffer> b;
+                device->CreateBuffer(&bigd, nullptr, &b);
+                set.push_back(b);
+            }
+        };
+        std::vector<ComPtr<ID3D11Buffer>> set;
+        make_set(set);
+        context->OMSetRenderTargets(4, gbs, dsv.Get());  // a corner frame
+        bool all = true;
+        for (auto& b : set)
+            all = bound_is_copy(b.Get()) && all;
+        check(all, "fifteen large buffers bound in the corner all mirrored (the 16 slots full)");
+        ID3D11Buffer* const none[] = {nullptr};
+        context->PSSetConstantBuffers(1, 1, none);
+        scs::corner_frame_end(&info, &fake_enumerate);
+        make_set(set);  // the game's next set; the old one let go (the vector held the game's only references)
+        context->OMSetRenderTargets(1, outs, nullptr);  // the next frame's first bind: its start
+        context->OMSetRenderTargets(4, gbs, dsv.Get());
+        all = true;
+        for (auto& b : set)
+            all = bound_is_copy(b.Get()) && all;
+        check(all, "the game's new set mirrored on the next frame: the old set's slots freed when it let them go");
+        context->PSSetConstantBuffers(1, 1, none);
+        scs::corner_frame_end(&info, &fake_enumerate);
+        context->OMSetRenderTargets(1, outs, nullptr);
+        set.clear();
+    }
+
     // A session restart as ATS does it (2026-11-15: three in 13 s before a freeze): the main thread ends the session and
     // starts the next; nothing is released or installed until the render thread's next xrEndFrame does both, in order.
     scs::corner_session_end();

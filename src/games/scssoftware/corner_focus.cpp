@@ -42,6 +42,46 @@ void evict_unused() {
                       g.twinBytes / 1048576.0);
 }
 
+void release_orphans() {
+    if (g.active)
+        return;
+    evict_mirrors(true);
+    // Twin views first: each holds the game's view, and the view its texture. A texture let go takes its twin views
+    // with it, so a view the game still binds can't point at a twin no entry fills any more.
+    size_t views = 0, twins = 0;
+    for (auto it = g.twinViews.begin(); it != g.twinViews.end();)
+        if (only_ours(it->second.game.Get())) {
+            it = g.twinViews.erase(it);
+            ++views;
+        } else {
+            ++it;
+        }
+    for (auto it = g.texes.begin(); it != g.texes.end();) {
+        if (!only_ours(it->second.game.Get())) {
+            ++it;
+            continue;
+        }
+        ID3D11Texture2D* const gone = it->second.game.Get();
+        for (auto v = g.twinViews.begin(); v != g.twinViews.end();) {
+            ComPtr<ID3D11Resource> r;
+            v->second.game->GetResource(&r);
+            if (r.Get() == gone) {
+                v = g.twinViews.erase(v);
+                ++views;
+            } else {
+                ++v;
+            }
+        }
+        g.twinBytes -= std::min(g.twinBytes, it->second.bytes);
+        twins += it->second.twin ? 1 : 0;
+        it = g.texes.erase(it);
+    }
+    if (views || twins)
+        simqvfr::logf("scs focus: %zu twins and %zu twin views whose game textures are gone let go (%zu twins left, %.0f MB "
+                      "at most)",
+                      twins, views, g.texes.size(), g.twinBytes / 1048576.0);
+}
+
 // The bound targets' focus regions are being written (a two-view scene draw, a replay).
 void mark_bound_written() {
     if (g.boundMarked)
