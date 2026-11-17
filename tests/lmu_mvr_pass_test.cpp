@@ -105,13 +105,13 @@ int SIM_QVFR_TEST_MAIN() {
     char what[200];
     const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
     std::snprintf(what, sizeof(what),
-                  "%llu functions hooked for %llu entries (thirteen with PSSetShader, ExecuteCommandList and "
-                  "VSSetConstantBuffers: no DrawIndexed without the focus post; two each at least: protection off and "
+                  "%llu functions hooked for %llu entries (fourteen with PSSetShader, ExecuteCommandList, "
+                  "VSSetConstantBuffers and RSGetViewports: no DrawIndexed without the focus post; two each at least: protection off and "
                   "on), %llu of them ResolveSubresource's",
                   static_cast<unsigned long long>(installed.contextFunctions),
                   static_cast<unsigned long long>(installed.contextEntries),
                   static_cast<unsigned long long>(installed.resolveFunctions));
-    check(installed.contextEntries == 13 && installed.contextFunctions >= 24 && installed.resolveFunctions >= 2, what);
+    check(installed.contextEntries == 14 && installed.contextFunctions >= 24 && installed.resolveFunctions >= 2, what);
     ComPtr<ID3D11DeviceContext4> context4;
     check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
           "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
@@ -149,6 +149,17 @@ int SIM_QVFR_TEST_MAIN() {
     check(bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && n == 2 && same(vps[0], 0, 0, 100, 80) &&
               same(vps[1], 100, 0, 60, 50),
           "pass 0 begins on a depth target: the twin, two views, the focus viewport beside the eye (100,0 60x50)");
+    {  // The game reading its viewport back (YEBIS's start): its own one, not our two; ours still see the two.
+        lmu::mvr_test_reads_as_game(true);
+        D3D11_VIEWPORT own[16];
+        UINT count = 0;
+        context->RSGetViewports(&count, nullptr);
+        const UINT gn = viewports(context.Get(), own);
+        lmu::mvr_test_reads_as_game(false);
+        check(count == 1 && gn == 1 && same(own[0], 0, 0, 100, 80) && viewports(context.Get(), vps) == 2 &&
+                  lmu::mvr_pass_stats().gameViewportReads >= 2,
+              "the game's viewport read in the pass: its own 100x80, not the focus view's beside it (ours: both)");
+    }
     ID3D11Buffer* cb = nullptr;
     context->VSGetConstantBuffers(13, 1, &cb);
     check(cb != nullptr, "the remap bound at cb13");
@@ -168,6 +179,25 @@ int SIM_QVFR_TEST_MAIN() {
     context->RSSetViewports(1, &quarter);
     n = viewports(context.Get(), vps);
     check(n == 2 && same(vps[1], 25, 0, 15, 12.5f), "a quarter-size pass: its focus viewport at quarter size (25,0 15x12.5)");
+    {  // The live resolution (Post Effects Low with MSAA off: no depth copy ends the cut before YEBIS starts, and YEBIS
+       // sizes its region from the viewport it reads back): the game's full viewport bound cut to the eye's, read back
+       // by the game as it set it (else its copy stretches the eye's corner over the whole target: the zoomed periphery).
+        lmu::mvr_size_cut(true, 256, 128, 100, 80);
+        const D3D11_VIEWPORT full = {0, 0, 256, 128, 0, 1};
+        context->RSSetViewports(1, &full);
+        D3D11_VIEWPORT bound[16], own[16];
+        const UINT bn = viewports(context.Get(), bound);
+        lmu::mvr_test_reads_as_game(true);
+        const UINT gn = viewports(context.Get(), own);
+        lmu::mvr_test_reads_as_game(false);
+        lmu::mvr_size_cut(false, 0, 0, 0, 0);
+        context->RSSetViewports(1, &quarter);
+        std::snprintf(what, sizeof(what),
+                      "live resolution: the game's 256x128 viewport bound as %u (%.0fx%.0f first), read back by the "
+                      "game as %u (%.0fx%.0f)",
+                      bn, bound[0].Width, bound[0].Height, gn, own[0].Width, own[0].Height);
+        check(bn == 2 && same(bound[0], 0, 0, 100, 80) && gn == 1 && same(own[0], 0, 0, 256, 128), what);
+    }
     const D3D11_RECT scissor = {0, 0, 25, 20};
     context->RSSetScissorRects(1, &scissor);
     D3D11_RECT rects[16];

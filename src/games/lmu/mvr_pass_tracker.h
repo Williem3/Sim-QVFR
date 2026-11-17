@@ -109,6 +109,31 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
     tr.offScene = tr.open && tr.singleSample && !tr.resolved && r0 && !dsv && r0.Get() != tr.scene;
 }
 
+// FSR with MSAA off (a render target bind, after fsr_final): there is no final blit (FSR's compute upscale writes the
+// eye's image), so the eye's image bound after the pass's post began is its final whether or not our focus step ran
+// there (fsr_final marks it only with the focus composite placed): the pass ends at the next other target. Without
+// this, a frame with no focus view (recovery's plain frames, one focus failure) left pass 0 open to the frame's end:
+// pass 1 taken into it, uncut, and recovery, which retries only on frames with both passes, never tried again
+// (review 2026-11-17).
+void track_fsr_final(UINT n, ID3D11RenderTargetView* const* rtvs) {
+    if (!tr.on || !tr.open || !tr.singleSample || !tr.resolved || tr.blitSeen || !g.fsr || tr.pass < 0 || !n ||
+        n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL || !rtvs || !rtvs[0])
+        return;
+    ComPtr<ID3D11Resource> r0;
+    rtvs[0]->GetResource(&r0);
+    if (!r0 || r0.Get() != g.fsrEye[tr.pass & 1])
+        return;
+    tr.blitSeen = true;
+    tr.finalTarget = r0.Get();  // raw, compared only
+    ++tr.stats.fsrEnds;
+    if (!tr.fsrEndLogged) {
+        tr.fsrEndLogged = true;
+        simqvfr::logf("lmu mvr: pass tracker, MSAA off: frame %llu pass %d: FSR's eye image bound without our focus step: "
+                      "the pass's final, it ends at the next target (the first; counted from now on)",
+                      static_cast<unsigned long long>(g.framesSinceInstall), tr.pass);
+    }
+}
+
 // The frame end: the open pass ends; this frame's tracked passes against the game's.
 void track_frame_end(unsigned long long frame) {
     track_end("the frame end");

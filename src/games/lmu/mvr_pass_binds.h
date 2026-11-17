@@ -136,8 +136,10 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargets(context, n, rtvs, dsv);
-        if (tr.on && context == g.context && !g.replaying)
+        if (tr.on && context == g.context && !g.replaying) {
             track_bind(n, rtvs, dsv);
+            track_fsr_final(n, rtvs);
+        }
         if (ours(context)) {  // the bind that began a tracked pass: its scene's targets
             note_scene_bind(n, rtvs, dsv);
             slot_bind(n, rtvs, dsv);
@@ -156,6 +158,7 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         slot_bind(n, rtvs, dsv);
     if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
         fsr_final(n, rtvs);
+    track_fsr_final(n, rtvs);
     if (g.fsr && g.observeShape && g.obsComposited && !g.obsFinal && ours(context) && g.pass < 2 && n && rtvs && rtvs[0]) {
         ComPtr<ID3D11Resource> bound;  // the shape's final under FSR: the eye's image bound after the composite
         rtvs[0]->GetResource(&bound);
@@ -181,8 +184,10 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
         without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
-        if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
             track_bind(n, rtvs, dsv);
+            track_fsr_final(n, rtvs);
+        }
         if (ours(context))
             note_scene_bind(n, rtvs, dsv);
         else if (tr.on && context == g.context && !g.replaying)
@@ -204,6 +209,7 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
         slot_bind(0, nullptr, nullptr);  // car slots: not beside unordered access views
     if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
         fsr_final(n, rtvs);
+    track_fsr_final(n, rtvs);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         g.overlayTarget = overlay_target(n, rtvs);
@@ -234,6 +240,52 @@ void STDMETHODCALLTYPE rs_set_viewports(ID3D11DeviceContext* context, UINT n, co
     update();  // two views only with one viewport
     if (g.on == was)  // (update applied them if they turned on or off)
         apply_viewports();
+}
+
+// The game reading its viewports back (RSGetViewports). YEBIS's start reads the bound one to size the region it
+// processes (mvr_pass_internal.h SizeCut): while ours are bound (the live resolution's cut, or the focus view's beside
+// the eye's) the game is given its own, as it set them, so it sees what it would see without us. With Post Effects Low
+// (and MSAA off) nothing ends the cut before YEBIS starts (no depth copy), and YEBIS stretched the eye's corner over its
+// whole target: the periphery zoomed (2026-11-17, its copy's triangle scaled by full / eye). Our own reads (from this
+// image: the hooks, the focus post's state guards, the tests) see what is bound.
+bool from_this_image(const void* at) {
+    static const auto base = reinterpret_cast<uintptr_t>(&__ImageBase);
+    static const uintptr_t size =
+        reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const char*>(&__ImageBase) + __ImageBase.e_lfanew)
+            ->OptionalHeader.SizeOfImage;
+    return reinterpret_cast<uintptr_t>(at) - base < size;
+}
+
+// The bound viewports aren't the game's own (cut, or two for the focus view).
+bool viewports_ours() {
+    return g.twoVpsApplied || g.vpCount != sizeCut.vpCount ||
+           std::memcmp(g.vps, sizeCut.vps, g.vpCount * sizeof(D3D11_VIEWPORT)) != 0;
+}
+
+using RSGetViewportsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT*, D3D11_VIEWPORT*);
+void rs_get_viewports(RSGetViewportsFn real, const void* caller, ID3D11DeviceContext* context, UINT* n,
+                      D3D11_VIEWPORT* vps) {
+    if (!n || !ours(context) || (from_this_image(caller) && !g.readsAsGameForTests) || !viewports_ours()) {
+        real(context, n, vps);
+        return;
+    }
+    const UINT count = sizeCut.vpCount;
+    if (vps) {
+        for (UINT i = 0; i < *n; ++i)
+            vps[i] = i < count ? sizeCut.vps[i] : D3D11_VIEWPORT{};
+    }
+    if (!vps || *n >= count)
+        *n = count;
+    ++g.stats.gameViewportReads;
+    const int why = cut_active() ? 0 : 1;
+    if (!g.gameReadLogged[why] && count) {
+        g.gameReadLogged[why] = true;
+        const D3D11_VIEWPORT& v = sizeCut.vps[0];
+        simqvfr::logf("lmu mvr: pass %d: the game read its viewport back while ours were bound (%s): given its own "
+                      "%.0f,%.0f %.0fx%.0f (the first; counted from now on)",
+                      g.pass, why == 0 ? "the live resolution's cut" : "the focus view's beside the eye's", v.TopLeftX,
+                      v.TopLeftY, v.Width, v.Height);
+    }
 }
 
 void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n, const D3D11_RECT* rects) {
@@ -308,6 +360,20 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         }
     }
     const int eye = g.pass & 1;
+    // A second multisample resolve in the same pass (its post began at the first): passed on as the game's, nothing
+    // begun again. Else DLAA ran a second time, the post's scene (g.resolved) moved to the second's target and the
+    // focus window was reset. LMU resolving twice in a pass isn't seen yet (review 2026-11-17): logged once if it does.
+    if (multisample && g.afterResolve) {
+        realResolveSubresource(context, dst, dstSub, src, srcSub, format);
+        ++g.stats.extraResolves;
+        if (!g.extraResolveLogged) {
+            g.extraResolveLogged = true;
+            simqvfr::logf("lmu mvr: pass %d: a second multisample resolve after its post began (into %s): passed on, the "
+                          "post not begun again (the first; counted from now on)",
+                          g.pass, describe(dst).c_str());
+        }
+        return;
+    }
     if (multisample) {
         stamp(g.pass, 1);  // the scene ends, the post-processing starts
         g.afterResolve = true;

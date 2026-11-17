@@ -409,6 +409,7 @@ void mvr_roles_known_for_tests(int copy, int blit) {
     g.blitUnknown = blit == 0;
 }
 void mvr_shape_force_bad(bool bad) { g.shapeForceBad = bad; }
+void mvr_test_reads_as_game(bool on) { g.readsAsGameForTests = on; }
 
 void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1) {
     g.fsr = on;

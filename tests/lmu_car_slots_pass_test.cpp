@@ -84,7 +84,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     char what[260];
     std::snprintf(what, sizeof(what), "%llu entries hooked (twenty with car slots, ExecuteCommandList among them)",
                   static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries));
-    check(lmu::mvr_pass_stats().contextEntries == 20, what);
+    check(lmu::mvr_pass_stats().contextEntries == 21, what);
 
     // The game's resources: the scene's target and depth, another target, the per-draw buffer, two meshes, an index buffer.
     constexpr UINT W = 64, H = 32;

@@ -46,6 +46,22 @@ struct LeanDetours {
     static void* get(int n) { return get(n, std::make_index_sequence<kFunctions>{}); }
 };
 
+// RSGetViewports' detours: the caller's return address (its image) tells the game's reads, answered with its own
+// viewports, from ours (mvr_pass_binds.h rs_get_viewports).
+struct ViewportReadDetours {
+    template <int N>
+    static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, UINT* n, D3D11_VIEWPORT* vps) {
+        rs_get_viewports(reinterpret_cast<RSGetViewportsFn>(functions[kHookVPGet].real[N]), _ReturnAddress(), context,
+                         n, vps);
+    }
+    template <std::size_t... N>
+    static void* get(int n, std::index_sequence<N...>) {
+        void* const table[] = {reinterpret_cast<void*>(&fn<static_cast<int>(N)>)...};
+        return table[n];
+    }
+    static void* get(int n) { return get(n, std::make_index_sequence<kFunctions>{}); }
+};
+
 void* detour_for(int h, int n) {
     using Instances = ID3D11ClassInstance* const*;
     switch (h) {
@@ -106,6 +122,7 @@ void* detour_for(int h, int n) {
         case kHookDepth:
             return LeanDetours<kHookDepth, &om_set_depth_stencil_state, void, ID3D11DepthStencilState*, UINT>::get(n);
         case kHookExecute: return Detours<kHookExecute, &execute_command_list, ID3D11CommandList*, BOOL>::get(n);
+        case kHookVPGet: return ViewportReadDetours::get(n);
         default: return nullptr;
     }
 }

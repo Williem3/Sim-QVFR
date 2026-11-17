@@ -1008,7 +1008,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                       static_cast<unsigned long long>(hookedNow),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
-        check(installed && lmu::mvr_pass_stats().contextEntries == 17 && hookedNow >= 32, what);
+        check(installed && lmu::mvr_pass_stats().contextEntries == 18 && hookedNow >= 32, what);
         ComPtr<ID3D11Multithread> mt;
         if (SUCCEEDED(context.As(&mt))) {
             const BOOL was = mt->SetMultithreadProtected(TRUE);
