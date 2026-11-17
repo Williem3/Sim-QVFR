@@ -35,6 +35,7 @@
 #include "launcher/report.h"
 #include "launcher/session_history.h"
 #include "launcher/settings.h"
+#include "launcher/signature_check.h"
 #include "launcher/update_check.h"
 #include "profile/profiles.h"
 #include "sha256_file.h"

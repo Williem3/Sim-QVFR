@@ -897,9 +897,53 @@ void explicit_layers_checks() {
     fs::remove_all(dir, ec);
 }
 
+// The layer DLL's signature before an anti-cheat launch (signature_check.h): the words for each outcome, then the
+// live check on this unsigned test program, a missing file, and a signed program where this PC has one.
+void signature_checks() {
+    SignatureCheck c;
+    c.state = SignatureState::Trusted;
+    c.signer = L"Publisher";
+    c.root = L"Certum Trusted Network CA 2";
+    check(signature_problem(c).empty() && anticheat_signature_error(c, L"x.dll").empty() &&
+              signature_line(c) == L"trusted, signed by Publisher, root Certum Trusted Network CA 2",
+          "signature: trusted: no problem, no refusal, signer and root in the report");
+    c.state = SignatureState::Untrusted;
+    c.status = static_cast<long>(CERT_E_UNTRUSTEDROOT);
+    check(signature_problem(c) == L"Windows doesn't trust the root certificate (Certum Trusted Network CA 2)" &&
+              anticheat_signature_error(c, L"x.dll").find(L"Connect to the internet") != std::wstring::npos &&
+              signature_line(c).rfind(L"NOT trusted: ", 0) == 0,
+          "signature: an untrusted root: named, and the refusal says to launch again online");
+    c.status = static_cast<long>(TRUST_E_BAD_DIGEST);
+    check(anticheat_signature_error(c, L"x.dll").find(L"Unpack the release ZIP again") != std::wstring::npos,
+          "signature: a changed file: unpack the release again");
+    c.status = 0x12345678;
+    check(signature_problem(c) == L"Windows doesn't trust the signature (0x12345678)", "signature: any other code in hex");
+    c.state = SignatureState::Unsigned;
+    const std::wstring unsignedError = anticheat_signature_error(c, L"x.dll");
+    check(unsignedError.find(L"isn't signed") != std::wstring::npos && unsignedError.find(L"signed files from the release") != std::wstring::npos &&
+              unsignedError.find(L'\n') == std::wstring::npos,
+          "signature: unsigned: the release's signed files, on one line (the action bar shows the first)");
+
+    wchar_t self[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, self, MAX_PATH);
+    check(check_signature(self).state == SignatureState::Unsigned, "signature: this test program is unsigned");
+    check(check_signature(L"C:\\no\\such\\sim-qvfr.dll").state == SignatureState::Missing, "signature: a missing file");
+    for (const wchar_t* signedFile : {L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+                                      L"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"}) {
+        std::error_code ec;
+        if (!fs::exists(signedFile, ec))
+            continue;
+        const SignatureCheck edge = check_signature(signedFile);
+        check(edge.state == SignatureState::Trusted && !edge.signer.empty() && !edge.root.empty(),
+              "signature: a signed program is trusted, with its signer and root");
+        break;
+    }
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
+    signature_checks();
     per_game_settings_checks();
     game_tabs_checks();
     launch_status_checks();

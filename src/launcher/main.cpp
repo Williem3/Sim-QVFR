@@ -48,6 +48,7 @@
 #include "preflight.h"
 #include "report.h"
 #include "settings.h"
+#include "signature_check.h"
 
 using namespace simqvfr::launcher;
 namespace fs = std::filesystem;
@@ -425,6 +426,14 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
             return fail(L"Cheeky's loader " + loaders.front() + L" is in the game folder, and Run with anti-cheat is on: "
                         L"move it out of the game folder");
     }
+    // The anti-cheat refuses a layer DLL Windows doesn't trust, and the game starts without Sim-QVFR: the chain is
+    // built here first, which also gets Windows to add a missing root certificate (signature_check.h). A dry run says.
+    SignatureCheck signature;
+    if (viaAntiCheat) {
+        signature = check_signature(library.wstring());
+        if (!dryRun && signature.state != SignatureState::Trusted)
+            return fail(anticheat_signature_error(signature, library.wstring()));
+    }
 
     const std::wstring stamp = stamp_now();
     const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
@@ -485,6 +494,9 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         say(L"  anti-cheat: ON, started through " + bootstrapper.filename().wstring() +
             L" ([launcher] anticheat=1): Sim-QVFR runs with the anti-cheat, at the user's risk");
     say(L"  layer:     " + library.wstring());
+    if (viaAntiCheat)
+        say(L"  signature: " + signature_line(signature) +
+            (dryRun && signature.state != SignatureState::Trusted ? L" (a real launch would refuse)" : L""));
     const std::wstring parent = parent_process_name();
     say(std::wstring(L"  rights:    ") +
         (!elevated        ? L"normal"
