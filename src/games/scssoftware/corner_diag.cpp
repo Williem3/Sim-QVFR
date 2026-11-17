@@ -251,7 +251,7 @@ namespace {
 bool gpuInReplay = false;  // gpu_replay_begin issued its timestamp
 }
 
-void gpu_replay_begin() {
+void gpu_replay_begin(UINT psFirst, UINT psCount) {
     gpuInReplay = false;
     GpuSlot* s = open_slot();
     if (!s || s->replays >= kGpuReplays)
@@ -261,7 +261,7 @@ void gpu_replay_begin() {
     if (!q || !query(s->end[i], D3D11_QUERY_TIMESTAMP))
         return;
     g.context->End(q);
-    s->info[i] = {g.frameReplay, g.boundW, g.boundH, g.ps.first, g.ps.count, g.boundSwapchain};
+    s->info[i] = {g.frameReplay, g.boundW, g.boundH, psFirst, psCount, g.boundSwapchain};
     gpuInReplay = true;
 }
 
@@ -339,8 +339,9 @@ void log_removed(HRESULT hr, const char* seen) {
     simqvfr::logf("scs corner: the GPU device was REMOVED (0x%08lX, %s), seen %s at frame %llu (%llu with the eyes in the "
                   "corner; the GPU's newest frame read back %llu: eye passes %.2f ms, %u replays %.2f ms); the focus view %s, "
                   "the corner %.0f%%, the box %d%% x %d%% at %.0f%% density, eye targets %ux%u; twins %zu (%.0f MB at most), "
-                  "mirrors %zu; this frame's eye pass %s; VRAM %llu MB used of a %llu MB budget (at frame %llu), the "
-                  "session's highest %llu MB",
+                  "mirrors %zu; this frame's eye pass %s; the boxes' top-left (left eye, right eye; screen 0..1) %.3f,%.3f and "
+                  "%.3f,%.3f, the frame before %.3f,%.3f and %.3f,%.3f, gaze %.3f,%.3f and %.3f,%.3f; VRAM %llu MB used of a %llu "
+                  "MB budget (at frame %llu), the session's highest %llu MB",
                   static_cast<unsigned long>(hr), removed_reason(hr), seen, static_cast<unsigned long long>(g.stats.frames),
                   static_cast<unsigned long long>(g.stats.cornerFrames),
                   static_cast<unsigned long long>(gpuDoneFrame.load(std::memory_order_relaxed)),
@@ -352,7 +353,10 @@ void log_removed(HRESULT hr, const char* seen) {
                   : g.mvr          ? "by NVIDIA's multi-view rendering"
                                    : "passes only",
                   g.percent, g.focusPercent, g.focusPercentY, g.density * 100, g.eyeW, g.eyeH, g.texes.size(),
-                  g.twinBytes / 1048576.0, g.mirrors.size(), g.active ? "under way" : "not under way",
+                  g.twinBytes / 1048576.0, g.mirrors.size(), g.active ? "under way" : "not under way", g.box[0][0],
+                  g.box[0][1], g.box[1][0], g.box[1][1], g.prevBox[0][0], g.prevBox[0][1], g.prevBox[1][0], g.prevBox[1][1],
+                  g.gaze[0][0].load(std::memory_order_relaxed), g.gaze[0][1].load(std::memory_order_relaxed),
+                  g.gaze[1][0].load(std::memory_order_relaxed), g.gaze[1][1].load(std::memory_order_relaxed),
                   static_cast<unsigned long long>(dw.usedMb), static_cast<unsigned long long>(dw.budgetMb),
                   static_cast<unsigned long long>(dw.readFrame), static_cast<unsigned long long>(dw.peakMb));
 }

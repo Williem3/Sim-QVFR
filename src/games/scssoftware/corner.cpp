@@ -390,6 +390,8 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         g.context->VSSetConstantBuffers(13, 1, cb13);
         g.gameCb13.Reset();
     }
+    // The ranges on_draw rewrote, for the replay's log and timing (the put-backs clear them).
+    const UINT vsFirst = g.vs.first, vsCount = g.vs.count, psFirst = g.ps.first, psCount = g.ps.count;
     if (g.vs.game || g.ps.game) {
         put_back(g.vs, false);
         put_back(g.ps, true);
@@ -410,12 +412,12 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1));
         if (g.stats.frames == g.replayLogFrame)
             simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u%s", n,
-                          g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", g.vs.first, g.vs.count,
-                          g.ps.first, g.ps.count, skip ? ": SKIPPED (scs_focus_replays / scs_replay_skip)" : "");
+                          g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", vsFirst, vsCount, psFirst,
+                          psCount, skip ? ": SKIPPED (scs_focus_replays / scs_replay_skip)" : "");
         if (!skip) {
             const Timed t(State::kTimeReplays);
             if (g.gpuTimes)
-                gpu_replay_begin();
+                gpu_replay_begin(psFirst, psCount);
             replay(count, start);  // into the headset's image too: its final blit
             if (g.gpuTimes)
                 gpu_replay_end();

@@ -435,7 +435,7 @@ void hang_check();
 // later without waiting; a line with each perf line, and one at once for a frame with a replay over 5 ms or passes over
 // 40 ms (a pass that runs away before a GPU hang names itself). All on the render thread.
 void gpu_pass_begin();  // the eye pass's first G-buffer bind
-void gpu_replay_begin();
+void gpu_replay_begin(UINT psFirst, UINT psCount);  // the pixel shader's rewritten range (tells the passes apart)
 void gpu_replay_end();
 void gpu_times_frame_end();  // take_frame_end
 void gpu_times_line();       // with perf_line
