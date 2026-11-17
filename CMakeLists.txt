@@ -600,12 +600,12 @@ add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/set
   src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
-  src/launcher/log_retention.cpp
+  src/launcher/log_retention.cpp src/launcher/signature_check.cpp
   src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp src/quad/osd.cpp)
 target_include_directories(sim_qvfr_launcher_shared PRIVATE src)
 target_compile_definitions(sim_qvfr_launcher_shared PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher_shared PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr_launcher_shared PUBLIC bcrypt winhttp version)
+target_link_libraries(sim_qvfr_launcher_shared PUBLIC bcrypt winhttp version wintrust crypt32)
 target_precompile_headers(sim_qvfr_launcher_shared PRIVATE ${SIM_QVFR_PCH})
 
 # Local analysis tools (src/probe/local_analysis.h): the developer's own, in a folder outside the repository, never
