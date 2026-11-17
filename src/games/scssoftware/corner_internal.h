@@ -265,6 +265,7 @@ struct State {
     // [experiment] scs_replay_skip_large=1: the replays whose pixel range is over kLargeRange vectors skipped (their
     // numbers move from frame to frame); counted either way, the first few logged.
     bool diagSkipLarge = false;
+    bool diagDumpLarge = false;  // [experiment] scs_dump_large=1: dump_large_range
     uint64_t largeReplays = 0, largeSkipped = 0;
     unsigned largeLogged = 0;
     unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
@@ -446,6 +447,10 @@ void gpu_replay_end();
 void gpu_times_frame_end();  // take_frame_end
 void gpu_times_line();       // with perf_line
 void gpu_times_reset();      // release_all (the queries are the device's)
+// g.diagDumpLarge: the pixel range bound for a large replay (n: the frame's replay number), read back at once (a stall,
+// a few times a session) and written to logs\scs-large-<k>.bin, with the places the focus view's rules would match in
+// it logged. At most 4, 300 frames apart.
+void dump_large_range(unsigned n);
 void poll_diag_keys();
 void poll_diag_hotkeys();
 

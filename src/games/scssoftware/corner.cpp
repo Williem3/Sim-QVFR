@@ -412,6 +412,8 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         const bool large = psCount > kLargeRange;
         const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge);
         if (large) {
+            if (g.diagDumpLarge)
+                dump_large_range(n);
             ++g.largeReplays;
             g.largeSkipped += skip ? 1 : 0;
             if (g.largeLogged < 12) {
@@ -801,9 +803,10 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     return true;
 }
 
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge) {
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge) {
     g.gpuTimes = gpuTimes;
     g.diagSkipLarge = skipLarge;
+    g.diagDumpLarge = dumpLarge;
     g.diagNoDraws = noDraws;
     g.diagNoReplays = noReplays;
     g.replaySkip = replaySkip;

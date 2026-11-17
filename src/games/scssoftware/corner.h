@@ -52,7 +52,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent = 0);
 // each bit n-1 of `replaySkip`. The log names each replay of one frame, 300 frames into driving. `gpuTimes`: the replays and
 // eye passes timed on the GPU (corner_internal.h's gpu_replay_begin).
 // `skipLarge`: the replays with a pixel range over 128 vectors skipped (a light list's).
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes = false, bool skipLarge = false);
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes = false, bool skipLarge = false,
+                     bool dumpLarge = false);  // `dumpLarge`: their ranges saved (dev diagnostics)
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame
 // just drawn had its eyes in it; `info` itself otherwise. The copies live until the next call.

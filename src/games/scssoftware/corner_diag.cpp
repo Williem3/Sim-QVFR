@@ -5,10 +5,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "../../dev_build.h"
 #include "../../log.h"
+#include "corner_rules.h"
 
 namespace scs {
 namespace detail {
@@ -437,6 +440,92 @@ void hang_check() {
     }
     if (!removedLogged.exchange(true))
         log_removed(hr, "by the hang watch");
+}
+
+namespace {
+unsigned largeDumps = 0;
+uint64_t largeDumpFrame = 0;
+
+std::string vec_text(const float (&v)[4]) {
+    char s[160];
+    uint32_t u[4];
+    std::memcpy(u, v, 16);
+    snprintf(s, sizeof(s), "(%g, %g, %g, %g | %08x %08x %08x %08x)", v[0], v[1], v[2], v[3], u[0], u[1], u[2], u[3]);
+    return s;
+}
+}  // namespace
+
+void dump_large_range(unsigned n) {
+    if (largeDumps >= 4 || (largeDumps && g.stats.frames - largeDumpFrame < 300))
+        return;
+    ID3D11Buffer* bound = nullptr;
+    UINT first = 0, count = 0;
+    g.context->PSGetConstantBuffers1(0, 1, &bound, &first, &count);
+    ComPtr<ID3D11Buffer> buf;
+    buf.Attach(bound);
+    if (!buf || !count)
+        return;
+    D3D11_BUFFER_DESC bd{};
+    buf->GetDesc(&bd);
+    const UINT bytes = std::min(count * 16, bd.ByteWidth > first * 16 ? bd.ByteWidth - first * 16 : 0);
+    if (!bytes)
+        return;
+    const D3D11_BUFFER_DESC sd = {bytes, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+    ComPtr<ID3D11Buffer> staging;
+    if (FAILED(g.device->CreateBuffer(&sd, nullptr, &staging)))
+        return;
+    const D3D11_BOX box = {first * 16, 0, 0, first * 16 + bytes, 1, 1};
+    g.context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, buf.Get(), 0, &box);
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m)))
+        return;
+    std::vector<float> data(bytes / 4);
+    std::memcpy(data.data(), m.pData, bytes);
+    g.context->Unmap(staging.Get(), 0);
+    ++largeDumps;
+    largeDumpFrame = g.stats.frames;
+    const std::wstring path = simqvfr::log_directory() + L"\\scs-large-" + std::to_wstring(largeDumps) + L".bin";
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f) {
+        fwrite(data.data(), 1, bytes, f);
+        fclose(f);
+    }
+    auto* v = reinterpret_cast<float(*)[4]>(data.data());
+    const int vectors = static_cast<int>(bytes / 16);
+    simqvfr::logf("scs focus: large range %u (frame %llu, replay %u, buffer %u bytes, %s): %d vectors from %u, saved as %ls",
+                  largeDumps, static_cast<unsigned long long>(g.stats.frames), n, bd.ByteWidth,
+                  bd.ByteWidth >= kMirrorMin ? "a mirror or the game's large buffer" : "the game's", vectors, first, path.c_str());
+    // Where the focus view's rules (kCornerPatchCs with flags 2) would write in it.
+    const float ones[4] = {1, 1, 1, 1}, last[4] = {0, 0, 0, 1};
+    const auto eq = [](const float (&a)[4], const float (&b)[4]) { return std::memcmp(a, b, 16) == 0; };
+    const auto size = [](const float (&a)[4]) { return corner_size(a); };
+    unsigned lines = 0;
+    for (int p = 0; p + 1 < vectors && lines < 24; ++p)
+        if (eq(v[p], ones) && size(v[p + 1])) {
+            ++lines;
+            simqvfr::logf("scs focus:   pair at %d: %s %s; the ray rewrite at %d: %s", p, vec_text(v[p]).c_str(),
+                          vec_text(v[p + 1]).c_str(), p + 3, p + 3 < vectors ? vec_text(v[p + 3]).c_str() : "(past the end)");
+            ++p;
+        }
+    if (vectors >= 5 && v[0][0] == 0.5f && v[0][1] == 0.5f && eq(v[3], ones) && size(v[4]))
+        simqvfr::logf("scs focus:   the AO rule at 0: %s", vec_text(v[0]).c_str());
+    for (int k = 0; k + 4 <= vectors && lines < 48; ++k) {
+        if (!eq(v[k + 3], last))
+            continue;
+        float back[4] = {-v[k + 2][0], -v[k + 2][1], -v[k + 2][2], -v[k + 2][3]};
+        if (k >= 4 && eq(v[k - 1], back)) {
+            ++lines;
+            simqvfr::logf("scs focus:   matrix remap at %d (rows %d, %d): %s %s", k - 4, k - 4, k - 3, vec_text(v[k - 4]).c_str(),
+                          vec_text(v[k - 3]).c_str());
+        }
+        if (k + 8 <= vectors && eq(v[k + 7], back)) {
+            ++lines;
+            simqvfr::logf("scs focus:   matrix remap at %d (rows %d, %d): %s %s", k + 4, k + 4, k + 5, vec_text(v[k + 4]).c_str(),
+                          vec_text(v[k + 5]).c_str());
+        }
+    }
+    if (!lines)
+        simqvfr::log_line("scs focus:   no rule matches in it");
 }
 
 // The diagnostic hotkeys exist in development builds only (dev_build.h): a release reads no key here.
