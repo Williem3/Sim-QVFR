@@ -37,3 +37,6 @@ NVIDIA-RTX-SDKs-LICENSE.txt
 # third_party/amd-fsr-sdk/ inside a checkout); a release carries the DLLs only as AMD's licence allows.
 third_party/amd-fsr-sdk/
 amd_fidelityfx_*.dll
+# NVIDIA's Nsight Aftermath SDK: local only like the DLSS SDK (CMake's AFTERMATH_SDK_DIR), never committed.
+GFSDK_Aftermath*
+*.nv-gpudmp

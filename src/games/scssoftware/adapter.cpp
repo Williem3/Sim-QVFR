@@ -9,6 +9,7 @@
 
 #include "../../dev_build.h"
 #include "../../log.h"
+#include "../../probe/aftermath.h"
 #include "../identity_adapter.h"
 #include "../lmu/mvr_probe.h"
 #include "corner.h"
@@ -40,6 +41,13 @@ public:
         // device has it, by Sim-QVFR's own (instancing) on every other GPU: the corner picks at xrCreateSession.
         // scs_corner / scs_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
         // ([experiment] periphery_scale, focus_percent) take over at the first live read.
+        // NVIDIA Aftermath (dev builds with the SDK; [experiment] aftermath=1): crash dumps on before the game's device.
+        if (simqvfr::kDevBuild && ini && GetPrivateProfileIntW(L"experiment", L"aftermath", 0, ini) != 0) {
+            if (!simqvfr::aftermath::built())
+                simqvfr::log_line("aftermath: asked for (aftermath=1) but this build has no Aftermath SDK");
+            else
+                simqvfr::aftermath::enable_dumps();
+        }
         wchar_t iniMode[32] = L"";
         cornerPercent_ = launch_corner(ini, iniMode);
         const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;

@@ -12,6 +12,7 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../lmu/mvr_probe.h"
 #include "../../log.h"
+#include "../../probe/aftermath.h"
 #include "../../probe/hang_watch.h"
 #include "corner_rules.h"
 #include "pass_probe.h"
@@ -45,6 +46,8 @@ void take_frame_end() {
     g.seenEndFrames = ends;
     if (g.gpuTimes)
         gpu_times_frame_end();  // before the frame count moves on: the slot is this frame's
+    mark(kMarkFrameEnd, 0);
+    g.frameDraw = 0;
     ++g.stats.frames;
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
@@ -329,7 +332,9 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
+        const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
+        mark(kMarkDraw, (++g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));
+        if (focusDraw) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
         } else if (g.twoViews) {  // switched off mid-frame: one view again
@@ -341,6 +346,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     }
     if (entry != ch::kDraw && entry != ch::kDrawInstanced)
         return;
+    mark(kMarkDraw, ++g.frameDraw & 0xFFFFFF);
     two_views(false);  // the full-screen passes: one view
     if (g.focusPercent && g.boundSwapchain && g.burstFramesLeft > 0 && count == 3) {  // the eye's final image, whole
         ID3D11ShaderResourceView* v = nullptr;
@@ -431,7 +437,9 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
             const Timed t(State::kTimeReplays);
             if (g.gpuTimes)
                 gpu_replay_begin(psFirst, psCount);
+            mark(kMarkReplay, n << 16 | std::min<UINT>(psCount, 0xFFFF));
             replay(count, start);  // into the headset's image too: its final blit
+            mark(kMarkReplayDone, n << 16);
             if (g.gpuTimes)
                 gpu_replay_end();
         }
@@ -551,6 +559,7 @@ void release_all() {
     if (g.context)
         two_views(false);
     gpu_times_reset();
+    simqvfr::aftermath::detach();
     if (g.gameVs) {
         g.gameVs->Release();
         g.gameVs = nullptr;
@@ -701,6 +710,8 @@ bool install_now(ID3D11Device* device, int percent, int focusPercent) {
     }
     g.percent = static_cast<float>(percent);
     simqvfr::hang_watch_on_fire(&hang_check);  // a frame stuck inside the runtime still logs the device's state
+    if (simqvfr::aftermath::attach(device, g.context.Get()))  // [experiment] aftermath=1 (dev builds with the SDK)
+        simqvfr::aftermath::set_marker_names(&marker_name);
     ch::Observers o;
     o.targets = &on_targets;
     o.draw = &on_draw;

@@ -267,6 +267,7 @@ struct State {
     bool diagSkipLarge = false;
     bool diagDumpLarge = false;  // [experiment] scs_dump_large=1: dump_large_range
     uint64_t largeReplays = 0, largeSkipped = 0;
+    uint32_t frameDraw = 0;  // this frame's draws in its eye passes (the markers' numbers)
     unsigned largeLogged = 0;
     unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
     uint64_t replayLogFrame = 0;  // the frame whose replays are each logged once (300 cornered frames in)
@@ -451,6 +452,11 @@ void gpu_times_reset();      // release_all (the queries are the device's)
 // a few times a session) and written to logs\scs-large-<k>.bin, with the places the focus view's rules would match in
 // it logged. At most 4, 300 frames apart.
 void dump_large_range(unsigned n);
+// Aftermath markers (probe/aftermath.h, [experiment] aftermath=1 in dev builds with the SDK): what the GPU reached last
+// when it hangs. A marker's number: its kind (top 4 bits), the frame (28 bits), and the kind's own value.
+enum MarkKind : uint64_t { kMarkDraw = 1, kMarkReplay = 2, kMarkReplayDone = 3, kMarkRelease = 4, kMarkReleaseDone = 5, kMarkFrameEnd = 6 };
+void mark(MarkKind kind, uint32_t value);
+void marker_name(uint64_t code, char* out, unsigned size);
 void poll_diag_keys();
 void poll_diag_hotkeys();
 

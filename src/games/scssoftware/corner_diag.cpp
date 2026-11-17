@@ -12,6 +12,7 @@
 #include "../../dev_build.h"
 #include "../../log.h"
 #include "corner_rules.h"
+#include "../../probe/aftermath.h"
 
 namespace scs {
 namespace detail {
@@ -415,6 +416,7 @@ void device_watch() {
         return;
     read_vram();  // the adapter's numbers outlive the device
     log_removed(hr, "at xrEndFrame");
+    simqvfr::aftermath::after_removal(5000);  // the last marker the GPU reached, and the dump written
 }
 
 void device_watch_reset() { dw = {}; }
@@ -526,6 +528,29 @@ void dump_large_range(unsigned n) {
     }
     if (!lines)
         simqvfr::log_line("scs focus:   no rule matches in it");
+}
+
+void mark(MarkKind kind, uint32_t value) {
+    if (simqvfr::aftermath::marking())
+        simqvfr::aftermath::mark((static_cast<uint64_t>(kind) << 60) | ((g.stats.frames & 0xFFFFFFFull) << 32) | value);
+}
+
+void marker_name(uint64_t code, char* out, unsigned size) {
+    const unsigned kind = static_cast<unsigned>(code >> 60);
+    const unsigned long long frame = (code >> 32) & 0xFFFFFFF;
+    const uint32_t v = static_cast<uint32_t>(code);
+    switch (kind) {
+        case kMarkDraw:
+            snprintf(out, size, "frame %llu, before eye-pass draw %u (%s%s)", frame, v & 0xFFFFFF,
+                     (v >> 24) & 1 ? "indexed: the scene" : "non-indexed: a full-screen pass", (v >> 25) & 1 ? ", with the focus view" : "");
+            break;
+        case kMarkReplay: snprintf(out, size, "frame %llu, before the focus replay %u (pixel range %u vectors)", frame, v >> 16, v & 0xFFFF); break;
+        case kMarkReplayDone: snprintf(out, size, "frame %llu, after the focus replay %u", frame, v >> 16); break;
+        case kMarkRelease: snprintf(out, size, "frame %llu, before our release work for eye %u (scale-up, focus composed)", frame, v); break;
+        case kMarkReleaseDone: snprintf(out, size, "frame %llu, after our release work for eye %u", frame, v); break;
+        case kMarkFrameEnd: snprintf(out, size, "frame %llu, its end (the next frame's first call of ours)", frame); break;
+        default: snprintf(out, size, "unknown marker %016llx", static_cast<unsigned long long>(code)); break;
+    }
 }
 
 // The diagnostic hotkeys exist in development builds only (dev_build.h): a release reads no key here.
