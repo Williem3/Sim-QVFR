@@ -267,6 +267,28 @@ int SIM_QVFR_TEST_MAIN() {
                   std::fabs(box_share_in_region(box, around) - (0.751 / 0.8) * (0.799 / 0.8)) < 1e-4,
               "box_share_in_region: a quarter inside, all inside, a strip outside");
 
+        // Views 0-1 over the runtime's whole eye (issue 29): the FOV crop's view (top 20%, bottom 15%, outer 8% of an
+        // eye of tangents -1.264..0.890 x -1.274..1.274), 794 x 664 texels, padded out on its own texel grid.
+        const float eyeTan[4] = {-1.264f, 0.890f, 1.274f, -1.274f};
+        const float croppedTan[4] = {-1.264f + 0.08f * 2.154f, 0.890f, 1.274f - 0.2f * 2.548f, -1.274f + 0.15f * 2.548f};
+        check(narrower_than_eye(croppedTan, eyeTan) && !narrower_than_eye(eyeTan, eyeTan),
+              "narrower_than_eye: the crop, not the eye");
+        RegionImage pad;
+        ok = eye_pad_image(croppedTan, 794, 664, eyeTan, pad);
+        const double perTanX = 794 / (static_cast<double>(croppedTan[1]) - croppedTan[0]);
+        const double perTanY = 664 / (static_cast<double>(croppedTan[2]) - croppedTan[3]);
+        std::printf("     eye pad %dx%d, the view at %d,%d, tangents %.4f %.4f %.4f %.4f\n", pad.width, pad.height,
+                    pad.boxX, pad.boxY, pad.tan[0], pad.tan[1], pad.tan[2], pad.tan[3]);
+        check(ok && pad.tan[0] <= eyeTan[0] && pad.tan[1] >= eyeTan[1] - 1e-6f && pad.tan[2] >= eyeTan[2] && pad.tan[3] <= eyeTan[3] &&
+                  pad.tan[0] > eyeTan[0] - 1.01 / perTanX && pad.tan[2] < eyeTan[2] + 1.01 / perTanY,
+              "eye_pad_image: covers the runtime's eye, to within a texel");
+        check(pad.boxX >= 0 && pad.boxY >= 0 && pad.boxX + 794 <= pad.width && pad.boxY + 664 <= pad.height &&
+                  std::abs(pad.boxX - static_cast<int>(std::lround((croppedTan[0] - eyeTan[0]) * perTanX))) <= 1 &&
+                  std::abs(pad.boxY - static_cast<int>(std::lround((eyeTan[2] - croppedTan[2]) * perTanY))) <= 1 &&
+                  std::fabs((pad.tan[1] - pad.tan[0]) * perTanX - pad.width) < 0.05,
+              "eye_pad_image: the view texel for texel inside, at the crop's offset, at its own density");
+        check(!eye_pad_image(eyeTan, 863, 1021, eyeTan, pad), "eye_pad_image: an uncropped view: nothing to pad");
+
         // The runtime's focus view as its eye sees it: unturned, its own tangents; turned 10 degrees about the
         // vertical, the bounding box of its corners, shifted that way and wider.
         const XrQuaternionf identity{0, 0, 0, 1};
@@ -368,6 +390,10 @@ int SIM_QVFR_TEST_MAIN() {
                   std::fabs(regions[1][3] + 0.1f) < 1e-5f,
               "the runtime's focus views as located for the frame, in each eye's frame");
         check(runtime_focus_regions(999, regions, &exact) && !exact, "another frame's: the latest located");
+        float eyes[2][4];
+        check(runtime_eye_tangents(1000, eyes) && std::fabs(eyes[0][1] - std::tan(0.9f)) < 1e-5f &&
+                  std::fabs(eyes[1][0] - std::tan(-0.91f)) < 1e-5f && std::fabs(eyes[1][2] - std::tan(0.9f)) < 1e-5f,
+              "the runtime's eyes as located for the frame, in tangents");
 
         // A menu frame at that time: views 2-3 its eyes' images cut to the runtime's focus views, the FOV theirs
         // within a texel of its eye (1000 x 900 over tangents about +-1.26).
@@ -384,7 +410,7 @@ int SIM_QVFR_TEST_MAIN() {
         menuEnd.displayTime = 1000;
         menuEnd.layerCount = 1;
         menuEnd.layers = menuOnly;
-        const uint64_t croppedBefore = nativeQuad.croppedFrames;
+        const uint64_t croppedBefore = nativeQuad.croppedFrames, narrowBefore = nativeQuad.narrowFrames;
         bool covered = XR_SUCCEEDED(next.EndFrame(kSession, &menuEnd)) && fake.endViews.size() == 4 &&
                        nativeQuad.croppedFrames == croppedBefore + 1;
         for (int v = 2; covered && v < 4; ++v) {
@@ -400,6 +426,12 @@ int SIM_QVFR_TEST_MAIN() {
                        fake.endViews[v].subImage.swapchain == (v == 2 ? kLeft : kRight);
         }
         check(covered, "a menu frame: views 2-3 cut to the runtime's focus views, at their FOV within a texel");
+        check(nativeQuad.narrowFrames == narrowBefore, "a menu frame over the runtime's eyes: not counted narrower");
+        // The same with the FOV crop and nothing padding it out: counted.
+        for (int e = 0; e < 2; ++e)
+            menuEyes[e].fov.angleUp = views[e].fov.angleUp * 0.7f;
+        check(XR_SUCCEEDED(next.EndFrame(kSession, &menuEnd)) && nativeQuad.narrowFrames == narrowBefore + 1,
+              "a frame with views 0-1 narrower than the runtime's eyes: counted");
 
         // The gaze off (a fixed focus box): the runtime asked not to move its focus views.
         experiment.gaze = false;

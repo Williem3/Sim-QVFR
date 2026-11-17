@@ -11,6 +11,7 @@
 #include "quad/focus_turn.h"
 #include "quad/fov_crop.h"
 #include "quad/helmet.h"
+#include "quad/native_quad.h"
 #include "quad/output_density.h"
 #include "xr.h"
 #include "layer/layer.h"
@@ -370,6 +371,23 @@ void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComp
     }
     // The FOV crop: the output keeps its density over the cropped FOV (views4_output_extent).
     extent = views4_output_extent(out);
+    // A quad view session (native quad views): the output covers at least the runtime's located eye, black past the
+    // crop at the same density, since the runtime may draw views 0-1 over its eye whatever FOV they carry (Pimax showed
+    // the cropped output stretched over the whole eye, the focus views at their place: issue 29).
+    float runtimeEyes[2][4];
+    float both[4];
+    if (quad.v4Crop.on() && runtime_eye_tangents(0, runtimeEyes)) {
+        eye_union(c.outerTan, runtimeEyes[e], both);
+        const float spanX = c.outerTan[1] - c.outerTan[0], spanY = c.outerTan[2] - c.outerTan[3];
+        if (spanX > 0 && spanY > 0 && narrower_than_eye(c.outerTan, runtimeEyes[e])) {
+            std::memcpy(c.viewTan, both, sizeof(both));
+            submitFov = tangents_fov(both);
+            extent = {std::clamp<int32_t>(static_cast<int32_t>(std::lround(extent.width * (both[1] - both[0]) / spanX)), 1,
+                                          static_cast<int32_t>(eyeW)),
+                      std::clamp<int32_t>(static_cast<int32_t>(std::lround(extent.height * (both[2] - both[3]) / spanY)), 1,
+                                          static_cast<int32_t>(eyeH))};
+        }
+    }
     c.outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(eyeW);
     c.outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(eyeH);
 }

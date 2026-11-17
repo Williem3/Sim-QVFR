@@ -45,6 +45,9 @@ void note_regions(XrTime time, const XrView (&four)[kQuadViews]) {
             return;
         turned |= region.turned;
         std::memcpy(entry.tan[e], region.tan, sizeof(region.tan));
+        const XrFovf& f = four[e].fov;
+        const float eye[4] = {std::tan(f.angleLeft), std::tan(f.angleRight), std::tan(f.angleUp), std::tan(f.angleDown)};
+        std::memcpy(entry.eyeTan[e], eye, sizeof(eye));
     }
     std::lock_guard guard(nativeQuad.regionMutex);
     nativeQuad.located[nativeQuad.locatedNext++ % std::size(nativeQuad.located)] = entry;
@@ -218,6 +221,32 @@ XrResult XRAPI_CALL quadEndFrame(XrSession session, const XrFrameEndInfo* info) 
                                      "views 2-3 copy the eyes (no runtime focus views located yet)");
         }
     }
+    // Views 0-1 narrower than the runtime's eyes (the FOV crop, in a frame nothing padded out): a runtime may draw
+    // them over its eyes whatever FOV they carry, stretched (issue 29). Counted for the log, the first one logged.
+    float eyes[2][4];
+    if (runtime_eye_tangents(info->displayTime, eyes)) {
+        bool narrow = false;
+        for (const XrCompositionLayerBaseHeader* l : frame.layers) {
+            if (!l || l->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION)
+                continue;
+            const auto* p = reinterpret_cast<const XrCompositionLayerProjection*>(l);
+            for (uint32_t v = 0; v < 2 && v < p->viewCount; ++v) {
+                const XrFovf& f = p->views[v].fov;
+                const float tan[4] = {std::tan(f.angleLeft), std::tan(f.angleRight), std::tan(f.angleUp),
+                                      std::tan(f.angleDown)};
+                narrow |= narrower_than_eye(tan, eyes[v], 0.01f);
+            }
+        }
+        if (narrow) {
+            ++nativeQuad.narrowFrames;
+            if (!nativeQuad.loggedNarrow) {
+                nativeQuad.loggedNarrow = true;
+                logf("native quad views: a frame%s with views 0-1 narrower than the runtime's eyes (the FOV crop, not "
+                     "padded out): the runtime may show them stretched over its eyes",
+                     focus ? " with the focus views" : " without focus views");
+            }
+        }
+    }
     if (frame.refused) {
         if (nativeQuad.refusedLayers == 0)
             logf("native quad views: %u projection layer(s) of neither two nor four views left out of a frame",
@@ -232,10 +261,10 @@ XrResult XRAPI_CALL quadEndFrame(XrSession session, const XrFrameEndInfo* info) 
 
 }  // namespace
 
-bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact) {
-    if (!nativeQuad.active)
-        return false;
-    std::lock_guard guard(nativeQuad.regionMutex);
+namespace {
+
+// The located entry for `time`, else the latest; null: none (under nativeQuad.regionMutex).
+const NativeQuad::Located* located_for(XrTime time) {
     const NativeQuad::Located* found = nullptr;
     const NativeQuad::Located* latest = nullptr;
     const uint32_t n = static_cast<uint32_t>(std::size(nativeQuad.located));
@@ -250,13 +279,32 @@ bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact) {
             break;
         }
     }
-    if (!found)
-        found = latest;
+    return found ? found : latest;
+}
+
+}  // namespace
+
+bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact) {
+    if (!nativeQuad.active)
+        return false;
+    std::lock_guard guard(nativeQuad.regionMutex);
+    const NativeQuad::Located* found = located_for(time);
     if (!found)
         return false;
     std::memcpy(tan, found->tan, sizeof(tan));
     if (exact)
         *exact = found->time == time;
+    return true;
+}
+
+bool runtime_eye_tangents(XrTime time, float (&tan)[2][4]) {
+    if (!nativeQuad.active)
+        return false;
+    std::lock_guard guard(nativeQuad.regionMutex);
+    const NativeQuad::Located* found = located_for(time);
+    if (!found)
+        return false;
+    std::memcpy(tan, found->eyeTan, sizeof(tan));
     return true;
 }
 
@@ -363,13 +411,16 @@ void native_quad_session_ended() {
              static_cast<unsigned long long>(nativeQuad.croppedFrames),
              static_cast<unsigned long long>(nativeQuad.refusedLayers),
              static_cast<unsigned long long>(nativeQuad.regionMisses));
+    if (nativeQuad.narrowFrames)
+        logf("native quad views: %llu frames with views 0-1 narrower than the runtime's eyes (not padded out)",
+             static_cast<unsigned long long>(nativeQuad.narrowFrames));
     if (nativeQuad.gazeFrames)
         logf("native quad views: the runtime's foveated rendering moved its focus views on %llu of %llu located frames",
              static_cast<unsigned long long>(nativeQuad.gazeMoves),
              static_cast<unsigned long long>(nativeQuad.gazeFrames));
     nativeQuad.focusFrames = nativeQuad.copyFrames = nativeQuad.refusedLayers = 0;
-    nativeQuad.croppedFrames = nativeQuad.regionMisses = 0;
-    nativeQuad.loggedFirstFocus = nativeQuad.loggedFirstCopy = false;
+    nativeQuad.croppedFrames = nativeQuad.regionMisses = nativeQuad.narrowFrames = 0;
+    nativeQuad.loggedFirstFocus = nativeQuad.loggedFirstCopy = nativeQuad.loggedNarrow = false;
     {
         std::lock_guard guard(nativeQuad.regionMutex);
         for (NativeQuad::Located& l : nativeQuad.located)

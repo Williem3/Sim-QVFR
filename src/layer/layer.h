@@ -135,6 +135,9 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
 void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4Layout& layout);
 // Composes both eyes of `proj` into the D3D11 output chain and points `copy` at it; false: nothing changed. With
 // focus_layer (`focus` given): the periphery in `copy`, the focus views' layer in `focus`, `*layered` true.
+// Native quad views with the FOV crop, a frame with the game's own views 0-1: padded out to the runtime's eyes (`copy`
+// pointed at the pad chain). False: `copy` as it was.
+bool v4d3d11_pad_eyes(XrSession session, std::vector<XrCompositionLayerProjectionView>& copy, XrTime displayTime);
 bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
                      std::vector<XrCompositionLayerProjectionView>& copy,
                      XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr,
@@ -216,6 +219,10 @@ bool runtime_gaze(XrSpace space, XrTime time, XrVector3f& direction);
 // (tangents left, right, up, down); the latest located when none was for `time` (`exact` false). False: none located
 // (no quad view session, or before its first locate). Views 2-3 go to the runtime over exactly these.
 bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact = nullptr);
+// A quad view session: the runtime's eyes (views 0-1) as located for `time` (the latest located when none was), each
+// eye's FOV in tangents (left, right, up, down). Views 0-1 go to the runtime over at least these (native_quad.h
+// eye_union): it may draw them over its own eyes whatever FOV they carry. False: none located.
+bool runtime_eye_tangents(XrTime time, float (&tan)[2][4]);
 // With the extension on the instance (nativeQuad.extension): the wrappers into `next`, after it is loaded.
 void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
 // At xrCreateSession: whether the session will be begun as a quad view one (the system has it, the run wants it).

@@ -181,6 +181,18 @@ const XrApiLayerNextInfo* chain_layers_below(const XrApiLayerNextInfo* self) {
     return chain::link(layers, self, storage);
 }
 
+// OpenXR layers known to pass a quad view session through as it is: they add layers of their own to a frame and touch
+// neither the game's views nor its session's view configuration (OpenKneeboard: its kneeboards as quad layers). With
+// only these between this layer and the runtime, native quad views ask the runtime itself for its offer, past them
+// (issue 29: OpenKneeboard on turned the runtime composition off).
+bool passes_quad_views(const char* layerName) {
+    static const char* const kKnown[] = {"XR_APILAYER_FREDEMMOTT_OpenKneeboard"};
+    for (const char* known : kKnown)
+        if (layerName && _stricmp(layerName, known) == 0)
+            return true;
+    return false;
+}
+
 }  // namespace
 
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
@@ -215,9 +227,22 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // Auto (native_quad_views=1, the default) asks only when the runtime is known to offer them: with a layer between,
     // an unknown offer would mean a refused instance and a second try on every launch on any runtime; 2 tries then too.
     // Not with VectorXR below (its frame generation works on one composed image).
+    // Only layers that pass a quad view session through between (passes_quad_views): the runtime's own list, from the
+    // chain's last node (its next is the runtime), which answers before any instance exists as it does directly below.
     const bool runtimeBelow = own->next == nullptr;
-    const QuadOffer quadOffer = extension_offered(gipa, runtimeBelow, XR_VARJO_QUAD_VIEWS_EXTENSION_NAME);
-    const QuadOffer foveatedOffer = extension_offered(gipa, runtimeBelow, XR_VARJO_FOVEATED_RENDERING_EXTENSION_NAME);
+    const XrApiLayerNextInfo* last = own;
+    bool onlyPassThrough = true;
+    std::string passedThrough;
+    for (const XrApiLayerNextInfo* n = own->next; n; n = n->next) {
+        last = n;
+        onlyPassThrough &= passes_quad_views(n->layerName);
+        passedThrough += (passedThrough.empty() ? "" : ", ") + std::string(n->layerName);
+    }
+    const bool runtimeAsked = runtimeBelow || onlyPassThrough;
+    PFN_xrGetInstanceProcAddr runtimeGipa = last->nextGetInstanceProcAddr;
+    const QuadOffer quadOffer = extension_offered(runtimeGipa, runtimeAsked, XR_VARJO_QUAD_VIEWS_EXTENSION_NAME);
+    const QuadOffer foveatedOffer =
+        extension_offered(runtimeGipa, runtimeAsked, XR_VARJO_FOVEATED_RENDERING_EXTENSION_NAME);
     std::string quadWhy;
     bool quadWanted = native_quad_wanted(&quadWhy) && thisGame->features.nativeQuadViews &&
                       games::adapter_for(thisGame).qvfr_separate_views();
@@ -298,6 +323,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     {
         static const char* const kOffer[] = {"offers them", "doesn't offer them", "offer unknown (a layer between)"};
         const bool hasFeature = thisGame->features.nativeQuadViews;
+        if (!runtimeBelow && onlyPassThrough)
+            logf("native quad views: only layers that pass quad views through between (%s): the runtime asked past them",
+                 passedThrough.c_str());
         logf("native quad views: the runtime %s (XR_VARJO_quad_views); %s%s", kOffer[static_cast<int>(quadOffer)],
              !hasFeature ? "not for this game yet"
              : quadWanted ? (forceQuad ? "native_quad_views=2 (tried even with the offer unknown)" : "auto")

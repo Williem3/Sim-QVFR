@@ -405,6 +405,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 // No four views this frame, yet the game rendered its eyes into the top-left of their images (the focus
                 // views didn't come): that part of each submitted, over the eye's whole field of view, where the whole
                 // image would show the eye small in a corner.
+                copy.assign(proj->views, proj->views + proj->viewCount);  // as the game gave them
+                bool changed = false;
                 unsigned ew[2] = {}, eh[2] = {};
                 if (game->qvfr_eye_extent(ew, eh)) {
                     bool cut = true;
@@ -413,14 +415,19 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                         cut = ew[v] > 0 && eh[v] > 0 && static_cast<int32_t>(ew[v]) <= r.extent.width &&
                               static_cast<int32_t>(eh[v]) <= r.extent.height;
                     }
-                    if (cut) {
-                        copy.assign(proj->views, proj->views + proj->viewCount);
+                    if (cut)
                         for (uint32_t v = 0; v < 2; ++v)
                             copy[v].subImage.imageRect.extent = {static_cast<int32_t>(ew[v]), static_cast<int32_t>(eh[v])};
-                        projections.push_back(*proj);
-                        projections.back().views = copy.data();
-                        layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
-                    }
+                    changed = cut;
+                }
+                // Native quad views with the FOV crop: the eyes padded out to the runtime's (issue 29: Pimax stretched
+                // the cropped eyes over its whole eye in menus, and in race frames without focus views).
+                if (copy.size() == 2 && v4d3d11_pad_eyes(session, copy, info->displayTime))
+                    changed = true;
+                if (changed) {
+                    projections.push_back(*proj);
+                    projections.back().views = copy.data();
+                    layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
                 }
             }
             continue;

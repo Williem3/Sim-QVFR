@@ -135,6 +135,34 @@ inline bool focus_region_image(const float (&box)[4], int boxW, int boxH, const 
     return true;
 }
 
+// Views 0-1 go to the runtime over at least its own eye FOV: a runtime may draw them over its located eye whatever FOV
+// they carry, as it does views 2-3 (2026-11-16, issue 29: with Sim-QVFR's FOV crop the cropped periphery showed
+// stretched over the whole eye on Pimax, the focus views at their place, a picture in the picture). `tan` (left,
+// right, up, down) the eye view's FOV as rendered, `eye` the runtime's located one: the tangents covering both.
+inline void eye_union(const float (&tan)[4], const float (&eye)[4], float (&out)[4]) {
+    out[0] = std::min(tan[0], eye[0]);
+    out[1] = std::max(tan[1], eye[1]);
+    out[2] = std::max(tan[2], eye[2]);
+    out[3] = std::min(tan[3], eye[3]);
+}
+
+// Whether a view over `tan` falls short of the runtime's eye `eye` on any side, by more than `slack` of the eye's span.
+inline bool narrower_than_eye(const float (&tan)[4], const float (&eye)[4], float slack = 1e-3f) {
+    const float sx = slack * (eye[1] - eye[0]), sy = slack * (eye[2] - eye[3]);
+    return tan[0] > eye[0] + sx || tan[1] < eye[1] - sx || tan[2] < eye[2] - sy || tan[3] > eye[3] + sy;
+}
+
+// An eye view (`tan`, `w` x `h` texels) padded out to the runtime's eye `eye`: its texel grid extended to whole texels
+// over both, so its texels are copied, not resampled, at `boxX`, `boxY` of the padded image (black around). False: it
+// covers the eye already (to within a texel), or degenerate input.
+inline bool eye_pad_image(const float (&tan)[4], int w, int h, const float (&eye)[4], RegionImage& out) {
+    float both[4];
+    eye_union(tan, eye, both);
+    if (!focus_region_image(tan, w, h, both, out))
+        return false;
+    return out.width > w || out.height > h;
+}
+
 // The share of `box`'s area (tangents) inside `region`, 0..1: how much of the focus box the runtime shows.
 inline double box_share_in_region(const float (&box)[4], const float (&region)[4]) {
     const double w = std::max(0.0, static_cast<double>(std::min(box[1], region[1])) - std::max(box[0], region[0]));
