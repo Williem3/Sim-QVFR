@@ -405,6 +405,9 @@ void write_burst();
 
 // corner_diag.cpp
 void perf_line();
+// Every xrEndFrame: a removed GPU device logged once, with its reason and the VRAM (read every 90 frames).
+void device_watch();
+void device_watch_reset();  // release_all: the next install reads its own adapter and peak
 void poll_diag_keys();
 void poll_diag_hotkeys();
 

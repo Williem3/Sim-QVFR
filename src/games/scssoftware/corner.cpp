@@ -592,6 +592,7 @@ void release_all() {
     g.burstDesc = {};
     g.burstFramesLeft = 0;
     g.context.Reset();
+    device_watch_reset();
     g.device.Reset();
     g.restore.store(0, std::memory_order_release);  // the next session's end asks again
 }

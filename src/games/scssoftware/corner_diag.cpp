@@ -1,6 +1,10 @@
 // Where the time goes (the perf lines) and the dev builds' diagnostic hotkeys (corner_internal.h).
 #include "corner_internal.h"
 
+#include <dxgi1_4.h>
+
+#include <algorithm>
+
 #include "../../dev_build.h"
 #include "../../log.h"
 
@@ -97,6 +101,83 @@ void perf_line() {
                       static_cast<unsigned long long>(g.otherWritesActive.load(std::memory_order_relaxed)));
     }
 }
+
+namespace {
+
+// The device watch's own state (device_watch): the adapter for the VRAM readings, and what they showed.
+struct DeviceWatch {
+    ComPtr<IDXGIAdapter3> adapter;
+    bool adapterTried = false;
+    uint64_t usedMb = 0, peakMb = 0, budgetMb = 0;  // the last reading, the session's highest, the budget then
+    uint64_t readFrame = 0;                          // g.stats.frames of the last reading
+};
+DeviceWatch dw;
+bool removedLogged = false;  // once per process: a removed device stays removed
+
+const char* removed_reason(HRESULT hr) {
+    switch (static_cast<uint32_t>(hr)) {
+        case 0x887A0006: return "DXGI_ERROR_DEVICE_HUNG: the GPU took too long on the work it was given, and Windows reset it (a TDR)";
+        case 0x887A0007: return "DXGI_ERROR_DEVICE_RESET: the device was reset after a badly formed command";
+        case 0x887A0005: return "DXGI_ERROR_DEVICE_REMOVED: the GPU was removed (a GPU page fault, a driver update or the card dropping off)";
+        case 0x887A0020: return "DXGI_ERROR_DRIVER_INTERNAL_ERROR: the driver hit an internal error";
+        case 0x887A0001: return "DXGI_ERROR_INVALID_CALL: an invalid call";
+        case 0x8007000E: return "E_OUTOFMEMORY: out of memory";
+        default: return "an unknown reason";
+    }
+}
+
+void read_vram() {
+    if (!dw.adapterTried) {
+        dw.adapterTried = true;
+        ComPtr<IDXGIDevice> dxgi;
+        ComPtr<IDXGIAdapter> adapter;
+        if (SUCCEEDED(g.device.As(&dxgi)) && SUCCEEDED(dxgi->GetAdapter(&adapter)))
+            adapter.As(&dw.adapter);
+    }
+    DXGI_QUERY_VIDEO_MEMORY_INFO m{};
+    if (!dw.adapter || FAILED(dw.adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &m)))
+        return;
+    dw.usedMb = m.CurrentUsage >> 20;
+    dw.budgetMb = m.Budget >> 20;
+    dw.peakMb = std::max(dw.peakMb, dw.usedMb);
+    dw.readFrame = g.stats.frames;
+}
+
+}  // namespace
+
+// Every xrEndFrame with the corner installed: the GPU device checked (GetDeviceRemovedReason, a cheap call on a
+// free-threaded device). Testers' ATS runs (2026-11-17) lost the device seconds into driving, and the game then crashed
+// on its next allocation with nothing in this log: the first failure is logged once with its reason, what the focus
+// view was doing and the VRAM, so a run says whether it was a hang, a fault or memory. The VRAM is read every 90 frames.
+void device_watch() {
+    if (!g.device || removedLogged)
+        return;
+    const HRESULT hr = g.device->GetDeviceRemovedReason();
+    if (SUCCEEDED(hr)) {
+        if (!dw.adapterTried || g.stats.frames - dw.readFrame >= 90)
+            read_vram();
+        return;
+    }
+    removedLogged = true;
+    read_vram();  // the adapter's numbers outlive the device
+    simqvfr::logf("scs corner: the GPU device was REMOVED (0x%08lX, %s), seen at frame %llu (%llu with the eyes in the "
+                  "corner); the focus view %s, the corner %.0f%%, the box %d%% x %d%% at %.0f%% density, eye targets %ux%u; "
+                  "twins %zu (%.0f MB at most), mirrors %zu; this frame's eye pass %s; VRAM %llu MB used of a %llu MB budget "
+                  "(at frame %llu), the session's highest %llu MB",
+                  static_cast<unsigned long>(hr), removed_reason(hr), static_cast<unsigned long long>(g.stats.frames),
+                  static_cast<unsigned long long>(g.stats.cornerFrames),
+                  !g.focusPercent ? "off"
+                  : g.focusOff     ? "OFF (Ctrl+Alt+G)"
+                  : g.instanced && (g.preferInstanced || !g.mvr) ? "by instancing"
+                  : g.mvr          ? "by NVIDIA's multi-view rendering"
+                                   : "passes only",
+                  g.percent, g.focusPercent, g.focusPercentY, g.density * 100, g.eyeW, g.eyeH, g.texes.size(),
+                  g.twinBytes / 1048576.0, g.mirrors.size(), g.active ? "under way" : "not under way",
+                  static_cast<unsigned long long>(dw.usedMb), static_cast<unsigned long long>(dw.budgetMb),
+                  static_cast<unsigned long long>(dw.readFrame), static_cast<unsigned long long>(dw.peakMb));
+}
+
+void device_watch_reset() { dw = {}; }
 
 // The diagnostic hotkeys exist in development builds only (dev_build.h): a release reads no key here.
 void poll_diag_hotkeys() {

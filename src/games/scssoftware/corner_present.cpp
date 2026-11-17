@@ -247,6 +247,7 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
         service_lifecycle();
     if (!g.context)
         return info;
+    device_watch();
     g.endFrames.fetch_add(1, std::memory_order_release);
     // The context's entries hooked again if the game's mode changed them: on its own thread, between its commands
     // (context_hooks.h), never inside an observer.
