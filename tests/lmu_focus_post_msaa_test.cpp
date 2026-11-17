@@ -319,6 +319,60 @@ int SIM_QVFR_TEST_MAIN() {
         lmu::mvr_track_passes(false);
     }
 
+    {  // A second multisample resolve in a pass (review 2026-11-17): passed on, the post not begun again; the focus
+       // view's post as with one.
+        Kit twice = standIn;
+        twice.resolveTwice = true;
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        eye_pass(0, &view, false, twice);
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what),
+                      "two resolves in a pass: %llu post begun, %llu passed on; %llu focus copies, %llu composites, %llu "
+                      "failures",
+                      static_cast<unsigned long long>(after.resolves - before.resolves),
+                      static_cast<unsigned long long>(after.extraResolves - before.extraResolves),
+                      static_cast<unsigned long long>(after.focusCopies - before.focusCopies),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusFailures - before.focusFailures));
+        check(after.resolves == before.resolves + 1 && after.extraResolves == before.extraResolves + 1 &&
+                  after.focusCopies == before.focusCopies + 1 && after.focusComposites == before.focusComposites + 1 &&
+                  after.focusFailures == before.focusFailures,
+              what);
+        final_as_eye("two resolves in a pass", 100);
+    }
+
+    {  // FSR with MSAA off and no focus view this frame (recovery's plain frames, one focus failure; review
+       // 2026-11-17): no final blit and our focus step not run, yet the eye's image bound is the pass's final, so both
+       // passes are found (before: pass 0 stayed open to the frame's end and took pass 1 into it).
+        Kit fsrSingle = standIn;
+        fsrSingle.fsr = true;
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_fsr(true, eyeFinal.Get(), eyeFinal.Get());
+        lmu::mvr_frame_end(100060);
+        eye_pass(0, nullptr, false, fsrSingle, false, true, true);  // the frame the scene's target is learned in
+        eye_pass(1, nullptr, false, fsrSingle, false, true, true);
+        lmu::mvr_frame_end(100061);
+        driveViews[0] = driveViews[1] = nullptr;  // no focus view handed over
+        driveLog.clear();
+        const lmu::MvrTrackStats before = lmu::mvr_track_stats();
+        eye_pass(0, nullptr, false, fsrSingle, false, true, true);
+        eye_pass(1, nullptr, false, fsrSingle, false, true, true);
+        lmu::mvr_frame_end(100062);
+        const lmu::MvrTrackStats after = lmu::mvr_track_stats();
+        std::snprintf(what, sizeof(what),
+                      "FSR, MSAA off, no focus view: passes%s, %llu ended at their eye image without our focus step",
+                      driveLog.c_str(), static_cast<unsigned long long>(after.fsrEnds - before.fsrEnds));
+        check(driveLog == " b0 e0 b1 e1" && after.fsrEnds == before.fsrEnds + 2, what);
+        lmu::mvr_fsr(false, nullptr, nullptr);
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

@@ -274,6 +274,7 @@ struct Kit {
     // 2 over the eye only. YEBIS's chain then starts from its image (no copy of the resolve).
     int stage = 0;
     bool fsr = false;  // FSR on: no final blit, the eye's image written whole from the scene's target
+    bool resolveTwice = false;  // a second multisample resolve right after the first (not a new post)
 };
 
 inline std::vector<uint8_t> file_bytes(const std::string& path) {

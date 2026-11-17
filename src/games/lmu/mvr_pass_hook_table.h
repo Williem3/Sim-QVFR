@@ -15,7 +15,7 @@ enum Hook : int {
     kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
     kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHookDrawAuto, kHookDrawIndexedIndirect,
     kHookDrawInstancedIndirect, kHookPS, kHookVSCB, kHookMap, kHookUnmap, kHookIAVB, kHookIAIB, kHookBlend, kHookDepth,
-    kHookExecute, kHooks
+    kHookExecute, kHookVPGet, kHooks
 };
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
@@ -23,7 +23,8 @@ constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRen
                                       kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion,
                                       kDrawAuto,      kDrawIndexedInstancedIndirect,        kDrawInstancedIndirect,
                                       kPSSetShader,   kVSSetConstantBuffers, kMap, kUnmap,  kIASetVertexBuffers,
-                                      kIASetIndexBuffer, kOMSetBlendState, kOMSetDepthStencilState, kExecuteCommandList};
+                                      kIASetIndexBuffer, kOMSetBlendState, kOMSetDepthStencilState, kExecuteCommandList,
+                                      kRSGetViewports};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
@@ -32,7 +33,7 @@ constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",     
                                            "CopySubresourceRegion", "DrawAuto", "DrawIndexedInstancedIndirect",
                                            "DrawInstancedIndirect", "PSSetShader", "VSSetConstantBuffers", "Map",
                                            "Unmap", "IASetVertexBuffers", "IASetIndexBuffer", "OMSetBlendState",
-                                           "OMSetDepthStencilState", "ExecuteCommandList"};
+                                           "OMSetDepthStencilState", "ExecuteCommandList", "RSGetViewports"};
 // Car tracking's hooks (mvr_car_track).
 constexpr bool is_car_hook(int h) {
     return h == kHookVSCB || h == kHookMap || h == kHookUnmap || h == kHookIAVB || h == kHookIAIB;

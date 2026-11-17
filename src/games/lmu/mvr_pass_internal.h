@@ -322,6 +322,9 @@ struct State {
     ID3D11Resource* obsCopyTargets[6] = {};
     unsigned obsCopyCount = 0;
     bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
+    bool readsAsGameForTests = false;  // mvr_test_reads_as_game: this image's RSGetViewports taken as the game's
+    bool gameReadLogged[2] = {};       // the game's viewport read given its own: under the cut, beside the focus view
+    bool extraResolveLogged = false;   // a second multisample resolve in a pass (logged once)
     // observe_post_draw this pass: not where it drew focus views after a frame with both (the recovery reads the shape
     // only while the eyes render alone, or once 45 frames in a row lacked them: every frame then is looked at).
     bool observeShape = true, lastFrameFinals = false;
@@ -433,6 +436,7 @@ struct Tracker {
     // scene target bound again, 2026-11-11 pass trace) rebinds the pass's own scene: still that pass, not the next's.
     ID3D11Resource* sceneTarget = nullptr;
     bool postSeen = false, rebindLogged = false;
+    bool fsrEndLogged = false;  // FSR with MSAA off: a pass ended at its eye image without our focus step (logged once)
     int pass = -1, passes = 0;            // the open tracked pass; tracked passes begun this frame (at most two)
     uint64_t draws = 0;                   // draws on the immediate context this frame (the four draw calls)
     uint64_t begin[2] = {}, end[2] = {};  // the draw count at each tracked pass's begin and end

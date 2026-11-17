@@ -71,6 +71,8 @@ inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12
                           kDrawIndexedInstancedIndirect = 39, kDrawInstancedIndirect = 40, kRSSetViewports = 44,
                           kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57,
                           kExecuteCommandList = 58, kHSSetShader = 60, kDSSetShader = 64;
+// The game's reads of its viewports (YEBIS's start reads the bound one to size its region): given the game's own.
+inline constexpr unsigned kRSGetViewports = 95;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
 // DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
 // PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
@@ -83,7 +85,7 @@ inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        
                                        kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
                                        kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
                                        kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
-                                       kOMSetDepthStencilState, kExecuteCommandList};
+                                       kOMSetDepthStencilState, kExecuteCommandList, kRSGetViewports};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -164,6 +166,8 @@ const char* mvr_shape_missing(int eye);
 // counts say, the default). Unknown: found by their bindings.
 void mvr_roles_known_for_tests(int copy, int blit);
 void mvr_shape_force_bad(bool bad);
+// Tests: RSGetViewports calls from this image taken as the game's (else ours: they see what is bound).
+void mvr_test_reads_as_game(bool on);
 // LMU's FSR is on (each eye's post-processing ends in FSR's compute upscale of the whole scene target into the eye's
 // image, no final blit to draw the focus final with): the focus composite is put beside the eye in the scene's
 // target right after YEBIS's composite, so FSR's own upscale carries it beside the eye into the eye's image, where
@@ -244,6 +248,8 @@ struct MvrPassStats {
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
+    uint64_t gameViewportReads = 0;          // the game's RSGetViewports answered with its own while ours were bound
+    uint64_t extraResolves = 0;              // multisample resolves after a pass's post began (passed on, not a new post)
     uint64_t resolveFunctions = 0;           // of those, ResolveSubresource's
     uint64_t focusCopies = 0, focusComposites = 0, focusFailures = 0;  // the focus post's steps (mvr_focus_replay)
     // Passes whose copy ran but no composite we know followed, and draws into the resolve's target after the copy with
@@ -345,6 +351,7 @@ struct MvrTrackStats {
     uint64_t sceneAtComposite = 0;    // that target learned from YEBIS's composite (its copy read a stage's image)
     uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
     uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
+    uint64_t fsrEnds = 0;             // FSR, MSAA off: passes ended at their eye image without our focus step
     uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy
     uint64_t sceneRebinds = 0;  // a pass's own multisample scene bound again after its resolve, before YEBIS: kept in it
 };

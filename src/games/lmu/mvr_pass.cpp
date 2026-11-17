@@ -38,6 +38,9 @@
 #include "abi.h"
 #include "yebis_shaders.h"
 
+// This image's own base (mvr_pass_binds.h from_this_image: our RSGetViewports calls told from the game's).
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
 namespace lmu {
 
 using namespace mvr_detail;  // the state and helpers shared with mvr_pass_*.cpp (mvr_pass_internal.h)

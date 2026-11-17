@@ -21,7 +21,7 @@
     lmu::mvr_set_two_views(&fake_two_views);
     lmu::mvr_focus_replay(true);  // before the install: DrawIndexed hooked too
     lmu::mvr_roles_known_for_tests(1, 1);  // the stand-ins carry their roles, as the probe marks the game's
-    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 17,
+    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 18,
           "the immediate context hooked, the four draws, CopySubresourceRegion and VSSetConstantBuffers among its entries "
           "(the focus post on)");
 
@@ -165,6 +165,8 @@
         context->RSSetViewports(1, &whole);
         context->Draw(3, 0);
         if (!single)
+            context->ResolveSubresource(scene.Get(), 0, msaa.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        if (!single && k.resolveTwice)
             context->ResolveSubresource(scene.Get(), 0, msaa.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
 
         context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
