@@ -46,6 +46,9 @@ void take_frame_end() {
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
+    if (!g.replayLogFrame && g.stats.cornerFrames == 300)
+        g.replayLogFrame = g.stats.frames + 1;  // a frame well into driving: its replays named once
+    g.frameReplay = 0;
     g.thisFrameCornered = false;
     g.gbufferPasses = 0;
     g.finalPasses = 0;
@@ -320,7 +323,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        if (focus_on() && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
+        if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
         } else if (g.twoViews) {  // switched off mid-frame: one view again
@@ -359,7 +362,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         ps = rewrite(g.ps, g.psCb.Get(), true);
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
-    if (focus_on() && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
+    if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
         const Timed t(State::kTimeFocusDraws);
         focus_draw();
     }
@@ -397,8 +400,16 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
     // view's own full-size depth. Ctrl+Alt+A: the focus view's own occlusion again, live.
     if (entry == ch::kDraw && count == 3 && focus_on() && g.active && g.cut &&
         (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
-        const Timed t(State::kTimeReplays);
-        replay(count, start);  // into the headset's image too: its final blit
+        const unsigned n = ++g.frameReplay;
+        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1));
+        if (g.stats.frames == g.replayLogFrame)
+            simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u%s", n,
+                          g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", g.vs.first, g.vs.count,
+                          g.ps.first, g.ps.count, skip ? ": SKIPPED (scs_focus_replays / scs_replay_skip)" : "");
+        if (!skip) {
+            const Timed t(State::kTimeReplays);
+            replay(count, start);  // into the headset's image too: its final blit
+        }
     }
     if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
         if (g.blits < 2 && g.boundChainEye >= 0) {
@@ -763,6 +774,12 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     lifecycle.focusPercent = focusPercent;
     g.lifecyclePending.store(true, std::memory_order_release);
     return true;
+}
+
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip) {
+    g.diagNoDraws = noDraws;
+    g.diagNoReplays = noReplays;
+    g.replaySkip = replaySkip;
 }
 
 bool corner_on() { return g.context != nullptr; }

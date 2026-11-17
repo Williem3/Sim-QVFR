@@ -5,6 +5,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "../../dev_build.h"
 #include "../../log.h"
@@ -53,6 +54,8 @@ public:
             shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
         if (cornerPercent_)
             passProbe_ = false;
+        if (focusPercent_ > 0)
+            read_diag(ini);
         simqvfr::logf("scs: QVFR at the D3D11 level %s (mode=%ls, scs_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
                       "shader %s",
                       cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
@@ -156,6 +159,32 @@ private:
         const int corner = static_cast<int>(
             GetPrivateProfileIntW(L"experiment", L"scs_corner", sizes.periphery > 0 ? sizes.periphery : 70, ini));
         return corner > 0 && corner < 100 ? corner : 0;
+    }
+
+    // The GPU-hang bisection keys (corner_set_diag), read at launch: scs_focus_draws=0, scs_focus_replays=0, and
+    // scs_replay_skip=<the frame's replays to skip, 1-based, comma-separated, e.g. 3,7,12>.
+    static void read_diag(const wchar_t* ini) {
+        const bool noDraws = GetPrivateProfileIntW(L"experiment", L"scs_focus_draws", 1, ini) == 0;
+        const bool noReplays = GetPrivateProfileIntW(L"experiment", L"scs_focus_replays", 1, ini) == 0;
+        wchar_t list[256] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_replay_skip", L"", list, 256, ini);
+        uint64_t skip = 0;
+        for (const wchar_t* p = list; *p;) {
+            wchar_t* end = nullptr;
+            const unsigned long n = wcstoul(p, &end, 10);
+            if (end == p) {
+                ++p;
+                continue;
+            }
+            if (n >= 1 && n <= 64)
+                skip |= 1ull << (n - 1);
+            p = end;
+        }
+        corner_set_diag(noDraws, noReplays, skip);
+        if (noDraws || noReplays || skip)
+            simqvfr::logf("scs focus: bisection: the focus view's scene draws %s, its replayed passes %s%s%ls",
+                          noDraws ? "OFF (scs_focus_draws=0)" : "on", noReplays ? "OFF (scs_focus_replays=0)" : "on",
+                          skip ? ", skipping the frame's replays " : "", skip ? list : L"");
     }
 
     bool passProbe_ = false, shaderProbe_ = false;

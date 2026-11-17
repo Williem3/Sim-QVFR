@@ -256,6 +256,13 @@ struct State {
     int64_t perfSince = 0;
     uint64_t perfFrame = 0;
     bool focusOff = false, focusKeyDown = false;
+    // The launch's bisection switches (corner_set_diag; [experiment] scs_focus_draws, scs_focus_replays,
+    // scs_replay_skip): the focus view's scene draws off, its replayed passes off, or single replays (bit n-1: the
+    // frame's nth replay) skipped. Set before the session, kept across sessions.
+    bool diagNoDraws = false, diagNoReplays = false;
+    uint64_t replaySkip = 0;
+    unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
+    uint64_t replayLogFrame = 0;  // the frame whose replays are each logged once (300 cornered frames in)
     bool occlusionKeyDown = false, ownOcclusion = false;  // Ctrl+Alt+A: the half-size passes replayed for the focus view
     // Stage 2: the focus view beside the corner.
     int focusPercent = 0;
