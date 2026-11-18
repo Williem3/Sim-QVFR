@@ -178,6 +178,9 @@ void dlss_frame_end(unsigned long long frame);
 // pixels per texel, row by row. False: none yet.
 bool dlss_vectors_for_checks(ID3D11DeviceContext* context, int index, std::vector<float>& xy, unsigned& width,
                              unsigned& height);
+// Every view's feature and its textures released, NGX (or FSR) left started: made again at each view's next pass (the
+// showcase's Stock, which runs none). On the render thread, between frames. The features released.
+int dlss_release_views();
 // The session's end (or a check's): every feature released, NGX shut down, nothing of the device held. A later pass
 // starts it again.
 void dlss_shutdown();

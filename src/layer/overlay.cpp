@@ -48,6 +48,8 @@ constexpr OsdPlacement kNoticePlacement{true, 0, -6, 34};
 
 // The showcase (quad/showcase.h): the overlay's card as the A/B table, its pixel rows from the menu's values of the
 // latest live reload, and the Stock / QVFR hotkey. On the frame thread.
+constexpr int kShowcaseVramFrames = 180;  // about 2 s at 90 Hz
+
 struct Showcase {
     AbTable table;
     std::optional<MenuValues> values;  // the latest live reload's
@@ -56,6 +58,7 @@ struct Showcase {
     std::wstring qvfrName = L"QVFR";  // with the multi-view badge QVFR last showed ("QVFR · MVR")
     bool hotkeyHeld = false;
     int activeLogged = -1;  // stock_active as last logged
+    int vramLogIn = 0;      // frames until VRAM is logged again after a switch
     uint64_t sceneFrames = 0;  // scene_frames() at the last window
 } showcase;
 
@@ -286,8 +289,14 @@ void showcase_hotkey() {
     if (active != showcase.activeLogged) {
         if (showcase.activeLogged >= 0 || active)
             logf("showcase: the game renders %s", active ? "Stock" : "QVFR");
+        if (showcase.activeLogged >= 0) {
+            log_vram(active ? "the switch to Stock" : "the switch to QVFR");
+            showcase.vramLogIn = kShowcaseVramFrames;  // and again once the other side settled
+        }
         showcase.activeLogged = active;
     }
+    if (showcase.vramLogIn > 0 && --showcase.vramLogIn == 0)
+        log_vram(active ? "Stock, 2 s after the switch" : "QVFR, 2 s after the switch");
 }
 
 bool osd_resources(XrSession session) {

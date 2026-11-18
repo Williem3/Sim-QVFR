@@ -18,6 +18,7 @@
 #include "probe/gpu_load.h"
 #include "probe/vram_census.h"
 #include "quad/osd.h"
+#include "quad/session_graphics.h"
 #include "quad/session_stint.h"
 #include "xr.h"
 #include "layer/layer.h"
@@ -188,6 +189,37 @@ void report_load(double frameMs) {
     cpu_placement_report(threadLoads);  // where they ran and what Windows gave the process (read only)
 }
 
+// The game's adapter (any API), found once.
+IDXGIAdapter3* vram_adapter() {
+    if (vramAdapter)
+        return vramAdapter;
+    LUID luid{};
+    if (quad.device)
+        luid = quad.device->GetAdapterLuid();
+    else if (!session_graphics_now().adapter_luid(luid))
+        return nullptr;
+    IDXGIFactory4* factory = nullptr;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        if (FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&vramAdapter))))
+            vramAdapter = nullptr;
+        factory->Release();
+    }
+    return vramAdapter;
+}
+
+// This process's use of the GPU's local memory against the budget Windows gives it, and what it has in system memory:
+// over the budget, Windows pages the process's least used allocations out (a freeze while they come back).
+void log_vram(const char* when) {
+    IDXGIAdapter3* adapter = vram_adapter();
+    DXGI_QUERY_VIDEO_MEMORY_INFO local{}, system{};
+    if (!adapter || FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)))
+        return;
+    adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &system);
+    constexpr double kMb = 1024.0 * 1024.0;
+    logf("vram: %s: %.0f MB used of a %.0f MB budget (%.0f%%), %.0f MB in system memory", when, local.CurrentUsage / kMb,
+         local.Budget / kMb, local.Budget ? 100.0 * local.CurrentUsage / local.Budget : 0.0, system.CurrentUsage / kMb);
+}
+
 namespace {
 
 // VRAM (views4): this process's use of the GPU's local memory and the census of ACE's render targets
@@ -196,18 +228,12 @@ namespace {
 void report_vram() {
     int render[2], output[2];
     game->qvfr_target_sizes(render, output);
-    if (output[0] <= 0 || !quad.device)
+    if (output[0] <= 0 || !quad.device) {  // no census (D3D11 games): this process's use against its budget alone
+        log_vram("the last 900 frames");
         return;
-    if (!vramAdapter) {
-        IDXGIFactory4* factory = nullptr;
-        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
-            if (FAILED(factory->EnumAdapterByLuid(quad.device->GetAdapterLuid(), IID_PPV_ARGS(&vramAdapter))))
-                vramAdapter = nullptr;
-            factory->Release();
-        }
-        if (!vramAdapter)
-            return;
     }
+    if (!vram_adapter())
+        return;
     DXGI_QUERY_VIDEO_MEMORY_INFO memory{};
     if (FAILED(vramAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memory)))
         return;

@@ -570,6 +570,20 @@ void stock_frame_begin() {
                                 : "QVFR");
         stockLogged = true;
     }
+    if (stock && !stockFrame) {
+        // QVFR's own images let go while Stock shows (made again at the first frame back: the atlas at the frame end,
+        // the DLSS features at their passes): left alone, Windows pages them out for the native-size eyes and back in
+        // at the switch, a 5 s freeze on a 16 GB card at native-size targets (2026-11-17).
+        const double atlasMb = atlas ? 4.0 * 4 * viewW * viewH / (1024.0 * 1024.0) : 0;
+        if (atlas) {
+            atlas->Release();
+            atlas = nullptr;  // ensure_atlas makes it again (viewW/viewH kept: the passes' sizes go by them)
+        }
+        const int features = simqvfr::dlss_release_views();
+        simqvfr::logf("lmu qvfr: frame %llu: showcase: Stock: QVFR's own images let go (the atlas ~%.0f MB, %d DLSS "
+                      "feature%s), made again at the switch back",
+                      frames, atlasMb, features, features == 1 ? "" : "s");
+    }
     stockFrame = stock;
     mvr_stock(stock);
     simqvfr::set_stock_active(stock);
@@ -1401,7 +1415,7 @@ void capture_views() {
         return;
     std::vector<std::uint8_t> px;
     unsigned w = 0, h = 0;
-    if (!simqvfr::d3d11_read_bgra8(atlas, px, w, h) || w < 2 * viewW || h < 2 * viewH) {
+    if (!atlas || !simqvfr::d3d11_read_bgra8(atlas, px, w, h) || w < 2 * viewW || h < 2 * viewH) {
         simqvfr::logf("lmu qvfr: frame capture: frame %llu's views couldn't be read back", frames);
         return;
     }

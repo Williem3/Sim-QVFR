@@ -196,6 +196,9 @@ AbPixels ab_pixels(const MenuValues& values);
 // overlay.cpp
 // The menu's values from the latest live reload: the A/B table's pixel rows follow them.
 void ab_values_changed(const MenuValues& values);
+// VRAM: this process's use against its budget, logged with `when` (reports.cpp); the game's adapter, found once.
+void log_vram(const char* when);
+IDXGIAdapter3* vram_adapter();
 void notice_set(std::wstring title, std::vector<std::wstring> lines);
 bool notice_pending();
 void osd_waited(XrDuration period);
