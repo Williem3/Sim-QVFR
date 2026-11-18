@@ -15,7 +15,7 @@ inline constexpr const char* kBuilds[] = {"055ec5343d53bd427de54b06eca74937f0d34
 inline constexpr simqvfr::games::GameInfo kGame = {
     "ets2", L"Euro Truck Simulator 2", L"ETS2", L"eurotrucks2.exe", L"Euro Truck Simulator 2", L"bin\\win_x64", L"227300",
     // Its own OpenXR; VR has a D3D11 binding only. The default branch turns VR off without -experimental_vr.
-    L"-openxr -experimental_vr -rdevice dx11",
+    L"-openxr -experimental_vr -rdevice dx11 -nointro",  // -nointro: straight to the menu, no logo videos
     nullptr,                   // OpenXR of its own
     nullptr,                   // no DLSS
     // QVFR through the D3D11 layer, the focus view by multi-view rendering (layerMultiView); nothing else yet.

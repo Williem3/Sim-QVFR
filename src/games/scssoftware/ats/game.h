@@ -16,7 +16,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     "ats", L"American Truck Simulator", L"ATS", L"amtrucks.exe", L"American Truck Simulator", L"bin\\win_x64", L"270880",
     // Its own OpenXR; VR has a D3D11 binding only. The default branch turns VR off without -experimental_vr ("Experimental
     // VR is not supported in this build by default", game.log.txt).
-    L"-openxr -experimental_vr -rdevice dx11",
+    L"-openxr -experimental_vr -rdevice dx11 -nointro",  // -nointro: straight to the menu, no logo videos
     nullptr,                   // OpenXR of its own
     nullptr,                   // no DLSS
     // QVFR through the D3D11 layer, the focus view by multi-view rendering (layerMultiView); nothing else yet.
