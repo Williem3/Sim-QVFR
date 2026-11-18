@@ -90,6 +90,9 @@ struct State {
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
     uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
+    bool forceUiRedraw = false;  // [experiment] scs_force_ui_redraw=1 (dev builds): redraw_focus for every UI draw
+    bool redrawFocus = false;  // this draw (onto the headset's image, no twin) is drawn again for the focus view after it
+    uint64_t redraws = 0, redrawsOutOfBounds = 0;
     ComPtr<ID3D11Buffer> rowsCb;  // run_cs's b1 (512 bytes): the rewritten shader's rows read by a fixed index
     // A draw's rewritten range (rewrite): the game's copied in, the compute shader's output, the constant buffer bound for
     // the draw. A ring of sets, a fresh one for every rewrite: with one set, the next rewrite wrote the buffers while the
@@ -434,6 +437,7 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
 State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d);
 ID3D11ShaderResourceView* twin_view(ID3D11ShaderResourceView* gameView, State::Tex& t);
 void replay(UINT vertices, UINT start);
+void redraw_focus(ch::Entry entry, UINT count, UINT start);
 void two_views(bool on);
 void dual_views();
 void focus_draw();

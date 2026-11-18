@@ -237,6 +237,11 @@ private:
         if (!dumpPs.empty())
             simqvfr::logf("scs focus: the constant ranges of %zu pixel shaders are saved (scs_dump_ps=%ls)", dumpPs.size(), dumpList);
         corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring, skipPs, dumpPs);
+        // Dev builds: the UI panels' focus redraw for every UI draw, twin or not (its test; normally only twinless ones).
+        const bool forceUi = simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"scs_force_ui_redraw", 0, ini) != 0;
+        corner_set_force_ui_redraw(forceUi);
+        if (forceUi)
+            simqvfr::log_line("scs focus: test: every UI draw onto the headset's image is drawn again for the focus view (scs_force_ui_redraw=1)");
         if (skipLarge)
             simqvfr::log_line("scs focus: bisection: the replays with a pixel range over 128 vectors are SKIPPED (scs_replay_skip_large=1)");
         if (gpuTimes)

@@ -366,6 +366,54 @@ void replay(UINT vertices, UINT start) {
     ++g.replays;
 }
 
+// A draw focus_draw had no twin for, onto the headset's image (ATS's UI panels, 2026-11-18: cut out of the focus box),
+// drawn again with the game's own shader for the focus view: the focus view's clip position is the eye's through the box
+// remap (x' = a x + b w, y' = c y + d w), an affine map of the eye's screen, so a viewport scaled and moved by it draws
+// the eye's clip positions where the focus view's would land; the scissor keeps it to the focus region.
+void redraw_focus(ch::Entry entry, UINT count, UINT start) {
+    if (entry != ch::kDraw || !g.boundSwapchain)
+        return;
+    const D3D11_RECT f = focus_rect_in(g.boundW, g.boundH);
+    float r[4];
+    box_remap(g.box[current_eye()], r);
+    const float fw = static_cast<float>(f.right - f.left), fh = static_cast<float>(f.bottom - f.top);
+    // px = (x' + 1) / 2 * fw + left with x' = a x + b: a viewport of width a fw at left + fw (b + 1 - a) / 2; y likewise
+    // from the top: (1 - y') / 2 * fh with y' = c y + d.
+    D3D11_VIEWPORT v = {f.left + fw * (r[1] + 1 - r[0]) / 2, f.top + fh * (1 - r[3] - r[2]) / 2, r[0] * fw, r[2] * fh,
+                        g.viewportCount ? g.viewports[0].MinDepth : 0, g.viewportCount ? g.viewports[0].MaxDepth : 1};
+    if (v.TopLeftX < D3D11_VIEWPORT_BOUNDS_MIN || v.TopLeftY < D3D11_VIEWPORT_BOUNDS_MIN ||
+        v.TopLeftX + v.Width > D3D11_VIEWPORT_BOUNDS_MAX || v.TopLeftY + v.Height > D3D11_VIEWPORT_BOUNDS_MAX) {
+        ++g.redrawsOutOfBounds;
+        return;
+    }
+    ID3D11DeviceContext1* c = g.context.Get();
+    ComPtr<ID3D11RasterizerState> gameRs, clipped;
+    c->RSGetState(&gameRs);
+    D3D11_RASTERIZER_DESC rd = {D3D11_FILL_SOLID, D3D11_CULL_BACK, FALSE, 0, 0, 0, TRUE, FALSE, FALSE, FALSE};
+    if (gameRs)
+        gameRs->GetDesc(&rd);
+    rd.ScissorEnable = TRUE;
+    if (FAILED(g.device->CreateRasterizerState(&rd, &clipped)))  // D3D11 hands back the same object for the same desc
+        return;
+    D3D11_VIEWPORT gameVp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    D3D11_RECT gameSc[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT vpN = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE, scN = vpN;
+    c->RSGetViewports(&vpN, gameVp);
+    c->RSGetScissorRects(&scN, gameSc);
+    c->RSSetState(clipped.Get());
+    c->RSSetViewports(1, &v);
+    c->RSSetScissorRects(1, &f);
+    c->Draw(count, start);
+    c->RSSetState(gameRs.Get());
+    c->RSSetViewports(vpN, gameVp);
+    c->RSSetScissorRects(scN, gameSc);
+    mark_bound_written();
+    if (g.redraws++ == 0)
+        simqvfr::logf("scs focus: a draw of %u vertices onto the headset's image without a twin is drawn again for the focus "
+                      "view (viewport %.0f,%.0f %.0fx%.0f)",
+                      count, v.TopLeftX, v.TopLeftY, v.Width, v.Height);
+}
+
 // NVAPI's two views on or off (the render thread). A refusal turns the focus view off for the session.
 void two_views(bool on) {
     if (g.twoViews == on || !g.context)
@@ -411,6 +459,9 @@ void focus_draw() {
     if (FAILED(vs->GetPrivateData(instancing ? lmu::kMvrInstancedTwinGuid : lmu::kMvrTwinGuid, &size, &twin)) || !twin) {
         vs->Release();
         ++g.noTwin;
+        // A draw onto the headset's image (the UI panels: their shader made before ours were hooked) is drawn again
+        // after the game's, for the focus view through its viewport (redraw_focus).
+        g.redrawFocus = g.boundSwapchain;
         two_views(false);
         if (g.viewsDual) {  // this draw into the eye alone
             g.viewsDual = false;

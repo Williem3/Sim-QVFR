@@ -143,7 +143,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("scs corner: %llu frames, %llu with the eyes in the corner; draws rewritten %llu, nothing to rewrite "
-                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
+                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu (drawn again for the focus view %llu), passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
                       static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames),
                       static_cast<unsigned long long>(g.stats.rewritten), static_cast<unsigned long long>(g.stats.notRewritten),
                       static_cast<unsigned long long>(g.stats.skipped),
@@ -151,7 +151,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.midFrameWrites), static_cast<unsigned long long>(g.mirrorSwaps),
                       static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses),
                       static_cast<unsigned long long>(g.heldTwo), static_cast<unsigned long long>(g.focusDraws),
-                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
+                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.redraws), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
                       g.twinBytes / 1048576.0, static_cast<unsigned long long>(g.twinCopies),
                       static_cast<unsigned long long>(g.stretched), static_cast<unsigned long long>(g.composed), g.box[0][0], g.box[0][1],
                       g.box[1][0], g.box[1][1], static_cast<unsigned long long>(g.boxMoves),
@@ -386,7 +386,10 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
     if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
         const Timed t(State::kTimeFocusDraws);
-        focus_draw();
+        if (g.forceUiRedraw)  // the dev test: the redraw instead of the shader's twin
+            g.redrawFocus = true;
+        else
+            focus_draw();
     }
     ++(vs || ps ? g.stats.rewritten : g.stats.notRewritten);  // the rule itself is the GPU's (the first frames' log names the draws)
     if (g.loggedDraws < 60) {
@@ -405,6 +408,10 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         ID3D11Buffer* const cb13[] = {g.gameCb13.Get()};  // the game's b13 again (null if it had none)
         g.context->VSSetConstantBuffers(13, 1, cb13);
         g.gameCb13.Reset();
+    }
+    if (g.redrawFocus) {  // a draw onto the headset's image without a twin: again, for the focus view (UI panels)
+        g.redrawFocus = false;
+        redraw_focus(entry, count, start);
     }
     // The ranges on_draw rewrote, for the replay's log and timing (the put-backs clear them).
     const UINT vsFirst = g.vs.first, vsCount = g.vs.count, psFirst = g.ps.first, psCount = g.ps.count;
@@ -843,6 +850,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     g.lifecyclePending.store(true, std::memory_order_release);
     return true;
 }
+
+void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
                      bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {
