@@ -246,8 +246,10 @@ the game; `--launch` launches without the window. Steam must be running and ACE 
 file in the release's `lang\` folder, picked on the About pane (`[launcher] language`: `auto` follows
 Windows, `en`, or a file's code). The English text is the key: wrap shown text in `tr(L"...")`, a
 sentence with values in `trf(L"Launch {game}", {{L"game", name}})` (never glue translated pieces
-together: word order differs), and an entry of a constexpr table in `I18N(L"...")`, translated with
-`tr()` where it shows. Logs, report bundles and ini keys stay English. After changing text:
+together: word order differs), a counted text in `trn(n, L"{count} game", L"{count} games", {{L"count", …}})`
+(each language gives its own plural forms: Polish and Russian three, `pl.one`/`pl.few`/`pl.many`; never pick the form
+with `n == 1 ?` in code), and an entry of a constexpr table in `I18N(L"...")`, translated with `tr()` where it shows.
+Upper-case styles go through `lang::upper` (Turkish i → İ). Logs, report bundles and ini keys stay English. After changing text:
 
 ```
 python tools/lang_extract.py --sync    # lang/_template.ini and every lang/<code>.ini in step

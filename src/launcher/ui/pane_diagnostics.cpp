@@ -328,14 +328,19 @@ Card diagnostics_card() {
                          ? std::wstring(
                                tr(L"The next launch logs everything, for a bug report; then normal logs again."))
                      : app.s.debugLogs > 1
-                         ? trf(L"The next {count} launches log everything, for a bug report; then normal logs again.",
+                         ? trn(app.s.debugLogs,
+                               L"The next {count} launch logs everything, for a bug report; then normal logs again.",
+                               L"The next {count} launches log everything, for a bug report; then normal logs again.",
                                {{L"count", launches}})
-                         : trf(L"For a bug report: {count} launches that log everything, then normal logs again.",
+                         : trn(kDebugLogLaunches,
+                               L"For a bug report: {count} launch that logs everything, then normal logs again.",
+                               L"For a bug report: {count} launches that log everything, then normal logs again.",
                                {{L"count", launches}}),
                      false, Applies::NextLaunch);
             const LogsUse& use = logs_use_now();
             const std::wstring kept =
-                trf(L"The newest {count} sessions are kept.", {{L"count", std::to_wstring(kKeepSessions)}});
+                trn(kKeepSessions, L"The newest {count} session is kept.", L"The newest {count} sessions are kept.",
+                    {{L"count", std::to_wstring(kKeepSessions)}});
             if (use.diagnosticsBytes > 0)
                 m.action(tr(L"Logs folder"),
                          kept + L" " +

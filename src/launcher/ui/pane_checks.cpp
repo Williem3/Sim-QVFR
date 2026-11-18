@@ -31,11 +31,11 @@ Card checks_card() {
             (tone == CheckTone::Bad || tone == CheckTone::Warn ? attention : ready).push_back(i);
         }
         if (bad > 0)
-            b.chip(2, bad == 1 ? trf(L"{count} problem · Launch will ask you to confirm first", {{L"count", L"1"}})
-                               : trf(L"{count} problems · Launch will ask you to confirm first",
-                                     {{L"count", std::to_wstring(bad)}}));
+            b.chip(2, trn(bad, L"{count} problem · Launch will ask you to confirm first",
+                          L"{count} problems · Launch will ask you to confirm first",
+                          {{L"count", std::to_wstring(bad)}}));
         else if (warn > 0)
-            b.chip(1, trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}));
+            b.chip(1, trn(warn, L"{count} to check", L"{count} to check", {{L"count", std::to_wstring(warn)}}));
         else
             b.chip(0, tr(L"Ready to launch"));
         const auto check_row = [](Body& r, size_t i) {
@@ -63,9 +63,12 @@ Card checks_card() {
         std::vector<std::wstring> labels;
         for (size_t i : ready)
             labels.push_back(app.checks[i].title);
+        const long long readyCount = static_cast<long long>(ready.size());
         if (!ready.empty())
-            b.more(attention.empty() ? trf(L"all {count} checks", {{L"count", std::to_wstring(ready.size())}})
-                                     : trf(L"{count} ready checks", {{L"count", std::to_wstring(ready.size())}}),
+            b.more(attention.empty() ? trn(readyCount, L"all {count} check", L"all {count} checks",
+                                           {{L"count", std::to_wstring(ready.size())}})
+                                     : trn(readyCount, L"{count} ready check", L"{count} ready checks",
+                                           {{L"count", std::to_wstring(ready.size())}}),
                    labels,
                    [ready, check_row](Body& m) {
                        for (size_t i : ready)

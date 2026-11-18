@@ -163,9 +163,9 @@ void session_chart(const Rect& r, const std::vector<const SessionRecord*>& sessi
         values += (k ? L", " : L"") + fixed(L"%.1f", s.fps);
     }
     const std::wstring count = std::to_wstring(n);
-    std::wstring tip = n == 1 ? trf(L"The last {count} session: {values} fps", {{L"count", count}, {L"values", values}})
-                              : trf(L"The last {count} sessions, oldest first: {values} fps",
-                                    {{L"count", count}, {L"values", values}});
+    std::wstring tip = trn(static_cast<long long>(n), L"The last {count} session: {values} fps",
+                           L"The last {count} sessions, oldest first: {values} fps",
+                           {{L"count", count}, {L"values", values}});
     if (target > 0) {
         tip += trf(L"; the target is {fps} fps.", {{L"fps", fixed(L"%.0f", target)}});
         const float ty = base - static_cast<float>(target / top) * (r.h - 4);
@@ -318,7 +318,8 @@ float game_panel(float x, float y, float w, bool draw) {
         if (draw) {
             const size_t n = std::min<size_t>(sessions.size(), kChartBars);
             cv.text(n == 1 ? std::wstring(tr(L"Last session"))
-                           : trf(L"Last {count} sessions", {{L"count", std::to_wstring(n)}}),
+                           : trn(static_cast<long long>(n), L"Last {count} session", L"Last {count} sessions",
+                                 {{L"count", std::to_wstring(n)}}),
                     t::kSubheadline,
                     {x + kPad, by, inner, 16}, col(app.c->label_secondary));
             if (target > 0)
@@ -462,8 +463,8 @@ std::vector<Tile> headset_tiles() {
     out.push_back({tr(L"Hotkeys"),
                    open.empty() ? menu_keys() : trf(L"{key} opens the menu", {{L"key", open}}) + L" · " + menu_keys(),
                    pads == 0   ? std::wstring(tr(L"No wheel buttons set"))
-                   : pads == 1 ? trf(L"{count} wheel button set", {{L"count", std::to_wstring(pads)}})
-                               : trf(L"{count} wheel buttons set", {{L"count", std::to_wstring(pads)}}),
+                               : trn(pads, L"{count} wheel button set", L"{count} wheel buttons set",
+                                     {{L"count", std::to_wstring(pads)}}),
                    clash ? tr(L"Clash") : L"", 1, I18N(L"Hotkeys"), Pane::Headset});
     return out;
 }
@@ -482,15 +483,16 @@ std::vector<Tile> game_tiles() {
         }
     if (bad + warn > 0)
         out.push_back({tr(L"Launch checks"), first, L"",
-                       bad == 1  ? trf(L"{count} problem", {{L"count", std::to_wstring(bad)}})
-                       : bad > 0 ? trf(L"{count} problems", {{L"count", std::to_wstring(bad)}})
-                                 : trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}),
+                       bad > 0 ? trn(bad, L"{count} problem", L"{count} problems",
+                                     {{L"count", std::to_wstring(bad)}})
+                               : trn(warn, L"{count} to check", L"{count} to check",
+                                     {{L"count", std::to_wstring(warn)}}),
                        bad > 0 ? 2 : 1, I18N(L"Launch checks"), Pane::Game});
     const std::vector<const SessionRecord*> sessions = game_sessions();
     Tile diag{tr(L"Diagnostics"),
               sessions.empty()        ? std::wstring(tr(L"No sessions yet"))
-              : sessions.size() == 1 ? trf(L"{count} session recorded", {{L"count", L"1"}})
-                                      : trf(L"{count} sessions recorded",
+                                      : trn(static_cast<long long>(sessions.size()), L"{count} session recorded",
+                                            L"{count} sessions recorded",
                                             {{L"count", std::to_wstring(sessions.size())}}),
               !sessions.empty() && !sessions.front()->limited.empty()
                   ? trf(L"Limited by {what}", {{L"what", sessions.front()->limited}})
@@ -503,7 +505,8 @@ std::vector<Tile> game_tiles() {
     games::all_games(count);
     const games::GameInfo& game = games::launcher_game();
     out.push_back({tr(L"Games"),
-                   trf(L"{shown} of {count} games shown",
+                   trn(static_cast<long long>(count), L"{shown} of {count} game shown",
+                       L"{shown} of {count} games shown",
                        {{L"shown", std::to_wstring(shown_game_count())}, {L"count", std::to_wstring(count)}}),
                    game.antiCheatStart ? (app.s.antiCheat ? tr(L"Anti-cheat on") : tr(L"Anti-cheat off")) : L"", L"", 3,
                    I18N(L"Games in the rail"), Pane::Game});
@@ -513,8 +516,8 @@ std::vector<Tile> game_tiles() {
     const bool lastIsThisGame = !sessions.empty() && sessions.front()->id == session_id(app.runtime.session.log);
     out.push_back({tr(L"OpenXR layers"),
                    below == 0   ? std::wstring(tr(L"No other VR add-ons"))
-                   : below == 1 ? trf(L"{count} other VR add-on", {{L"count", std::to_wstring(below)}})
-                                : trf(L"{count} other VR add-ons", {{L"count", std::to_wstring(below)}}),
+                                : trn(below, L"{count} other VR add-on", L"{count} other VR add-ons",
+                                      {{L"count", std::to_wstring(below)}}),
                    lastIsThisGame && app.runtime.session.layerMs >= 0
                        ? trf(L"{ms} ms per frame", {{L"ms", fixed(L"%.2f", app.runtime.session.layerMs)}})
                        : L"",

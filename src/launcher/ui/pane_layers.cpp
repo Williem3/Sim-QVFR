@@ -172,9 +172,8 @@ Card layers_card() {
                 names += (below++ ? L", " : L"") + friendly_layer(l.name);
             }
         b.note(below == 0   ? trf(L"No other VR add-ons load with {game} from here.", {{L"game", short_name()}})
-               : below == 1 ? trf(L"{count} other VR add-on loads with {game} from here: {names}.",
-                                  {{L"count", L"1"}, {L"game", short_name()}, {L"names", names}})
-                            : trf(L"{count} other VR add-ons load with {game} from here: {names}.",
+                            : trn(below, L"{count} other VR add-on loads with {game} from here: {names}.",
+                                  L"{count} other VR add-ons load with {game} from here: {names}.",
                                   {{L"count", std::to_wstring(below)}, {L"game", short_name()}, {L"names", names}}));
         b.more(tr(kLayersMore), {tr(L"Layers for"), tr(L"Load order, nearest the game first"), tr(L"A frame’s path")},
                [](Body& b) {
