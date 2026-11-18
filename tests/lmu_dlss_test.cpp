@@ -332,6 +332,13 @@ int SIM_QVFR_TEST_MAIN() {
         check(close_to(got[10], eyeP[10], 1e-4) && close_to(got[14], eyeP[14], 2e-4 * std::fabs(eyeP[14]) + 1e-5),
               "view pair: its depth terms are the ordinary convention's (the module reverses them again)");
         check(lmu::same_eye(got, eyeF), "view pair: the eye's own camera is the eye's");
+        {  // DLSS's jitter a frame apart: up to a pixel each way at a 1199-wide eye (2 / 1199 in NDC)
+            float jittered[16];
+            std::memcpy(jittered, got, sizeof(jittered));
+            jittered[8] += 2.0f / 1199;
+            jittered[9] -= 2.0f / 963;
+            check(lmu::same_eye(jittered, eyeF), "view pair: the eye's camera a jitter phase on is still the eye's");
+        }
         const Tangents narrow{-0.3, 0.3, -0.2, 0.2};  // a mirror's camera, drawn in the same pass
         const M4 mirror = mul(camView, reversed_depth(projection_of(narrow, 0.075, 1e7)));
         float mf[16], mirrorP[16];

@@ -1,8 +1,10 @@
 // LMU's inputs to the engine's DLAA (dlss_inputs.h).
 #include "dlss_inputs.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "../../engine/code_patch.h"
@@ -48,13 +50,16 @@ bool renderer_matrices(int eye, float (&view)[16], float (&projection)[16], bool
 }
 
 // The pass's view and projection from what its draws uploaded (view_pair.h): of this frame's pairs in the pass, the one
-// whose projection is the eye's. Any build.
-bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16]) {
+// whose projection is the eye's. Any build. `why` (when false): none drawn yet, or none of them the eye's.
+bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const char** why = nullptr) {
     float pairs[4][32];
     const int n = mvr_view_pairs(eye, pairs, 4);
     float expected[16];
-    if (!n || !qvfr_frame_eye_projection(eye, expected))
+    if (!n || !qvfr_frame_eye_projection(eye, expected)) {
+        if (why)
+            *why = n ? "no FOV located yet" : "no pair drawn in the pass yet";
         return false;
+    }
     for (int i = 0; i < n; ++i) {
         float v[16], vp[16], p[16];
         std::memcpy(v, pairs[i], sizeof(v));
@@ -65,7 +70,40 @@ bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16]) {
             return true;
         }
     }
+    if (why)
+        *why = "none of the pass's pairs is the eye's";
     return false;
+}
+
+// The last pass camera found per eye, and the frame (of mvr_view_pairs's count) it was found in: a pass without its own
+// takes the eye's from a few frames before, rather than leaving DLSS without one.
+float lastView[2][16], lastProjection[2][16];
+unsigned long long lastFound[2] = {}, drawnPasses = 0, heldPasses = 0, missedPasses = 0;
+bool haveLast[2] = {};
+int missSaid = 0;
+
+// A miss said (the first few): the pass's pairs' projections against the eye's.
+void say_miss(int eye, const char* why) {
+    if (missSaid >= 3)
+        return;
+    ++missSaid;
+    float pairs[4][32], expected[16] = {};
+    const int n = mvr_view_pairs(eye, pairs, 4);
+    const bool haveEye = qvfr_frame_eye_projection(eye, expected);
+    char text[512];
+    int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d without its own (%s); the eye's m0 "
+                            "%.5f m5 %.5f m8 %.5f m9 %.5f%s; %d pairs:",
+                            eye, why, expected[0], expected[5], expected[8], expected[9], haveEye ? "" : " (none)", n);
+    for (int i = 0; i < n && len > 0 && len < static_cast<int>(sizeof(text)); ++i) {
+        float v[16], vp[16], p[16];
+        std::memcpy(v, pairs[i], sizeof(v));
+        std::memcpy(vp, pairs[i] + 16, sizeof(vp));
+        const bool shaped = projection_of_pair(v, vp, p);
+        len += std::snprintf(text + len, sizeof(text) - len, " [%s m0 %.5f m5 %.5f m8 %.5f m9 %.5f]",
+                             shaped ? "shaped" : (dlss::rigid(dlss::from_floats(v)) ? "not a projection" : "view not rigid"),
+                             shaped ? p[0] : 0.0f, shaped ? p[5] : 0.0f, shaped ? p[8] : 0.0f, shaped ? p[9] : 0.0f);
+    }
+    simqvfr::log_line(text);
 }
 
 void log_once(const float (&view)[16], const float (&projection)[16], bool rigid, bool shaped, const char* from) {
@@ -115,14 +153,37 @@ void compare(int eye, const float (&view)[16], const float (&projection)[16]) {
 
 bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
     if (qvfr_frame_build_free()) {  // any build: what the pass's draws uploaded
-        if (!drawn_matrices(eye, view, projection)) {
-            if (!drawnLogged && ++drawnMisses == 90) {
-                drawnLogged = true;
-                simqvfr::log_line("lmu dlss: build-free camera: no pass camera found in the draws' constant buffers for "
-                                  "90 passes (DLSS leaves those views as drawn)");
+        const int e = eye & 1;
+        const char* why = "";
+        ++drawnPasses;
+        if (drawn_matrices(eye, view, projection, &why)) {
+            std::memcpy(lastView[e], view, sizeof(view));
+            std::memcpy(lastProjection[e], projection, sizeof(projection));
+            lastFound[e] = drawnPasses;
+            haveLast[e] = true;
+            drawnMisses = 0;
+        } else {
+            say_miss(eye, why);
+            // The eye's camera from a few frames before (up to 8 passes back): a frame's vectors a little off, where
+            // DLSS would otherwise leave the view as drawn.
+            if (haveLast[e] && drawnPasses - lastFound[e] <= 8) {
+                std::memcpy(view, lastView[e], sizeof(view));
+                std::memcpy(projection, lastProjection[e], sizeof(projection));
+                ++heldPasses;
+            } else {
+                ++missedPasses;
+                if (!drawnLogged && ++drawnMisses == 90) {
+                    drawnLogged = true;
+                    simqvfr::log_line("lmu dlss: build-free camera: no pass camera found in the draws' constant buffers "
+                                      "for 90 passes (DLSS leaves those views as drawn)");
+                }
+                return false;
             }
-            return false;
         }
+        if (drawnPasses % 5400 == 0)
+            simqvfr::logf("lmu dlss: build-free camera: %llu passes, %llu with the camera of a frame before, %llu without "
+                          "one",
+                          drawnPasses, heldPasses, missedPasses);
         const bool rigid = dlss::rigid(dlss::from_floats(view)), shaped = dlss::projection(dlss::from_floats(projection));
         log_once(view, projection, rigid, shaped, "drawn (the per-draw buffer's)");
         return rigid && shaped;
@@ -142,6 +203,7 @@ bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
 void dlss_use_lmu_inputs() {
     logged = drawnLogged = false;
     drawnMisses = 0;
+    haveLast[0] = haveLast[1] = false;
     simqvfr::dlss_set_matrices(&pass_matrices);
 }
 

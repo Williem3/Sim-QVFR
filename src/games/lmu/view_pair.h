@@ -40,12 +40,14 @@ inline bool projection_of_pair(const float (&view)[16], const float (&viewProj)[
     return true;
 }
 
-// `projection` is the eye's (`eye`: the FOV the game was handed, focus_math.h projection_from_tangents): its x and y
-// terms within a jitter phase's rounding.
+// `projection` is the eye's (`eye`: the FOV the game was handed, focus_math.h projection_from_tangents): its scale
+// terms (m0, m5: the FOV's width and height, which DLSS's jitter doesn't move) to 0.1%, its offsets (m8, m9) within
+// 0.01: DLSS's jitter moves those by up to a pixel (2 / width in NDC) and the FOV located last may be a frame on from
+// the pass's. A mirror's or side target's camera is another FOV altogether.
 inline bool same_eye(const float (&projection)[16], const float (&eye)[16]) {
     const auto rel = [](double a, double b) { return std::fabs(a - b) <= 1e-3 * std::fabs(b); };
-    return rel(projection[0], eye[0]) && rel(projection[5], eye[5]) && std::fabs(projection[8] - eye[8]) <= 1e-3 &&
-           std::fabs(projection[9] - eye[9]) <= 1e-3;
+    return rel(projection[0], eye[0]) && rel(projection[5], eye[5]) && std::fabs(projection[8] - eye[8]) <= 0.01 &&
+           std::fabs(projection[9] - eye[9]) <= 0.01;
 }
 
 }  // namespace lmu
