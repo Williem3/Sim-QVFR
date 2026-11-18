@@ -288,7 +288,7 @@ bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buf
 
 // The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy) and bound in its place for this draw
 // (put_back undoes it). False: left as the game bound it.
-bool rewrite(Range& r, bool pixel, bool focus) {
+bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
     if (pixel)
@@ -299,6 +299,7 @@ bool rewrite(Range& r, bool pixel, bool focus) {
     r.first = first;
     r.count = count;
     r.ours = false;
+    r.position = nullptr;
     if (!buf)
         return false;
     D3D11_BUFFER_DESC d;
@@ -362,10 +363,17 @@ bool rewrite(Range& r, bool pixel, bool focus) {
         float fx, fy;
         UINT count, flags;
         float box[4], remap[4];
-        float px, py, pad[2];
+        float px, py;
+        uint32_t rectRow, sizeRow;
     } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
-           focus ? focus_fy() : g.fy, {}};
+           focus ? focus_fy() : g.fy, ~0u, ~0u};
+    const bool positioned = position && !pixel && focus && count <= kPositionAt;
+    if (positioned) {
+        p.flags |= 8u;
+        p.rectRow = position[0] >= 0 ? static_cast<uint32_t>(position[0]) : ~0u;
+        p.sizeRow = position[1] >= 0 ? static_cast<uint32_t>(position[1]) : ~0u;
+    }
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
@@ -373,6 +381,11 @@ bool rewrite(Range& r, bool pixel, bool focus) {
     const D3D11_BOX outBox = {0, 0, 0, count * 16, 1, 1};
     ID3D11Buffer* ours = set.cb.Get();
     g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, set.out.Get(), 0, &outBox);
+    if (positioned) {  // the twin's two vectors, bound as their own 16-constant block
+        const D3D11_BOX at = {kPositionAt * 16, 0, 0, (kPositionAt + 16) * 16, 1, 1};
+        g.context->CopySubresourceRegion(ours, 0, kPositionAt * 16, 0, 0, set.out.Get(), 0, &at);
+        r.position = ours;
+    }
     const UINT zero = 0, n = ((count + 15) / 16) * 16;  // ranged binds: multiples of 16 constants
     if (pixel)
         g.context->PSSetConstantBuffers1(0, 1, &ours, &zero, &n);

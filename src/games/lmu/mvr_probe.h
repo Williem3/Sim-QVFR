@@ -41,6 +41,7 @@ struct MvrProbeStats {
     uint64_t yebisCopies = 0, yebisComposites = 0;  // YEBIS's copy and composite pixel shaders marked (yebis_shaders.h)
     uint64_t finalBlits = 0;  // the game's final blit pixel shaders marked (yebis_shaders.h)
     uint64_t lensMasks = 0, vruiPanels = 0;  // the lens mask's and VR UI panel's vertex shaders marked (VsRole)
+    uint64_t positionTwins = 0;  // full-screen shaders given a position twin (mvr_probe_position_twins)
     // Pixel shaders (lmu_mvr): created, given a mip bias twin (dxbc::add_focus_mip_bias; texture sharpening), and why not.
     uint64_t pixelCreated = 0, pixelTwinned = 0, pixelRepeats = 0, pixelFailed = 0;
     std::map<std::string, uint64_t> pixelRefused;
@@ -74,6 +75,10 @@ inline constexpr GUID kCb0VectorsGuid = {0x64b0e3a9, 0x2f17, 0x4c58, {0xb4, 0x0a
 inline constexpr GUID kPixelIdGuid = {0x3c8d1f52, 0x6a94, 0x4e07, {0x9b, 0x21, 0x5d, 0xe3, 0x70, 0x8a, 0x44, 0xc6}};
 // A pixel shader's rows of constant buffer 0 read by a fixed index (512 bytes: dxbc::constant_buffer_static_rows).
 inline constexpr GUID kCb0StaticRowsGuid = {0x5e2a7b14, 0xc39d, 0x4f61, {0x8e, 0x05, 0xa7, 0x3b, 0x91, 0xd2, 0x6c, 0x48}};
+// The SCS games' focus replays (mvr_probe_position_twins): a full-screen pass's vertex shader that turns its vertex into
+// screen pixels carries its dxbc::add_position_remap twin (an interface) and the twin's rectangle and size rows (two ints).
+inline constexpr GUID kFocusPositionTwinGuid = {0x8b3e51c7, 0x2d64, 0x4a19, {0x9f, 0x0e, 0x73, 0xc2, 0x58, 0xa1, 0x4d, 0x36}};
+inline constexpr GUID kFocusPositionRowsGuid = {0x1f6a9c38, 0x7e05, 0x4b72, {0xa4, 0xd9, 0x0c, 0x83, 0x6e, 0x27, 0xb5, 0x91}};
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
 // Every input layout the probe sees made, twinned or not: its kind (a UINT). Unmarked: not seen (made before the
 // probe hooked the device), not known.
@@ -91,6 +96,8 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false, bool nameSh
 // xrCreateSession with the game's device: device creation unhooked; NVAPI's flags on the device; its shader creation
 // hooked if device creation wasn't.
 void mvr_probe_device(ID3D11Device* device);
+// The SCS games: full-screen shaders get their position twins (kFocusPositionTwinGuid) from now on.
+void mvr_probe_position_twins(bool on);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();
 MvrProbeStats mvr_probe_stats();

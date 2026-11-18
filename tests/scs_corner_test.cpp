@@ -656,10 +656,194 @@ void eye_shape_checks() {
     g.eyeW = g.eyeH = 0;  // as before the first session
 }
 
+namespace {
+
+ComPtr<ID3DBlob> compile_blob(const char* src, const char* entry, const char* profile) {
+    ComPtr<ID3DBlob> code, errors;
+    if (FAILED(D3DCompile(src, std::strlen(src), "test", nullptr, nullptr, entry, profile, 0, 0, &code, &errors))) {
+        std::printf("     compile failed: %s\n", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
+        return nullptr;
+    }
+    return code;
+}
+
+// kCornerPatchCs on a vertex range (flags 1 | 2, plus 8 for the position twin): the range's 4096 vectors back.
+std::vector<float> run_patch(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ComputeShader* cs,
+                             const std::vector<float>& range, const void* params) {
+    std::vector<float> data(4096 * 4, 0.0f);
+    std::memcpy(data.data(), range.data(), range.size() * 4);
+    const D3D11_BUFFER_DESC raw = {4096 * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0,
+                                   D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+    const D3D11_BUFFER_DESC pd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC rd = {512, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC sd = {4096 * 16, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+    const D3D11_SUBRESOURCE_DATA init = {data.data(), 0, 0}, pInit = {params, 0, 0};
+    ComPtr<ID3D11Buffer> in, out, p, rows, staging;
+    if (FAILED(device->CreateBuffer(&raw, &init, &in)) || FAILED(device->CreateBuffer(&raw, nullptr, &out)) ||
+        FAILED(device->CreateBuffer(&pd, &pInit, &p)) || FAILED(device->CreateBuffer(&rd, nullptr, &rows)) ||
+        FAILED(device->CreateBuffer(&sd, nullptr, &staging)))
+        return {};
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = DXGI_FORMAT_R32_TYPELESS;
+    sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+    sv.BufferEx = {0, 4096 * 4, D3D11_BUFFEREX_SRV_FLAG_RAW};
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uv{};
+    uv.Format = DXGI_FORMAT_R32_TYPELESS;
+    uv.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uv.Buffer = {0, 4096 * 4, D3D11_BUFFER_UAV_FLAG_RAW};
+    ComPtr<ID3D11ShaderResourceView> inView;
+    ComPtr<ID3D11UnorderedAccessView> outView;
+    if (FAILED(device->CreateShaderResourceView(in.Get(), &sv, &inView)) ||
+        FAILED(device->CreateUnorderedAccessView(out.Get(), &uv, &outView)))
+        return {};
+    ID3D11Buffer* const cbs[] = {p.Get(), rows.Get()};
+    context->CSSetShader(cs, nullptr, 0);
+    context->CSSetShaderResources(0, 1, inView.GetAddressOf());
+    context->CSSetUnorderedAccessViews(0, 1, outView.GetAddressOf(), nullptr);
+    context->CSSetConstantBuffers(0, 2, cbs);
+    context->Dispatch(1, 1, 1);
+    ID3D11UnorderedAccessView* none = nullptr;
+    context->CSSetUnorderedAccessViews(0, 1, &none, nullptr);
+    context->CopyResource(staging.Get(), out.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
+        return {};
+    std::memcpy(data.data(), map.pData, data.size() * 4);
+    context->Unmap(staging.Get(), 0);
+    return data;
+}
+
+// Three vertices through a full-screen vertex shader: its clip position and TEXCOORD0 (stream output).
+bool stream_vs(ID3D11Device* device, ID3D11DeviceContext* context, const void* code, size_t size, const float* cb0,
+               const float* cb12, float (&out)[3][8]) {
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11GeometryShader> so;
+    const D3D11_SO_DECLARATION_ENTRY decl[] = {{0, "SV_POSITION", 0, 0, 4, 0}, {0, "TEXCOORD", 0, 0, 4, 0}};
+    UINT stride = 32;
+    const D3D11_INPUT_ELEMENT_DESC element = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    ComPtr<ID3D11InputLayout> layout;
+    if (FAILED(device->CreateVertexShader(code, size, nullptr, &vs)) ||
+        FAILED(device->CreateGeometryShaderWithStreamOutput(code, size, decl, 2, &stride, 1, D3D11_SO_NO_RASTERIZED_STREAM,
+                                                            nullptr, &so)) ||
+        FAILED(device->CreateInputLayout(&element, 1, code, size, &layout)))
+        return false;
+    const float points[3][2] = {{0, 0}, {2, 0}, {0, 2}};
+    const D3D11_SUBRESOURCE_DATA vInit = {points, 0, 0}, cInit = {cb0, 0, 0}, rInit = {cb12, 0, 0};
+    const D3D11_BUFFER_DESC bd = {sizeof(points), D3D11_USAGE_DEFAULT, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC cd = {256, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC od = {stride * 3, D3D11_USAGE_DEFAULT, D3D11_BIND_STREAM_OUTPUT, 0, 0, 0};
+    const D3D11_BUFFER_DESC sd = {stride * 3, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+    ComPtr<ID3D11Buffer> vb, c0, c12, o, staging;
+    if (FAILED(device->CreateBuffer(&bd, &vInit, &vb)) || FAILED(device->CreateBuffer(&cd, &cInit, &c0)) ||
+        FAILED(device->CreateBuffer(&cd, cb12 ? &rInit : nullptr, &c12)) || FAILED(device->CreateBuffer(&od, nullptr, &o)) ||
+        FAILED(device->CreateBuffer(&sd, nullptr, &staging)))
+        return false;
+    const UINT vbStride = 8, offset = 0;
+    context->IASetInputLayout(layout.Get());
+    context->IASetVertexBuffers(0, 1, vb.GetAddressOf(), &vbStride, &offset);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    context->VSSetShader(vs.Get(), nullptr, 0);
+    context->VSSetConstantBuffers(0, 1, c0.GetAddressOf());
+    context->VSSetConstantBuffers(12, 1, c12.GetAddressOf());
+    context->GSSetShader(so.Get(), nullptr, 0);
+    context->PSSetShader(nullptr, nullptr, 0);
+    context->SOSetTargets(1, o.GetAddressOf(), &offset);
+    context->Draw(3, 0);
+    ID3D11Buffer* none = nullptr;
+    context->SOSetTargets(1, &none, &offset);
+    context->GSSetShader(nullptr, nullptr, 0);
+    context->CopyResource(staging.Get(), o.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
+        return false;
+    std::memcpy(out, map.pData, sizeof(out));
+    context->Unmap(staging.Get(), 0);
+    return true;
+}
+
+bool close_to(float a, float b) { return std::fabs(a - b) <= 1e-4f * (1 + std::fabs(a)); }
+
+}  // namespace
+
+// The focus replay at the box's place (kCornerPatchCs flag 8 + dxbc::add_position_remap): a V1 vertex range like the
+// light pass's (rectangle, flip, normalized_to_texture, viewport_size). Against the replay as before, the twin keeps
+// the clip position and the texture coordinates and turns the screen pixels into the eye's under the box.
+void position_checks() {
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,
+                                 &context))) {
+        check(false, "position: a WARP device");
+        return;
+    }
+    const ComPtr<ID3DBlob> csCode = compile_blob(scs::kCornerPatchCs, "main", "cs_5_0");
+    const char* vsSource = R"(
+cbuffer C : register(b0) { float4 rect; float4 flip; float4 ntt; float4 size; };
+struct Out { float4 pos : SV_Position; float4 t : TEXCOORD0; };
+Out main(float2 v : POSITION) {
+    Out o;
+    o.pos = float4(v.x * 2 - 1, -(v.y * 2 - 1) * flip.x, flip.z, 1);
+    o.t.xy = (v * rect.zw + rect.xy) * ntt.xy;
+    o.t.zw = v * size.xy;
+    return o;
+}
+)";
+    const ComPtr<ID3DBlob> vsCode = compile_blob(vsSource, "main", "vs_5_0");
+    ComPtr<ID3D11ComputeShader> cs;
+    if (!csCode || !vsCode || FAILED(device->CreateComputeShader(csCode->GetBufferPointer(), csCode->GetBufferSize(), nullptr, &cs))) {
+        check(false, "position: the shaders compiled");
+        return;
+    }
+    const auto* vsBytes = static_cast<const uint8_t*>(vsCode->GetBufferPointer());
+    const simqvfr::dxbc::PositionRemap pr = simqvfr::dxbc::add_position_remap(vsBytes, vsCode->GetBufferSize());
+    check(!pr.bytecode.empty() && pr.rectRow == 0 && pr.sizeRow == 3, "position: the twin made, rectangle row 0, size row 3");
+    if (pr.bytecode.empty())
+        return;
+    const float W = 4040, H = 3376;
+    const std::vector<float> range = {0, 0, 1, 1, 1, -0.5f, 0.5f, 0, 1, 1, 1, 1, W, H, 1, 1};
+    struct {
+        float fx, fy;
+        uint32_t count, flags;
+        float box[4], remap[4];
+        float px, py;
+        uint32_t rectRow, sizeRow;
+    } p = {0.9f, 0.85f, 4, 3, {0.35f, 0.3f, 0.25f, 0.3f}, {1, 0, 1, 0}, 0.25f, 0.3f, ~0u, ~0u};
+    const std::vector<float> before = run_patch(device.Get(), context.Get(), cs.Get(), range, &p);
+    p.flags |= 8, p.rectRow = 0, p.sizeRow = 3;
+    const std::vector<float> after = run_patch(device.Get(), context.Get(), cs.Get(), range, &p);
+    if (before.empty() || after.empty()) {
+        check(false, "position: the rules ran");
+        return;
+    }
+    float a[3][8] = {}, b[3][8] = {};
+    const float identity[8] = {1, 1, 0, 0, 1, 1, 0, 0};
+    const bool ran = stream_vs(device.Get(), context.Get(), vsBytes, vsCode->GetBufferSize(), before.data(), identity, a) &&
+                     stream_vs(device.Get(), context.Get(), pr.bytecode.data(), pr.bytecode.size(), after.data(),
+                               after.data() + scs::detail::kPositionAt * 4, b);
+    bool position = ran, texture = ran, pixels = ran;
+    const float unit[3][2] = {{0, 0}, {2, 0}, {0, 2}};
+    for (int v = 0; v < 3 && ran; ++v) {
+        for (int c = 0; c < 4; ++c)
+            position = position && close_to(a[v][c], b[v][c]);
+        texture = texture && close_to(a[v][4], b[v][4]) && close_to(a[v][5], b[v][5]);
+        pixels = pixels && close_to(b[v][6], (p.box[0] + unit[v][0] * p.box[2]) * W) && close_to(b[v][7], (p.box[1] + unit[v][1] * p.box[3]) * H);
+    }
+    check(position, "position: the twin's clip position the replay's (the same pixels drawn)");
+    check(texture, "position: its texture coordinates the replay's (the twins read as before)");
+    check(pixels, "position: its screen pixels the eye's under the box (light list tiles)");
+    check(close_to(after[3 * 4 + 2] / after[3 * 4 + 0], before[3 * 4 + 2] / before[3 * 4 + 0]), "position: the size row's zw / xy kept");
+    // Not the V1 shape (a rectangle left of a flip: V2): the identity, so the twin is the game's shader.
+    const std::vector<float> v2 = {1, -0.5f, 0.5f, 0, 0, 0, 1, 1, W, H, 1 / W, 1 / H, 0, 0, 0, 0};
+    const std::vector<float> other = run_patch(device.Get(), context.Get(), cs.Get(), v2, &p);
+    const float* id = other.empty() ? nullptr : other.data() + scs::detail::kPositionAt * 4;
+    check(id && std::memcmp(id, identity, sizeof(identity)) == 0, "position: another shape gets the identity");
+}
+
 int SIM_QVFR_TEST_MAIN() {
     eye_shape_checks();
     rules_checks();
     warp_checks();
+    position_checks();
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

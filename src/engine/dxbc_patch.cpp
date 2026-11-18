@@ -63,7 +63,7 @@ void md5_block(uint32_t (&s)[4], const uint8_t* block) {
 
 enum : uint32_t {
     kOpLd = 45, kOpDclResource = 88,
-    kOpAnd = 1, kOpGe = 29, kOpLt = 49, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56,
+    kOpAnd = 1, kOpDiv = 14, kOpGe = 29, kOpLt = 49, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56,
     kOpRet = 62, kOpRetc = 63, kOpSample = 69, kOpSampleC = 70, kOpSampleCLz = 71, kOpSampleL = 72, kOpSampleD = 73,
     kOpSampleB = 74, kOpUshr = 85, kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclInput = 95,
     kOpDclInputSgv = 96, kOpDclInputSiv = 97, kOpDclInputPs = 98, kOpDclInputPsSgv = 99, kOpDclInputPsSiv = 100,
@@ -1214,6 +1214,304 @@ uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot
         }
     }
     return 0;
+}
+
+PositionRemap add_position_remap(const uint8_t* data, size_t size, const PositionRemapOptions& options) {
+    PositionRemap r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    int programAt = -1, outputsAt = -1;
+    for (size_t c = 0; c < chunks.size(); ++c)
+        if (chunks[c].fourcc == fourcc("SHDR") || chunks[c].fourcc == fourcc("SHEX"))
+            programAt = static_cast<int>(c);
+        else if (chunks[c].fourcc == fourcc("OSGN"))
+            outputsAt = static_cast<int>(c);
+    if (programAt < 0 || outputsAt < 0 || chunks[programAt].data.size() < 8) {
+        r.error = programAt < 0 ? "no SHDR/SHEX" : "no OSGN";
+        return r;
+    }
+    std::vector<Element> outputs;
+    if (!read_signature(chunks[outputsAt].data, outputs)) {
+        r.error = "unreadable output signature";
+        return r;
+    }
+    uint32_t positionRegister = ~0u;
+    for (const Element& el : outputs)
+        if (el.systemValue == kNamePosition)
+            positionRegister = el.reg;
+    if (positionRegister == ~0u) {
+        r.error = "no SV_Position output";
+        return r;
+    }
+    const size_t words = chunks[programAt].data.size() / 4;
+    std::vector<uint32_t> tokens(words);
+    std::memcpy(tokens.data(), chunks[programAt].data.data(), words * 4);
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 1) {
+        r.error = "not a vertex shader";
+        return r;
+    }
+    if (length < 2 || length > words) {
+        r.error = "program length";
+        return r;
+    }
+    const uint32_t reg = options.inputRegister;
+    // The operand at `at` (its token) of an instruction: its immediate values' place (kImm32), else 0.
+    const auto imm_values = [&](size_t at, size_t len) -> size_t {
+        const uint32_t comps = tokens[at] & 3;
+        const size_t values = comps == 1 ? 1 : comps == 2 ? 4 : 0;
+        return values && len > values ? at + len - values : 0;
+    };
+    const auto has_value = [&](size_t at, size_t len, float want) {
+        const size_t v = imm_values(at, len);
+        if (!v)
+            return false;
+        for (size_t k = v; k < at + len; ++k) {
+            float f;
+            std::memcpy(&f, &tokens[k], 4);
+            if (f == want)
+                return true;
+        }
+        return false;
+    };
+
+    // First pass: the declarations, and every read of the input classified.
+    uint32_t temps = 0;
+    size_t tempsAt = 0, lastCbDcl = 0, globalFlagsEnd = 2, firstInstruction = 0;
+    int reads = 0, positionWrites = 0;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(&tokens[i], length - i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!firstInstruction && !is_declaration(op))
+            firstInstruction = i;
+        if (op == kOpDclTemps) {
+            if (n < 2) {
+                r.error = "malformed declaration";
+                return r;
+            }
+            temps = tokens[i + 1];
+            tempsAt = i;
+        } else if (op == kOpDclConstantBuffer) {
+            if (n < 4) {
+                r.error = "malformed declaration";
+                return r;
+            }
+            lastCbDcl = i + n;
+            if (tokens[i + 2] == options.cbSlot) {
+                r.error = "the remap's constant buffer slot is in use";
+                return r;
+            }
+        } else if (op == kOpDclGlobalFlags) {
+            globalFlagsEnd = i + n;
+        } else if (op == kOpDclIndexRange) {
+            Operand o;
+            if (read_operand(&tokens[i + 1], n - 1, o) && ((o.type == kInput && o.index0 <= reg && reg < o.index0 + tokens[i + n - 1]) ||
+                                                           (o.type == kOutput && o.index0 <= positionRegister &&
+                                                            positionRegister < o.index0 + tokens[i + n - 1]))) {
+                r.error = "the input or the position in an index range";
+                return r;
+            }
+        } else if (!is_declaration(op)) {
+            const size_t first = operands_at(&tokens[i], n);
+            if (!first) {
+                r.error = "extended opcode chain past the instruction";
+                return r;
+            }
+            struct Read {
+                Operand o;
+                size_t at, len;
+            } ops[6];
+            int count = 0;
+            bool input = false;
+            for (size_t at = i + first; at < i + n;) {
+                Operand o;
+                const size_t len = read_operand(&tokens[at], i + n - at, o);
+                if (!len) {
+                    r.error = "unreadable operand (opcode " + std::to_string(op) + ")";
+                    return r;
+                }
+                if (o.type == kOutput && (!o.index0Immediate || o.index0 == positionRegister)) {
+                    if (count != 0 || !o.index0Immediate) {
+                        r.error = "SV_Position written other than as a first operand";
+                        return r;
+                    }
+                    ++positionWrites;
+                }
+                if (o.type == kInput) {
+                    if (!o.index0Immediate) {
+                        r.error = "an input read by a relative index";
+                        return r;
+                    }
+                    if (o.index0 == reg) {
+                        if ((tokens[at] >> 31) != 0) {
+                            r.error = "the input read with a modifier";
+                            return r;
+                        }
+                        input = true;
+                    }
+                }
+                if (count < 6)
+                    ops[count] = {o, at, len};
+                ++count;
+                at += len;
+            }
+            if (input) {
+                ++reads;
+                const auto is_input = [&](int k) { return ops[k].o.type == kInput && ops[k].o.index0 == reg; };
+                const auto cb0_row = [&](int k) {
+                    const Operand& o = ops[k].o;
+                    return o.type == kConstantBuffer && o.dims == 2 && o.index0Immediate && o.index0 == 0 &&
+                                   o.index1Representation == 0
+                               ? static_cast<int>(o.index1)
+                               : -1;
+                };
+                bool known = false;
+                if (op == kOpMad && count == 4 && is_input(1) && !is_input(2) && !is_input(3)) {
+                    if (ops[2].o.type == kImm32 && ops[3].o.type == kImm32)  // the clip position
+                        known = has_value(ops[2].at, ops[2].len, 2.0f) && has_value(ops[3].at, ops[3].len, -1.0f);
+                    else if (const int k = cb0_row(2); k >= 0 && k == cb0_row(3) && (r.rectRow < 0 || r.rectRow == k)) {
+                        r.rectRow = k;  // a rectangle: v * row.zw + row.xy
+                        known = true;
+                    }
+                } else if (op == kOpMul && count == 3 && (is_input(1) != is_input(2))) {
+                    if (const int s = cb0_row(is_input(1) ? 2 : 1); s >= 0 && (r.sizeRow < 0 || r.sizeRow == s)) {
+                        r.sizeRow = s;  // screen pixels: v * the viewport size
+                        known = true;
+                    }
+                }
+                if (!known) {
+                    r.error = "the input read other than as a position, rectangle or screen size (opcode " +
+                              std::to_string(op) + ")";
+                    return r;
+                }
+            }
+        }
+        i += n;
+    }
+    if (!firstInstruction || reads == 0) {
+        r.error = reads ? "no instructions" : "the input never read";
+        return r;
+    }
+    if (r.rectRow >= 0 && r.rectRow == r.sizeRow) {
+        r.error = "one row as rectangle and size";
+        return r;
+    }
+    // The caller rewrites those two rows for the region, so nothing else may read them: the rectangle row nowhere else,
+    // the size row only as size.zw / size.xy (a texel size: the caller keeps that ratio).
+    for (size_t i = firstInstruction; (r.rectRow >= 0 || r.sizeRow >= 0) && i < length;) {
+        const uint32_t n = length_of(&tokens[i], length - i);
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!is_declaration(op)) {
+            bool input = false;
+            int rect = 0, sized = 0, operands = 0;
+            for (size_t at = i + operands_at(&tokens[i], n); at < i + n; ++operands) {
+                Operand o;
+                const size_t len = read_operand(&tokens[at], i + n - at, o);
+                if (!len)
+                    break;
+                input = input || (o.type == kInput && o.index0 == reg);
+                if (o.type == kConstantBuffer && o.dims == 2 && o.index0 == 0 && o.index1Representation == 0) {
+                    rect += static_cast<int>(o.index1) == r.rectRow ? 1 : 0;
+                    sized += static_cast<int>(o.index1) == r.sizeRow ? 1 : 0;
+                }
+                at += len;
+            }
+            if (!input && rect) {
+                r.error = "the rectangle row read elsewhere";
+                return r;
+            }
+            if (!input && sized && !(op == kOpDiv && sized == 2 && operands == 3)) {
+                r.error = "the size row read elsewhere";
+                return r;
+            }
+        }
+        i += n;
+    }
+    if (positionWrites == 0) {
+        r.error = "SV_Position never written";
+        return r;
+    }
+    const uint32_t tempP = temps, tempT = temps + 1;  // the remapped vertex; the position before its undo
+
+    const std::vector<uint32_t> cbDcl = {instruction(kOpDclConstantBuffer, 4),
+                                         operand(2, 1, swizzle(0, 1, 2, 3), kConstantBuffer, 2), options.cbSlot, 2};
+    // Before each ret: position.xy = T.xy * cb[1].xy + cb[1].zw (the remap's effect on the clip position undone, so
+    // the draw covers the pixels it did); position.zw = T.zw.
+    std::vector<uint32_t> epilogue;
+    epilogue.push_back(instruction(kOpMad, 11));
+    dst(epilogue, kOutput, positionRegister, 0x3);
+    src_temp(epilogue, tempT, swizzle(0, 1, 0, 0));
+    src_cb(epilogue, options.cbSlot, 1, swizzle(0, 1, 0, 0));
+    src_cb(epilogue, options.cbSlot, 1, swizzle(2, 3, 2, 2));
+    epilogue.push_back(instruction(kOpMov, 5));
+    dst(epilogue, kOutput, positionRegister, 0xc);
+    src_temp(epilogue, tempT, swizzle(0, 1, 2, 3));
+    // At the start: P.zw = 0; P.xy = v.xy * cb[0].xy + cb[0].zw.
+    std::vector<uint32_t> prologue;
+    prologue.push_back(instruction(kOpMov, 8));
+    dst(prologue, kTemp, tempP, 0xc);
+    prologue.insert(prologue.end(), {operand(2, 0, 0, kImm32, 0), 0u, 0u, 0u, 0u});
+    prologue.push_back(instruction(kOpMad, 11));  // 1 + dst 2 + input 2 + two constants of 3
+    dst(prologue, kTemp, tempP, 0x3);
+    src_input(prologue, reg, swizzle(0, 1, 0, 0));
+    src_cb(prologue, options.cbSlot, 0, swizzle(0, 1, 0, 0));
+    src_cb(prologue, options.cbSlot, 0, swizzle(2, 3, 2, 2));
+
+    const size_t cbAt = lastCbDcl ? lastCbDcl : globalFlagsEnd;
+    const auto retarget = [](std::vector<uint32_t>& code, size_t at, uint32_t type, uint32_t index) {
+        code[at] = (code[at] & ~(0xffu << 12)) | (type << 12);
+        size_t idx = at + 1;  // the first index: past any extended operand tokens
+        for (bool extended = (code[at] >> 31) != 0; extended; ++idx)
+            extended = (code[idx] >> 31) != 0;
+        code[idx] = index;
+    };
+    std::vector<uint32_t> out(tokens.begin(), tokens.begin() + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == cbAt)
+            out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+        if (i == firstInstruction) {
+            if (!tempsAt)
+                out.insert(out.end(), {instruction(kOpDclTemps, 2), 2u});
+            out.insert(out.end(), prologue.begin(), prologue.end());
+        }
+        const uint32_t n = length_of(&tokens[i], length - i);
+        const uint32_t op = opcode_of(tokens[i]);
+        if (op == kOpRet || op == kOpRetc)
+            out.insert(out.end(), epilogue.begin(), epilogue.end());
+        const size_t start = out.size();
+        out.insert(out.end(), tokens.begin() + i, tokens.begin() + i + n);
+        if (i == tempsAt)
+            out[start + 1] = temps + 2;
+        if (!is_declaration(op)) {
+            size_t at = operands_at(&tokens[i], n);
+            for (int k = 0; at && at < n; ++k) {
+                Operand o;
+                const size_t len = read_operand(&tokens[i + at], n - at, o);
+                if (!len)
+                    break;
+                if (o.type == kInput && o.index0Immediate && o.index0 == reg)
+                    retarget(out, start + at, kTemp, tempP);
+                else if (k == 0 && o.type == kOutput && o.index0Immediate && o.index0 == positionRegister)
+                    retarget(out, start + at, kTemp, tempT);
+                at += len;
+            }
+        }
+        i += n;
+    }
+    if (cbAt >= length)
+        out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+    out[1] = static_cast<uint32_t>(out.size());
+    chunks[programAt].data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                                  reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    r.bytecode = write_chunks(chunks);
+    return r;
 }
 
 }  // namespace simqvfr::dxbc

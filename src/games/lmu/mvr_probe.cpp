@@ -89,6 +89,7 @@ uint64_t loggedCreated = ~0ull;
 int64_t lastLogQpc = 0;
 int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
+std::atomic<bool> positionTwins{false};  // the SCS games' focus replays: full-screen shaders' position twins
 
 // The game creates each of its ~135 vertex shaders many times (3,810 creations in a race, 2026-11-08): one conversion
 // and one NVAPI shader per distinct bytecode, by its checksum (null: refused or not created).
@@ -351,6 +352,24 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
         if (at.first != ~0u) {
             const UINT value[2] = {at.first, at.second};
             (*shader)->SetPrivateData(kVsWorldMatrixGuid, sizeof(value), value);
+        }
+    }
+    // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
+    // reading the vertex at the focus box's place on the eye's screen (dxbc::add_position_remap, scs corner_focus.cpp).
+    if (SUCCEEDED(hr) && positionTwins.load(std::memory_order_relaxed) && !inProbe && shader && *shader && code && size) {
+        const dxbc::PositionRemap pr = dxbc::add_position_remap(static_cast<const uint8_t*>(code), size);
+        if (!pr.bytecode.empty() && pr.rectRow == 0 && pr.sizeRow >= 0) {
+            Microsoft::WRL::ComPtr<ID3D11VertexShader> twin;
+            inProbe = true;
+            const HRESULT th = currentHook->vertex(device, pr.bytecode.data(), pr.bytecode.size(), nullptr, &twin);
+            inProbe = false;
+            if (SUCCEEDED(th) && twin) {
+                (*shader)->SetPrivateDataInterface(kFocusPositionTwinGuid, twin.Get());
+                const int rows[2] = {pr.rectRow, pr.sizeRow};
+                (*shader)->SetPrivateData(kFocusPositionRowsGuid, sizeof(rows), rows);
+                std::lock_guard guard(statsMutex);
+                ++stats.positionTwins;
+            }
         }
     }
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
@@ -616,6 +635,8 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 }
 
 }  // namespace
+
+void mvr_probe_position_twins(bool on) { positionTwins.store(on, std::memory_order_relaxed); }
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;

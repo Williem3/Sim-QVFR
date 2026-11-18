@@ -64,6 +64,7 @@ struct Range {
     ComPtr<ID3D11Buffer> game;  // the game's buffer as bound (a reference while we hold the draw)
     UINT first = 0, count = 0;  // in constants (16 bytes)
     bool ours = false;          // ours is bound in its place for this draw
+    ID3D11Buffer* position = nullptr;  // a focus replay's position twin's constants (vector kPositionAt of ours): set by rewrite
 };
 
 struct State {
@@ -88,6 +89,7 @@ struct State {
     UINT scissorCount = 0;
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
+    uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
     ComPtr<ID3D11Buffer> rowsCb;  // run_cs's b1 (512 bytes): the rewritten shader's rows read by a fixed index
     // A draw's rewritten range (rewrite): the game's copied in, the compute shader's output, the constant buffer bound for
     // the draw. A ring of sets, a fresh one for every rewrite: with one set, the next rewrite wrote the buffers while the
@@ -415,7 +417,9 @@ void release_orphans();
 void swap_bound(bool on);
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
-bool rewrite(Range& r, bool pixel, bool focus = false);
+// `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
+bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr);
+constexpr UINT kPositionAt = 4080;  // kCornerPatchCs's: where the position twin's two vectors go in our copy
 void put_back(Range& r, bool pixel);
 
 // corner_eye_order.cpp

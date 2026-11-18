@@ -96,7 +96,14 @@ inline CornerRule corner_patch(float (*v)[4], int count, float fx, float fy, boo
 inline constexpr char kCornerPatchCs[] = R"(
 // `px`: the region's share of the texture size the game names (f itself, except for a focus replay: its inputs are twins,
 // smaller than the game's textures, so the region's share of a twin (f) isn't its share of the game's size (px)).
-cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; float2 pad; };
+// flags & 8 (a focus replay's vertex range, its shader's position twin bound: dxbc::add_position_remap): the twin reads
+// its vertex as v * s + o from vectors kPositionAt (s, o) and kPositionAt + 1 (its clip position's undo), written here:
+// the box's place on the eye's screen where the range is the V1 shape with the rectangle at row `rectRow`, else the
+// identity (the twin is then the game's shader). The rectangle is scaled back (the texture coordinates stay the
+// replay's) and the size row `sizeRow` gets the eye's own size, so v * size is the eye's screen pixel (ATS's light list
+// tiles: night lights in the focus view, 2026-11-18), its zw / xy (a twin's texel size) kept.
+cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; uint rectRow; uint sizeRow; };
+static const uint kPositionAt = 4080;
 // flags & 4: the rows the shader reads by a fixed index (bit r & 31 of rows[r >> 7][(r >> 5) & 3]). Every focus rule writes
 // only such rows (a whole matrix, a pair, its ray, the AO's two): run 16's Aftermath markers (2026-11-17) put the hang in
 // the occluder pass's replay even with only the written rows checked: a leftover matrix at rows 31-34 remapped row 32.
@@ -178,6 +185,10 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
             }
         return;
     }
+    if (flags & 8) {  // the identity unless the V1 shape below places it
+        dst.Store4(kPositionAt * 16, asuint(float4(1, 1, 0, 0)));
+        dst.Store4((kPositionAt + 1) * 16, asuint(float4(1, 1, 0, 0)));
+    }
     if (count < 2)
         return;
     float4 a = at(0), b = at(1);
@@ -185,6 +196,19 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
     if (eq(a, whole) && isFlip(b)) {
         if (!pairAt(2))
             pairAt(3);
+        if ((flags & 8) && rectRow == 0 && sizeRow < count && isSize(at(sizeRow)) && box.z > 0 && box.w > 0) {
+            const float4 rect = asfloat(dst.Load4(0));  // v * rect.zw + rect.xy, now of v' = box.xy + v * box.zw
+            const float2 scale = rect.zw / box.zw;
+            dst.Store4(0, asuint(float4(rect.xy - box.xy * scale, scale)));
+            const float4 size = at(sizeRow);  // the game's: the eye's size
+            const float2 texel = asfloat(dst.Load4(sizeRow * 16)).zw / asfloat(dst.Load4(sizeRow * 16)).xy;
+            dst.Store4(sizeRow * 16, asuint(float4(size.xy, texel * size.xy)));
+            // The clip position from v' undone: x = 2 v - 1; y = -(2 v - 1) * flip.x.
+            const float s = b.x;
+            dst.Store4(kPositionAt * 16, asuint(float4(box.zw, box.xy)));
+            dst.Store4((kPositionAt + 1) * 16,
+                       asuint(float4(1 / box.z, 1 / box.w, (1 - 2 * box.x) / box.z - 1, s * (1 - (1 - 2 * box.y) / box.w))));
+        }
     } else if (isFlip(a) && eq(b, whole)) {
         dst.Store4(16, asuint(float4(0, 0, f)));
     } else if (eq(a, whole) && eq(b, whole)) {
