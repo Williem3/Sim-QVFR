@@ -143,7 +143,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("scs corner: %llu frames, %llu with the eyes in the corner; draws rewritten %llu, nothing to rewrite "
-                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu (drawn again for the focus view %llu), passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
+                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu (drawn again for the focus view %llu), non-indexed scene draws %llu, passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
                       static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames),
                       static_cast<unsigned long long>(g.stats.rewritten), static_cast<unsigned long long>(g.stats.notRewritten),
                       static_cast<unsigned long long>(g.stats.skipped),
@@ -151,7 +151,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.midFrameWrites), static_cast<unsigned long long>(g.mirrorSwaps),
                       static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses),
                       static_cast<unsigned long long>(g.heldTwo), static_cast<unsigned long long>(g.focusDraws),
-                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.redraws), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
+                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.redraws), static_cast<unsigned long long>(g.geometryDraws), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
                       g.twinBytes / 1048576.0, static_cast<unsigned long long>(g.twinCopies),
                       static_cast<unsigned long long>(g.stretched), static_cast<unsigned long long>(g.composed), g.box[0][0], g.box[0][1],
                       g.box[1][0], g.box[1][1], static_cast<unsigned long long>(g.boxMoves),
@@ -382,6 +382,14 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         }
         vs = rewrite(g.vs, false, false, haveRows ? rows : nullptr);
         ps = rewrite(g.ps, true);
+    }
+    // Scene geometry drawn without an index buffer (ATS's rain: a compute pass makes the drops, then Draw of thousands of
+    // vertices into the full-size target with the scene's depth, 2026-11-18: no drops in the focus box): its focus
+    // view too, as an indexed scene draw's. More than 6 vertices: not a full-screen pass (3) nor a UI quad (6).
+    if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize && !g.boundSwapchain && count > 6) {
+        const Timed t(State::kTimeFocusDraws);
+        focus_draw();
+        ++g.geometryDraws;
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
     if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {

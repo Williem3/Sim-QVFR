@@ -90,6 +90,7 @@ struct State {
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
     uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
+    uint64_t geometryDraws = 0;  // non-indexed scene draws (particles: rain) given their focus view
     bool forceUiRedraw = false;  // [experiment] scs_force_ui_redraw=1 (dev builds): redraw_focus for every UI draw
     bool redrawFocus = false;  // this draw (onto the headset's image, no twin) is drawn again for the focus view after it
     uint64_t redraws = 0, redrawsOutOfBounds = 0;
