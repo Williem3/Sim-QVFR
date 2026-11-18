@@ -101,7 +101,12 @@ std::unordered_map<uint64_t, std::pair<Microsoft::WRL::ComPtr<ID3D11PixelShader>
     slotTwins;
 std::atomic<uint64_t> pixelGeneration{0};
 // Where each distinct vertex shader reads its worldMatrix (slot, byte offset; slot ~0u: it reads none), by bytecode.
-std::unordered_map<uint64_t, std::pair<UINT, UINT>> worldSlots;
+// With it, where it reads viewMatrix and viewProjMatrix in that buffer (~0u: not there).
+struct WorldPlace {
+    UINT slot = ~0u, offset = 0;
+    UINT view = ~0u, viewProj = ~0u;
+};
+std::unordered_map<uint64_t, WorldPlace> worldSlots;
 
 // The constant buffer slot and byte offset of the shader's `worldMatrix` (its reflection: LMU's shaders keep their
 // names, GlobalCBFloats_Draw_0 at offset 0). False: it has none.
@@ -121,6 +126,29 @@ bool world_matrix_slot(const void* code, size_t size, UINT& slot, UINT& offset) 
     slot = bind.BindPoint;
     offset = vd.StartOffset;
     return true;
+}
+
+// The byte offsets of the shader's `viewMatrix` and `viewProjMatrix` in the buffer it reads its worldMatrix from (slot
+// `slot`): the pass's camera for DLSS on any build (view_pair.h). False: it reads either from elsewhere, or neither.
+bool view_matrices_place(const void* code, size_t size, UINT slot, UINT& viewOffset, UINT& viewProjOffset) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    const auto place = [&](const char* name, UINT& offset) {
+        ID3D11ShaderReflectionVariable* v = r->GetVariableByName(name);
+        D3D11_SHADER_VARIABLE_DESC vd{};
+        if (!v || FAILED(v->GetDesc(&vd)) || vd.Size < 64)
+            return false;
+        ID3D11ShaderReflectionConstantBuffer* cb = v->GetBuffer();
+        D3D11_SHADER_BUFFER_DESC bd{};
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (!cb || FAILED(cb->GetDesc(&bd)) || FAILED(r->GetResourceBindingDescByName(bd.Name, &bind)) ||
+            bind.BindPoint != slot)
+            return false;
+        offset = vd.StartOffset;
+        return true;
+    };
+    return place("viewMatrix", viewOffset) && place("viewProjMatrix", viewProjOffset);
 }
 
 uint64_t id_of(const uint8_t* code, size_t size) {
@@ -333,7 +361,7 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
     // Other cars' motion vectors: where it reads its worldMatrix (once per distinct bytecode).
     if (SUCCEEDED(hr) && markWorldMatrix && !inProbe && shader && *shader && code && size) {
         const uint64_t id = id_of(static_cast<const uint8_t*>(code), size);
-        std::pair<UINT, UINT> at{~0u, 0};
+        WorldPlace at;
         bool seen = false;
         {
             std::lock_guard guard(twinMutex);
@@ -344,14 +372,25 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
         }
         if (!seen) {
             UINT slot = 0, offset = 0;
-            if (world_matrix_slot(code, size, slot, offset))
-                at = {slot, offset};
+            if (world_matrix_slot(code, size, slot, offset)) {
+                at.slot = slot;
+                at.offset = offset;
+                UINT view = 0, viewProj = 0;
+                if (view_matrices_place(code, size, slot, view, viewProj)) {
+                    at.view = view;
+                    at.viewProj = viewProj;
+                }
+            }
             std::lock_guard guard(twinMutex);
             worldSlots[id] = at;
         }
-        if (at.first != ~0u) {
-            const UINT value[2] = {at.first, at.second};
+        if (at.slot != ~0u) {
+            const UINT value[2] = {at.slot, at.offset};
             (*shader)->SetPrivateData(kVsWorldMatrixGuid, sizeof(value), value);
+            if (at.view != ~0u) {
+                const UINT views[2] = {at.view, at.viewProj};
+                (*shader)->SetPrivateData(kVsViewMatricesGuid, sizeof(views), views);
+            }
         }
     }
     // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
@@ -649,8 +688,12 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
         const bool playerCars = player.on && player.carVectors;
         const int track = ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, ini)) : 0;
         const int slots = ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, ini)) : 0;
-        markWorldMatrix = attach && ini && (track > 0 || slots > 0 || playerCars);
-        makeSlotTwins = markWorldMatrix && (slots > 0 || playerCars);
+        // Every vertex shader's worldMatrix, viewMatrix and viewProjMatrix places, whatever the cars: DLSS's camera on any
+        // game build comes from the same buffer (view_pair.h), and DLSS can be turned on live (one reflection per distinct
+        // bytecode, ~70 in a session).
+        markWorldMatrix = attach;
+        makeSlotTwins = attach && ini && (slots > 0 || playerCars);
+        (void)track;
     }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     noRoles = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_no_checksums", 0, ini) != 0;

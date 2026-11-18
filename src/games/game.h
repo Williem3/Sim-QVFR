@@ -82,8 +82,8 @@ struct GameInfo {
     struct Defaults {
         int periphery = 0, density = 0, focusWidth = 0, focusHeight = 0;
     } defaults = {};
-    // QVFR runs on builds other than `builds` too (a game update, a beta branch), without what needs the game's
-    // addresses (LMU: Sim-QVFR's DLSS). The launcher then warns instead of saying Sim-QVFR stays off.
+    // QVFR runs on builds other than `builds` too (a game update, a beta branch), from what OpenXR and Direct3D show.
+    // The launcher then warns instead of saying Sim-QVFR stays off.
     bool anyBuild = false;
 };
 

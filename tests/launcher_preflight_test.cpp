@@ -75,7 +75,7 @@ int SIM_QVFR_TEST_MAIN() {
             build = find(checks, "build");
             check(lmu::kGame.anyBuild && !ace::kGame.anyBuild && build && build->tone == CheckTone::Warn &&
                       !build->confirm && build->fix == CheckFix::OpenReleases &&
-                      build->detail.find(L"Foveated rendering still runs") != std::wstring::npos,
+                      build->detail.find(L"Foveated rendering, DLSS and FSR still run") != std::wstring::npos,
                   "preflight: LMU on a build Sim-QVFR wasn't made for: a warning, the launch not held back");
             simqvfr::games::set_launcher_game(ace::kGame);
         }

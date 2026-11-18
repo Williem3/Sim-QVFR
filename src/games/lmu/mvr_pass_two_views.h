@@ -102,6 +102,8 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
         g.vsRole = e ? e->role : VsRole::none;
         g.vsWorldSlot = e ? e->worldSlot : -1;  // car tracking: where it reads its worldMatrix
         g.vsWorldOffset = e ? e->worldOffset : 0;
+        g.vsViewOffset = e ? e->viewOffset : ~0u;  // view tracking: its view matrices there
+        g.vsViewProjOffset = e ? e->viewProjOffset : ~0u;
         keep_game_entry(vs, e);
     }
     if (!ours(context)) {

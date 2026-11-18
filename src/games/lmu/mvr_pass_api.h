@@ -195,9 +195,11 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.blitUnknown = g.blitKnownForTests >= 0 ? g.blitKnownForTests == 0 : mvr_probe_final_blits() == 0;
     if (pass == 0)
         g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // a new frame: its own focus finals
-    if (pass == 0 && g.carTrack) {  // car tracking: the matrices drawn from now on are this frame's
+    if (pass == 0 && cb_track()) {  // car (or view) tracking: the matrices drawn from now on are this frame's
         Timed carTimed(g.time.cars);
-        g.cars.frame_begin(++g.carFrame);
+        ++g.carFrame;
+        if (g.carTrack)
+            g.cars.frame_begin(g.carFrame);
         g.vbChecked = nullptr;  // a buffer freed since can't pass for one checked before at its address
     }
     if (g.carTrack) {  // the pass's draws matched by pass 0's order first (car_motion.h)
@@ -423,6 +425,23 @@ bool mvr_fsr_written() {
     const bool seen = g.fsrUavSeen;
     g.fsrUavSeen = false;
     return seen;
+}
+
+void mvr_view_track(bool on) {
+    if (!g.context)  // before the install only: its hooks are chosen there
+        g.viewTrack = on;
+}
+
+int mvr_view_pairs(int pass, float (*pairs)[32], int max) {
+    if (pass < 0 || pass > 1 || !pairs)
+        return 0;
+    const State::PassPairs& p = g.passPairs[pass];
+    if (p.frame != g.carFrame)  // none drawn in this frame's pass yet
+        return 0;
+    const int n = p.count < max ? p.count : max;
+    for (int i = 0; i < n; ++i)
+        std::memcpy(pairs[i], p.pair[i], sizeof(p.pair[i]));
+    return n;
 }
 
 bool mvr_scene_size(unsigned& width, unsigned& height) {

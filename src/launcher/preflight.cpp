@@ -161,11 +161,11 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
                 trf(L"{exe} could not be read: {path}", {{L"exe", exe}, {L"path", in.gameExe}}));
             break;
         case BuildState::Unsupported: {
-            if (game.anyBuild) {  // QVFR runs on it, without what needs the game's addresses
+            if (game.anyBuild) {  // QVFR runs on it, from what OpenXR and Direct3D show
                 Check& c = add("build", CheckTone::Warn, trf(L"{game} build not tested yet", {{L"game", name}}),
                                trf(L"Its {exe} is newer than this version of Sim-QVFR, or from a beta branch. "
-                                   L"Foveated rendering still runs. Sim-QVFR’s DLSS and FSR stay off until a "
-                                   L"Sim-QVFR release supports this build.",
+                                   L"Foveated rendering, DLSS and FSR still run. If something looks wrong, look for a "
+                                   L"Sim-QVFR update.",
                                    {{L"exe", exe}}));
                 c.fix = CheckFix::OpenReleases;
                 c.fixLabel = tr(L"Check for an update");

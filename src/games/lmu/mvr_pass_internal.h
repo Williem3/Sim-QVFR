@@ -75,6 +75,7 @@ struct TwinEntry {
     VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
     int worldSlot = -1;          // where it reads its worldMatrix (car tracking; mvr_probe.h kVsWorldMatrixGuid)
     UINT worldOffset = 0;
+    UINT viewOffset = ~0u, viewProjOffset = ~0u;  // its viewMatrix and viewProjMatrix there (kVsViewMatricesGuid)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -239,6 +240,19 @@ struct State {
     std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
     float matrix[16] = {};
+    // View tracking (mvr_view_track; DLSS's camera on any build, view_pair.h): car tracking's buffer reads without its
+    // table. The bound shader's viewMatrix and viewProjMatrix places, the learned buffer's (from the draw that taught
+    // it), the pair last written into it, and each eye pass's distinct pairs as drawn (the eye's own among the mirrors').
+    bool viewTrack = false, viewPairRead = false;
+    UINT vsViewOffset = ~0u, vsViewProjOffset = ~0u;
+    UINT viewCbOffset = ~0u, viewProjCbOffset = ~0u;
+    float viewPair[32] = {};  // view, then viewProj (row-major, as the buffer holds them)
+    static constexpr int kViewPairs = 4;
+    struct PassPairs {
+        float pair[kViewPairs][32] = {};
+        int count = 0;
+        uint64_t frame = 0;  // carFrame they were drawn in
+    } passPairs[2];
     CarMotion cars;
     uint64_t carFrame = 0;
     CarMotionStats carLogged;     // the counts at the last log line
@@ -422,6 +436,9 @@ struct State {
     // DLL_PROCESS_DETACH risks its locks (held by threads ExitProcess already ended); the references go with the process.
 };
 extern State g;
+
+// The per-draw buffer read (car tracking, or view tracking alone).
+inline bool cb_track() { return g.carTrack || g.viewTrack; }
 
 inline bool ours(ID3D11DeviceContext* context) {
     if (g.inList && context == g.context)

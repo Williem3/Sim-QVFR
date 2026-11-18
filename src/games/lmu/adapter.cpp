@@ -86,8 +86,7 @@ public:
             // ini's): as the player's.
             {
                 const simqvfr::DlssSettings player = s.ini ? simqvfr::read_dlss_settings(s.ini) : simqvfr::DlssSettings{};
-                // (only where DLSS can run: a build Sim-QVFR was made for, see below)
-                const bool playerCars = player.on && player.carVectors && qvfr_frame_known_build();
+                const bool playerCars = player.on && player.carVectors;
                 const int track = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, s.ini))
                                         : 0;
                 const int slots =
@@ -133,10 +132,9 @@ public:
         run.buildFree = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_build_free", 0, s.ini) != 0;
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
-        // Sim-QVFR's DLSS (and FSR in its place, and DLSS-NR on it) takes each pass's view matrices from the game's
-        // renderer (dlss_inputs.cpp): a build abi.h's addresses are from only.
-        const bool knownBuild = qvfr_frame_known_build();
-        dlssPossible_ = run.trackerDrives && knownBuild;
+        // Each pass's camera for DLSS (dlss_inputs.cpp): the game's renderer's on a known build, what the pass's draws
+        // upload on any other (view_pair.h).
+        dlssPossible_ = run.trackerDrives;
         if (s.ini) {
             const auto key = [&](const wchar_t* name, int fallback) {
                 return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
@@ -179,14 +177,6 @@ public:
             if (dlss.views && !run.trackerDrives) {
                 simqvfr::log_line("lmu dlss: asked for, but this run has no multi-view path: off");
                 dlss.views = 0;
-            }
-            if (!knownBuild) {  // no view matrices to give it: neither DLSS nor FSR in its place
-                if (dlss.views)
-                    simqvfr::log_line("lmu dlss: asked for, but this game build isn't one Sim-QVFR was made for (its view "
-                                      "matrices are read in the game's renderer): off, QVFR runs without it");
-                dlss.views = 0;
-                dlss.upscaler = 0;
-                dlss.fsrWhereNoDlss = false;
             }
         }
         dlss_use_lmu_inputs();  // the pass's matrices from the game's renderer
@@ -271,9 +261,7 @@ public:
             return;
         if (settings.on && !dlssPossible_) {
             if (!dlssRefusedLogged_)
-                simqvfr::log_line(qvfr_frame_known_build()
-                                      ? "lmu dlss: turned on, but this run has no multi-view path: off"
-                                      : "lmu dlss: turned on, but this game build isn't one Sim-QVFR was made for: off");
+                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path: off");
             dlssRefusedLogged_ = true;
             dlssSettings_ = settings;
             return;

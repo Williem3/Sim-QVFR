@@ -63,6 +63,9 @@ inline constexpr GUID kMvrMipBiasTwinGuid = {0x5a8e2c71, 0x0d4f, 0x4b96, {0xb1, 
 // Other cars' motion vectors (lmu_car_track, car_motion.h): where a game vertex shader reads its `worldMatrix`, as two
 // UINTs: the constant buffer slot and the byte offset in it (from the shader's reflection; none when it reads none).
 inline constexpr GUID kVsWorldMatrixGuid = {0x3e9b7a14, 0x6c25, 0x4f81, {0x8d, 0x47, 0xa2, 0x19, 0xe5, 0x6b, 0x0c, 0x73}};
+// With it, where the shader reads `viewMatrix` and `viewProjMatrix` in that same buffer, as two UINT byte offsets: the
+// pass's camera for DLSS on any game build (view_pair.h). None when it reads them elsewhere or not at all.
+inline constexpr GUID kVsViewMatricesGuid = {0x9b1e4c27, 0x3d58, 0x4a06, {0xa7, 0x92, 0x5c, 0xe1, 0x08, 0x3f, 0xb6, 0x4d}};
 // Other cars' motion vectors, stage 3 (lmu_car_vectors; engine/dxbc_patch.h add_slot_output): a game pixel shader's twin
 // that also writes the draw's car part slot to render target 1, and the same made of its mip bias twin (ID3D11PixelShader
 // each; texture sharpening with the slots).

@@ -185,6 +185,12 @@ void mvr_fsr_watch(bool on);
 bool mvr_fsr_written();
 // The size of the scene target the last tracked pass began on (the game's main targets); false before the first.
 bool mvr_scene_size(unsigned& width, unsigned& height);
+// DLSS's camera on any game build (view_pair.h): the per-draw buffer's viewMatrix and viewProjMatrix read as car
+// tracking reads its worldMatrix (its hooks, without its table when the cars are off). Before mvr_pass_install.
+void mvr_view_track(bool on);
+// This frame's distinct (view, viewProj) pairs eye pass `pass` (0-1) has drawn so far, each 32 floats (view, then
+// viewProj), up to `max`; how many.
+int mvr_view_pairs(int pass, float (*pairs)[32], int max);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips

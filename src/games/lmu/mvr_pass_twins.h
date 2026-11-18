@@ -36,13 +36,19 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
     if (FAILED(vs->GetPrivateData(kVsRoleGuid, &size, &role)) || size != sizeof(role))
         role = 0;
     e = {vs, twin_under(kMvrTwinGuid), twin_under(kMvrInstancedTwinGuid), g.twinEpoch, static_cast<VsRole>(role)};
-    if (g.carTrack) {  // where it reads its worldMatrix (the probe's reflection)
+    if (cb_track()) {  // where it reads its worldMatrix (the probe's reflection), and its view matrices beside it
         UINT world[2] = {};
         size = sizeof(world);
         if (SUCCEEDED(vs->GetPrivateData(kVsWorldMatrixGuid, &size, world)) && size == sizeof(world) &&
             world[0] < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
             e.worldSlot = static_cast<int>(world[0]);
             e.worldOffset = world[1];
+            UINT views[2] = {};
+            size = sizeof(views);
+            if (SUCCEEDED(vs->GetPrivateData(kVsViewMatricesGuid, &size, views)) && size == sizeof(views)) {
+                e.viewOffset = views[0];
+                e.viewProjOffset = views[1];
+            }
         }
     }
     return e;

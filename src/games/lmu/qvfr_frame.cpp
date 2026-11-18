@@ -640,6 +640,9 @@ bool install_mvr(ID3D11Device* device) {
     carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
     // FSR seen at the d3d11 level: build-free runs take it from there, a known build compares it with the game's setting.
     mvr_fsr_watch(cfg.trackerDrives);
+    // DLSS's camera from the per-draw buffer (view_pair.h): where it is the source (build-free), and where the cars'
+    // hooks are in anyway (a known build's comparison with the renderer's, at no cost).
+    mvr_view_track(cfg.trackerDrives && (buildFree || cars));
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;
@@ -1119,7 +1122,8 @@ bool qvfr_frame_start(const QvfrFrameRun& run) {
     buildFree = !knownBuild || run.buildFree;
     if (!knownBuild)
         simqvfr::logf("%s: a game build Sim-QVFR wasn't made for (sha256 %s): the eye size, render scale, FSR and eye "
-                      "projections from what OpenXR and Direct3D show, nothing read in the game; Sim-QVFR's DLSS off",
+                      "projections from what OpenXR and Direct3D show, DLSS's camera from the draws' constant buffers, "
+                      "nothing read in the game",
                       tag(), buildSha.c_str());
     else if (buildFree)
         simqvfr::logf("%s: lmu_build_free=1: the game's facts from what OpenXR and Direct3D show, as on a build Sim-QVFR "
@@ -1516,6 +1520,8 @@ void qvfr_frame_note_views(const XrView* views, uint32_t count) {
 }
 
 bool qvfr_frame_known_build() { return exe_known_build(); }
+bool qvfr_frame_build_free() { return buildFree; }
+bool qvfr_frame_eye_projection(int eye, float (&out)[16]) { return eye >= 0 && eye < 2 && layer_slot(eye, out); }
 
 void qvfr_frame_offered(std::uint32_t width, std::uint32_t height) {
     const bool changed = width != offeredW.load(std::memory_order_relaxed) ||

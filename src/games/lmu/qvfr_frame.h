@@ -84,9 +84,14 @@ struct QvfrFrameRun {
 };
 
 // The game's exe is a build abi.h's addresses are from (game.h kBuilds; hashed once). Any other build runs QVFR from
-// what OpenXR and Direct3D show, with nothing read in the game; what needs the game's renderer (Sim-QVFR's DLSS: its
-// view matrices) stays off there.
+// what OpenXR and Direct3D show, with nothing read in the game (DLSS's camera: dlss_inputs.cpp, view_pair.h).
 bool qvfr_frame_known_build();
+// This run takes the game's facts from OpenXR and Direct3D (an unknown build, or lmu_build_free=1); set by
+// qvfr_frame_start.
+bool qvfr_frame_build_free();
+// Eye `eye`'s projection from the FOV the game was last handed (focus_math.h projection_from_tangents: its x and y
+// terms only). False before the first.
+bool qvfr_frame_eye_projection(int eye, float (&out)[16]);
 // The stereo views' size the layer offered the game (xrEnumerateViewConfigurationViews, after the layer's own change):
 // the eye targets' size on any build.
 void qvfr_frame_offered(std::uint32_t width, std::uint32_t height);
