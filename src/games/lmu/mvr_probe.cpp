@@ -89,6 +89,7 @@ uint64_t loggedCreated = ~0ull;
 int64_t lastLogQpc = 0;
 int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
+std::atomic<bool> positionTwins{false};  // the SCS games' focus replays: full-screen shaders' position twins
 
 // The game creates each of its ~135 vertex shaders many times (3,810 creations in a race, 2026-11-08): one conversion
 // and one NVAPI shader per distinct bytecode, by its checksum (null: refused or not created).
@@ -353,6 +354,24 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
             (*shader)->SetPrivateData(kVsWorldMatrixGuid, sizeof(value), value);
         }
     }
+    // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
+    // reading the vertex at the focus box's place on the eye's screen (dxbc::add_position_remap, scs corner_focus.cpp).
+    if (SUCCEEDED(hr) && positionTwins.load(std::memory_order_relaxed) && !inProbe && shader && *shader && code && size) {
+        const dxbc::PositionRemap pr = dxbc::add_position_remap(static_cast<const uint8_t*>(code), size);
+        if (!pr.bytecode.empty() && pr.rectRow == 0 && pr.sizeRow >= 0) {
+            Microsoft::WRL::ComPtr<ID3D11VertexShader> twin;
+            inProbe = true;
+            const HRESULT th = currentHook->vertex(device, pr.bytecode.data(), pr.bytecode.size(), nullptr, &twin);
+            inProbe = false;
+            if (SUCCEEDED(th) && twin) {
+                (*shader)->SetPrivateDataInterface(kFocusPositionTwinGuid, twin.Get());
+                const int rows[2] = {pr.rectRow, pr.sizeRow};
+                (*shader)->SetPrivateData(kFocusPositionRowsGuid, sizeof(rows), rows);
+                std::lock_guard guard(statsMutex);
+                ++stats.positionTwins;
+            }
+        }
+    }
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
         shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
@@ -426,9 +445,19 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         uint32_t checksum[4];
         if (dxbc_checksum(code, size, checksum))
             (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);
-        if (dump)
-            save(static_cast<const uint8_t*>(code), size, "PS");
     }
+    if (code && size >= 20) {  // its id, for the logs and the SCS replay switches (scs_replay_skip_ps)
+        uint32_t id[2];
+        std::memcpy(id, static_cast<const uint8_t*>(code) + 4, sizeof(id));
+        const uint64_t value = static_cast<uint64_t>(id[0]) << 32 | id[1];
+        (*shader)->SetPrivateData(kPixelIdGuid, sizeof(value), &value);
+        uint64_t rows[64];  // the rows of cb0 it reads by a fixed index (the SCS focus rules write only those as matrices)
+        if (dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(code), size, 0, rows))
+            (*shader)->SetPrivateData(kCb0StaticRowsGuid, sizeof(rows), rows);
+    }
+    // Every pixel shader too (the SCS games' GPU hang: an Aftermath dump names the hung shader by its bytecode's hash).
+    if (dump && code)
+        save(static_cast<const uint8_t*>(code), size, "PS");
     // Texture sharpening (mvr_pass.cpp): the mip bias twin, one per distinct bytecode, made when it is first seen.
     if (attach && makeBiasTwins && !inProbe && role == YebisRole::none && code && size) {
         const auto* bytes = static_cast<const uint8_t*>(code);
@@ -606,6 +635,8 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 }
 
 }  // namespace
+
+void mvr_probe_position_twins(bool on) { positionTwins.store(on, std::memory_order_relaxed); }
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;

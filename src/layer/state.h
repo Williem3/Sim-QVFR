@@ -203,7 +203,10 @@ struct Experiment {
     // with the focus views replayed at the D3D12 level, no game code hooked; the replay_* keys default to that set.
     // [experiment] ace_legacy_views4=1 keeps the old 4views path (deprecated, to be removed).
     bool apiPath = false;
-    bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
+    // QVFR runs on the game's own path below the layer (ACE's API path, the SCS games' D3D11 corner; GameAdapter::own_qvfr)
+    // with the layer at mode=off: the reports say QVFR, and the CPU settings apply.
+    bool ownQvfr = false;
+    bool quad = false;           // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
     std::atomic<uint64_t> focusShape = 0;  // the focus area's pulled-in corners (focus_shape.h's bits; 0 = the box)

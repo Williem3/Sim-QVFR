@@ -11,11 +11,22 @@ namespace detail {
 
 bool focus_on() { return g.focusPercent && !g.focusOff; }
 
+// The eye's own sizes: its targets (and the headset's images, within a few texels of them: ATS 5192 against the
+// recommended 5190) and their halvings (the half- and quarter-size passes, the bloom chain), within a pixel of rounding.
+// Not any texture of the eye's proportions: on a near-square eye (Pimax, 6240x6280) every square from 16 to about 157
+// px had them, so the replays twinned 128x128 material textures (2026-11-17).
 bool eye_shaped(unsigned w, unsigned h) {
-    if (!g.eyeW || w < 16 || w > g.eyeW || h > g.eyeH)
+    if (!g.eyeW || w < 16 || w > g.eyeW + 8 || h > g.eyeH + 8)
         return false;
-    const double a = static_cast<double>(w) * g.eyeH, b = static_cast<double>(h) * g.eyeW;
-    return std::abs(a - b) <= std::max(g.eyeW, g.eyeH);  // the same shape within a pixel of rounding
+    for (unsigned k = 0; k <= 8; ++k) {
+        const double ew = static_cast<double>(g.eyeW) / (1u << k), eh = static_cast<double>(g.eyeH) / (1u << k);
+        if (ew < 15)
+            break;
+        const double slack = k == 0 ? 8.0 : 1.0;
+        if (std::abs(w - ew) <= slack && std::abs(h - eh) <= slack)
+            return true;
+    }
+    return false;
 }
 
 void size_of(ID3D11View* view, unsigned& w, unsigned& h) {

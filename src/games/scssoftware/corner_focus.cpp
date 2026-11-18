@@ -42,6 +42,46 @@ void evict_unused() {
                       g.twinBytes / 1048576.0);
 }
 
+void release_orphans() {
+    if (g.active)
+        return;
+    evict_mirrors(true);
+    // Twin views first: each holds the game's view, and the view its texture. A texture let go takes its twin views
+    // with it, so a view the game still binds can't point at a twin no entry fills any more.
+    size_t views = 0, twins = 0;
+    for (auto it = g.twinViews.begin(); it != g.twinViews.end();)
+        if (only_ours(it->second.game.Get())) {
+            it = g.twinViews.erase(it);
+            ++views;
+        } else {
+            ++it;
+        }
+    for (auto it = g.texes.begin(); it != g.texes.end();) {
+        if (!only_ours(it->second.game.Get())) {
+            ++it;
+            continue;
+        }
+        ID3D11Texture2D* const gone = it->second.game.Get();
+        for (auto v = g.twinViews.begin(); v != g.twinViews.end();) {
+            ComPtr<ID3D11Resource> r;
+            v->second.game->GetResource(&r);
+            if (r.Get() == gone) {
+                v = g.twinViews.erase(v);
+                ++views;
+            } else {
+                ++v;
+            }
+        }
+        g.twinBytes -= std::min(g.twinBytes, it->second.bytes);
+        twins += it->second.twin ? 1 : 0;
+        it = g.texes.erase(it);
+    }
+    if (views || twins)
+        simqvfr::logf("scs focus: %zu twins and %zu twin views whose game textures are gone let go (%zu twins left, %.0f MB "
+                      "at most)",
+                      twins, views, g.texes.size(), g.twinBytes / 1048576.0);
+}
+
 // The bound targets' focus regions are being written (a two-view scene draw, a replay).
 void mark_bound_written() {
     if (g.boundMarked)
@@ -262,8 +302,39 @@ void replay(UINT vertices, UINT start) {
     }
     if (swapped)
         g.context->PSSetShaderResources(0, kSlots, bind);
-    rewrite(g.vsFocus, g.vsCbFocus.Get(), false, true);
-    rewrite(g.psFocus, g.psCbFocus.Get(), true, true);
+    // A shader that turns its vertex into screen pixels (v * the viewport size: ATS's light list tiles, a dither) gets
+    // its position twin: its vertex at the box's place on the eye's screen, its texture rectangle and clip position as
+    // before (kCornerPatchCs flag 8), so those pixels are the eye's under the box, not the box's own from 0.
+    ComPtr<ID3D11VertexShader> gameVs, positionTwin;
+    int positionRows[2] = {-1, -1};
+    {
+        ID3D11VertexShader* vs = nullptr;
+        g.context->VSGetShader(&vs, nullptr, nullptr);
+        gameVs.Attach(vs);
+        ID3D11VertexShader* twin = nullptr;
+        UINT size = sizeof(twin), rowsSize = sizeof(positionRows);
+        if (vs && SUCCEEDED(vs->GetPrivateData(lmu::kFocusPositionTwinGuid, &size, &twin)) && twin) {
+            positionTwin.Attach(twin);
+            if (FAILED(vs->GetPrivateData(lmu::kFocusPositionRowsGuid, &rowsSize, positionRows)) || rowsSize != sizeof(positionRows))
+                positionTwin.Reset();
+        }
+    }
+    rewrite(g.vsFocus, false, true, positionTwin ? positionRows : nullptr);
+    rewrite(g.psFocus, true, true);
+    ComPtr<ID3D11Buffer> gameCb12;
+    UINT gameCb12First = 0, gameCb12Count = 0;
+    const bool positioned = positionTwin && g.vsFocus.position;
+    if (positioned) {
+        g.context->VSGetConstantBuffers1(12, 1, gameCb12.GetAddressOf(), &gameCb12First, &gameCb12Count);
+        ID3D11Buffer* const pb[] = {g.vsFocus.position};
+        const UINT first = kPositionAt, count = 16;
+        g.context->VSSetConstantBuffers1(12, 1, pb, &first, &count);
+        g.context->VSSetShader(positionTwin.Get(), nullptr, 0);
+        if (g.positioned++ == 0)
+            simqvfr::logf("scs focus: the first replay at the box's place on the eye's screen (its shader's rectangle row %d, "
+                          "size row %d)",
+                          positionRows[0], positionRows[1]);
+    }
     const D3D11_RECT f = focus_rect_in(g.boundW, g.boundH);
     const D3D11_VIEWPORT vp = {static_cast<float>(f.left), 0, static_cast<float>(f.right - f.left),
                                static_cast<float>(f.bottom), g.viewportCount ? g.viewports[0].MinDepth : 0,
@@ -272,6 +343,14 @@ void replay(UINT vertices, UINT start) {
     if (g.scissorCount)
         g.context->RSSetScissorRects(1, &f);
     g.context->Draw(vertices, start);
+    if (positioned) {  // the game's shader and slot 12 back
+        g.context->VSSetShader(gameVs.Get(), nullptr, 0);
+        ID3D11Buffer* const cb[] = {gameCb12.Get()};
+        if (gameCb12Count)
+            g.context->VSSetConstantBuffers1(12, 1, cb, &gameCb12First, &gameCb12Count);
+        else
+            g.context->VSSetConstantBuffers(12, 1, cb);
+    }
     if (record)
         shoot_stage(f, inputs);
     put_back(g.vsFocus, false);

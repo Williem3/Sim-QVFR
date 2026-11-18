@@ -96,7 +96,22 @@ inline CornerRule corner_patch(float (*v)[4], int count, float fx, float fy, boo
 inline constexpr char kCornerPatchCs[] = R"(
 // `px`: the region's share of the texture size the game names (f itself, except for a focus replay: its inputs are twins,
 // smaller than the game's textures, so the region's share of a twin (f) isn't its share of the game's size (px)).
-cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; float2 pad; };
+// flags & 8 (a focus replay's vertex range, its shader's position twin bound: dxbc::add_position_remap): the twin reads
+// its vertex as v * s + o from vectors kPositionAt (s, o) and kPositionAt + 1 (its clip position's undo), written here:
+// the box's place on the eye's screen where the range is the V1 shape with the rectangle at row `rectRow`, else the
+// identity (the twin is then the game's shader). The rectangle is scaled back (the texture coordinates stay the
+// replay's) and the size row `sizeRow` gets the eye's own size, so v * size is the eye's screen pixel (ATS's light list
+// tiles: night lights in the focus view, 2026-11-18), its zw / xy (a twin's texel size) kept.
+cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; uint rectRow; uint sizeRow; };
+static const uint kPositionAt = 4080;
+// flags & 4: the rows the shader reads by a fixed index (bit r & 31 of rows[r >> 7][(r >> 5) & 3]). Every focus rule writes
+// only such rows (a whole matrix, a pair, its ray, the AO's two): run 16's Aftermath markers (2026-11-17) put the hang in
+// the occluder pass's replay even with only the written rows checked: a leftover matrix at rows 31-34 remapped row 32.
+// Before: ATS's occluder pass (2026-11-17) keeps its occluder count in cb0[32].x and
+// its occluders in an array behind it (read cb0[i + 33]); leftovers of other draws' matrices there matched the rule,
+// its x and y rows were remapped over the count, and the occluder loop ran ~a billion times: the GPU hang.
+cbuffer Rows : register(b1) { uint4 rows[32]; };
+bool fixedRow(uint r) { return (flags & 4) == 0 || (r < 4096 && ((rows[r >> 7][(r >> 5) & 3] >> (r & 31)) & 1) != 0); }
 ByteAddressBuffer src : register(t0);
 RWByteAddressBuffer dst : register(u0);
 float4 at(uint i) { return asfloat(src.Load4(i * 16)); }
@@ -107,17 +122,28 @@ bool pairAt(uint p) {
     if (p + 1 >= count)
         return false;
     float4 a = at(p), b = at(p + 1);
-    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b))
+    // Each row of the pair written only where the shader reads it by a fixed index. scsfix1 (facb92e) wanted both: a
+    // shader reading only one of normalized_to_texture / viewport_size (most full-screen passes) then kept the eye's
+    // scale in its focus replay: the lit scene a small copy in the focus box's top-left (growing with the density), the
+    // rest dark but for emissive surfaces (2026-11-18 testers).
+    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b) || (!fixedRow(p) && !fixedRow(p + 1)))
         return false;
-    dst.Store4(p * 16, asuint(float4(f, 1 / f)));
-    dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
-    if ((flags & 3) == 2 && p + 3 < count) {  // the focus view's ray
+    if (fixedRow(p))
+        dst.Store4(p * 16, asuint(float4(f, 1 / f)));
+    if (fixedRow(p + 1))
+        dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
+    if ((flags & 3) == 2 && p + 3 < count && fixedRow(p + 3)) {  // the focus view's ray
         float4 ray = at(p + 3);
         dst.Store4((p + 3) * 16, asuint(float4(ray.xy + box.xy * ray.zw, box.zw * ray.zw)));
     }
     return true;
 }
 void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
+    // The rows the rule reads or writes: x, y and w (run 16: a leftover at rows 31-34, its w at 34 the occluder array's,
+    // over the count at 32). The z row isn't needed: a shader projecting only to the screen never reads it, and scsfix1's
+    // check of it left such matrices (light culling, flares) at the eye's projection in the focus view.
+    if (!fixedRow(j) || !fixedRow(j + 1) || !fixedRow(j + 3))
+        return;  // not rows the shader reads as a matrix (an array's, or leftovers)
     float4 x = at(j), y = at(j + 1), w = at(j + 3);
     dst.Store4(j * 16, asuint(remap.x * x + remap.y * w));
     dst.Store4((j + 1) * 16, asuint(remap.z * y + remap.w * w));
@@ -142,8 +168,10 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
         // then reached 1 / box.z as far in the world (S6: a wide dark band under the cab's visor, the box darker).
         if ((flags & 2) && count >= 5 && all(at(0).xy == float2(0.5, 0.5)) && eq(at(3), float4(1, 1, 1, 1)) && isSize(at(4))) {
             float4 h = at(0);
-            dst.Store4(0, asuint(float4(h.xy / box.z, h.zw)));
-            dst.Store4(48, asuint(float4(f / box.z, 1 / f)));
+            if (fixedRow(0))
+                dst.Store4(0, asuint(float4(h.xy / box.z, h.zw)));
+            if (fixedRow(3))
+                dst.Store4(48, asuint(float4(f / box.z, 1 / f)));
         }
         if (flags & 2)
             for (uint n = 0; n + 4 <= count; ++n) {
@@ -157,6 +185,10 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
             }
         return;
     }
+    if (flags & 8) {  // the identity unless the V1 shape below places it
+        dst.Store4(kPositionAt * 16, asuint(float4(1, 1, 0, 0)));
+        dst.Store4((kPositionAt + 1) * 16, asuint(float4(1, 1, 0, 0)));
+    }
     if (count < 2)
         return;
     float4 a = at(0), b = at(1);
@@ -164,6 +196,23 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
     if (eq(a, whole) && isFlip(b)) {
         if (!pairAt(2))
             pairAt(3);
+        // The eye's own pass (flags & 2 clear) too: its vertex spans the eye's screen, so the size row with the eye's
+        // size makes v * size its screen pixel (the periphery's night lights, run of 2026-11-18); no twin, no remap.
+        if ((flags & 8) && rectRow == 0 && sizeRow < count && isSize(at(sizeRow))) {
+            const float4 size = at(sizeRow);  // the game's: the eye's size
+            const float2 texel = asfloat(dst.Load4(sizeRow * 16)).zw / asfloat(dst.Load4(sizeRow * 16)).xy;
+            dst.Store4(sizeRow * 16, asuint(float4(size.xy, texel * size.xy)));
+        }
+        if ((flags & 10) == 10 && rectRow == 0 && sizeRow < count && isSize(at(sizeRow)) && box.z > 0 && box.w > 0) {
+            const float4 rect = asfloat(dst.Load4(0));  // v * rect.zw + rect.xy, now of v' = box.xy + v * box.zw
+            const float2 scale = rect.zw / box.zw;
+            dst.Store4(0, asuint(float4(rect.xy - box.xy * scale, scale)));
+            // The clip position from v' undone: x = 2 v - 1; y = -(2 v - 1) * flip.x.
+            const float s = b.x;
+            dst.Store4(kPositionAt * 16, asuint(float4(box.zw, box.xy)));
+            dst.Store4((kPositionAt + 1) * 16,
+                       asuint(float4(1 / box.z, 1 / box.w, (1 - 2 * box.x) / box.z - 1, s * (1 - (1 - 2 * box.y) / box.w))));
+        }
     } else if (isFlip(a) && eq(b, whole)) {
         dst.Store4(16, asuint(float4(0, 0, f)));
     } else if (eq(a, whole) && eq(b, whole)) {

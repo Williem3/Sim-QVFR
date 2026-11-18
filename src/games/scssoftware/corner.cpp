@@ -12,6 +12,8 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../lmu/mvr_probe.h"
 #include "../../log.h"
+#include "../../probe/aftermath.h"
+#include "../../probe/hang_watch.h"
 #include "corner_rules.h"
 #include "pass_probe.h"
 
@@ -42,10 +44,17 @@ void take_frame_end() {
     if (ends == g.seenEndFrames)
         return;
     g.seenEndFrames = ends;
+    if (g.gpuTimes)
+        gpu_times_frame_end();  // before the frame count moves on: the slot is this frame's
+    mark(kMarkFrameEnd, 0);
+    g.frameDraw = 0;
     ++g.stats.frames;
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
+    if (!g.replayLogFrame && g.stats.cornerFrames == 300)
+        g.replayLogFrame = g.stats.frames + 1;  // a frame well into driving: its replays named once
+    g.frameReplay = 0;
     g.thisFrameCornered = false;
     g.gbufferPasses = 0;
     g.finalPasses = 0;
@@ -122,6 +131,7 @@ void take_frame_end() {
     }
     if (g.stats.frames % kEvictFrames == 0)
         evict_mirrors();  // after our copies were swapped back out (above)
+    release_orphans();    // every frame: what the game let go since the last
     g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch ? 0
                 : g.focusOff ? 3
                 : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,
@@ -133,7 +143,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("scs corner: %llu frames, %llu with the eyes in the corner; draws rewritten %llu, nothing to rewrite "
-                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu, twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
+                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
                       static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames),
                       static_cast<unsigned long long>(g.stats.rewritten), static_cast<unsigned long long>(g.stats.notRewritten),
                       static_cast<unsigned long long>(g.stats.skipped),
@@ -141,7 +151,7 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.midFrameWrites), static_cast<unsigned long long>(g.mirrorSwaps),
                       static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses),
                       static_cast<unsigned long long>(g.heldTwo), static_cast<unsigned long long>(g.focusDraws),
-                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.replays), g.twinViews.size(),
+                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
                       g.twinBytes / 1048576.0, static_cast<unsigned long long>(g.twinCopies),
                       static_cast<unsigned long long>(g.stretched), static_cast<unsigned long long>(g.composed), g.box[0][0], g.box[0][1],
                       g.box[1][0], g.box[1][1], static_cast<unsigned long long>(g.boxMoves),
@@ -278,6 +288,8 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         g.thisFrameCornered = true;
         g.cornerNow.store(true, std::memory_order_release);
         g.activeNow.store(true, std::memory_order_relaxed);
+        if (g.gpuTimes)
+            gpu_pass_begin();
         if (!g.mirrorsOff)
             swap_bound(true);  // the binds made before this one, to our rewritten copies
     }
@@ -320,7 +332,10 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        if (focus_on() && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
+        const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
+        if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
+            mark(kMarkDraw, (g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));
+        if (focusDraw) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
         } else if (g.twoViews) {  // switched off mid-frame: one view again
@@ -332,6 +347,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     }
     if (entry != ch::kDraw && entry != ch::kDrawInstanced)
         return;
+    mark(kMarkDraw, ++g.frameDraw & 0xFFFFFF);  // the full-screen passes: few, each marked
     two_views(false);  // the full-screen passes: one view
     if (g.focusPercent && g.boundSwapchain && g.burstFramesLeft > 0 && count == 3) {  // the eye's final image, whole
         ID3D11ShaderResourceView* v = nullptr;
@@ -355,11 +371,20 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     bool vs, ps;
     {
         const Timed t(State::kTimeRewrites);
-        vs = rewrite(g.vs, g.vsCb.Get(), false);
-        ps = rewrite(g.ps, g.psCb.Get(), true);
+        // A shader that turns its vertex into screen pixels (its position twin's rows): its size row keeps the eye's
+        // size, so those are the eye's pixels, not the corner's (the light list's tiles: the periphery's night lights).
+        int rows[2] = {-1, -1};
+        bool haveRows = false;
+        if (ID3D11VertexShader* s = nullptr; (g.context->VSGetShader(&s, nullptr, nullptr), s)) {
+            UINT size = sizeof(rows);
+            haveRows = SUCCEEDED(s->GetPrivateData(lmu::kFocusPositionRowsGuid, &size, rows)) && size == sizeof(rows);
+            s->Release();
+        }
+        vs = rewrite(g.vs, false, false, haveRows ? rows : nullptr);
+        ps = rewrite(g.ps, true);
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
-    if (focus_on() && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
+    if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
         const Timed t(State::kTimeFocusDraws);
         focus_draw();
     }
@@ -381,6 +406,8 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         g.context->VSSetConstantBuffers(13, 1, cb13);
         g.gameCb13.Reset();
     }
+    // The ranges on_draw rewrote, for the replay's log and timing (the put-backs clear them).
+    const UINT vsFirst = g.vs.first, vsCount = g.vs.count, psFirst = g.ps.first, psCount = g.ps.count;
     if (g.vs.game || g.ps.game) {
         put_back(g.vs, false);
         put_back(g.ps, true);
@@ -397,8 +424,50 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
     // view's own full-size depth. Ctrl+Alt+A: the focus view's own occlusion again, live.
     if (entry == ch::kDraw && count == 3 && focus_on() && g.active && g.cut &&
         (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
-        const Timed t(State::kTimeReplays);
-        replay(count, start);  // into the headset's image too: its final blit
+        const unsigned n = ++g.frameReplay;
+        const bool large = psCount > kLargeRange;
+        uint64_t psId = 0;  // the pass's pixel shader (lmu::kPixelIdGuid: the shader dump's file name)
+        {
+            ID3D11PixelShader* ps = nullptr;
+            g.context->PSGetShader(&ps, nullptr, nullptr);
+            if (ps) {
+                UINT size = sizeof(psId);
+                if (FAILED(ps->GetPrivateData(lmu::kPixelIdGuid, &size, &psId)))
+                    psId = 0;
+                ps->Release();
+            }
+        }
+        const bool skipPs = psId && std::find(g.replaySkipPs.begin(), g.replaySkipPs.end(), psId) != g.replaySkipPs.end();
+        if (psId && std::find(g.dumpPs.begin(), g.dumpPs.end(), psId) != g.dumpPs.end())
+            dump_large_range(n, psId);
+        g.skippedByPs += skipPs ? 1 : 0;
+        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge) || skipPs;
+        if (large) {
+            if (g.diagDumpLarge)
+                dump_large_range(n);
+            ++g.largeReplays;
+            g.largeSkipped += skip ? 1 : 0;
+            if (g.largeLogged < 12) {
+                ++g.largeLogged;
+                simqvfr::logf("scs focus: a large replay at frame %llu: replay %u of the frame into %ux%u, vertex range %u+%u, "
+                              "pixel range %u+%u%s", static_cast<unsigned long long>(g.stats.frames), n, g.boundW, g.boundH,
+                              vsFirst, vsCount, psFirst, psCount, skip ? ": SKIPPED" : "");
+            }
+        }
+        if (g.stats.frames == g.replayLogFrame)
+            simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u, pixel shader "
+                          "PS_%016llx%s", n, g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", vsFirst, vsCount,
+                          psFirst, psCount, static_cast<unsigned long long>(psId), skip ? ": SKIPPED" : "");
+        if (!skip) {
+            const Timed t(State::kTimeReplays);
+            if (g.gpuTimes)
+                gpu_replay_begin(psFirst, psCount, psId);
+            mark(kMarkReplay, n << 16 | std::min<UINT>(psCount, 0xFFFF));
+            replay(count, start);  // into the headset's image too: its final blit
+            mark(kMarkReplayDone, n << 16);
+            if (g.gpuTimes)
+                gpu_replay_end();
+        }
     }
     if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
         if (g.blits < 2 && g.boundChainEye >= 0) {
@@ -455,15 +524,20 @@ bool make_resources() {
     if (FAILED(g.device->CreateComputeShader(mirrorCode->GetBufferPointer(), mirrorCode->GetBufferSize(), nullptr,
                                              &g.mirrorCs)))
         return false;
-    return SUCCEEDED(g.device->CreateBuffer(&raw, nullptr, &g.rawIn)) &&
-           SUCCEEDED(g.device->CreateBuffer(&rawOut, nullptr, &g.rawOut)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.vsCb)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.psCb)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.vsCbFocus)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.psCbFocus)) &&
-           SUCCEEDED(g.device->CreateBuffer(&params, nullptr, &g.params)) &&
-           SUCCEEDED(g.device->CreateShaderResourceView(g.rawIn.Get(), &sv, &g.rawInView)) &&
-           SUCCEEDED(g.device->CreateUnorderedAccessView(g.rawOut.Get(), &uv, &g.rawOutView)) &&
+    g.rewriteSets.assign(g.rewriteRing ? kRewriteSets : 1, {});
+    for (State::RewriteSet& s : g.rewriteSets)
+        if (FAILED(g.device->CreateBuffer(&raw, nullptr, &s.in)) || FAILED(g.device->CreateBuffer(&rawOut, nullptr, &s.out)) ||
+            FAILED(g.device->CreateBuffer(&cb, nullptr, &s.cb)) ||
+            FAILED(g.device->CreateShaderResourceView(s.in.Get(), &sv, &s.inView)) ||
+            FAILED(g.device->CreateUnorderedAccessView(s.out.Get(), &uv, &s.outView))) {
+            g.rewriteSets.clear();
+            return false;
+        }
+    simqvfr::logf("scs corner: %zu rewrite buffer sets (%s)", g.rewriteSets.size(),
+                  g.rewriteRing ? "a fresh one for every rewrite" : "one, reused: scs_rewrite_ring=0");
+    const D3D11_BUFFER_DESC rowsDesc = {512, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    return SUCCEEDED(g.device->CreateBuffer(&params, nullptr, &g.params)) &&
+           SUCCEEDED(g.device->CreateBuffer(&rowsDesc, nullptr, &g.rowsCb)) &&
            SUCCEEDED(g.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &g.patchCs));
 }
 
@@ -514,6 +588,8 @@ bool session_ending() {
 void release_all() {
     if (g.context)
         two_views(false);
+    gpu_times_reset();
+    simqvfr::aftermath::detach();
     if (g.gameVs) {
         g.gameVs->Release();
         g.gameVs = nullptr;
@@ -550,10 +626,10 @@ void release_all() {
     g.ps = Range{};
     g.vsFocus = Range{};
     g.psFocus = Range{};
-    g.rawIn.Reset(), g.rawOut.Reset(), g.params.Reset(), g.vsCb.Reset(), g.psCb.Reset(), g.vsCbFocus.Reset(),
-        g.psCbFocus.Reset();
-    g.rawInView.Reset();
-    g.rawOutView.Reset();
+    g.params.Reset();
+    g.rowsCb.Reset();
+    g.rewriteSets.clear();
+    g.nextRewriteSet = 0;
     g.patchCs.Reset();
     g.mirrorCs.Reset();
     g.mirrorIdCount.store(0, std::memory_order_release);  // first: the other threads stop comparing
@@ -592,6 +668,7 @@ void release_all() {
     g.burstDesc = {};
     g.burstFramesLeft = 0;
     g.context.Reset();
+    device_watch_reset();
     g.device.Reset();
     g.restore.store(0, std::memory_order_release);  // the next session's end asks again
 }
@@ -662,6 +739,9 @@ bool install_now(ID3D11Device* device, int percent, int focusPercent) {
         return false;
     }
     g.percent = static_cast<float>(percent);
+    simqvfr::hang_watch_on_fire(&hang_check);  // a frame stuck inside the runtime still logs the device's state
+    if (simqvfr::aftermath::attach(device, g.context.Get()))  // [experiment] aftermath=1 (dev builds with the SDK)
+        simqvfr::aftermath::set_marker_names(&marker_name);
     ch::Observers o;
     o.targets = &on_targets;
     o.draw = &on_draw;
@@ -762,6 +842,19 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     lifecycle.focusPercent = focusPercent;
     g.lifecyclePending.store(true, std::memory_order_release);
     return true;
+}
+
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
+                     bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {
+    g.replaySkipPs = skipPs;
+    g.dumpPs = dumpPs;
+    g.gpuTimes = gpuTimes;
+    g.diagSkipLarge = skipLarge;
+    g.rewriteRing = rewriteRing;
+    g.diagDumpLarge = dumpLarge;
+    g.diagNoDraws = noDraws;
+    g.diagNoReplays = noReplays;
+    g.replaySkip = replaySkip;
 }
 
 bool corner_on() { return g.context != nullptr; }

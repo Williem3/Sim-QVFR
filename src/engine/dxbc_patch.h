@@ -133,5 +133,28 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
 // How many vectors (16 bytes) of the constant buffer in `slot` the shader declares; 0: none, or not a shader. What lies
 // past that in a bound range is not the shader's (a pooled buffer's leftovers).
 uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot);
+// The rows of constant buffer slot the program reads by a fixed index (bit r % 64 of rows[r / 64], rows below 4096);
+// rows read only through a relative index (an array: cb0[r0.x + 33]) aren't set. False: the program couldn't be read.
+bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]);
+
+// add_position_remap is for a full-screen pass drawn again over a region of its screen (the SCS focus view): a vertex
+// shader whose vertex position input v<reg>.xy (0..1 over the screen) reads instead v.xy * s + o, with (s, o) the
+// first vector of constant buffer `cbSlot` (xy: s, zw: o), so everything the shader derives from it (clip position,
+// texture rectangle, screen pixels) is the region's. Only a shader whose every read of v<reg> is one of three shapes is
+// converted, so the caller knows what each derived value is:
+//   - the clip position: mad r, v.x|y, l(2), l(-1) (immediates);
+//   - a rectangle: mad r, v, cb0[k], cb0[k] (one row k: xy offset, zw scale) -> rectRow;
+//   - screen pixels: mul r, v, cb0[s] (one row s: the viewport size) -> sizeRow.
+// Anything else (another use, a relative index, an index range over the input) is refused.
+struct PositionRemapOptions {
+    uint32_t inputRegister = 0;
+    uint32_t cbSlot = 12;
+};
+struct PositionRemap {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+    int rectRow = -1, sizeRow = -1;  // -1: none
+};
+PositionRemap add_position_remap(const uint8_t* data, size_t size, const PositionRemapOptions& options = {});
 
 }  // namespace simqvfr::dxbc

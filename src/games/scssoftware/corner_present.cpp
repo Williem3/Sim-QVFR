@@ -104,7 +104,17 @@ ID3D11RenderTargetView* target_view(ID3D11Texture2D* image, const D3D11_TEXTURE2
 }
 
 // The corner of `image` (cw x ch) drawn back over the whole image; the game's state put back. False: nothing changed.
+bool upscale_now(ID3D11Texture2D* image, UINT cw, UINT ch, int eye);
+
+// Our release work between two markers (Aftermath: a hang in it names it).
 bool upscale(ID3D11Texture2D* image, UINT cw, UINT ch, int eye) {
+    mark(kMarkRelease, static_cast<uint32_t>(eye));
+    const bool done = upscale_now(image, cw, ch, eye);
+    mark(kMarkReleaseDone, static_cast<uint32_t>(eye));
+    return done;
+}
+
+bool upscale_now(ID3D11Texture2D* image, UINT cw, UINT ch, int eye) {
     D3D11_TEXTURE2D_DESC d;
     image->GetDesc(&d);
     if (!blit_resources() || d.SampleDesc.Count != 1 || !(d.BindFlags & D3D11_BIND_RENDER_TARGET) || cw > d.Width ||
@@ -247,6 +257,7 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
         service_lifecycle();
     if (!g.context)
         return info;
+    device_watch();
     g.endFrames.fetch_add(1, std::memory_order_release);
     // The context's entries hooked again if the game's mode changed them: on its own thread, between its commands
     // (context_hooks.h), never inside an observer.

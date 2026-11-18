@@ -61,6 +61,13 @@ public:
     // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
     // as mode=off, and puts nothing of its own into the game or the headset.
     virtual bool has_qvfr() const { return true; }
+    // True: a game without the layer's views4 QVFR (has_qvfr false) that runs QVFR on a path of its own below the layer
+    // (the SCS games' D3D11 corner), decided from `ini` at load, before the adapter's instance_created. The layer then
+    // still runs as mode=off, but its reports say QVFR and the CPU settings apply.
+    virtual bool own_qvfr(const wchar_t* ini) const {
+        (void)ini;
+        return false;
+    }
     // False while the layer can't compose this game's views (its graphics API isn't supported yet): QVFR then
     // runs uncomposed, the headset showing views 0-1.
     virtual bool qvfr_composable() const { return has_qvfr(); }

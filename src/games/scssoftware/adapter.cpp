@@ -5,9 +5,13 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cwctype>
+#include <vector>
 
 #include "../../dev_build.h"
 #include "../../log.h"
+#include "../../probe/aftermath.h"
 #include "../identity_adapter.h"
 #include "../lmu/mvr_probe.h"
 #include "corner.h"
@@ -39,17 +43,16 @@ public:
         // device has it, by Sim-QVFR's own (instancing) on every other GPU: the corner picks at xrCreateSession.
         // scs_corner / scs_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
         // ([experiment] periphery_scale, focus_percent) take over at the first live read.
+        // NVIDIA Aftermath (dev builds with the SDK; [experiment] aftermath=1): crash dumps on before the game's device.
+        if (simqvfr::kDevBuild && ini && GetPrivateProfileIntW(L"experiment", L"aftermath", 0, ini) != 0) {
+            if (!simqvfr::aftermath::built())
+                simqvfr::log_line("aftermath: asked for (aftermath=1) but this build has no Aftermath SDK");
+            else
+                simqvfr::aftermath::enable_dumps();
+        }
         wchar_t iniMode[32] = L"";
-        if (ini)
-            GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
-        const bool qvfr = analysis() && ini && _wcsicmp(iniMode, L"off") != 0 &&
-                          GetPrivateProfileIntW(L"experiment", L"scs_qvfr", 1, ini) != 0;
+        cornerPercent_ = launch_corner(ini, iniMode);
         const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;
-        cornerPercent_ = qvfr ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_corner",
-                                                                        sizes.periphery > 0 ? sizes.periphery : 70, ini))
-                              : 0;
-        if (cornerPercent_ <= 0 || cornerPercent_ >= 100)
-            cornerPercent_ = 0;
         focusPercent_ = cornerPercent_ ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_focus",
                                                                                  sizes.focusWidth > 0 ? sizes.focusWidth : 30, ini))
                                        : 0;
@@ -57,14 +60,27 @@ public:
             focusPercent_ = cornerPercent_ <= 90 ? std::min(30, 100 - cornerPercent_) : 0;
         if (focusPercent_ > 0)
             shaderProbe_ = true;  // the scene draws need the shaders' twins
+        // The focus replays' full-screen shaders that turn their vertex into screen pixels (the light list's tiles) get
+        // a twin placing the vertex at the box: [experiment] scs_focus_position=0 for the replays as before (A/B).
+        if (focusPercent_ > 0 && GetPrivateProfileIntW(L"experiment", L"scs_focus_position", 1, ini) != 0) {
+            lmu::mvr_probe_position_twins(true);
+            simqvfr::log_line("scs focus: full-screen passes that use screen pixels are replayed at the box's place on the eye's screen");
+        }
         if (shaderProbe_)  // with the focus view on, each shader keeps its twin (the scene draws bind it)
             shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
         if (cornerPercent_)
             passProbe_ = false;
+        if (focusPercent_ > 0)
+            read_diag(ini);
         simqvfr::logf("scs: QVFR at the D3D11 level %s (mode=%ls, scs_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
                       "shader %s",
                       cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
                       shaderProbe_ ? "on" : "off");
+    }
+    // The layer's own reports and CPU settings: QVFR runs here whenever the corner will (read from the ini at load).
+    bool own_qvfr(const wchar_t* ini) const override {
+        wchar_t iniMode[32] = L"";
+        return launch_corner(ini, iniMode) > 0;
     }
     bool observes_d3d11() const override { return passProbe_ || shaderProbe_ || cornerPercent_; }
     // The focus box follows the gaze: where it points on each eye's screen (x right, y down, 0..1), from the eye's
@@ -146,6 +162,86 @@ public:
     }
 
 private:
+    // The corner's launch share in percent, 0 when QVFR is off: the launcher's QVFR switch ([experiment] mode other than
+    // off), [experiment] scs_qvfr (default 1) and a corner inside 1..99 ([experiment] scs_corner, default the game's
+    // periphery size). `iniMode`: the ini's mode, for the log.
+    int launch_corner(const wchar_t* ini, wchar_t (&iniMode)[32]) const {
+        if (ini)
+            GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
+        if (!analysis() || !ini || _wcsicmp(iniMode, L"off") == 0 ||
+            GetPrivateProfileIntW(L"experiment", L"scs_qvfr", 1, ini) == 0)
+            return 0;
+        const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;
+        const int corner = static_cast<int>(
+            GetPrivateProfileIntW(L"experiment", L"scs_corner", sizes.periphery > 0 ? sizes.periphery : 70, ini));
+        return corner > 0 && corner < 100 ? corner : 0;
+    }
+
+    // The GPU-hang bisection keys (corner_set_diag), read at launch: scs_focus_draws=0, scs_focus_replays=0,
+    // scs_replay_skip=<the frame's replays to skip, 1-based, comma-separated, e.g. 3,7,12>, and scs_gpu_times.
+    static void read_diag(const wchar_t* ini) {
+        const bool noDraws = GetPrivateProfileIntW(L"experiment", L"scs_focus_draws", 1, ini) == 0;
+        const bool noReplays = GetPrivateProfileIntW(L"experiment", L"scs_focus_replays", 1, ini) == 0;
+        wchar_t list[256] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_replay_skip", L"", list, 256, ini);
+        uint64_t skip = 0;
+        for (const wchar_t* p = list; *p;) {
+            wchar_t* end = nullptr;
+            const unsigned long n = wcstoul(p, &end, 10);
+            if (end == p) {
+                ++p;
+                continue;
+            }
+            if (n >= 1 && n <= 64)
+                skip |= 1ull << (n - 1);
+            p = end;
+        }
+        // The GPU's times for the replays: on by default in dev builds (a few timestamp queries a frame).
+        const bool gpuTimes = GetPrivateProfileIntW(L"experiment", L"scs_gpu_times", simqvfr::kDevBuild ? 1 : 0, ini) != 0;
+        const bool skipLarge = GetPrivateProfileIntW(L"experiment", L"scs_replay_skip_large", 0, ini) != 0;
+        const bool dumpLarge = GetPrivateProfileIntW(L"experiment", L"scs_dump_large", 0, ini) != 0;
+        const bool ring = GetPrivateProfileIntW(L"experiment", L"scs_rewrite_ring", 1, ini) != 0;
+        // scs_replay_skip_ps=<pixel shader ids, hex, comma-separated: the shader dump's PS_<id> names>
+        wchar_t psList[512] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_replay_skip_ps", L"", psList, 512, ini);
+        std::vector<uint64_t> skipPs;
+        for (const wchar_t* p = psList; *p;) {
+            if (!iswxdigit(*p)) {
+                ++p;
+                continue;
+            }
+            wchar_t* end = nullptr;
+            skipPs.push_back(_wcstoui64(p, &end, 16));
+            p = end;
+        }
+        if (!skipPs.empty())
+            simqvfr::logf("scs focus: bisection: the replays of %zu pixel shaders are SKIPPED (scs_replay_skip_ps=%ls)",
+                          skipPs.size(), psList);
+        wchar_t dumpList[512] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_dump_ps", L"", dumpList, 512, ini);
+        std::vector<uint64_t> dumpPs;
+        for (const wchar_t* p = dumpList; *p;) {
+            if (!iswxdigit(*p)) {
+                ++p;
+                continue;
+            }
+            wchar_t* end = nullptr;
+            dumpPs.push_back(_wcstoui64(p, &end, 16));
+            p = end;
+        }
+        if (!dumpPs.empty())
+            simqvfr::logf("scs focus: the constant ranges of %zu pixel shaders are saved (scs_dump_ps=%ls)", dumpPs.size(), dumpList);
+        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring, skipPs, dumpPs);
+        if (skipLarge)
+            simqvfr::log_line("scs focus: bisection: the replays with a pixel range over 128 vectors are SKIPPED (scs_replay_skip_large=1)");
+        if (gpuTimes)
+            simqvfr::log_line("scs gpu: timing the focus view's replays and the eye passes on the GPU (scs_gpu_times)");
+        if (noDraws || noReplays || skip)
+            simqvfr::logf("scs focus: bisection: the focus view's scene draws %s, its replayed passes %s%s%ls",
+                          noDraws ? "OFF (scs_focus_draws=0)" : "on", noReplays ? "OFF (scs_focus_replays=0)" : "on",
+                          skip ? ", skipping the frame's replays " : "", skip ? list : L"");
+    }
+
     bool passProbe_ = false, shaderProbe_ = false;
     int cornerPercent_ = 0, focusPercent_ = 0;
     bool liveSeen_ = false;

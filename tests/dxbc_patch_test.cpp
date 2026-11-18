@@ -657,6 +657,14 @@ void real_shaders(Gpu& g, const char* folder) {
             code.resize(std::fread(code.data(), 1, code.size(), f));
             std::fclose(f);
         }
+        if (const dxbc::PositionRemap pr = dxbc::add_position_remap(code.data(), code.size()); !pr.bytecode.empty()) {
+            ComPtr<ID3D11VertexShader> remapped;
+            const bool made = SUCCEEDED(g.device->CreateVertexShader(pr.bytecode.data(), pr.bytecode.size(), nullptr, &remapped));
+            std::printf("     position remap %s: rectangle row %d, size row %d%s\n", name.c_str(), pr.rectRow, pr.sizeRow,
+                        made ? "" : ", NOT CREATED");
+            if (!made)
+                mismatches.push_back(name + ": position remap not created");
+        }
         const dxbc::InstancedView iv = dxbc::add_instanced_view(code.data(), code.size());
         if (iv.bytecode.empty()) {
             ++refused[iv.error];
@@ -1040,6 +1048,114 @@ void malformed_cases() {
     check(dxbc::constant_buffer_vectors(bad.data(), bad.size(), 0) == 0, "malformed: declared constants of customdata at the end: none");
 }
 
+// A full-screen pass's vertex shader as the SCS games write theirs: the unit vertex's clip position, a texture
+// rectangle (row 0) times the texture scale (row 2), and screen pixels (v * the viewport size, row 3).
+const char* kFullScreenVs = R"(
+cbuffer C : register(b0) { float4 rect; float4 flip; float4 ntt; float4 size; };
+struct Out { float4 pos : SV_Position; float4 t : TEXCOORD0; };
+Out main(float2 v : POSITION) {
+    Out o;
+    o.pos = float4(v.x * 2 - 1, -(v.y * 2 - 1) * flip.x, flip.z, 1);
+    float2 r = v * rect.zw + rect.xy;
+    o.t.xy = r * ntt.xy;
+    o.t.zw = v * size.xy;
+    return o;
+}
+)";
+
+// Three vertices through `vs` (stream output of the position and TEXCOORD0); `remap` bound in b12.
+bool stream_full_screen(Gpu& g, const std::vector<uint8_t>& vs, const float (&points)[3][2], const float (&remap)[8],
+                        float (&out)[3][8]) {
+    ComPtr<ID3D11VertexShader> shader;
+    if (FAILED(g.device->CreateVertexShader(vs.data(), vs.size(), nullptr, &shader)))
+        return false;
+    const D3D11_SO_DECLARATION_ENTRY decl[] = {{0, "SV_POSITION", 0, 0, 4, 0}, {0, "TEXCOORD", 0, 0, 4, 0}};
+    UINT stride = 32;
+    ComPtr<ID3D11GeometryShader> so;
+    if (FAILED(g.device->CreateGeometryShaderWithStreamOutput(vs.data(), vs.size(), decl, 2, &stride, 1,
+                                                              D3D11_SO_NO_RASTERIZED_STREAM, nullptr, &so)))
+        return false;
+    const D3D11_INPUT_ELEMENT_DESC element = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    ComPtr<ID3D11InputLayout> layout;
+    if (FAILED(g.device->CreateInputLayout(&element, 1, vs.data(), vs.size(), &layout)))
+        return false;
+    const float constants[16] = {0.1f, 0.2f, 0.5f, 0.25f, 1, -0.5f, 0.5f, 0, 0.4f, 0.4f, 2.5f, 2.5f, 1616, 1350, 0.4f, 0.4f};
+    const D3D11_SUBRESOURCE_DATA vInit = {points, 0, 0}, cInit = {constants, 0, 0}, rInit = {remap, 0, 0};
+    D3D11_BUFFER_DESC bd = {sizeof(points), D3D11_USAGE_DEFAULT, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+    D3D11_BUFFER_DESC cd = {sizeof(constants), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    D3D11_BUFFER_DESC rd = {32, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    D3D11_BUFFER_DESC od = {stride * 3, D3D11_USAGE_DEFAULT, D3D11_BIND_STREAM_OUTPUT, 0, 0, 0};
+    D3D11_BUFFER_DESC sd = {stride * 3, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+    ComPtr<ID3D11Buffer> vb, cb, rb, o, staging;
+    if (FAILED(g.device->CreateBuffer(&bd, &vInit, &vb)) || FAILED(g.device->CreateBuffer(&cd, &cInit, &cb)) ||
+        FAILED(g.device->CreateBuffer(&rd, &rInit, &rb)) || FAILED(g.device->CreateBuffer(&od, nullptr, &o)) ||
+        FAILED(g.device->CreateBuffer(&sd, nullptr, &staging)))
+        return false;
+    const UINT vbStride = 8, offset = 0;
+    g.context->IASetInputLayout(layout.Get());
+    g.context->IASetVertexBuffers(0, 1, vb.GetAddressOf(), &vbStride, &offset);
+    g.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    g.context->VSSetShader(shader.Get(), nullptr, 0);
+    g.context->VSSetConstantBuffers(0, 1, cb.GetAddressOf());
+    g.context->VSSetConstantBuffers(12, 1, rb.GetAddressOf());
+    g.context->GSSetShader(so.Get(), nullptr, 0);
+    g.context->PSSetShader(nullptr, nullptr, 0);
+    g.context->SOSetTargets(1, o.GetAddressOf(), &offset);
+    g.context->Draw(3, 0);
+    ID3D11Buffer* none = nullptr;
+    g.context->SOSetTargets(1, &none, &offset);
+    g.context->GSSetShader(nullptr, nullptr, 0);
+    g.context->CopyResource(staging.Get(), o.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
+        return false;
+    std::memcpy(out, map.pData, sizeof(out));
+    g.context->Unmap(staging.Get(), 0);
+    return true;
+}
+
+void position_remap_cases(Gpu& g) {
+    for (const char* profile : {"vs_4_0", "vs_5_0"}) {
+        const std::string what = std::string("position remap ") + profile;
+        const std::vector<uint8_t> vs = compile(kFullScreenVs, profile);
+        const dxbc::PositionRemap pr = dxbc::add_position_remap(vs.data(), vs.size());
+        check(!pr.bytecode.empty(), (what + ": converted" + (pr.error.empty() ? "" : " (" + pr.error + ")")).c_str());
+        if (pr.bytecode.empty())
+            continue;
+        check(pr.rectRow == 0 && pr.sizeRow == 3, (what + ": the rectangle at row 0, the size at row 3").c_str());
+        check(dxbc::checksum_ok(pr.bytecode.data(), pr.bytecode.size()), (what + ": checksum").c_str());
+        // The converted shader on the unit vertices: its texture coordinates the original's on the remapped vertices
+        // (v * s + o), its clip position the original's on the unit ones (the undo in cb[1]; flip.x = 1).
+        const float s[2] = {0.25f, 0.3f}, o[2] = {0.35f, 0.4f};
+        const float unit[3][2] = {{0, 0}, {2, 0}, {0, 2}};
+        float moved[3][2];
+        for (int v = 0; v < 3; ++v)
+            moved[v][0] = unit[v][0] * s[0] + o[0], moved[v][1] = unit[v][1] * s[1] + o[1];
+        const float remap[8] = {s[0], s[1], o[0], o[1], 1 / s[0], 1 / s[1], (1 - 2 * o[0]) / s[0] - 1, 1 - (1 - 2 * o[1]) / s[1]};
+        const float identity[8] = {1, 1, 0, 0, 1, 1, 0, 0};
+        float a[3][8] = {}, b[3][8] = {}, c0[3][8] = {}, c1[3][8] = {};
+        const bool ran = stream_full_screen(g, vs, moved, identity, a) && stream_full_screen(g, pr.bytecode, unit, remap, b) &&
+                         stream_full_screen(g, vs, unit, identity, c0) && stream_full_screen(g, pr.bytecode, unit, identity, c1);
+        bool texcoords = ran, position = ran, same = ran;
+        for (int v = 0; v < 3 && ran; ++v)
+            for (int c = 0; c < 8; ++c) {
+                (c < 4 ? position : texcoords) = (c < 4 ? position : texcoords) && close(c < 4 ? c0[v][c] : a[v][c], b[v][c]);
+                same = same && close(c0[v][c], c1[v][c]);
+            }
+        check(texcoords, (what + ": its texture coordinates the original's on the region's vertices").c_str());
+        check(position, (what + ": its clip position the original's (the remap undone)").c_str());
+        check(same, (what + ": with an identity remap, the original exactly").c_str());
+        const dxbc::PositionRemap again = dxbc::add_position_remap(pr.bytecode.data(), pr.bytecode.size());
+        check(again.bytecode.empty() && !again.error.empty(), (what + ": a converted shader is refused").c_str());
+    }
+    const std::vector<uint8_t> other = compile(
+        "cbuffer C : register(b0) { float4 k; };"
+        "float4 main(float2 v : POSITION, out float4 t : TEXCOORD0) : SV_Position { t = v.xyxy * v.yxyx; return float4(v * 2 - 1, k.z, 1); }",
+        "vs_5_0");
+    const dxbc::PositionRemap no = dxbc::add_position_remap(other.data(), other.size());
+    check(!other.empty() && no.bytecode.empty() && !no.error.empty(), "position remap: another use of the vertex is refused");
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
@@ -1056,6 +1172,20 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 2) == 5, "declared constants: cb2 of 5 vectors");
         check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 1) == 0, "declared constants: no cb1");
         check(dxbc::constant_buffer_vectors(ps.data(), 12, 0) == 0, "declared constants: not a container");
+    }
+    {  // the rows read by a fixed index: a matrix and a count yes, an array read by a loop's index no (ATS's occluders)
+        const std::vector<uint8_t> ps = compile(
+            "cbuffer C : register(b0) { float4x4 m; uint count; float3 pad; float4 boxes[15]; };"
+            "float4 main(float4 p : SV_Position) : SV_Target {"
+            "  float4 r = mul(float4(p.xyz, 1), m); float d = 999;"
+            "  for (uint i = 0; i < count && d > 0; ++i) d = min(d, dot(boxes[i].xyz, r.xyz) - boxes[i].w);"
+            "  return r * d; }",
+            "ps_5_0");
+        uint64_t rows[64];
+        const bool read = dxbc::constant_buffer_static_rows(ps.data(), ps.size(), 0, rows);
+        check(read && (rows[0] & 0x1f) == 0x1f, "fixed rows: the matrix's four rows and the count's");
+        check(read && (rows[0] & ~0x1full) == 0 && rows[1] == 0, "fixed rows: not the array read by the loop's index");
+        check(!dxbc::constant_buffer_static_rows(ps.data(), 12, 0, rows), "fixed rows: not a container");
     }
     malformed_cases();
     Gpu g;
@@ -1097,6 +1227,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
 
     instanced_cases(g, plain, pixel);
     mip_bias_cases(g);
+    position_remap_cases(g);
     if (argc > 1) {  // a game's shaders: vertex ones (logs\shaders of a probe run with lmu_mvr_dump=1) both ways, pixel
         real_shaders(g, argv[1]);  // ones through the focus mip bias
         real_pixel_shaders(g, argv[1]);

@@ -175,8 +175,14 @@ void load_experiment() {
     }
     // A game known by its identity alone (no QVFR yet, games/adapter.h): log only, whatever the ini says.
     // mode=off, the session and swapchain logging on (probes), and nothing that changes what it renders.
+    // A game whose QVFR runs on its own path below the layer (the SCS games' D3D11 corner) is that too, as far as the
+    // layer's views4 goes: mode=off here, its QVFR the adapter's.
     const bool logOnly = !game->has_qvfr();
-    if (logOnly)
+    const bool ownPath = logOnly && !baseline && game->own_qvfr(ini.c_str());
+    if (ownPath)
+        logf("experiment: %ls runs QVFR on its own path (the layer's views4 off: mode=off underneath, ini mode=%ls)",
+             game->info()->name, mode);
+    else if (logOnly)
         logf("experiment: %ls has no QVFR yet: log only, running as mode=off (ini mode=%ls)", game->info()->name, mode);
     if (logOnly)
         wcscpy_s(mode, L"off");
@@ -187,7 +193,8 @@ void load_experiment() {
         const bool qvfr = !baseline && !logOnly && parse_render_mode(mode) == IniRenderMode::Qvfr;
         const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
         experiment.apiPath = ace && qvfr && !legacy;
-        experiment.cpuSettings = !baseline && !logOnly;  // a baseline measures the game as it runs without us
+        experiment.ownQvfr = ownPath || experiment.apiPath;
+        experiment.cpuSettings = !baseline && (!logOnly || ownPath);  // a baseline measures the game as it runs without us
         if (experiment.apiPath) {
             log_line("experiment: ACE's QVFR: the API path (its own two eyes, the focus views replayed at the D3D12 level; "
                      "ace_legacy_views4=1 for the old 4views path)");

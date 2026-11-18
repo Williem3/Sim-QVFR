@@ -23,6 +23,10 @@ void hang_watch_frame();
 void hang_watch_stage(const char* stage);
 // At xrDestroySession: no frames are due until the next session.
 void hang_watch_disarm();
+// What a game's path adds when the watch fires (any thread; null: nothing), run on the watch thread after the dump
+// is written: ATS on Pimax froze inside the runtime's xrEndFrame with the GPU hung (2026-11-17), where the per-frame
+// device check never runs. It mustn't take a lock the frame thread may hold.
+void hang_watch_on_fire(void (*fn)());
 // Tests: the helper to start (instead of the launcher next to this module); before the first arm.
 void hang_watch_set_helper(const wchar_t* path);
 // Logs the loaded modules now. It reads the loader list as another process would (psapi through

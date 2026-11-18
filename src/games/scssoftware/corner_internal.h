@@ -64,6 +64,7 @@ struct Range {
     ComPtr<ID3D11Buffer> game;  // the game's buffer as bound (a reference while we hold the draw)
     UINT first = 0, count = 0;  // in constants (16 bytes)
     bool ours = false;          // ours is bound in its place for this draw
+    ID3D11Buffer* position = nullptr;  // a focus replay's position twin's constants (vector kPositionAt of ours): set by rewrite
 };
 
 struct State {
@@ -87,9 +88,22 @@ struct State {
     D3D11_RECT scissors[kMaxViews] = {};
     UINT scissorCount = 0;
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
-    ComPtr<ID3D11Buffer> rawIn, rawOut, params, vsCb, psCb, vsCbFocus, psCbFocus;
-    ComPtr<ID3D11ShaderResourceView> rawInView;
-    ComPtr<ID3D11UnorderedAccessView> rawOutView;
+    ComPtr<ID3D11Buffer> params;
+    uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
+    ComPtr<ID3D11Buffer> rowsCb;  // run_cs's b1 (512 bytes): the rewritten shader's rows read by a fixed index
+    // A draw's rewritten range (rewrite): the game's copied in, the compute shader's output, the constant buffer bound for
+    // the draw. A ring of sets, a fresh one for every rewrite: with one set, the next rewrite wrote the buffers while the
+    // GPU could still be running the draw before it, and on the user's RTX 5070 Ti (2026-11-17) a long full-screen pass
+    // (the tone mapping's) read another pass's constants, turned its debug number print on and printed a NaN: a digit
+    // loop of ~4 billion steps, the GPU hang (Aftermath dump of run 8). [experiment] scs_rewrite_ring=0: one set again.
+    struct RewriteSet {
+        ComPtr<ID3D11Buffer> in, out, cb;
+        ComPtr<ID3D11ShaderResourceView> inView;
+        ComPtr<ID3D11UnorderedAccessView> outView;
+    };
+    std::vector<RewriteSet> rewriteSets;
+    unsigned nextRewriteSet = 0;
+    bool rewriteRing = true;
     ComPtr<ID3D11ComputeShader> patchCs, mirrorCs;
     std::vector<Mirror> mirrors;
     ComPtr<ID3D11Buffer> bigIn, bigOut;  // the mirrors' scratch, as large as the largest
@@ -256,6 +270,24 @@ struct State {
     int64_t perfSince = 0;
     uint64_t perfFrame = 0;
     bool focusOff = false, focusKeyDown = false;
+    // The launch's bisection switches (corner_set_diag; [experiment] scs_focus_draws, scs_focus_replays,
+    // scs_replay_skip): the focus view's scene draws off, its replayed passes off, or single replays (bit n-1: the
+    // frame's nth replay) skipped. Set before the session, kept across sessions.
+    bool diagNoDraws = false, diagNoReplays = false;
+    uint64_t replaySkip = 0;
+    bool gpuTimes = false;  // [experiment] scs_gpu_times (gpu_replay_begin)
+    // [experiment] scs_replay_skip_large=1: the replays whose pixel range is over kLargeRange vectors skipped (their
+    // numbers move from frame to frame); counted either way, the first few logged.
+    bool diagSkipLarge = false;
+    bool diagDumpLarge = false;  // [experiment] scs_dump_large=1: dump_large_range
+    std::vector<uint64_t> replaySkipPs;  // [experiment] scs_replay_skip_ps: the replays of these pixel shaders skipped
+    std::vector<uint64_t> dumpPs;        // [experiment] scs_dump_ps: these pixel shaders' ranges saved (dump_large_range)
+    uint64_t skippedByPs = 0;
+    uint64_t largeReplays = 0, largeSkipped = 0;
+    uint32_t frameDraw = 0;  // this frame's draws in its eye passes (the markers' numbers)
+    unsigned largeLogged = 0;
+    unsigned frameReplay = 0;     // this frame's replays so far (take_frame_end resets it)
+    uint64_t replayLogFrame = 0;  // the frame whose replays are each logged once (300 cornered frames in)
     bool occlusionKeyDown = false, ownOcclusion = false;  // Ctrl+Alt+A: the half-size passes replayed for the focus view
     // Stage 2: the focus view beside the corner.
     int focusPercent = 0;
@@ -310,6 +342,8 @@ struct State {
 extern State g;
 
 constexpr int kBurstFrames = 20;
+constexpr unsigned kRewriteSets = 64;  // more than a frame's full-screen passes and their replays in flight
+constexpr UINT kLargeRange = 128;  // a replay's pixel range this large: the light list's size, not a pass's few vectors
 constexpr uint64_t kEvictFrames = 900;  // twins unused this long are let go (evict_unused)
 
 struct Timed {  // a bucket's time, for as long as it lives
@@ -362,15 +396,30 @@ D3D11_RECT focus_rect();
 Mirror* mirror_of_game(ID3D11Buffer* b);
 ID3D11Buffer* game_of(ID3D11Buffer* b);
 bool big_scratch(UINT bytes);
+// ows: b1, the rows the rewritten shader reads by a fixed index (512 bytes), for kCornerPatchCs's flag 4.
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups);
+            UINT groups, const void* rows = nullptr);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
-void evict_mirrors();
+// The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last
+// reference; one still bound in a context counts the binding too, so it stays). Free-threaded: the count, not the object.
+inline bool only_ours(IUnknown* p) {
+    if (!p)
+        return false;
+    p->AddRef();
+    return p->Release() == 1;
+}
+void evict_mirrors(bool orphans = false);
+// Every frame's end, outside the eye passes: the mirrors, twins and twin views whose game object is gone, let go at
+// once (ETS2 and ATS remake their targets and 2 MB constant buffers at loads and menus: 2026-11-16, the 16 mirror slots
+// stayed full for up to 900 frames, 3.5 million binds unmirrored and not rewritten for the corner).
+void release_orphans();
 void swap_bound(bool on);
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
-bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false);
+// `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
+bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr);
+constexpr UINT kPositionAt = 4080;  // kCornerPatchCs's: where the position twin's two vectors go in our copy
 void put_back(Range& r, bool pixel);
 
 // corner_eye_order.cpp
@@ -405,6 +454,32 @@ void write_burst();
 
 // corner_diag.cpp
 void perf_line();
+// Every xrEndFrame: a removed GPU device logged once, with its reason and the VRAM (read every 90 frames).
+void device_watch();
+void device_watch_reset();  // release_all: the next install reads its own adapter and peak
+// The hang watch fired (its thread): the device asked why, logged with the GPU's newest finished frame.
+void hang_check();
+// The GPU's time for the focus view's replays and the eye passes (g.gpuTimes; [experiment] scs_gpu_times, on by default
+// in dev builds): timestamps around each replay and from the eye pass's start to the frame's end, read back a few frames
+// later without waiting; a line with each perf line, and one at once for a frame with a replay over 5 ms or passes over
+// 40 ms (a pass that runs away before a GPU hang names itself). All on the render thread.
+void gpu_pass_begin();  // the eye pass's first G-buffer bind
+void gpu_replay_begin(UINT psFirst, UINT psCount, uint64_t psId);  // the pass's range and pixel shader (its id)
+void gpu_replay_end();
+void gpu_times_frame_end();  // take_frame_end
+void gpu_times_line();       // with perf_line
+void gpu_times_reset();      // release_all (the queries are the device's)
+// g.diagDumpLarge: the pixel range bound for a large replay (n: the frame's replay number), read back at once (a stall,
+// a few times a session) and written to logs\scs-large-<k>.bin, with the places the focus view's rules would match in
+// it logged. At most 4, 300 frames apart.
+void dump_large_range(unsigned n, uint64_t psId = 0);
+// Aftermath markers (probe/aftermath.h, [experiment] aftermath=1 in dev builds with the SDK): what the GPU reached last
+// when it hangs. A marker's number: its kind (top 4 bits), the frame (28 bits), and the kind's own value.
+enum MarkKind : uint64_t { kMarkDraw = 1, kMarkReplay = 2, kMarkReplayDone = 3, kMarkRelease = 4, kMarkReleaseDone = 5, kMarkFrameEnd = 6 };
+void mark(MarkKind kind, uint32_t value);
+// The scene draws marked: the first and every kMarkEveryDraws-th after (a marker before draw n: the GPU got to n or past).
+constexpr uint32_t kMarkEveryDraws = 64;
+void marker_name(uint64_t code, char* out, unsigned size);
 void poll_diag_keys();
 void poll_diag_hotkeys();
 

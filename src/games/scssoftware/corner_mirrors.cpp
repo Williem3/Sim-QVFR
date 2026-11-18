@@ -3,6 +3,7 @@
 #include "corner_internal.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "../lmu/mvr_probe.h"
@@ -52,10 +53,11 @@ bool big_scratch(UINT bytes) {
 
 // Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back (b0 with its range).
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups) {
+            UINT groups, const void* rows) {
     d3s::Spec spec;
     spec.parts = d3s::kCS;
-    spec.csSrv = spec.csUavs = spec.csCb = {0, 1};
+    spec.csSrv = spec.csUavs = {0, 1};
+    spec.csCb = {0, rows ? 2u : 1u};
     spec.instances = false;
     const simqvfr::D3D11StateGuard keep(g.context.Get(), spec);
     g.context->UpdateSubresource(g.params.Get(), 0, nullptr, params, 0, 0);
@@ -66,6 +68,11 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetShaderResources(0, 1, ins);
     g.context->CSSetUnorderedAccessViews(0, 1, outs, nullptr);
     g.context->CSSetConstantBuffers(0, 1, ps);
+    if (rows) {  // b1: the shader's rows read by a fixed index (kCornerPatchCs)
+        g.context->UpdateSubresource(g.rowsCb.Get(), 0, nullptr, rows, 0, 0);
+        ID3D11Buffer* const rb[] = {g.rowsCb.Get()};
+        g.context->CSSetConstantBuffers(1, 1, rb);
+    }
     g.context->Dispatch(groups, 1, 1);
 }
 
@@ -149,9 +156,13 @@ Mirror* learn(ID3D11Buffer* b) {
 // makes new buffers at level loads, and each mirror holds the game's old one alive with our copy (256 KB and more
 // each). At the frame's end, outside the corner (our copies swapped back out); one still bound anyway is kept, so
 // game_of can still map it back.
-void evict_mirrors() {
+// `orphans`: only those whose game buffer the game has let go (ours the last reference), whenever they were used: every
+// frame (release_orphans), so the slots come back as soon as the game remakes its buffers, not 900 frames later.
+void evict_mirrors(bool orphans) {
     if (g.active || g.mirrors.empty())
         return;
+    if (orphans && std::none_of(g.mirrors.begin(), g.mirrors.end(), [](const Mirror& m) { return only_ours(m.game.Get()); }))
+        return;  // the usual frame: nothing to look up in the context
     constexpr UINT n = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
     ID3D11Buffer* bound[2][n] = {};
     g.context->VSGetConstantBuffers(0, n, bound[0]);
@@ -166,7 +177,7 @@ void evict_mirrors() {
     const uint64_t now = g.stats.frames;
     size_t gone = 0;
     for (auto it = g.mirrors.begin(); it != g.mirrors.end();)
-        if (now - it->usedFrame > kEvictFrames && !held(*it)) {
+        if ((orphans ? only_ours(it->game.Get()) : now - it->usedFrame > kEvictFrames) && !held(*it)) {
             if (it->id >= 0)  // first: other threads stop matching it (before the game's buffer, and its address, go)
                 g.mirrorIds[it->id].store(nullptr, std::memory_order_release);
             it = g.mirrors.erase(it);
@@ -181,10 +192,15 @@ void evict_mirrors() {
     if (gone) {
         g.mirrorsEvicted += gone;
         g.mirrorNoIdLogged = false;  // a buffer left unmirrored is logged again if it still finds no slot
-        simqvfr::logf("scs corner: %zu mirrors unused for %llu frames let go (%zu left; %llu let go, %llu binds left "
-                      "unmirrored for want of a slot so far)",
-                      gone, static_cast<unsigned long long>(kEvictFrames), g.mirrors.size(),
-                      static_cast<unsigned long long>(g.mirrorsEvicted), static_cast<unsigned long long>(g.mirrorNoId));
+        char why[64];
+        if (orphans)
+            snprintf(why, sizeof(why), "whose game buffers are gone");
+        else
+            snprintf(why, sizeof(why), "unused for %llu frames", static_cast<unsigned long long>(kEvictFrames));
+        simqvfr::logf("scs corner: %zu mirrors %s let go (%zu left; %llu let go, %llu binds left unmirrored for want of a "
+                      "slot so far)",
+                      gone, why, g.mirrors.size(), static_cast<unsigned long long>(g.mirrorsEvicted),
+                      static_cast<unsigned long long>(g.mirrorNoId));
     }
 }
 
@@ -272,7 +288,7 @@ bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buf
 
 // The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy) and bound in its place for this draw
 // (put_back undoes it). False: left as the game bound it.
-bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
+bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
     if (pixel)
@@ -283,6 +299,7 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
     r.first = first;
     r.count = count;
     r.ours = false;
+    r.position = nullptr;
     if (!buf)
         return false;
     D3D11_BUFFER_DESC d;
@@ -300,12 +317,19 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
     count = std::min(count, kMaxVectors);
     if (!count)
         return false;
+    if (g.rewriteSets.empty()) {
+        r = Range{};
+        return false;
+    }
+    const State::RewriteSet& set = g.rewriteSets[g.nextRewriteSet++ % g.rewriteSets.size()];  // a set no draw in flight reads
     const D3D11_BOX box = {first * 16, 0, 0, (first + count) * 16, 1, 1};
-    g.context->CopySubresourceRegion(g.rawIn.Get(), 0, 0, 0, 0, game_of(buf), 0, &box);  // the game's own data
+    g.context->CopySubresourceRegion(set.in.Get(), 0, 0, 0, 0, game_of(buf), 0, &box);  // the game's own data
     // The rules read only what the shader declares: a range is bound in blocks of 16 vectors, and past the shader's own
     // lie the pooled buffer's leftovers (S5 run 4: a leftover matrix pair there had the focus rule rewrite the depth of
     // field's weights: far terrain black for single frames).
     UINT declared = count;
+    uint64_t rows[64];
+    bool haveRows = false;  // the shader's rows read by a fixed index (lmu::kCb0StaticRowsGuid): the focus matrix rule's limit
     {
         ComPtr<ID3D11DeviceChild> shader;
         if (pixel) {
@@ -316,6 +340,10 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
             ID3D11VertexShader* s = nullptr;
             g.context->VSGetShader(&s, nullptr, nullptr);
             shader.Attach(s);
+        }
+        if (shader && pixel && focus) {
+            UINT rowsSize = sizeof(rows);
+            haveRows = SUCCEEDED(shader->GetPrivateData(lmu::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
         }
         UINT vectors = 0, size = sizeof(vectors);
         if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors))) {
@@ -335,16 +363,30 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
         float fx, fy;
         UINT count, flags;
         float box[4], remap[4];
-        float px, py, pad[2];
-    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
+        float px, py;
+        uint32_t rectRow, sizeRow;
+    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
-           focus ? focus_fy() : g.fy, {}};
+           focus ? focus_fy() : g.fy, ~0u, ~0u};
+    const bool positioned = position && !pixel && count <= kPositionAt;  // the eye's pass: its size row alone
+    if (positioned) {
+        p.flags |= 8u;
+        p.rectRow = position[0] >= 0 ? static_cast<uint32_t>(position[0]) : ~0u;
+        p.sizeRow = position[1] >= 0 ? static_cast<uint32_t>(position[1]) : ~0u;
+    }
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
-    run_cs(g.patchCs.Get(), g.rawInView.Get(), g.rawOutView.Get(), &p, 1);
+    run_cs(g.patchCs.Get(), set.inView.Get(), set.outView.Get(), &p, 1, haveRows ? rows : nullptr);
     const D3D11_BOX outBox = {0, 0, 0, count * 16, 1, 1};
-    g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, g.rawOut.Get(), 0, &outBox);
+    ID3D11Buffer* ours = set.cb.Get();
+    g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, set.out.Get(), 0, &outBox);
+    if (positioned) {  // the twin's two vectors, bound as their own 16-constant block
+        const D3D11_BOX at = {kPositionAt * 16, 0, 0, (kPositionAt + 16) * 16, 1, 1};
+        g.context->CopySubresourceRegion(ours, 0, kPositionAt * 16, 0, 0, set.out.Get(), 0, &at);
+        if (focus)
+            r.position = ours;
+    }
     const UINT zero = 0, n = ((count + 15) / 16) * 16;  // ranged binds: multiples of 16 constants
     if (pixel)
         g.context->PSSetConstantBuffers1(0, 1, &ours, &zero, &n);

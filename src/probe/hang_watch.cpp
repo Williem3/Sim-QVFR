@@ -19,6 +19,7 @@ constexpr DWORD kHelperWaitMs = 120000;
 
 std::atomic<bool> armed{false}, started{false}, framed{false};
 std::atomic<const char*> stage{nullptr};  // hang_watch_stage's
+std::atomic<void (*)()> onFire{nullptr};  // hang_watch_on_fire's
 std::atomic<unsigned> limit{0};          // seconds without a frame
 std::atomic<uint64_t> lastFrame{0};      // GetTickCount64 at xrCreateSession or the last xrEndFrame
 // Resolved at the first arm, before the watch thread starts: finding them takes the loader lock
@@ -109,6 +110,8 @@ DWORD WINAPI watch(void*) {
         dump(process);
         if (process)
             CloseHandle(process);
+        if (void (*fn)() = onFire.load())
+            fn();  // after the dump: if it waits on something stuck, the dump is already written
         return 0;  // once per process
     }
 }
@@ -164,5 +167,7 @@ void hang_watch_frame() {
 }
 
 void hang_watch_disarm() { armed = false; }
+
+void hang_watch_on_fire(void (*fn)()) { onFire = fn; }
 
 }  // namespace simqvfr
