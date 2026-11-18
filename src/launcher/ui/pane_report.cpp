@@ -235,8 +235,8 @@ Card help_card() {
             for (size_t i = 2; i < causes.size(); ++i)
                 labels.push_back(causes[i].shownTitle);
             const size_t more = causes.size() - 2;
-            b.more(more == 1 ? trf(L"{count} more cause", {{L"count", L"1"}})
-                             : trf(L"{count} more causes", {{L"count", std::to_wstring(more)}}),
+            b.more(trn(static_cast<long long>(more), L"{count} more cause", L"{count} more causes",
+                       {{L"count", std::to_wstring(more)}}),
                    labels, [causes](Body& m) {
                 for (size_t i = 2; i < causes.size(); ++i)
                     m.row(causes[i].shownTitle, causes[i].shownFix, L"");

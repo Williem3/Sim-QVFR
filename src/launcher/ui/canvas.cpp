@@ -10,6 +10,7 @@
 #include <dwrite_3.h>
 
 #include "font_resources.h"
+#include "../../lang.h"
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -396,9 +397,10 @@ ComPtr<IDWriteTextLayout> Canvas::layout(const std::wstring& s, const tokens::Ty
     if (!f)
         return out;
     std::wstring text = s;
-    // Windows' Unicode upper case: towupper in the C locale leaves ä, ç, ł... as they are ("GEWäHLTES SPIEL").
-    if (style.upper && !text.empty())
-        CharUpperBuffW(text.data(), static_cast<DWORD>(text.size()));
+    // The language's own capitals (lang::upper): towupper in the C locale left ä, ç, ł... ("GEWäHLTES SPIEL"), and
+    // Turkish needs İ for i.
+    if (style.upper)
+        text = lang::upper(std::move(text));
     if (FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), f, w, h, &out)))
         return nullptr;
     const DWRITE_TEXT_RANGE all{0, static_cast<UINT32>(text.size())};

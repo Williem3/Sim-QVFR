@@ -31,9 +31,11 @@
 namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
-// The launcher's text in the chosen language (lang.h): tr(L"English"), trf(L"… {name} …", {{L"name", value}}).
+// The launcher's text in the chosen language (lang.h): tr(L"English"), trf(L"… {name} …", {{L"name", value}}), and
+// a counted text trn(n, L"{count} game", L"{count} games", {{L"count", …}}) (each language's plural forms).
 using lang::tr;
 using lang::trf;
+using lang::trn;
 
 // The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
 // headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).

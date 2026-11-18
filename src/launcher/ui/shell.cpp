@@ -137,7 +137,9 @@ StatusNow status_now() {
     }
     const auto checks_text = [&](const Check& first) {
         return first.title +
-               (bad + warn > 1 ? L"  ·  " + trf(L"{count} more", {{L"count", std::to_wstring(bad + warn - 1)}}) : L"");
+               (bad + warn > 1 ? L"  ·  " + trn(static_cast<long long>(bad + warn - 1), L"{count} more",
+                                                  L"{count} more", {{L"count", std::to_wstring(bad + warn - 1)}})
+                               : L"");
     };
     if (app.status == Status::Starting)
         return {3, tr(L"Starting…"), trf(L"Starting {game}…", {{L"game", game_name()}})};
@@ -153,8 +155,8 @@ StatusNow status_now() {
         return launch_status();
     if (const Check* b = first_with(app.checks, CheckTone::Bad))
         return {2,
-                bad == 1 ? trf(L"{count} problem", {{L"count", std::to_wstring(bad)}})
-                         : trf(L"{count} problems", {{L"count", std::to_wstring(bad)}}),
+                trn(static_cast<long long>(bad), L"{count} problem", L"{count} problems",
+                    {{L"count", std::to_wstring(bad)}}),
                 checks_text(*b), kChecksBadge};
     if (eye_warning())
         return {1, tr(L"No eye tracker"), tr(L"Eye tracker not detected")};

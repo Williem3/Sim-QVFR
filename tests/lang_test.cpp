@@ -121,6 +121,54 @@ void choosing() {
     fs::remove_all(dir, ec);
 }
 
+void plurals() {
+    using lang::plural_category;
+    check(plural_category(L"en", 1) == lang::kOne && plural_category(L"en", 0) == lang::kOther &&
+              plural_category(L"de", 2) == lang::kOther,
+          "English and German: 1 and the rest");
+    check(plural_category(L"fr", 0) == lang::kOne && plural_category(L"pt-BR", 1) == lang::kOne &&
+              plural_category(L"fr", 2) == lang::kOther,
+          "French and Portuguese count 0 as one");
+    check(plural_category(L"pl", 1) == lang::kOne && plural_category(L"pl", 3) == lang::kFew &&
+              plural_category(L"pl", 5) == lang::kMany && plural_category(L"pl", 12) == lang::kMany &&
+              plural_category(L"pl", 22) == lang::kFew && plural_category(L"pl", 21) == lang::kMany,
+          "Polish: 1, 2-4 (not 12-14), the rest (21 is many)");
+    check(plural_category(L"ru", 21) == lang::kOne && plural_category(L"ru", 11) == lang::kMany &&
+              plural_category(L"ru", 24) == lang::kFew && plural_category(L"ru", 0) == lang::kMany,
+          "Russian: 21 is one, 11 many, 24 few");
+    check(plural_category(L"cs", 1) == lang::kOne && plural_category(L"cs", 4) == lang::kFew &&
+              plural_category(L"cs", 5) == lang::kOther && plural_category(L"cs", 22) == lang::kOther,
+          "Czech: 1, 2-4, the rest");
+    check(plural_category(L"tr", 1) == lang::kOne && plural_category(L"tr", 7) == lang::kOther, "Turkish: 1 and the rest");
+
+    lang::use(nullptr);
+    check(lang::trn(1, L"{count} problem", L"{count} problems", {{L"count", L"1"}}) == L"1 problem" &&
+              lang::trn(3, L"{count} problem", L"{count} problems", {{L"count", L"3"}}) == L"3 problems",
+          "English without a table: one or other");
+    auto t = std::make_unique<lang::Table>();
+    lang::parse("[strings]\n"
+                "en.one = {count} problem\nen.other = {count} problems\n"
+                "pl.one = {count} problem\npl.few = {count} problemy\npl.many = {count} problem\xC3\xB3w\n"
+                "en.one = {count} game\nen.other = {count} games\n"
+                "pl.one = {count} gra\npl.few = {secret} gry\n"  // few refused: a placeholder neither English form has
+                "en = Plain\npl = Zwyk\xC5\x82y\n",
+                *t);
+    t->code = L"pl";
+    check(t->plurals.size() == 2 && t->refused == 1 && t->text.size() == 1,
+          "plural forms read beside plain lines; a bad form refused");
+    lang::use(std::move(t));
+    const auto problems = [](long long n) {
+        return lang::trn(n, L"{count} problem", L"{count} problems", {{L"count", std::to_wstring(n)}});
+    };
+    check(problems(1) == L"1 problem" && problems(3) == L"3 problemy" && problems(5) == L"5 problemów" &&
+              problems(22) == L"22 problemy",
+          "Polish picks one, few and many");
+    check(lang::trn(3, L"{count} game", L"{count} games", {{L"count", L"3"}}) == L"3 games",
+          "a form the file doesn't give shows in English");
+    check(lang::trn(2, L"{count} file", L"{count} files", {{L"count", L"2"}}) == L"2 files", "an unknown counted text: English");
+    lang::use(nullptr);
+}
+
 // Every file the release ships reads clean: none refused, the template among them.
 void shipped() {
     int files = 0;
@@ -146,6 +194,7 @@ int SIM_QVFR_TEST_MAIN() {
     refusals();
     lookups();
     choosing();
+    plurals();
     shipped();
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;

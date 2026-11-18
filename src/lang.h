@@ -20,6 +20,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cwchar>
@@ -52,12 +53,49 @@ struct TextHash {
     size_t operator()(std::wstring_view s) const noexcept { return std::hash<std::wstring_view>{}(s); }
 };
 
+// A count's plural categories (CLDR's names): the forms a language may give a counted text (trn). English has One and
+// Other; Polish One, Few and Many; Czech One, Few and Other. A file writes them as `de.one = ...`, `pl.few = ...`.
+enum PluralForm { kOne, kFew, kMany, kOther, kPluralForms };
+inline constexpr const wchar_t* kPluralNames[kPluralForms] = {L"one", L"few", L"many", L"other"};
+
+// A counted text's forms in one language (empty: not given, English shows for that count).
+using PluralForms = std::array<std::wstring, kPluralForms>;
+
+// The key a counted text is stored under: its English forms, one and other, with a separator no text holds.
+inline std::wstring plural_key(std::wstring_view one, std::wstring_view other) {
+    std::wstring key(one);
+    key += L'\x1f';
+    key += other;
+    return key;
+}
+
 struct Table {
     std::wstring code;  // the file's name: de, pl, pt-BR
     std::wstring name;  // its own name for itself: Deutsch, Polski
     std::unordered_map<std::wstring, std::wstring, TextHash, std::equal_to<>> text;  // English -> translation
+    std::unordered_map<std::wstring, PluralForms, TextHash, std::equal_to<>> plurals;  // plural_key -> forms (trn)
     size_t refused = 0;  // translations refused (placeholders differ, too long, invalid UTF-8)
 };
+
+// The category `n` takes in language `code` (CLDR's rules for whole numbers): Polish and the East Slavic languages
+// tell 1, 2-4 (not 12-14) and the rest apart; Czech and Slovak 1, 2-4 and the rest; French and Portuguese count 0 as
+// one; every other language here 1 and the rest.
+inline PluralForm plural_category(std::wstring_view code, long long n) {
+    const unsigned long long v = n < 0 ? 0ull - static_cast<unsigned long long>(n) : static_cast<unsigned long long>(n);
+    const std::wstring_view base = code.substr(0, code.find(L'-'));
+    const auto is = [&base](const wchar_t* c) { return _wcsnicmp(base.data(), c, base.size()) == 0 && wcslen(c) == base.size(); };
+    const unsigned long long d = v % 10, h = v % 100;
+    const bool fewEnding = d >= 2 && d <= 4 && !(h >= 12 && h <= 14);
+    if (is(L"pl"))
+        return v == 1 ? kOne : fewEnding ? kFew : kMany;
+    if (is(L"ru") || is(L"uk") || is(L"be"))
+        return d == 1 && h != 11 ? kOne : fewEnding ? kFew : kMany;
+    if (is(L"cs") || is(L"sk"))
+        return v == 1 ? kOne : v >= 2 && v <= 4 ? kFew : kOther;
+    if (is(L"fr") || is(L"pt"))
+        return v <= 1 ? kOne : kOther;
+    return v == 1 ? kOne : kOther;
+}
 
 // One language file found (available): its code and own name.
 struct Info {
@@ -163,8 +201,10 @@ inline bool fits(std::wstring_view english, std::wstring_view translation) {
 
 // A language file's text (UTF-8, a BOM allowed) into `out`. Lines: [section], key = value, ; or # comments. In
 // [language]: code, name. In [strings]: `en = <English>`, then the next other key's value is its translation; an
-// empty translation is left out (English shows). False only when the file is no language file at all (too large, or
-// no [strings]); a bad line is skipped and counted in `refused`.
+// empty translation is left out (English shows). A counted text (trn): `en.one = ...` and `en.other = ...`, then its
+// forms as `<code>.one`, `.few`, `.many`, `.other`, each with the placeholders of one of the English forms. False
+// only when the file is no language file at all (too large, or no [strings]); a bad line is skipped and counted in
+// `refused`.
 inline bool parse(std::string_view utf8, Table& out) {
     out = {};
     if (utf8.size() > kMaxFileBytes)
@@ -175,6 +215,16 @@ inline bool parse(std::string_view utf8, Table& out) {
     enum class Section { None, Language, Strings, Other } section = Section::None;
     bool sawStrings = false, haveEnglish = false;
     std::wstring english, line, value;
+    // A counted text being read: its English forms (en.one, en.other), then its translated forms.
+    std::wstring pluralOne, pluralOther;
+    bool pluralOpen = false;  // en.other read: forms may follow
+    PluralForms forms;
+    const auto close_plural = [&] {
+        if (pluralOpen && std::any_of(forms.begin(), forms.end(), [](const std::wstring& f) { return !f.empty(); }))
+            out.plurals[plural_key(pluralOne, pluralOther)] = forms;
+        pluralOpen = false;
+        forms = {};
+    };
     size_t start = 0;
     while (start <= utf8.size()) {
         size_t end = utf8.find('\n', start);
@@ -201,6 +251,8 @@ inline bool parse(std::string_view utf8, Table& out) {
             section = is(L"language") ? Section::Language : is(L"strings") ? Section::Strings : Section::Other;
             sawStrings |= section == Section::Strings;
             haveEnglish = false;
+            close_plural();
+            pluralOne.clear();
             continue;
         }
         const size_t eq = l.find(L'=');
@@ -217,7 +269,38 @@ inline bool parse(std::string_view utf8, Table& out) {
         }
         if (section != Section::Strings)
             continue;
+        // A counted text: key `<language>.<form>`.
+        if (const size_t dot = key.find(L'.'); dot != std::wstring::npos) {
+            const std::wstring who = key.substr(0, dot), form = key.substr(dot + 1);
+            int f = -1;
+            for (int i = 0; i < kPluralForms; ++i)
+                if (_wcsicmp(form.c_str(), kPluralNames[i]) == 0)
+                    f = i;
+            if (_wcsicmp(who.c_str(), L"en") == 0) {
+                haveEnglish = false;
+                if (f == kOne) {
+                    close_plural();
+                    pluralOne = ok ? value : std::wstring();
+                } else if (f == kOther && !pluralOne.empty() && ok && !value.empty()) {
+                    pluralOther = value;
+                    pluralOpen = true;
+                } else {
+                    ++out.refused;
+                    pluralOne.clear();
+                }
+                continue;
+            }
+            if (!pluralOpen || f < 0)
+                continue;  // a form without its English, or not a form
+            if (!ok || (!value.empty() && !fits(pluralOne, value) && !fits(pluralOther, value))) {
+                ++out.refused;
+                continue;
+            }
+            forms[static_cast<size_t>(f)] = value;
+            continue;
+        }
         if (_wcsicmp(key.c_str(), L"en") == 0) {
+            close_plural();
             haveEnglish = ok && !value.empty();
             if (haveEnglish)
                 english = value;
@@ -235,6 +318,7 @@ inline bool parse(std::string_view utf8, Table& out) {
         if (!value.empty())
             out.text[english] = value;
     }
+    close_plural();
     return sawStrings;
 }
 
@@ -424,6 +508,40 @@ inline std::wstring fill(std::wstring_view text, std::initializer_list<std::pair
 // `english` (with {placeholders}) in the current language, the placeholders filled.
 inline std::wstring trf(const wchar_t* english, std::initializer_list<std::pair<const wchar_t*, std::wstring>> args) {
     return fill(tr(english), args);
+}
+
+// A counted text: English `one` (n is 1) or `other`, in the current language the form its rules pick for `n`
+// (plural_category), the placeholders filled. A form the file doesn't give shows in English.
+inline std::wstring trn(long long n, const wchar_t* one, const wchar_t* other,
+                        std::initializer_list<std::pair<const wchar_t*, std::wstring>> args) {
+    if (const Table* t = current()) {
+        const auto it = t->plurals.find(std::wstring_view(plural_key(one, other)));
+        if (it != t->plurals.end()) {
+            const std::wstring& form = it->second[static_cast<size_t>(plural_category(t->code, n))];
+            if (!form.empty())
+                return fill(form, args);
+        }
+    }
+    return fill(n == 1 || n == -1 ? one : other, args);
+}
+
+// `text` in capitals by the current language's rules (Turkish: i to İ, not I), Windows' Unicode upper case for English
+// or a language Windows doesn't know.
+inline std::wstring upper(std::wstring text) {
+    if (text.empty())
+        return text;
+    if (const Table* t = current()) {
+        const int n = LCMapStringEx(t->code.c_str(), LCMAP_UPPERCASE | LCMAP_LINGUISTIC_CASING, text.c_str(),
+                                    static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr, 0);
+        if (n > 0) {
+            std::wstring out(static_cast<size_t>(n), L'\0');
+            if (LCMapStringEx(t->code.c_str(), LCMAP_UPPERCASE | LCMAP_LINGUISTIC_CASING, text.c_str(),
+                              static_cast<int>(text.size()), out.data(), n, nullptr, nullptr, 0) == n)
+                return out;
+        }
+    }
+    CharUpperBuffW(text.data(), static_cast<DWORD>(text.size()));
+    return text;
 }
 
 // The folder lang\ files are in for a module in `moduleFolder`: beside it (the launcher, a development build's layer)
