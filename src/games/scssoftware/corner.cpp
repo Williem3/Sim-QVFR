@@ -386,7 +386,10 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
     if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
         const Timed t(State::kTimeFocusDraws);
-        focus_draw();
+        if (g.forceUiRedraw)  // the dev test: the redraw instead of the shader's twin
+            g.redrawFocus = true;
+        else
+            focus_draw();
     }
     ++(vs || ps ? g.stats.rewritten : g.stats.notRewritten);  // the rule itself is the GPU's (the first frames' log names the draws)
     if (g.loggedDraws < 60) {
@@ -847,6 +850,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     g.lifecyclePending.store(true, std::memory_order_release);
     return true;
 }
+
+void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
                      bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {

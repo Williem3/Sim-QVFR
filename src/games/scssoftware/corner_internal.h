@@ -90,6 +90,7 @@ struct State {
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
     uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
+    bool forceUiRedraw = false;  // [experiment] scs_force_ui_redraw=1 (dev builds): redraw_focus for every UI draw
     bool redrawFocus = false;  // this draw (onto the headset's image, no twin) is drawn again for the focus view after it
     uint64_t redraws = 0, redrawsOutOfBounds = 0;
     ComPtr<ID3D11Buffer> rowsCb;  // run_cs's b1 (512 bytes): the rewritten shader's rows read by a fixed index
