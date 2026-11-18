@@ -97,8 +97,10 @@ inline constexpr char kCornerPatchCs[] = R"(
 // `px`: the region's share of the texture size the game names (f itself, except for a focus replay: its inputs are twins,
 // smaller than the game's textures, so the region's share of a twin (f) isn't its share of the game's size (px)).
 cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; float2 pad; };
-// flags & 4: the rows the shader reads by a fixed index (bit r & 31 of rows[r >> 7][(r >> 5) & 3]). A matrix is only
-// remapped where the shader reads its rows so: ATS's occluder pass (2026-11-17) keeps its occluder count in cb0[32].x and
+// flags & 4: the rows the shader reads by a fixed index (bit r & 31 of rows[r >> 7][(r >> 5) & 3]). Every focus rule writes
+// only such rows (a whole matrix, a pair, its ray, the AO's two): run 16's Aftermath markers (2026-11-17) put the hang in
+// the occluder pass's replay even with only the written rows checked: a leftover matrix at rows 31-34 remapped row 32.
+// Before: ATS's occluder pass (2026-11-17) keeps its occluder count in cb0[32].x and
 // its occluders in an array behind it (read cb0[i + 33]); leftovers of other draws' matrices there matched the rule,
 // its x and y rows were remapped over the count, and the occluder loop ran ~a billion times: the GPU hang.
 cbuffer Rows : register(b1) { uint4 rows[32]; };
@@ -113,18 +115,18 @@ bool pairAt(uint p) {
     if (p + 1 >= count)
         return false;
     float4 a = at(p), b = at(p + 1);
-    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b))
+    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b) || !fixedRow(p) || !fixedRow(p + 1))
         return false;
     dst.Store4(p * 16, asuint(float4(f, 1 / f)));
     dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
-    if ((flags & 3) == 2 && p + 3 < count) {  // the focus view's ray
+    if ((flags & 3) == 2 && p + 3 < count && fixedRow(p + 3)) {  // the focus view's ray
         float4 ray = at(p + 3);
         dst.Store4((p + 3) * 16, asuint(float4(ray.xy + box.xy * ray.zw, box.zw * ray.zw)));
     }
     return true;
 }
 void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
-    if (!fixedRow(j) || !fixedRow(j + 1))
+    if (!fixedRow(j) || !fixedRow(j + 1) || !fixedRow(j + 2) || !fixedRow(j + 3))  // the whole matrix (run 16: rows 31-34 over the count at 32)
         return;  // not rows the shader reads as a matrix (an array's, or leftovers)
     float4 x = at(j), y = at(j + 1), w = at(j + 3);
     dst.Store4(j * 16, asuint(remap.x * x + remap.y * w));
@@ -148,7 +150,8 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
         // a step do the growing: the half-size scale (0.5,0.5: the radius in pixels) and normalized_to_texture.xy (the
         // step in texture coordinates; its only use in this shader). S4 run 2 scaled the config instead: the occlusion
         // then reached 1 / box.z as far in the world (S6: a wide dark band under the cab's visor, the box darker).
-        if ((flags & 2) && count >= 5 && all(at(0).xy == float2(0.5, 0.5)) && eq(at(3), float4(1, 1, 1, 1)) && isSize(at(4))) {
+        if ((flags & 2) && count >= 5 && all(at(0).xy == float2(0.5, 0.5)) && eq(at(3), float4(1, 1, 1, 1)) && isSize(at(4)) &&
+            fixedRow(0) && fixedRow(3)) {
             float4 h = at(0);
             dst.Store4(0, asuint(float4(h.xy / box.z, h.zw)));
             dst.Store4(48, asuint(float4(f / box.z, 1 / f)));
