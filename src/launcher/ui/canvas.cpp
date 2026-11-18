@@ -396,9 +396,9 @@ ComPtr<IDWriteTextLayout> Canvas::layout(const std::wstring& s, const tokens::Ty
     if (!f)
         return out;
     std::wstring text = s;
-    if (style.upper)
-        for (wchar_t& ch : text)
-            ch = static_cast<wchar_t>(std::towupper(ch));
+    // Windows' Unicode upper case: towupper in the C locale leaves ä, ç, ł... as they are ("GEWäHLTES SPIEL").
+    if (style.upper && !text.empty())
+        CharUpperBuffW(text.data(), static_cast<DWORD>(text.size()));
     if (FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), f, w, h, &out)))
         return nullptr;
     const DWRITE_TEXT_RANGE all{0, static_cast<UINT32>(text.size())};

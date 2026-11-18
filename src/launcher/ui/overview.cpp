@@ -27,6 +27,8 @@ namespace {
 // The game's name on its yellow header, and the profile's segments (four in the panel's width).
 constexpr t::TypeStyle kGameTitle = {30.0f, 32.0f, 900, false, t::Family::Jost, true, 0.0f};
 constexpr t::TypeStyle kSegment = {12.0f, 16.0f, 600, false, t::Family::Inter, false, 0.0f};
+// The segments' names a size down, for a language whose names don't fit at kSegment (before any is cut).
+constexpr t::TypeStyle kSegmentSmall = {10.5f, 14.0f, 600, false, t::Family::Inter, false, 0.0f};
 
 constexpr float kPanelW = 320, kPad = 20, kGap = 16, kTileMinW = 200, kTilePad = 16, kChartH = 96;
 constexpr int kChartBars = 5;
@@ -84,13 +86,23 @@ void profile_segments(const Rect& r) {
     std::vector<std::wstring> items;
     const int selected = choice_items(kOverviewProfile, items);
     cv.fill(r, col(app.c->segment_track), t::kRadiusControl);
-    std::vector<float> widths;
-    float natural = 0;
-    for (const std::wstring& item : items) {
-        widths.push_back(std::ceil(cv.measure(item, kSegment)));
-        natural += widths.back();
-    }
     const float room = r.w - 4 - 2 * (items.size() - 1);
+    const auto measure_all = [&](const t::TypeStyle& style, std::vector<float>& widths) {
+        float total = 0;
+        widths.clear();
+        for (const std::wstring& item : items) {
+            widths.push_back(std::ceil(cv.measure(item, style)) + 12);  // 6 each side
+            total += widths.back();
+        }
+        return total;
+    };
+    std::vector<float> widths;
+    float natural = measure_all(kSegment, widths);
+    t::TypeStyle style = kSegment;
+    if (natural > room) {
+        style = kSegmentSmall;
+        natural = measure_all(style, widths);
+    }
     const float extra = std::max(0.0f, (room - natural) / items.size());
     float x = r.x + 2;
     for (size_t i = 0; i < items.size(); ++i) {
@@ -101,8 +113,8 @@ void profile_segments(const Rect& r) {
             cv.fill(item, col(app.c->segment_selected), t::kRadiusControl - 2);
         else if (pointer_in(item))
             cv.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
-        const std::wstring shown = fit(items[i], kSegment, item.w - 8);
-        cv.text(shown, kSegment, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
+        const std::wstring shown = fit(items[i], style, item.w - 8);
+        cv.text(shown, style, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
         if (on && focused(kOverviewProfile))
             focus_ring(item, t::kRadiusControl - 2);
         app.hits.push_back({kOverviewProfile, item, static_cast<int>(i),
@@ -198,10 +210,12 @@ float game_panel(float x, float y, float w, bool draw) {
     if (draw)
         profile_segments({x + kPad, by, inner, 34});
     by += 34 + 4;
-    if (draw)  // the presets' trade-off, in words
-        cv.text(tr(L"Performance: more frames  ·  Quality: sharper"), t::kSubheadline, {x + kPad, by, inner, 16},
-                col(app.c->label_muted));
-    by += 16 + 10;
+    // The presets' trade-off, in words (on two lines where a language needs them).
+    const std::wstring tradeOff = tr(L"Performance: more frames  ·  Quality: sharper");
+    const float th = std::max(16.0f, cv.measure_height(tradeOff, t::kSubheadline, inner));
+    if (draw)
+        cv.text(tradeOff, t::kSubheadline, {x + kPad, by, inner, th + 2}, col(app.c->label_muted), Align::Leading, false, true);
+    by += th + 10;
     const std::wstring summary = picture_summary(), saved = saved_profile_line();
     const float sh = cv.measure_height(summary, t::kCallout, inner);
     if (draw) {
