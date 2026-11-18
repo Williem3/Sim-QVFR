@@ -366,6 +366,7 @@ void load_experiment() {
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
+    game->qvfr_set_look(settings.feather, settings.cornerRadius, settings.border, settings.borderColor);
     experiment.gaze = settings.gaze;
     experiment.gazeThread = GetPrivateProfileIntW(L"quad", L"gaze_thread", 1, ini.c_str()) != 0;
     experiment.views4Converge = GetPrivateProfileIntW(L"experiment", L"views4_converge", 1, ini.c_str()) != 0;
