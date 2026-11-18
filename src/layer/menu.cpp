@@ -610,6 +610,12 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
         log_line("settings menu: hidden");
     }
     bool showMenu = menu.visible && menu_resources(session);
+    // A new language (the ini worker's follow_language, e.g. chosen in the launcher while the menu is open): redrawn in it.
+    static uint32_t languageDrawn = lang::generation();
+    if (const uint32_t g = lang::generation(); g != languageDrawn) {
+        languageDrawn = g;
+        menu.dirty = true;
+    }
     if (showMenu && menu.dirty)
         menu_render();
     showMenu = showMenu && menu.uploaded;

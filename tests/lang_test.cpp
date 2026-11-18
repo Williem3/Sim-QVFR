@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <cstdint>
 #include <string>
 
 #include "lang.h"
@@ -84,7 +85,9 @@ void lookups() {
     auto t = std::make_unique<lang::Table>();
     t->text[L"Check now"] = L"Jetzt prüfen";
     t->text[L"Launch {game}"] = L"{game} starten";
+    const uint32_t before = lang::generation();
     const lang::Table* first = lang::use(std::move(t));
+    check(lang::generation() == before + 1, "a change of language moves generation() (the menu redraws)");
     const wchar_t* german = lang::tr(L"Check now");
     check(std::wstring(german) == L"Jetzt prüfen", "tr finds the translation");
     check(std::wstring(lang::tr(L"Unknown")) == L"Unknown", "a missing line shows in English");

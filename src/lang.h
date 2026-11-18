@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
@@ -329,6 +330,7 @@ struct State {
     std::mutex mutex;
     std::vector<std::unique_ptr<Table>> loaded;  // never freed: tr's pointers outlive a change of language
     std::atomic<const Table*> current{nullptr};
+    std::atomic<uint32_t> generation{0};  // counts changes of language (generation())
 };
 
 inline State& state() {
@@ -343,12 +345,14 @@ inline const Table* use(std::unique_ptr<Table> table) {
     detail::State& s = detail::state();
     if (!table) {
         s.current.store(nullptr, std::memory_order_release);
+        s.generation.fetch_add(1, std::memory_order_release);
         return nullptr;
     }
     std::lock_guard lock(s.mutex);
     s.loaded.push_back(std::move(table));
     const Table* t = s.loaded.back().get();
     s.current.store(t, std::memory_order_release);
+    s.generation.fetch_add(1, std::memory_order_release);
     return t;
 }
 
@@ -367,6 +371,9 @@ inline std::wstring select(const std::filesystem::path& folder, const std::wstri
     use(std::move(t));
     return code;
 }
+
+// How many times the language has changed: a drawing kept as an image (the headset menu's panel) redraws when it moves.
+inline uint32_t generation() { return detail::state().generation.load(std::memory_order_acquire); }
 
 // The current table (nullptr: English).
 inline const Table* current() { return detail::state().current.load(std::memory_order_acquire); }
