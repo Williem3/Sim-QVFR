@@ -417,7 +417,20 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
         const unsigned n = ++g.frameReplay;
         const bool large = psCount > kLargeRange;
-        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge);
+        uint64_t psId = 0;  // the pass's pixel shader (lmu::kPixelIdGuid: the shader dump's file name)
+        {
+            ID3D11PixelShader* ps = nullptr;
+            g.context->PSGetShader(&ps, nullptr, nullptr);
+            if (ps) {
+                UINT size = sizeof(psId);
+                if (FAILED(ps->GetPrivateData(lmu::kPixelIdGuid, &size, &psId)))
+                    psId = 0;
+                ps->Release();
+            }
+        }
+        const bool skipPs = psId && std::find(g.replaySkipPs.begin(), g.replaySkipPs.end(), psId) != g.replaySkipPs.end();
+        g.skippedByPs += skipPs ? 1 : 0;
+        const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge) || skipPs;
         if (large) {
             if (g.diagDumpLarge)
                 dump_large_range(n);
@@ -431,13 +444,13 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
             }
         }
         if (g.stats.frames == g.replayLogFrame)
-            simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u%s", n,
-                          g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", vsFirst, vsCount, psFirst,
-                          psCount, skip ? ": SKIPPED (scs_focus_replays / scs_replay_skip)" : "");
+            simqvfr::logf("scs focus: replay %u of the frame: into %ux%u%s, vertex range %u+%u, pixel range %u+%u, pixel shader "
+                          "PS_%016llx%s", n, g.boundW, g.boundH, g.boundSwapchain ? " (the headset's image)" : "", vsFirst, vsCount,
+                          psFirst, psCount, static_cast<unsigned long long>(psId), skip ? ": SKIPPED" : "");
         if (!skip) {
             const Timed t(State::kTimeReplays);
             if (g.gpuTimes)
-                gpu_replay_begin(psFirst, psCount);
+                gpu_replay_begin(psFirst, psCount, psId);
             mark(kMarkReplay, n << 16 | std::min<UINT>(psCount, 0xFFFF));
             replay(count, start);  // into the headset's image too: its final blit
             mark(kMarkReplayDone, n << 16);
@@ -818,7 +831,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
-                     bool rewriteRing) {
+                     bool rewriteRing, const std::vector<uint64_t>& skipPs) {
+    g.replaySkipPs = skipPs;
     g.gpuTimes = gpuTimes;
     g.diagSkipLarge = skipLarge;
     g.rewriteRing = rewriteRing;

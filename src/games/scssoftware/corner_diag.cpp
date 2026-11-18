@@ -44,6 +44,9 @@ void perf_line() {
         g.ticks[b] = 0, g.timed[b] = 0;
     if (g.gpuTimes)
         gpu_times_line();
+    if (!g.replaySkipPs.empty())
+        simqvfr::logf("scs focus: replays skipped by their pixel shader (scs_replay_skip_ps) so far: %llu",
+                      static_cast<unsigned long long>(g.skippedByPs));
     if (g.largeReplays)
         simqvfr::logf("scs focus: large replays (pixel range over %u vectors) so far: %llu, skipped %llu", kLargeRange,
                       static_cast<unsigned long long>(g.largeReplays), static_cast<unsigned long long>(g.largeSkipped));
@@ -134,6 +137,7 @@ struct ReplayInfo {
     unsigned w = 0, h = 0;      // the target
     UINT psFirst = 0, psCount = 0;  // the pixel shader's constant range (tells the passes apart)
     bool swapchain = false;     // the headset's image (the final blit)
+    uint64_t psId = 0;          // the pixel shader (the shader dump's PS_<id>)
 };
 struct GpuSlot {
     ComPtr<ID3D11Query> disjoint, passStart, frameEnd, begin[kGpuReplays], end[kGpuReplays];
@@ -258,7 +262,7 @@ namespace {
 bool gpuInReplay = false;  // gpu_replay_begin issued its timestamp
 }
 
-void gpu_replay_begin(UINT psFirst, UINT psCount) {
+void gpu_replay_begin(UINT psFirst, UINT psCount, uint64_t psId) {
     gpuInReplay = false;
     GpuSlot* s = open_slot();
     if (!s || s->replays >= kGpuReplays)
@@ -268,7 +272,7 @@ void gpu_replay_begin(UINT psFirst, UINT psCount) {
     if (!q || !query(s->end[i], D3D11_QUERY_TIMESTAMP))
         return;
     g.context->End(q);
-    s->info[i] = {g.frameReplay, g.boundW, g.boundH, psFirst, psCount, g.boundSwapchain};
+    s->info[i] = {g.frameReplay, g.boundW, g.boundH, psFirst, psCount, g.boundSwapchain, psId};
     gpuInReplay = true;
 }
 
@@ -318,10 +322,10 @@ void gpu_times_line() {
         total += gw.sum[i] / gw.frames;
         if (gw.max[i] < 0.05)
             continue;
-        char one[128];
-        snprintf(one, sizeof(one), "%s#%u %ux%u%s p%u+%u %.2f/%.2f", list.empty() ? "" : ", ", i + 1, gw.info[i].w,
+        char one[160];
+        snprintf(one, sizeof(one), "%s#%u %ux%u%s p%u+%u PS_%016llx %.2f/%.2f", list.empty() ? "" : ", ", i + 1, gw.info[i].w,
                  gw.info[i].h, gw.info[i].swapchain ? "(hmd)" : "", gw.info[i].psFirst, gw.info[i].psCount,
-                 gw.sum[i] / gw.count[i], gw.max[i]);
+                 static_cast<unsigned long long>(gw.info[i].psId), gw.sum[i] / gw.count[i], gw.max[i]);
         list += one;
     }
     simqvfr::logf("scs gpu: %u frames read back (%u late, %u disjoint): the eye passes and ours %.2f ms a frame (slowest "

@@ -70,6 +70,8 @@ inline constexpr GUID kMvrSlotBiasTwinGuid = {0x2a96f0c3, 0x84d7, 0x4b21, {0xae,
 // An input layout with per-instance data: its twin with every per-instance step rate doubled (an ID3D11InputLayout).
 // A game shader's (vertex or pixel) declared size of the constant buffer in slot 0, in vectors (a UINT).
 inline constexpr GUID kCb0VectorsGuid = {0x64b0e3a9, 0x2f17, 0x4c58, {0xb4, 0x0a, 0x91, 0x7e, 0x3d, 0x52, 0xc6, 0x1f}};
+// A pixel shader's id (a uint64): its DXBC checksum's first two words, as the shader dump names its file (PS_<id>.dxbc).
+inline constexpr GUID kPixelIdGuid = {0x3c8d1f52, 0x6a94, 0x4e07, {0x9b, 0x21, 0x5d, 0xe3, 0x70, 0x8a, 0x44, 0xc6}};
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
 // Every input layout the probe sees made, twinned or not: its kind (a UINT). Unmarked: not seen (made before the
 // probe hooked the device), not known.

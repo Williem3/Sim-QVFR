@@ -277,6 +277,8 @@ struct State {
     // numbers move from frame to frame); counted either way, the first few logged.
     bool diagSkipLarge = false;
     bool diagDumpLarge = false;  // [experiment] scs_dump_large=1: dump_large_range
+    std::vector<uint64_t> replaySkipPs;  // [experiment] scs_replay_skip_ps: the replays of these pixel shaders skipped
+    uint64_t skippedByPs = 0;
     uint64_t largeReplays = 0, largeSkipped = 0;
     uint32_t frameDraw = 0;  // this frame's draws in its eye passes (the markers' numbers)
     unsigned largeLogged = 0;
@@ -455,7 +457,7 @@ void hang_check();
 // later without waiting; a line with each perf line, and one at once for a frame with a replay over 5 ms or passes over
 // 40 ms (a pass that runs away before a GPU hang names itself). All on the render thread.
 void gpu_pass_begin();  // the eye pass's first G-buffer bind
-void gpu_replay_begin(UINT psFirst, UINT psCount);  // the pixel shader's rewritten range (tells the passes apart)
+void gpu_replay_begin(UINT psFirst, UINT psCount, uint64_t psId);  // the pass's range and pixel shader (its id)
 void gpu_replay_end();
 void gpu_times_frame_end();  // take_frame_end
 void gpu_times_line();       // with perf_line

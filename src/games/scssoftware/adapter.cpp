@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cwctype>
+#include <vector>
 
 #include "../../dev_build.h"
 #include "../../log.h"
@@ -193,7 +195,23 @@ private:
         const bool skipLarge = GetPrivateProfileIntW(L"experiment", L"scs_replay_skip_large", 0, ini) != 0;
         const bool dumpLarge = GetPrivateProfileIntW(L"experiment", L"scs_dump_large", 0, ini) != 0;
         const bool ring = GetPrivateProfileIntW(L"experiment", L"scs_rewrite_ring", 1, ini) != 0;
-        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring);
+        // scs_replay_skip_ps=<pixel shader ids, hex, comma-separated: the shader dump's PS_<id> names>
+        wchar_t psList[512] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_replay_skip_ps", L"", psList, 512, ini);
+        std::vector<uint64_t> skipPs;
+        for (const wchar_t* p = psList; *p;) {
+            if (!iswxdigit(*p)) {
+                ++p;
+                continue;
+            }
+            wchar_t* end = nullptr;
+            skipPs.push_back(_wcstoui64(p, &end, 16));
+            p = end;
+        }
+        if (!skipPs.empty())
+            simqvfr::logf("scs focus: bisection: the replays of %zu pixel shaders are SKIPPED (scs_replay_skip_ps=%ls)",
+                          skipPs.size(), psList);
+        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring, skipPs);
         if (skipLarge)
             simqvfr::log_line("scs focus: bisection: the replays with a pixel range over 128 vectors are SKIPPED (scs_replay_skip_large=1)");
         if (gpuTimes)
