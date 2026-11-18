@@ -526,7 +526,9 @@ bool make_resources() {
         }
     simqvfr::logf("scs corner: %zu rewrite buffer sets (%s)", g.rewriteSets.size(),
                   g.rewriteRing ? "a fresh one for every rewrite" : "one, reused: scs_rewrite_ring=0");
+    const D3D11_BUFFER_DESC rowsDesc = {512, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     return SUCCEEDED(g.device->CreateBuffer(&params, nullptr, &g.params)) &&
+           SUCCEEDED(g.device->CreateBuffer(&rowsDesc, nullptr, &g.rowsCb)) &&
            SUCCEEDED(g.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &g.patchCs));
 }
 
@@ -616,6 +618,7 @@ void release_all() {
     g.vsFocus = Range{};
     g.psFocus = Range{};
     g.params.Reset();
+    g.rowsCb.Reset();
     g.rewriteSets.clear();
     g.nextRewriteSet = 0;
     g.patchCs.Reset();

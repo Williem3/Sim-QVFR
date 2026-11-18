@@ -3,6 +3,7 @@
 #include "engine/dxbc_patch.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 #include <map>
 
@@ -134,6 +135,8 @@ struct Operand {
     uint32_t type = 0, dims = 0;
     bool index0Immediate = false;
     uint32_t index0 = 0;
+    uint32_t index1Representation = 0;  // 0 immediate, 2 relative, 3 immediate plus relative
+    uint32_t index1 = 0;                // its immediate part (representations 0 and 3)
 };
 
 // One operand at t (n tokens left): its length in tokens, 0 when it can't be read.
@@ -156,12 +159,16 @@ size_t read_operand(const uint32_t* t, size_t n, Operand& o) {
         at += comps == 1 ? 2 : comps == 2 ? 8 : 0;
     for (uint32_t d = 0; d < o.dims; ++d) {
         const uint32_t representation = (token >> (22 + 3 * d)) & 7;
+        if (d == 1)
+            o.index1Representation = representation;
         if (representation == 0 || representation == 3) {
             if (at >= n)
                 return 0;
             if (d == 0) {
                 o.index0Immediate = representation == 0;
                 o.index0 = t[at];
+            } else if (d == 1) {
+                o.index1 = t[at];
             }
             ++at;
         } else if (representation == 1 || representation == 4) {
@@ -1141,6 +1148,46 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
     signature->data = write_signature(outputs);
     r.bytecode = write_chunks(chunks);
     return r;
+}
+
+bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]) {
+    std::fill(std::begin(rows), std::end(rows), 0ull);
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks))
+        return false;
+    for (const Chunk& c : chunks) {
+        if (c.fourcc != fourcc("SHDR") && c.fourcc != fourcc("SHEX"))
+            continue;
+        const size_t words = c.data.size() / 4;
+        if (words < 2)
+            return false;
+        std::vector<uint32_t> t(words);
+        std::memcpy(t.data(), c.data.data(), words * 4);
+        for (size_t i = 2; i < words;) {
+            const uint32_t n = length_of(&t[i], words - i);
+            if (!n || i + n > words)
+                return false;
+            const uint32_t op = opcode_of(t[i]);
+            if (!is_declaration(op)) {
+                const size_t first = operands_at(&t[i], n);
+                if (!first)
+                    return false;
+                for (size_t at = i + first; at < i + n;) {
+                    Operand o;
+                    const size_t len = read_operand(&t[at], i + n - at, o);
+                    if (!len)
+                        return false;
+                    if (o.type == kConstantBuffer && o.dims == 2 && o.index0Immediate && o.index0 == slot &&
+                        o.index1Representation == 0 && o.index1 < 4096)
+                        rows[o.index1 / 64] |= 1ull << (o.index1 % 64);
+                    at += len;
+                }
+            }
+            i += n;
+        }
+        return true;
+    }
+    return false;
 }
 
 uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot) {

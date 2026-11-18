@@ -97,6 +97,12 @@ inline constexpr char kCornerPatchCs[] = R"(
 // `px`: the region's share of the texture size the game names (f itself, except for a focus replay: its inputs are twins,
 // smaller than the game's textures, so the region's share of a twin (f) isn't its share of the game's size (px)).
 cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; float2 pad; };
+// flags & 4: the rows the shader reads by a fixed index (bit r & 31 of rows[r >> 7][(r >> 5) & 3]). A matrix is only
+// remapped where the shader reads its rows so: ATS's occluder pass (2026-11-17) keeps its occluder count in cb0[32].x and
+// its occluders in an array behind it (read cb0[i + 33]); leftovers of other draws' matrices there matched the rule,
+// its x and y rows were remapped over the count, and the occluder loop ran ~a billion times: the GPU hang.
+cbuffer Rows : register(b1) { uint4 rows[32]; };
+bool fixedRow(uint r) { return (flags & 4) == 0 || (r < 4096 && ((rows[r >> 7][(r >> 5) & 3] >> (r & 31)) & 1) != 0); }
 ByteAddressBuffer src : register(t0);
 RWByteAddressBuffer dst : register(u0);
 float4 at(uint i) { return asfloat(src.Load4(i * 16)); }
@@ -118,6 +124,8 @@ bool pairAt(uint p) {
     return true;
 }
 void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
+    if (!fixedRow(j) || !fixedRow(j + 1))
+        return;  // not rows the shader reads as a matrix (an array's, or leftovers)
     float4 x = at(j), y = at(j + 1), w = at(j + 3);
     dst.Store4(j * 16, asuint(remap.x * x + remap.y * w));
     dst.Store4((j + 1) * 16, asuint(remap.z * y + remap.w * w));

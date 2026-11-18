@@ -1057,6 +1057,20 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 1) == 0, "declared constants: no cb1");
         check(dxbc::constant_buffer_vectors(ps.data(), 12, 0) == 0, "declared constants: not a container");
     }
+    {  // the rows read by a fixed index: a matrix and a count yes, an array read by a loop's index no (ATS's occluders)
+        const std::vector<uint8_t> ps = compile(
+            "cbuffer C : register(b0) { float4x4 m; uint count; float3 pad; float4 boxes[15]; };"
+            "float4 main(float4 p : SV_Position) : SV_Target {"
+            "  float4 r = mul(float4(p.xyz, 1), m); float d = 999;"
+            "  for (uint i = 0; i < count && d > 0; ++i) d = min(d, dot(boxes[i].xyz, r.xyz) - boxes[i].w);"
+            "  return r * d; }",
+            "ps_5_0");
+        uint64_t rows[64];
+        const bool read = dxbc::constant_buffer_static_rows(ps.data(), ps.size(), 0, rows);
+        check(read && (rows[0] & 0x1f) == 0x1f, "fixed rows: the matrix's four rows and the count's");
+        check(read && (rows[0] & ~0x1full) == 0 && rows[1] == 0, "fixed rows: not the array read by the loop's index");
+        check(!dxbc::constant_buffer_static_rows(ps.data(), 12, 0, rows), "fixed rows: not a container");
+    }
     malformed_cases();
     Gpu g;
     if (FAILED(D3D11CreateDevice(nullptr, driverType, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &g.device,

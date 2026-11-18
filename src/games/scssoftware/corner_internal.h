@@ -88,6 +88,7 @@ struct State {
     UINT scissorCount = 0;
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
+    ComPtr<ID3D11Buffer> rowsCb;  // run_cs's b1 (512 bytes): the rewritten shader's rows read by a fixed index
     // A draw's rewritten range (rewrite): the game's copied in, the compute shader's output, the constant buffer bound for
     // the draw. A ring of sets, a fresh one for every rewrite: with one set, the next rewrite wrote the buffers while the
     // GPU could still be running the draw before it, and on the user's RTX 5070 Ti (2026-11-17) a long full-screen pass
@@ -393,8 +394,9 @@ D3D11_RECT focus_rect();
 Mirror* mirror_of_game(ID3D11Buffer* b);
 ID3D11Buffer* game_of(ID3D11Buffer* b);
 bool big_scratch(UINT bytes);
+// ows: b1, the rows the rewritten shader reads by a fixed index (512 bytes), for kCornerPatchCs's flag 4.
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups);
+            UINT groups, const void* rows = nullptr);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
 // The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last

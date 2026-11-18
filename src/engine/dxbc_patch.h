@@ -133,5 +133,8 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
 // How many vectors (16 bytes) of the constant buffer in `slot` the shader declares; 0: none, or not a shader. What lies
 // past that in a bound range is not the shader's (a pooled buffer's leftovers).
 uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot);
+// The rows of constant buffer slot the program reads by a fixed index (bit r % 64 of rows[r / 64], rows below 4096);
+// rows read only through a relative index (an array: cb0[r0.x + 33]) aren't set. False: the program couldn't be read.
+bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]);
 
 }  // namespace simqvfr::dxbc

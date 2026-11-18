@@ -53,10 +53,11 @@ bool big_scratch(UINT bytes) {
 
 // Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back (b0 with its range).
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups) {
+            UINT groups, const void* rows) {
     d3s::Spec spec;
     spec.parts = d3s::kCS;
-    spec.csSrv = spec.csUavs = spec.csCb = {0, 1};
+    spec.csSrv = spec.csUavs = {0, 1};
+    spec.csCb = {0, rows ? 2u : 1u};
     spec.instances = false;
     const simqvfr::D3D11StateGuard keep(g.context.Get(), spec);
     g.context->UpdateSubresource(g.params.Get(), 0, nullptr, params, 0, 0);
@@ -67,6 +68,11 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetShaderResources(0, 1, ins);
     g.context->CSSetUnorderedAccessViews(0, 1, outs, nullptr);
     g.context->CSSetConstantBuffers(0, 1, ps);
+    if (rows) {  // b1: the shader's rows read by a fixed index (kCornerPatchCs)
+        g.context->UpdateSubresource(g.rowsCb.Get(), 0, nullptr, rows, 0, 0);
+        ID3D11Buffer* const rb[] = {g.rowsCb.Get()};
+        g.context->CSSetConstantBuffers(1, 1, rb);
+    }
     g.context->Dispatch(groups, 1, 1);
 }
 
@@ -321,6 +327,8 @@ bool rewrite(Range& r, bool pixel, bool focus) {
     // lie the pooled buffer's leftovers (S5 run 4: a leftover matrix pair there had the focus rule rewrite the depth of
     // field's weights: far terrain black for single frames).
     UINT declared = count;
+    uint64_t rows[64];
+    bool haveRows = false;  // the shader's rows read by a fixed index (lmu::kCb0StaticRowsGuid): the focus matrix rule's limit
     {
         ComPtr<ID3D11DeviceChild> shader;
         if (pixel) {
@@ -331,6 +339,10 @@ bool rewrite(Range& r, bool pixel, bool focus) {
             ID3D11VertexShader* s = nullptr;
             g.context->VSGetShader(&s, nullptr, nullptr);
             shader.Attach(s);
+        }
+        if (shader && pixel && focus) {
+            UINT rowsSize = sizeof(rows);
+            haveRows = SUCCEEDED(shader->GetPrivateData(lmu::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
         }
         UINT vectors = 0, size = sizeof(vectors);
         if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors))) {
@@ -351,13 +363,13 @@ bool rewrite(Range& r, bool pixel, bool focus) {
         UINT count, flags;
         float box[4], remap[4];
         float px, py, pad[2];
-    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
+    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
            focus ? focus_fy() : g.fy, {}};
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
-    run_cs(g.patchCs.Get(), set.inView.Get(), set.outView.Get(), &p, 1);
+    run_cs(g.patchCs.Get(), set.inView.Get(), set.outView.Get(), &p, 1, haveRows ? rows : nullptr);
     const D3D11_BOX outBox = {0, 0, 0, count * 16, 1, 1};
     ID3D11Buffer* ours = set.cb.Get();
     g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, set.out.Get(), 0, &outBox);

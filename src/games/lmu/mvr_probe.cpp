@@ -432,6 +432,9 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         std::memcpy(id, static_cast<const uint8_t*>(code) + 4, sizeof(id));
         const uint64_t value = static_cast<uint64_t>(id[0]) << 32 | id[1];
         (*shader)->SetPrivateData(kPixelIdGuid, sizeof(value), &value);
+        uint64_t rows[64];  // the rows of cb0 it reads by a fixed index (the SCS focus rules write only those as matrices)
+        if (dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(code), size, 0, rows))
+            (*shader)->SetPrivateData(kCb0StaticRowsGuid, sizeof(rows), rows);
     }
     // Every pixel shader too (the SCS games' GPU hang: an Aftermath dump names the hung shader by its bytecode's hash).
     if (dump && code)
