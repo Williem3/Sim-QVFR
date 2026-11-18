@@ -115,10 +115,16 @@ bool pairAt(uint p) {
     if (p + 1 >= count)
         return false;
     float4 a = at(p), b = at(p + 1);
-    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b) || !fixedRow(p) || !fixedRow(p + 1))
+    // Each row of the pair written only where the shader reads it by a fixed index. scsfix1 (facb92e) wanted both: a
+    // shader reading only one of normalized_to_texture / viewport_size (most full-screen passes) then kept the eye's
+    // scale in its focus replay: the lit scene a small copy in the focus box's top-left (growing with the density), the
+    // rest dark but for emissive surfaces (2026-11-18 testers).
+    if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b) || (!fixedRow(p) && !fixedRow(p + 1)))
         return false;
-    dst.Store4(p * 16, asuint(float4(f, 1 / f)));
-    dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
+    if (fixedRow(p))
+        dst.Store4(p * 16, asuint(float4(f, 1 / f)));
+    if (fixedRow(p + 1))
+        dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
     if ((flags & 3) == 2 && p + 3 < count && fixedRow(p + 3)) {  // the focus view's ray
         float4 ray = at(p + 3);
         dst.Store4((p + 3) * 16, asuint(float4(ray.xy + box.xy * ray.zw, box.zw * ray.zw)));
@@ -126,7 +132,10 @@ bool pairAt(uint p) {
     return true;
 }
 void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
-    if (!fixedRow(j) || !fixedRow(j + 1) || !fixedRow(j + 2) || !fixedRow(j + 3))  // the whole matrix (run 16: rows 31-34 over the count at 32)
+    // The rows the rule reads or writes: x, y and w (run 16: a leftover at rows 31-34, its w at 34 the occluder array's,
+    // over the count at 32). The z row isn't needed: a shader projecting only to the screen never reads it, and scsfix1's
+    // check of it left such matrices (light culling, flares) at the eye's projection in the focus view.
+    if (!fixedRow(j) || !fixedRow(j + 1) || !fixedRow(j + 3))
         return;  // not rows the shader reads as a matrix (an array's, or leftovers)
     float4 x = at(j), y = at(j + 1), w = at(j + 3);
     dst.Store4(j * 16, asuint(remap.x * x + remap.y * w));
@@ -150,11 +159,12 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
         // a step do the growing: the half-size scale (0.5,0.5: the radius in pixels) and normalized_to_texture.xy (the
         // step in texture coordinates; its only use in this shader). S4 run 2 scaled the config instead: the occlusion
         // then reached 1 / box.z as far in the world (S6: a wide dark band under the cab's visor, the box darker).
-        if ((flags & 2) && count >= 5 && all(at(0).xy == float2(0.5, 0.5)) && eq(at(3), float4(1, 1, 1, 1)) && isSize(at(4)) &&
-            fixedRow(0) && fixedRow(3)) {
+        if ((flags & 2) && count >= 5 && all(at(0).xy == float2(0.5, 0.5)) && eq(at(3), float4(1, 1, 1, 1)) && isSize(at(4))) {
             float4 h = at(0);
-            dst.Store4(0, asuint(float4(h.xy / box.z, h.zw)));
-            dst.Store4(48, asuint(float4(f / box.z, 1 / f)));
+            if (fixedRow(0))
+                dst.Store4(0, asuint(float4(h.xy / box.z, h.zw)));
+            if (fixedRow(3))
+                dst.Store4(48, asuint(float4(f / box.z, 1 / f)));
         }
         if (flags & 2)
             for (uint n = 0; n + 4 <= count; ++n) {
