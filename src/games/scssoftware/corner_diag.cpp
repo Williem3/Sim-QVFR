@@ -514,6 +514,42 @@ void dump_large_range(unsigned n, uint64_t psId) {
         fwrite(data.data(), 1, bytes, f);
         fclose(f);
     }
+    if (psId) {  // the vertex shader's range too (what the focus replay's vertex rules start from), and the sizes they use
+        ID3D11Buffer* vb = nullptr;
+        UINT vFirst = 0, vCount = 0;
+        g.context->VSGetConstantBuffers1(0, 1, &vb, &vFirst, &vCount);
+        ComPtr<ID3D11Buffer> vbuf;
+        vbuf.Attach(vb);
+        D3D11_BUFFER_DESC vd{};
+        if (vbuf)
+            vbuf->GetDesc(&vd);
+        const UINT vBytes = vbuf ? std::min(std::max(vCount, 1u) * 16, vd.ByteWidth > vFirst * 16 ? vd.ByteWidth - vFirst * 16 : 0) : 0;
+        const D3D11_BUFFER_DESC vsd = {vBytes, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> vstaging;
+        if (vBytes && SUCCEEDED(g.device->CreateBuffer(&vsd, nullptr, &vstaging))) {
+            const D3D11_BOX vbox = {vFirst * 16, 0, 0, vFirst * 16 + vBytes, 1, 1};
+            g.context->CopySubresourceRegion(vstaging.Get(), 0, 0, 0, 0, vbuf.Get(), 0, &vbox);
+            D3D11_MAPPED_SUBRESOURCE vm{};
+            if (SUCCEEDED(g.context->Map(vstaging.Get(), 0, D3D11_MAP_READ, 0, &vm))) {
+                std::vector<float> vdata(vBytes / 4);
+                std::memcpy(vdata.data(), vm.pData, vBytes);
+                g.context->Unmap(vstaging.Get(), 0);
+                const auto* vv = reinterpret_cast<const float(*)[4]>(vdata.data());
+                std::string rows;
+                for (UINT r = 0; r < std::min(vBytes / 16, 4u); ++r) {
+                    char one[96];
+                    snprintf(one, sizeof(one), " [%u] (%g, %g, %g, %g)", r, vv[r][0], vv[r][1], vv[r][2], vv[r][3]);
+                    rows += one;
+                }
+                simqvfr::logf("scs focus:   its vertex range %u+%u (bound count %u):%s; the rules' sizes: corner %.4f x %.4f, "
+                              "twin %.4f x %.4f, focus %.4f x %.4f, box %.3f,%.3f %.3fx%.3f (eye %d)",
+                              vFirst, vBytes / 16, vCount, rows.c_str(), g.fx, g.fy, twin_fx(), twin_fy(), focus_fx(),
+                              focus_fy(), g.box[current_eye()][0], g.box[current_eye()][1], beta_x(), beta_y(), current_eye());
+            }
+        }
+        const auto* pv = reinterpret_cast<const float(*)[4]>(data.data());
+        simqvfr::logf("scs focus:   its pixel range's first vector (%g, %g, %g, %g)", pv[0][0], pv[0][1], pv[0][2], pv[0][3]);
+    }
     auto* v = reinterpret_cast<float(*)[4]>(data.data());
     const int vectors = static_cast<int>(bytes / 16);
     simqvfr::logf("scs focus: range %u of PS_%016llx (frame %llu, replay %u, buffer %u bytes, %s): %d vectors from %u, saved as %ls",
