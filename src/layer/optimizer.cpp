@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "input/hotkeys.h"
+#include "lang.h"
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_profile.h"
@@ -160,16 +161,16 @@ void optimize_tick(int64_t now) {
     } else {
         optimize.frames.clear();
     }
-    // The menu's line and detail.
+    // The menu's line (English; the menu shows it translated) and detail (English: it is logged too).
     std::wstring line, detail;
     if (optimize.shown) {
         detail = optimize.note.empty() ? o.status() : optimize.note;
         switch (o.state()) {
         case QvfrState::Measuring:
-        case QvfrState::Settling: line = L"Running…"; break;
-        case QvfrState::Done: line = o.can_undo() ? L"Done (Left: undo)" : L"Done"; break;
-        case QvfrState::Failed: line = L"Not possible"; break;
-        default: line = optimize.note.empty() ? L"" : L"Not possible"; break;
+        case QvfrState::Settling: line = I18N(L"Running…"); break;
+        case QvfrState::Done: line = o.can_undo() ? I18N(L"Done (Left: undo)") : I18N(L"Done"); break;
+        case QvfrState::Failed: line = I18N(L"Not possible"); break;
+        default: line = optimize.note.empty() ? L"" : I18N(L"Not possible"); break;
         }
     }
     if (line != menu.model.optimizeStatus || detail != menu.model.optimizeDetail) {
@@ -207,11 +208,11 @@ void frame_capture_poll() {
     const bool pressed = held && !frameCaptureHotkeyHeld;
     frameCaptureHotkeyHeld = held;
     if (pressed && experiment.d3d11CaptureHotkey && d3d11_capture_arm(endFrames + 1))
-        profile_notice(L"Frame capture: saved to the logs folder (captures)", 2500);
+        profile_notice(lang::tr(L"Frame capture: saved to the logs folder (captures)"), 2500);
     // pix_capture_hotkey (D3D12): a PIX GPU capture of the next frames, into the logs folder's pix folder.
     if (pressed && experiment.pixCaptureHotkey) {
         if (pix_capture_arm(endFrames + 1))
-            profile_notice(L"PIX capture: saved to the logs folder (pix)", 2500);
+            profile_notice(lang::tr(L"PIX capture: saved to the logs folder (pix)"), 2500);
         else
             log_line("pix: the frame capture hotkey: no capture (one is running, or no PIX capturer)");
     }
@@ -222,7 +223,7 @@ void cpu_profile_poll() {
         return;
     const bool running = cpu_profile_running();
     if (profileNotice.wasRunning && !running)
-        profile_notice(L"CPU capture done: the report is in the logs folder", 5000);
+        profile_notice(lang::tr(L"CPU capture done: the report is in the logs folder"), 5000);
     profileNotice.wasRunning = running;
     if (profileNotice.until && qpc_now() >= profileNotice.until) {
         profileNotice.until = 0;
@@ -256,7 +257,9 @@ void cpu_profile_poll() {
         }
     if (cpu_profile_start(request)) {
         profileNotice.wasRunning = true;
-        profile_notice(L"CPU capture: " + std::to_wstring(experiment.cpuProfileSeconds) + L" s, keep driving", 4000);
+        profile_notice(lang::trf(L"CPU capture: {seconds} s, keep driving",
+                                  {{L"seconds", std::to_wstring(experiment.cpuProfileSeconds)}}),
+                       4000);
     }
 }
 

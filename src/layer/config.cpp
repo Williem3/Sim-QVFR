@@ -393,6 +393,7 @@ void load_experiment() {
     if (settings.eyeOff != kEyeOffNone)
         logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;
+    follow_language(ini.c_str());  // before anything shows text (the notice card, the menu)
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
     hotkeys_changed(read_hotkeys(ini.c_str()));

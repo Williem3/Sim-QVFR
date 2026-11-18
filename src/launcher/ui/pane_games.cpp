@@ -342,7 +342,7 @@ Card cpu_card() {
         b.note(tr(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs "
                   L"with 6 or more cores and two threads per core, and stays off if another tool (such as Process "
                   L"Lasso) already set the game’s CPU sets or affinity. Try it on and watch your frames; the headset "
-                  L"menu’s CPU page changes it too."));
+                  L"menu’s Game page changes it too."));
     };
     c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
     return c;

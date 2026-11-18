@@ -161,7 +161,10 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
         SIZE size{};
         GetTextExtentPoint32W(dc, badge.value.c_str(), static_cast<int>(badge.value.size()), &size);
         const int tile = (std::min)(2, static_cast<int>(tiles.size()) - 1);
-        const int right = kMargin + (tile + 1) * tileWidth - 20, left = right - static_cast<int>(size.cx) - 24;
+        // Inside its tile: a longer language's badge is cut with an ellipsis rather than run into the tile before.
+        const int tileLeft = kMargin + tile * tileWidth + (tile ? 24 : 0);
+        const int right = kMargin + (tile + 1) * tileWidth - 20,
+                  left = std::max(tileLeft, right - static_cast<int>(size.cx) - 24);
         const int top = tileTop - 4, bottom = tileTop + 28;
         const uint32_t colour = tone_colour(badge.tone, true);
         rounded(dc, left, top, right, bottom, bottom - top, badge.tone == OsdTone::Neutral ? kTrack : mix(kCard, colour, 0.22));

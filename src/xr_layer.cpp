@@ -11,6 +11,7 @@
 #include "cheeky/cheeky_host.h"
 #include "games/adapter.h"
 #include "games/game.h"
+#include "lang.h"
 #include "layer_chain.h"
 #include "log.h"
 #include "probe/dred.h"
@@ -385,12 +386,12 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         start.ini = live.ini.c_str();
         if (!game->qvfr_start(start)) {
             experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
-            notice_set(L"Sim-QVFR is off",
-                       {L"This " + std::wstring(thisGame->name) +
-                            L" build isn’t one Sim-QVFR supports, so the game runs as normal, "
-                            L"without foveated rendering. The game has probably been updated.",
-                        L"Look for an Sim-QVFR release for the new build. The launcher’s Launch checks say the same "
-                        L"before a launch."});
+            notice_set(lang::tr(L"Sim-QVFR is off"),
+                       {lang::trf(L"This {game} build isn’t one Sim-QVFR supports, so the game runs as normal, "
+                                  L"without foveated rendering. The game has probably been updated.",
+                                  {{L"game", thisGame->name}}),
+                        lang::tr(L"Look for a Sim-QVFR release for the new build. The launcher’s Launch checks say the "
+                                 L"same before a launch.")});
         }
     }
     Dispatch d;

@@ -152,6 +152,8 @@ void cheeky_apply_ini();
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
+// [launcher] language (lang.h) made current when it changed: at start-up (config), then on every ini worker pass.
+void follow_language(const wchar_t* ini);
 // How long the headset menu stays after the last press: kMenuHideOverlayMs with the performance overlay on, else
 // kMenuHideMs (overlay.cpp).
 int64_t menu_hide_ms();

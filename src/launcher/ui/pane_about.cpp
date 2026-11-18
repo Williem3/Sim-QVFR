@@ -54,8 +54,8 @@ float about_pane(float x, float y, float w, bool draw) {
         const int selected = language_items(names);
         Row language;
         language.label = tr(L"Launcher language");
-        language.desc = tr(L"The launcher’s text. Translations are files in the lang folder; a line not translated yet "
-                           L"shows in English.");
+        language.desc = tr(L"The launcher’s and the headset menu’s text; it changes in a running game too. "
+                           L"Translations are files in the lang folder; a line not translated yet shows in English.");
         language.controlW = popup_width(names.data(), static_cast<int>(names.size()), 160);
         language.controlH = t::kControlHeight;
         const std::wstring value = names[static_cast<size_t>(selected)];

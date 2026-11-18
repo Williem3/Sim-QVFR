@@ -8,6 +8,7 @@
 
 #include "input/hotkeys.h"
 #include "input/pad_input.h"
+#include "lang.h"
 #include "log.h"
 #include "layer/layer.h"
 
@@ -151,9 +152,14 @@ std::wstring menu_hint() {
         padKeys |= hotkeys[a].pad.set();
     }
     const Hotkey& toggle = hotkeys[static_cast<int>(HotkeyAction::MenuToggle)];
-    std::wstring hint = defaultKeys ? L"Ctrl+Alt+arrows" : L"Your menu hotkeys";
-    hint += padKeys ? L", wheel buttons or right stick: select and change" : L", or right stick: select and change";
-    hint += toggle.key.set() || toggle.pad.set() ? L" · open/close hotkey or left stick click: close" : L" · left stick click: close";
+    // In the player's language (lang.h): how to select, then (after " · ") how to close.
+    const std::wstring keys = lang::tr(defaultKeys ? I18N(L"Ctrl+Alt+arrows") : I18N(L"Your menu hotkeys"));
+    std::wstring hint = lang::trf(padKeys ? I18N(L"{keys}, wheel buttons or right stick: select and change")
+                                          : I18N(L"{keys}, or right stick: select and change"),
+                                  {{L"keys", keys}});
+    hint += L" · ";
+    hint += lang::tr(toggle.key.set() || toggle.pad.set() ? I18N(L"open/close hotkey or left stick click: close")
+                                                          : I18N(L"left stick click: close"));
     return hint;
 }
 
@@ -166,10 +172,11 @@ std::wstring hotkey_footer(bool helmetOn) {
         const wchar_t* name;
         bool shown;
     };
-    const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
-                             {HotkeyAction::Visor, L"Visor", helmetOn},
-                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile},
-                             {HotkeyAction::FrameCapture, L"Frame capture",
+    // The actions' names in the player's language (lang.h); the keys as key_text prints them.
+    const Entry entries[] = {{HotkeyAction::Overlay, I18N(L"Overlay"), true},
+                             {HotkeyAction::Visor, I18N(L"Visor"), helmetOn},
+                             {HotkeyAction::CpuCapture, I18N(L"CPU capture"), experiment.cpuProfile},
+                             {HotkeyAction::FrameCapture, I18N(L"Frame capture"),
                               experiment.d3d11CaptureHotkey || experiment.pixCaptureHotkey}};
     std::wstring out;
     for (const Entry& e : entries) {
@@ -178,8 +185,9 @@ std::wstring hotkey_footer(bool helmetOn) {
             continue;
         std::wstring binding = key_text(h.key);
         if (h.pad.set())
-            binding += (binding.empty() ? L"" : L" / ") + std::wstring(L"wheel ") + control_text(h.pad.control);
-        out += (out.empty() ? L"" : L"  \u00b7  ") + std::wstring(e.name) + L" " + binding;
+            binding += (binding.empty() ? L"" : L" / ") +
+                       lang::trf(L"wheel {button}", {{L"button", control_text(h.pad.control)}});
+        out += (out.empty() ? L"" : L"  \u00b7  ") + std::wstring(lang::tr(e.name)) + L" " + binding;
     }
     return out;
 }

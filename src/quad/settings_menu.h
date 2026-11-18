@@ -225,8 +225,9 @@ MenuItem menu_section(const SettingsMenu& menu);
 std::vector<MenuItem> menu_items(bool qvfr);
 // The current page's items: the page switch first, then the page's.
 std::vector<MenuItem> menu_page_items(const SettingsMenu& menu);
-// The current page's name, as its tab shows it ("Picture", "View & DLSS", "Headset", "Game").
-std::wstring menu_page_name(const SettingsMenu& menu);
+// The current page's name, as its tab shows it ("Picture", "View & DLSS", "Headset", "Game"): in the player's language
+// (lang.h), or with `shown` false in English (the log's "settings menu: ..." lines).
+std::wstring menu_page_name(const SettingsMenu& menu, bool shown = true);
 // The panel's title ("Headset menu", the method added for Two-loop and the API path), and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
 // the settings page the optimizer's detail while it has one; else empty.
 std::wstring menu_title(const SettingsMenu& menu);
@@ -262,7 +263,9 @@ struct MenuLine {
     bool capped = false;  // asked above the launch size: `value` also says what is in effect
     bool header = false;  // a section's heading (the launcher's card name): no value, never selected
 };
-std::vector<MenuLine> menu_lines(const SettingsMenu& menu);
+// The page's lines, labels and values in the player's language (lang.h); `shown` false: in English, for the log
+// (layer/menu.cpp's "settings menu: <page> / <section>: <label> -> <value>" stays English).
+std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown = true);
 // Why a value did not take and what to lower (empty when everything fits): at most two lines.
 std::vector<std::wstring> menu_notes(const SettingsMenu& menu);
 

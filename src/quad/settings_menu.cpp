@@ -10,9 +10,20 @@
 #include <windows.h>
 
 #include "../ini.h"
+#include "../lang.h"
 
 namespace simqvfr {
 namespace {
+
+// The menu's words in the player's language for the panel (`shown`), or in English for the log ("settings menu: ...
+// -> ..." stays English whatever the language). Literals passed here are marked I18N for tools/lang_extract.py.
+struct Words {
+    bool shown = true;
+    const wchar_t* t(const wchar_t* english) const { return shown ? lang::tr(english) : english; }
+    std::wstring f(const wchar_t* english, std::initializer_list<std::pair<const wchar_t*, std::wstring>> args) const {
+        return shown ? lang::trf(english, args) : lang::fill(english, args);
+    }
+};
 
 struct Spec {
     MenuItem item;
@@ -25,114 +36,119 @@ constexpr Spec spec_of(MenuItem item, const wchar_t* label, const IniInt& k) { r
 static_assert(kCropTop.max == static_cast<int>(kCropMax * 100), "the table's crop sides are fov_crop.h's kCropMax");
 
 constexpr Spec kSpecs[] = {
-    spec_of(MenuItem::Periphery, L"Periphery resolution", kPeripheryScale), spec_of(MenuItem::Density, L"Focus density", kFocusDensity),
-    spec_of(MenuItem::ObjectDetail, L"Object detail", kObjectDetail),
-    spec_of(MenuItem::Sharpening, L"Sharpening", kSharpenPercent),
-    spec_of(MenuItem::EyeOff, L"Eye off", kEyeOff),  // [quad] eye_off: none, left, right
-    {MenuItem::FocusQuadDistance, L"Focus quad distance", 0, kFocusQuadSteps - 1, 1},  // steps of kFocusQuadDistances
-    spec_of(MenuItem::Width, L"Focus width", kFocusPercent), spec_of(MenuItem::Height, L"Focus height", kFocusHeightPercent),
-    spec_of(MenuItem::Feather, L"Feather", kFeatherPercent), spec_of(MenuItem::Corners, L"Corner radius", kCornerRadiusPercent),
-    spec_of(MenuItem::Outline, L"Show focus outline", kDebugBorder), spec_of(MenuItem::EyeTracking, L"Foveated mode", kGaze),
-    {MenuItem::FocusOffset, L"Gaze offset", -kFocusOffsetMax, kFocusOffsetMax, 1},
-    {MenuItem::GazeDeadzone, L"Gaze dead-zone", 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
+    spec_of(MenuItem::Periphery, I18N(L"Periphery resolution"), kPeripheryScale),
+    spec_of(MenuItem::Density, I18N(L"Focus density"), kFocusDensity),
+    spec_of(MenuItem::ObjectDetail, I18N(L"Object detail"), kObjectDetail),
+    spec_of(MenuItem::Sharpening, I18N(L"Sharpening"), kSharpenPercent),
+    spec_of(MenuItem::EyeOff, I18N(L"Eye off"), kEyeOff),  // [quad] eye_off: none, left, right
+    // Steps of kFocusQuadDistances.
+    {MenuItem::FocusQuadDistance, I18N(L"Focus quad distance"), 0, kFocusQuadSteps - 1, 1},
+    spec_of(MenuItem::Width, I18N(L"Focus width"), kFocusPercent),
+    spec_of(MenuItem::Height, I18N(L"Focus height"), kFocusHeightPercent),
+    spec_of(MenuItem::Feather, I18N(L"Feather"), kFeatherPercent),
+    spec_of(MenuItem::Corners, I18N(L"Corner radius"), kCornerRadiusPercent),
+    spec_of(MenuItem::Outline, I18N(L"Show focus outline"), kDebugBorder),
+    spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
+    {MenuItem::FocusOffset, I18N(L"Gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
+    {MenuItem::GazeDeadzone, I18N(L"Gaze dead-zone"), 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
     // The Foveation section's Custom corners: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
-    {MenuItem::Shape, L"Shape", 0, 1, 1},
-    {MenuItem::ShapeTopLeftIn, L"Top left in", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopLeftDown, L"Top left down", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopRightIn, L"Top right in", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopRightDown, L"Top right down", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomLeftIn, L"Bottom left in", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomLeftUp, L"Bottom left up", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomRightIn, L"Bottom right in", 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomRightUp, L"Bottom right up", 0, kFocusCornerMax, 5},
+    {MenuItem::Shape, I18N(L"Shape"), 0, 1, 1},
+    {MenuItem::ShapeTopLeftIn, I18N(L"Top left in"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopLeftDown, I18N(L"Top left down"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopRightIn, I18N(L"Top right in"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopRightDown, I18N(L"Top right down"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomLeftIn, I18N(L"Bottom left in"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomLeftUp, I18N(L"Bottom left up"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomRightIn, I18N(L"Bottom right in"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomRightUp, I18N(L"Bottom right up"), 0, kFocusCornerMax, 5},
     // The performance overlay's place, degrees (the launcher's sliders).
-    {MenuItem::Overlay, L"Show the overlay", 0, 1, 1},
-    {MenuItem::OverlayYaw, L"Horizontal", -kOsdYawMax, kOsdYawMax, 1},
-    {MenuItem::OverlayPitch, L"Vertical", -kOsdPitchMax, kOsdPitchMax, 1},
-    {MenuItem::OverlayWidth, L"Size", kOsdWidthMin, kOsdWidthMax, 1},
+    {MenuItem::Overlay, I18N(L"Show the overlay"), 0, 1, 1},
+    {MenuItem::OverlayYaw, I18N(L"Horizontal"), -kOsdYawMax, kOsdYawMax, 1},
+    {MenuItem::OverlayPitch, I18N(L"Vertical"), -kOsdPitchMax, kOsdPitchMax, 1},
+    {MenuItem::OverlayWidth, I18N(L"Size"), kOsdWidthMin, kOsdWidthMax, 1},
     // The clock's place, degrees (its size: the launcher's slider).
-    {MenuItem::Clock, L"Show the clock", 0, 1, 1},
-    {MenuItem::ClockYaw, L"Horizontal", -kClockYawMax, kClockYawMax, 1},
-    {MenuItem::ClockPitch, L"Vertical", -kClockPitchMax, kClockPitchMax, 1},
-    {MenuItem::ClockWidth, L"Size", kClockWidthMin, kClockWidthMax, 1},
+    {MenuItem::Clock, I18N(L"Show the clock"), 0, 1, 1},
+    {MenuItem::ClockYaw, I18N(L"Horizontal"), -kClockYawMax, kClockYawMax, 1},
+    {MenuItem::ClockPitch, I18N(L"Vertical"), -kClockPitchMax, kClockPitchMax, 1},
+    {MenuItem::ClockWidth, I18N(L"Size"), kClockWidthMin, kClockWidthMax, 1},
     // The panel's place, degrees (the launcher's kMenuYawRange, kMenuPitchRange, kMenuWidthRange).
-    {MenuItem::MenuYaw, L"Horizontal", -kMenuYawMax, kMenuYawMax, 1},
-    {MenuItem::MenuPitch, L"Vertical", -kMenuPitchMax, kMenuPitchMax, 1},
-    {MenuItem::MenuWidth, L"Size", kMenuWidthMin, kMenuWidthMax, 1},
+    {MenuItem::MenuYaw, I18N(L"Horizontal"), -kMenuYawMax, kMenuYawMax, 1},
+    {MenuItem::MenuPitch, I18N(L"Vertical"), -kMenuPitchMax, kMenuPitchMax, 1},
+    {MenuItem::MenuWidth, I18N(L"Size"), kMenuWidthMin, kMenuWidthMax, 1},
     // The page switch and the Foveated DLSS page (cheeky_settings.h's ranges; presets step through its list).
-    {MenuItem::Page, L"Page", 0, 1, 1},
-    {MenuItem::CheekyProcessing, L"Foveated DLSS", 0, 1, 1},
-    {MenuItem::CheekyOuterDlaa, L"Cheaper outer views", 0, 1, 1},
-    {MenuItem::CheekyOuterScale, L"Outer DLAA scale", kCheekyScaleMin, kCheekyScaleMax, kCheekyScaleStep},
-    {MenuItem::CheekyOuterPreset, L"Outer preset", 0, 0, 1},
-    {MenuItem::CheekyFocusPreset, L"Focus preset", 0, 0, 1},
-    {MenuItem::CheekySupersampling, L"Focus supersampling", kCheekySupersamplingMin, kCheekySupersamplingMax,
+    {MenuItem::Page, I18N(L"Page"), 0, 1, 1},
+    {MenuItem::CheekyProcessing, I18N(L"Foveated DLSS"), 0, 1, 1},
+    {MenuItem::CheekyOuterDlaa, I18N(L"Cheaper outer views"), 0, 1, 1},
+    {MenuItem::CheekyOuterScale, I18N(L"Outer DLAA scale"), kCheekyScaleMin, kCheekyScaleMax, kCheekyScaleStep},
+    {MenuItem::CheekyOuterPreset, I18N(L"Outer preset"), 0, 0, 1},
+    {MenuItem::CheekyFocusPreset, I18N(L"Focus preset"), 0, 0, 1},
+    {MenuItem::CheekySupersampling, I18N(L"Focus supersampling"), kCheekySupersamplingMin, kCheekySupersamplingMax,
      kCheekySupersamplingStep},
-    {MenuItem::CheekyMotionFix, L"Fix motion-vector blur", 0, 1, 1},
+    {MenuItem::CheekyMotionFix, I18N(L"Fix motion-vector blur"), 0, 1, 1},
     {MenuItem::CheekyNr, L"DLSS-NR", 0, 1, 1},
-    {MenuItem::CheekyNrPreset, L"DLSS-NR preset", 0, kCheekyNrPresetMax, 1},
-    {MenuItem::CheekyNrPasses, L"DLSS-NR passes", 1, kCheekyNrPassesMax, 1},
-    {MenuItem::FgOn, L"Frame generation", 0, 1, 1},
-    {MenuItem::FgMultiplier, L"Multiplier", 2, kCheekyFgMultiplierMax, 1},
-    {MenuItem::FgSize, L"Center region", kCheekyFgSizeMin, kCheekyFgSizeMax, kCheekyFgSizeStep},
-    {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
-    {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
-    {MenuItem::FgRelease, L"Release game", 0, 2, 1},
-    {MenuItem::FgBorder, L"Show the center region", 0, 1, 1},
+    {MenuItem::CheekyNrPreset, I18N(L"DLSS-NR preset"), 0, kCheekyNrPresetMax, 1},
+    {MenuItem::CheekyNrPasses, I18N(L"DLSS-NR passes"), 1, kCheekyNrPassesMax, 1},
+    {MenuItem::FgOn, I18N(L"Frame generation"), 0, 1, 1},
+    {MenuItem::FgMultiplier, I18N(L"Multiplier"), 2, kCheekyFgMultiplierMax, 1},
+    {MenuItem::FgSize, I18N(L"Center region"), kCheekyFgSizeMin, kCheekyFgSizeMax, kCheekyFgSizeStep},
+    {MenuItem::FgScale, I18N(L"Center FG scale"), 25, 100, 25},
+    {MenuItem::FgPeriphery, I18N(L"Periphery FG scale"), 25, 100, 25},
+    {MenuItem::FgRelease, I18N(L"Release game"), 0, 2, 1},
+    {MenuItem::FgBorder, I18N(L"Show the center region"), 0, 1, 1},
     // The View & helmet section's crop: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
-    spec_of(MenuItem::Crop, L"Crop the view", kCropEnabled),
-    spec_of(MenuItem::CropTop, L"Top", kCropTop),
-    spec_of(MenuItem::CropBottom, L"Bottom", kCropBottom),
-    spec_of(MenuItem::CropOuter, L"Outer side (temple)", kCropOuter),
-    spec_of(MenuItem::CropInner, L"Inner side (nose)", kCropInner),
-    {MenuItem::Helmet, L"Show a helmet", 0, 1, 1},
-    {MenuItem::HelmetRim, L"Rim", 0, kHelmetRimMax, 1},
-    {MenuItem::HelmetCorners, L"Corners", 0, kHelmetCornersMax, 10},
-    {MenuItem::HelmetLight, L"Lighting", 0, kHelmetLightMax, kHelmetLightStep},
-    {MenuItem::HelmetDebug, L"Show helmet light", 0, 1, 1},
-    {MenuItem::Visor, L"Visor", 0, 2, 1},
-    {MenuItem::HelmetSize, L"Size", kHelmetSizeMin, kHelmetSizeMax, 5},
-    {MenuItem::HelmetHeight, L"Height", -kHelmetHeightMax, kHelmetHeightMax, 1},
-    {MenuItem::HelmetDepth, L"Depth", 0, kHelmetDepthMax, 1},
-    {MenuItem::HelmetDetail, L"Detail", 0, 1, 1},
-    {MenuItem::Optimize, L"Auto-fit to headset rate", 0, 0, 1},
-    {MenuItem::Profile, L"Profile", 0, 0, 1},
-    {MenuItem::HotkeyFooter, L"Show the hotkeys under the menu", 0, 1, 1},
-    spec_of(MenuItem::CpuIsolateMain, L"Give the main thread a core of its own", kCpuIsolateMain),
+    spec_of(MenuItem::Crop, I18N(L"Crop the view"), kCropEnabled),
+    spec_of(MenuItem::CropTop, I18N(L"Top"), kCropTop),
+    spec_of(MenuItem::CropBottom, I18N(L"Bottom"), kCropBottom),
+    spec_of(MenuItem::CropOuter, I18N(L"Outer side (temple)"), kCropOuter),
+    spec_of(MenuItem::CropInner, I18N(L"Inner side (nose)"), kCropInner),
+    {MenuItem::Helmet, I18N(L"Show a helmet"), 0, 1, 1},
+    {MenuItem::HelmetRim, I18N(L"Rim"), 0, kHelmetRimMax, 1},
+    {MenuItem::HelmetCorners, I18N(L"Corners"), 0, kHelmetCornersMax, 10},
+    {MenuItem::HelmetLight, I18N(L"Lighting"), 0, kHelmetLightMax, kHelmetLightStep},
+    {MenuItem::HelmetDebug, I18N(L"Show helmet light"), 0, 1, 1},
+    {MenuItem::Visor, I18N(L"Visor"), 0, 2, 1},
+    {MenuItem::HelmetSize, I18N(L"Size"), kHelmetSizeMin, kHelmetSizeMax, 5},
+    {MenuItem::HelmetHeight, I18N(L"Height"), -kHelmetHeightMax, kHelmetHeightMax, 1},
+    {MenuItem::HelmetDepth, I18N(L"Depth"), 0, kHelmetDepthMax, 1},
+    {MenuItem::HelmetDetail, I18N(L"Detail"), 0, 1, 1},
+    {MenuItem::Optimize, I18N(L"Auto-fit to headset rate"), 0, 0, 1},
+    {MenuItem::Profile, I18N(L"Profile"), 0, 0, 1},
+    {MenuItem::HotkeyFooter, I18N(L"Show the hotkeys under the menu"), 0, 1, 1},
+    spec_of(MenuItem::CpuIsolateMain, I18N(L"Give the main thread a core of its own"), kCpuIsolateMain),
     // The DLSS page (Sim-QVFR's own; engine/dlss_settings.h's choices).
-    {MenuItem::DlssOn, L"Use DLSS", 0, 1, 1},
-    {MenuItem::DlssUpscaler, L"Upscaler", 0, 1, 1},
-    {MenuItem::DlssFocusMode, L"Focus views", 0, 0, 1},
-    {MenuItem::DlssFocusPreset, L"Focus preset", 0, 0, 1},
-    {MenuItem::DlssEyePreset, L"Periphery preset", 0, 0, 1},
-    {MenuItem::DlssSharpening, L"Texture sharpening", 0, 0, 1},
+    {MenuItem::DlssOn, I18N(L"Use DLSS"), 0, 1, 1},
+    {MenuItem::DlssUpscaler, I18N(L"Upscaler"), 0, 1, 1},
+    {MenuItem::DlssFocusMode, I18N(L"Focus views"), 0, 0, 1},
+    {MenuItem::DlssFocusPreset, I18N(L"Focus preset"), 0, 0, 1},
+    {MenuItem::DlssEyePreset, I18N(L"Periphery preset"), 0, 0, 1},
+    {MenuItem::DlssSharpening, I18N(L"Texture sharpening"), 0, 0, 1},
     // The DLSS-NR page (engine/nr_settings.h's ranges).
-    {MenuItem::NrOn, L"Use DLSS-NR", 0, 1, 1},
-    {MenuItem::NrIntensity, L"Intensity", 0, 100, 5},
-    {MenuItem::NrStyle, L"Style", 0, 2, 1},
-    {MenuItem::NrPreset, L"Preset", 0, 2, 1},
-    {MenuItem::NrLocalTone, L"Local tone", 0, 200, 10},
-    {MenuItem::NrLocalStructure, L"Local structure", 0, 200, 10},
-    {MenuItem::NrAutoMask, L"Auto mask", 0, 1, 1},
-    {MenuItem::NrOrder, L"Runs", 0, 1, 1},
-    {MenuItem::NrFocusScale, L"Focus working size", kNrScaleMin, 100, 5},
-    {MenuItem::NrEdgeBlend, L"Edge blend", 0, kNrEdgeMax, 2},
-    {MenuItem::NrPeriphery, L"Periphery too", 0, 1, 1},
-    {MenuItem::NrPeripheryScale, L"Periphery working size", kNrScaleMin, 100, 5},
-    {MenuItem::NrPeripheryCoverage, L"Periphery covered", kNrCoverageMin, 100, 10},
-    {MenuItem::NrLimit, L"Working size limit", kNrLimitMin, kNrLimitMax, 1},  // tenths of a megapixel a view
+    {MenuItem::NrOn, I18N(L"Use DLSS-NR"), 0, 1, 1},
+    {MenuItem::NrIntensity, I18N(L"Intensity"), 0, 100, 5},
+    {MenuItem::NrStyle, I18N(L"Style"), 0, 2, 1},
+    {MenuItem::NrPreset, I18N(L"Preset"), 0, 2, 1},
+    {MenuItem::NrLocalTone, I18N(L"Local tone"), 0, 200, 10},
+    {MenuItem::NrLocalStructure, I18N(L"Local structure"), 0, 200, 10},
+    {MenuItem::NrAutoMask, I18N(L"Auto mask"), 0, 1, 1},
+    {MenuItem::NrOrder, I18N(L"Runs"), 0, 1, 1},
+    {MenuItem::NrFocusScale, I18N(L"Focus working size"), kNrScaleMin, 100, 5},
+    {MenuItem::NrEdgeBlend, I18N(L"Edge blend"), 0, kNrEdgeMax, 2},
+    {MenuItem::NrPeriphery, I18N(L"Periphery too"), 0, 1, 1},
+    {MenuItem::NrPeripheryScale, I18N(L"Periphery working size"), kNrScaleMin, 100, 5},
+    {MenuItem::NrPeripheryCoverage, I18N(L"Periphery covered"), kNrCoverageMin, 100, 10},
+    {MenuItem::NrLimit, I18N(L"Working size limit"), kNrLimitMin, kNrLimitMax, 1},  // tenths of a megapixel a view
     // The sections: the launcher's card names (HeadDlss: "FSR" while FSR runs the views, menu_lines).
-    {MenuItem::HeadResolution, L"Resolution", 0, 0, 0},
-    {MenuItem::HeadFoveation, L"Foveation", 0, 0, 0},
-    {MenuItem::HeadView, L"View & helmet", 0, 0, 0},
+    {MenuItem::HeadResolution, I18N(L"Resolution"), 0, 0, 0},
+    {MenuItem::HeadFoveation, I18N(L"Foveation"), 0, 0, 0},
+    {MenuItem::HeadView, I18N(L"View & helmet"), 0, 0, 0},
     {MenuItem::HeadDlss, L"DLSS", 0, 0, 0},
     {MenuItem::HeadNr, L"DLSS-NR", 0, 0, 0},
-    {MenuItem::HeadCheeky, L"Foveated DLSS", 0, 0, 0},
-    {MenuItem::HeadFg, L"Frame generation", 0, 0, 0},
-    {MenuItem::HeadMenu, L"Headset menu", 0, 0, 0},
-    {MenuItem::HeadOverlay, L"Performance overlay", 0, 0, 0},
-    {MenuItem::HeadClock, L"Clock", 0, 0, 0},
-    {MenuItem::HeadVision, L"Vision", 0, 0, 0},
+    {MenuItem::HeadCheeky, I18N(L"Foveated DLSS"), 0, 0, 0},
+    {MenuItem::HeadFg, I18N(L"Frame generation"), 0, 0, 0},
+    {MenuItem::HeadMenu, I18N(L"Headset menu"), 0, 0, 0},
+    {MenuItem::HeadOverlay, I18N(L"Performance overlay"), 0, 0, 0},
+    {MenuItem::HeadClock, I18N(L"Clock"), 0, 0, 0},
+    {MenuItem::HeadVision, I18N(L"Vision"), 0, 0, 0},
     {MenuItem::HeadCpu, L"CPU", 0, 0, 0},
 };
 
@@ -369,13 +385,13 @@ MenuItem menu_section(const SettingsMenu& menu) {
 
 namespace {
 
-std::wstring page_name(const SettingsMenu&, MenuPage page) {
+std::wstring page_name(const SettingsMenu&, MenuPage page, const Words& w) {
     switch (page) {
-    case MenuPage::Foveation: return L"Foveation";
-    case MenuPage::View: return L"View";
-    case MenuPage::Headset: return L"Headset";
-    case MenuPage::Game: return L"Game";
-    default: return L"Picture";
+    case MenuPage::Foveation: return w.t(I18N(L"Foveation"));
+    case MenuPage::View: return w.t(I18N(L"View"));
+    case MenuPage::Headset: return w.t(I18N(L"Headset"));
+    case MenuPage::Game: return w.t(I18N(L"Game"));
+    default: return w.t(I18N(L"Picture"));
     }
 }
 
@@ -384,18 +400,20 @@ std::wstring page_name(const SettingsMenu&, MenuPage page) {
 std::vector<std::wstring> menu_tabs(const SettingsMenu& menu) {
     std::vector<std::wstring> tabs;
     for (const MenuPage p : menu_pages(menu))
-        tabs.push_back(page_name(menu, p));
+        tabs.push_back(page_name(menu, p, Words{}));
     return tabs;
 }
 
 std::wstring menu_title(const SettingsMenu& menu) {
     // The launcher's name for the panel; the method where it isn't plain QVFR. The page: the tabs under it.
-    return menu.launch.apiPath ? L"Headset menu \u00b7 QVFR (API path)"
-           : menu.launch.qvfr  ? L"Headset menu"
-                               : L"Headset menu \u00b7 Two-loop (legacy)";
+    return lang::tr(menu.launch.apiPath ? I18N(L"Headset menu \u00b7 QVFR (API path)")
+                    : menu.launch.qvfr  ? I18N(L"Headset menu")
+                                        : I18N(L"Headset menu \u00b7 Two-loop (legacy)"));
 }
 
-std::wstring menu_page_name(const SettingsMenu& menu) { return page_name(menu, menu_page(menu)); }
+std::wstring menu_page_name(const SettingsMenu& menu, bool shown) {
+    return page_name(menu, menu_page(menu), Words{shown});
+}
 
 std::wstring menu_subtitle(const SettingsMenu& menu) {
     if (!menu.notice.empty())
@@ -407,15 +425,15 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
         return menu.optimizeDetail;
     // The runtime composing the views (Pimax, Varjo): the focus area shows inside the runtime's own focus region.
     if (page == MenuPage::Foveation && menu.launch.runtimeComposes)
-        return L"The runtime composes the views: the focus area shows inside its own focus region";
+        return lang::tr(L"The runtime composes the views: the focus area shows inside its own focus region");
     if (page == MenuPage::Foveation || section == MenuItem::HeadResolution)
         return L"";
     if (section == MenuItem::HeadDlss && menu.launch.ownDlss && fsr_runs(menu))
-        return L"AMD FSR, run by Sim-QVFR (experimental): changes apply at once";
+        return lang::tr(L"AMD FSR, run by Sim-QVFR (experimental): changes apply at once");
     if (section == MenuItem::HeadDlss && menu.launch.ownDlss)
-        return L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once";
+        return lang::tr(L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once");
     if (section == MenuItem::HeadNr)
-        return L"NVIDIA DLSS neural rendering, your own nvngx_dlssnr.dll (experimental)";
+        return lang::tr(L"NVIDIA DLSS neural rendering, your own nvngx_dlssnr.dll (experimental)");
     return section == MenuItem::HeadCheeky || section == MenuItem::HeadFg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 
@@ -693,8 +711,10 @@ bool menu_over_launch(const SettingsMenu& menu) {
 namespace {
 
 // "12° right", "4° down", "0°".
-std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
-    return v == 0 ? L"0\u00b0" : std::to_wstring(v < 0 ? -v : v) + L"\u00b0 " + (v > 0 ? plus : minus);
+// `plus` and `minus` are whole texts with {degrees} ("{degrees} right"), marked with I18N where they are passed (as
+// the launcher's Headset menu pane).
+std::wstring degrees(const Words& w, int v, const wchar_t* plus, const wchar_t* minus) {
+    return v == 0 ? L"0\u00b0" : w.f(v > 0 ? plus : minus, {{L"degrees", std::to_wstring(v < 0 ? -v : v) + L"\u00b0"}});
 }
 
 std::wstring percent(double v) { return std::to_wstring(static_cast<int>(std::lround(v))) + L"%"; }
@@ -788,32 +808,33 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         return notes;
     if (section == MenuItem::HeadFg) {
         if (menu.cheeky.values.fg)
-            notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
+            notes.push_back(lang::tr(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off"));
         return notes;
     }
     if (section == MenuItem::HeadDlss && menu.launch.ownDlss && fsr_runs(menu)) {
         if (menu.values.dlss.on && menu.values.dlss.textureSharpening != 0 && !menu.launch.sharpeningReady)
-            notes.push_back(L"Texture sharpening was off at launch: it starts at the next launch");
-        notes.push_back(L"Each change rebuilds FSR: a short stutter (not texture sharpening)");
+            notes.push_back(lang::tr(L"Texture sharpening was off at launch: it starts at the next launch"));
+        notes.push_back(lang::tr(L"Each change rebuilds FSR: a short stutter (not texture sharpening)"));
         return notes;
     }
     if (section == MenuItem::HeadDlss && menu.launch.ownDlss) {
         if (menu.values.dlss.on)
-            notes.push_back(menu.values.dlss.eyePreset == 6 ? L"Periphery F: cheaper, more aliasing; suits eye tracking"
-                                                            : L"Periphery K: steadier; F is cheaper and suits eye tracking");
+            notes.push_back(lang::tr(menu.values.dlss.eyePreset == 6
+                                         ? I18N(L"Periphery F: cheaper, more aliasing; suits eye tracking")
+                                         : I18N(L"Periphery K: steadier; F is cheaper and suits eye tracking")));
         if (menu.values.dlss.on && menu.values.dlss.textureSharpening != 0 && !menu.launch.sharpeningReady)
-            notes.push_back(L"Texture sharpening was off at launch: it starts at the next launch");
-        notes.push_back(L"Each change rebuilds DLSS: a short stutter (not texture sharpening)");
+            notes.push_back(lang::tr(L"Texture sharpening was off at launch: it starts at the next launch"));
+        notes.push_back(lang::tr(L"Each change rebuilds DLSS: a short stutter (not texture sharpening)"));
         return notes;
     }
     if (section == MenuItem::HeadNr) {
         const NrSettings& n = menu.values.nr;
         if (n.on && !menu.values.dlss.on)
-            notes.push_back(L"Runs with DLSS on (Use DLSS, above): it takes DLSS's depth and motion");
+            notes.push_back(lang::tr(L"Runs with DLSS on (Use DLSS, above): it takes DLSS's depth and motion"));
         if (n.on)
-            notes.push_back(L"Each view: 2 ms of GPU at least, about 2 ms and 130 MB a megapixel worked on");
+            notes.push_back(lang::tr(L"Each view: 2 ms of GPU at least, about 2 ms and 130 MB a megapixel worked on"));
         if (n.on)
-            notes.push_back(L"Preset, working sizes, coverage and order rebuild it: a short stutter");
+            notes.push_back(lang::tr(L"Preset, working sizes, coverage and order rebuild it: a short stutter"));
         return notes;
     }
     if (section == MenuItem::HeadCheeky || section == MenuItem::HeadVision ||
@@ -826,71 +847,84 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         const bool shapeLine = at == MenuItem::Shape || (at >= MenuItem::ShapeTopLeftIn && at <= MenuItem::ShapeBottomRightUp);
         if (shapeLine) {
             const bool masks = menu.launch.focusMask && menu.values.focusMask;
-            notes.push_back(!menu.values.shape.corners
-                                ? L"Custom corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid"
-                            : masks ? L"The cut corners aren't rendered: the shape saves pixels too"
-                                    : L"The focus views still render the whole box: the shape picks what stays sharp");
+            notes.push_back(lang::tr(
+                !menu.values.shape.corners
+                    ? I18N(L"Custom corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid")
+                : masks ? I18N(L"The cut corners aren't rendered: the shape saves pixels too")
+                        : I18N(L"The focus views still render the whole box: the shape picks what stays sharp")));
             return notes;
         }
     }
     if (section == MenuItem::HeadView) {
         // The FOV follows at once; the views' pixels only without DLSS (and up to the launch size).
         if (menu.launch.dlssHeld)
-            notes.push_back(L"DLSS is on: the view crops now, its pixel savings apply at the next launch");
+            notes.push_back(lang::tr(L"DLSS is on: the view crops now, its pixel savings apply at the next launch"));
         if (menu.values.crop_width() > menu.launch.cropWidth + 0.5 || menu.values.crop_height() > menu.launch.cropHeight + 0.5)
-            notes.push_back(L"Less crop than at launch: the periphery is softer until the next launch");
+            notes.push_back(lang::tr(L"Less crop than at launch: the periphery is softer until the next launch"));
         return notes;
     }
-    if (!menu.dlssState.empty())
+    if (!menu.dlssState.empty())  // in the player's language already (layer/menu.cpp)
         notes.push_back(menu.dlssState);
     if (menu.launch.qvfr && menu.launch.dlssHeld)
-        notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
+        notes.push_back(lang::tr(L"DLSS is on: resolution changes apply at the next launch"));
     else if (menu.launch.apiPath) {
         // The API path's periphery is live from its launch value down to a quarter of it (the game's eye targets are
         // made once, at launch); above, at the next launch.
         const double top = menu.launch.outer, floor = menu.launch.outer / 4;
         if (menu.values.periphery > top + 0.5)
-            notes.push_back(L"Periphery above its launch value (" + percent(top) + L") applies at the next launch");
+            notes.push_back(lang::trf(L"Periphery above its launch value ({percent}) applies at the next launch",
+                                      {{L"percent", percent(top)}}));
         else if (menu.values.periphery < floor - 0.5)
-            notes.push_back(L"Periphery stays at " + percent(floor) + L" (a quarter of its launch value) until the next launch");
+            notes.push_back(
+                lang::trf(L"Periphery stays at {percent} (a quarter of its launch value) until the next launch",
+                          {{L"percent", percent(floor)}}));
         else
-            notes.push_back(L"Periphery applies now up to its launch value (" + percent(top) + L"); focus density and mode too");
+            notes.push_back(
+                lang::trf(L"Periphery applies now up to its launch value ({percent}); focus density and mode too",
+                          {{L"percent", percent(top)}}));
     }
     else if (menu.launch.qvfr && !menu.launch.liveResolution)
-        notes.push_back(L"Resolution changes apply at the next launch in this game");
+        notes.push_back(lang::tr(L"Resolution changes apply at the next launch in this game"));
     const MenuFit f = menu_fit(menu);
     const MenuLaunch& l = menu.launch;
     const bool known = l.nativeWidth > 0 && l.nativeHeight > 0;
     if (f.focusCapped)
-        notes.push_back(known ? L"Focus area needs " + pixels(l, f.wantFocusWidth, f.wantFocusHeight) + L" px, " +
-                                    pixels(l, f.focusWidth, f.focusHeight) + L" fits: lower Focus density, width or height"
-                              : L"Focus area is too large for this launch: lower Focus density, width or height");
+        notes.push_back(
+            known ? lang::trf(L"Focus area needs {needed} px, {fits} fits: lower Focus density, width or height",
+                              {{L"needed", pixels(l, f.wantFocusWidth, f.wantFocusHeight)},
+                               {L"fits", pixels(l, f.focusWidth, f.focusHeight)}})
+                  : std::wstring(
+                        lang::tr(L"Focus area is too large for this launch: lower Focus density, width or height")));
     // The periphery's views at a density, over the FOV crop's share of the eye.
     const auto periphery = [&](double density) {
         return pixels(l, density * menu.values.crop_width() / 100, density * menu.values.crop_height() / 100);
     };
     if (f.peripheryCapped && f.peripheryByRoom)
-        notes.push_back(L"Periphery needs " + (known ? periphery(menu.values.periphery) + L" px, the focus area leaves " +
-                                                           periphery(f.periphery)
-                                                     : std::wstring(L"more room")) +
-                        L": lower Focus density or size to make room");
+        notes.push_back(
+            known ? lang::trf(L"Periphery needs {needed} px, the focus area leaves {left}: lower Focus density or "
+                              L"size to make room",
+                              {{L"needed", periphery(menu.values.periphery)}, {L"left", periphery(f.periphery)}})
+                  : std::wstring(lang::tr(L"Periphery needs more room: lower Focus density or size to make room")));
     else if (f.peripheryCapped)
-        notes.push_back(L"Periphery above " + percent(f.periphery) + L" does not fit this launch: relaunch to use it");
+        notes.push_back(lang::trf(L"Periphery above {percent} does not fit this launch: relaunch to use it",
+                                  {{L"percent", percent(f.periphery)}}));
     return notes;
 }
 
-std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
+std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
     std::vector<MenuLine> lines;
     const std::vector<MenuItem> items = menu_page_items(menu);
     MenuValues v = menu.values;
     const CheekySettings& c = menu.cheeky.values;
     const MenuFit fit = menu_fit(menu);
+    const Words w{shown};  // the panel's language, or English for the log (layer/menu.cpp)
+    const auto on_off = [&w](bool on) { return std::wstring(w.t(on ? I18N(L"On") : I18N(L"Off"))); };
     for (size_t i = 0; i < items.size(); ++i) {
         MenuLine line;
-        line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu)     ? L"Use FSR"
-                     : items[i] == MenuItem::HeadDlss && fsr_runs(menu) ? L"FSR"
-                     : items[i] == MenuItem::FocusOffset && !v.eyeTracking ? L"Vertical position"
-                                                                           : spec(items[i]).label;
+        line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu)        ? w.t(I18N(L"Use FSR"))
+                     : items[i] == MenuItem::HeadDlss && fsr_runs(menu)    ? L"FSR"
+                     : items[i] == MenuItem::FocusOffset && !v.eyeTracking ? w.t(I18N(L"Vertical position"))
+                                                                           : w.t(spec(items[i]).label);
         line.selected = static_cast<int>(i) == menu.selected;
         line.header = menu_item_is_header(items[i]);
         if (line.header) {
@@ -898,46 +932,57 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             lines.push_back(line);
             continue;
         }
-        if (items[i] == MenuItem::Page)
-            line.value = page_name(menu, menu_page(menu)) + L"  " + std::to_wstring(std::clamp(menu.page, 0, static_cast<int>(menu_pages(menu).size()) - 1) + 1) +
-                         L" of " + std::to_wstring(menu_pages(menu).size());
-        else if (items[i] == MenuItem::Optimize)
-            line.value = menu.optimizeStatus.empty() ? L"Right: start · Left: undo" : menu.optimizeStatus;
-        else if (items[i] == MenuItem::Profile)
-            line.value = menu.profile < 0 || menu.profile >= static_cast<int>(menu.profiles.size())
-                             ? L"Your own"
-                             : menu.profiles[menu.profile] + (menu.profileChanged ? L" (changed)" : L"");
+        if (items[i] == MenuItem::Page) {
+            const int pages = static_cast<int>(menu_pages(menu).size());
+            line.value = w.f(I18N(L"{page}  {number} of {count}"),
+                             {{L"page", page_name(menu, menu_page(menu), w)},
+                              {L"number", std::to_wstring(std::clamp(menu.page, 0, pages - 1) + 1)},
+                              {L"count", std::to_wstring(pages)}});
+        } else if (items[i] == MenuItem::Optimize)
+            line.value = std::wstring(menu.optimizeStatus.empty() ? w.t(I18N(L"Right: start · Left: undo"))
+                                                                  : w.t(menu.optimizeStatus.c_str()));  // optimizer.cpp's
+        else if (items[i] == MenuItem::Profile) {
+            const bool known = menu.profile >= 0 && menu.profile < static_cast<int>(menu.profiles.size());
+            // A preset's name in the player's language (profiles.cpp marks them); a saved one's as written.
+            const std::wstring name = known ? std::wstring(w.t(menu.profiles[menu.profile].c_str())) : std::wstring();
+            line.value = !known                ? std::wstring(w.t(I18N(L"Your own")))
+                         : menu.profileChanged ? w.f(I18N(L"{profile} (changed)"), {{L"profile", name}})
+                                               : name;
+        }
         else if (items[i] == MenuItem::NrStyle)
-            line.value = dlss_choice_name(kNrStyles, v.nr.style);
+            line.value = w.t(dlss_choice_name(kNrStyles, v.nr.style));
         else if (items[i] == MenuItem::NrPreset)
-            line.value = dlss_choice_name(kNrPresets, v.nr.preset);
+            line.value = w.t(dlss_choice_name(kNrPresets, v.nr.preset));
         else if (items[i] == MenuItem::NrOrder)
-            line.value = v.nr.beforeDlss ? L"Before DLSS" : L"After DLSS";
+            line.value = w.t(v.nr.beforeDlss ? I18N(L"Before DLSS") : I18N(L"After DLSS"));
         else if (items[i] == MenuItem::NrLimit)
-            line.value = std::to_wstring(v.nr.workingLimit / 10) + L"." + std::to_wstring(v.nr.workingLimit % 10) + L" MP a view";
+            line.value = w.f(I18N(L"{megapixels} MP a view"),
+                             {{L"megapixels", std::to_wstring(v.nr.workingLimit / 10) + L"." +
+                                                  std::to_wstring(v.nr.workingLimit % 10)}});
         else if (const bool* flag = nr_flag(v.nr, items[i]))
-            line.value = *flag ? L"On" : L"Off";
+            line.value = on_off(*flag);
         else if (const int* number = nr_number(v.nr, items[i]))
             line.value = std::to_wstring(*number) + L"%";
         else if (items[i] == MenuItem::DlssOn)
-            line.value = v.dlss.on ? L"On" : L"Off";
+            line.value = on_off(v.dlss.on);
         else if (items[i] == MenuItem::DlssUpscaler)
             line.value = v.dlss.upscaler == 1 ? L"AMD FSR" : L"NVIDIA DLSS";
         else if (items[i] == MenuItem::DlssFocusMode && fsr_runs(menu) && v.dlss.focusScale >= 100)
-            line.value = L"Native AA";
+            line.value = w.t(I18N(L"Native AA"));
         else if (items[i] == MenuItem::DlssFocusMode)
-            line.value = std::wstring(dlss_choice_name(kDlssFocusModes, v.dlss.focusScale)) +
+            line.value = std::wstring(w.t(dlss_choice_name(kDlssFocusModes, v.dlss.focusScale))) +
                          (v.dlss.focusScale < 100 ? L" (" + std::to_wstring(v.dlss.focusScale) + L"%)" : L"");
         else if (items[i] == MenuItem::DlssFocusPreset)
-            line.value = v.dlss.focusPreset ? dlss_choice_name(kDlssFocusPresets, v.dlss.focusPreset)
-                         : menu.launch.apiDlss  ? L"The game's own"
-                                                : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
+            line.value = v.dlss.focusPreset ? w.t(dlss_choice_name(kDlssFocusPresets, v.dlss.focusPreset))
+                         : menu.launch.apiDlss ? w.t(I18N(L"The game's own"))
+                         : v.dlss.focusScale == 50 ? w.t(I18N(L"Default (M)"))
+                                                   : w.t(I18N(L"Default (K)"));
         else if (items[i] == MenuItem::DlssEyePreset)
-            line.value = dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset);
+            line.value = w.t(dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset));
         else if (items[i] == MenuItem::DlssSharpening)
-            line.value = dlss_choice_name(kDlssTextureSharpening, v.dlss.textureSharpening);
+            line.value = w.t(dlss_choice_name(kDlssTextureSharpening, v.dlss.textureSharpening));
         else if (items[i] == MenuItem::FgOn)
-            line.value = c.fg ? L"On" : L"Off";
+            line.value = on_off(c.fg);
         else if (items[i] == MenuItem::FgMultiplier)
             line.value = std::to_wstring(c.fgMultiplier) + L"x";
         else if (items[i] == MenuItem::FgSize)
@@ -947,100 +992,103 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         else if (items[i] == MenuItem::FgPeriphery)
             line.value = std::to_wstring(c.fgPeriphery) + L"%";
         else if (items[i] == MenuItem::FgBorder)
-            line.value = c.fgBorder ? L"On" : L"Off";
+            line.value = on_off(c.fgBorder);
         else if (items[i] == MenuItem::FgRelease)
-            line.value = kCheekyFgReleaseNames[cheeky_fg_release_index(c.fgRelease)];
+            line.value = w.t(kCheekyFgReleaseNames[cheeky_fg_release_index(c.fgRelease)]);
         else if (items[i] == MenuItem::CheekyProcessing)
-            line.value = c.processing ? L"On" : L"Off";
+            line.value = on_off(c.processing);
         else if (items[i] == MenuItem::CheekyOuterDlaa)
-            line.value = c.outerDlaa ? L"On" : L"Off";
+            line.value = on_off(c.outerDlaa);
         else if (items[i] == MenuItem::CheekyOuterScale)
             line.value = std::to_wstring(c.outerScale) + L"%";
         else if (items[i] == MenuItem::CheekyOuterPreset)
-            line.value = cheeky_preset_name(c.outerPreset);
+            line.value = w.t(cheeky_preset_name(c.outerPreset));
         else if (items[i] == MenuItem::CheekyFocusPreset)
-            line.value = cheeky_preset_name(c.focusPreset);
+            line.value = w.t(cheeky_preset_name(c.focusPreset));
         else if (items[i] == MenuItem::CheekySupersampling)
             line.value = std::to_wstring(c.supersampling) + L"%";
         else if (items[i] == MenuItem::CheekyMotionFix)
-            line.value = c.motionFix ? L"On" : L"Off";
+            line.value = on_off(c.motionFix);
         else if (items[i] == MenuItem::CheekyNr)
-            line.value = c.nr ? L"On" : L"Off";
+            line.value = on_off(c.nr);
         else if (items[i] == MenuItem::CheekyNrPreset)
-            line.value = kCheekyNrPresets[std::clamp(c.nrPreset, 0, kCheekyNrPresetMax)];
+            line.value = w.t(kCheekyNrPresets[std::clamp(c.nrPreset, 0, kCheekyNrPresetMax)]);
         else if (items[i] == MenuItem::CheekyNrPasses)
             line.value = std::to_wstring(c.nrPasses);
         else if (items[i] == MenuItem::Outline)
-            line.value = v.outline ? L"On" : L"Off";
+            line.value = on_off(v.outline);
         else if (items[i] == MenuItem::Shape)
-            line.value = v.shape.corners ? L"Custom corners" : L"Rectangle";
+            line.value = w.t(v.shape.corners ? I18N(L"Custom corners") : I18N(L"Rectangle"));
         else if (items[i] == MenuItem::EyeTracking)
-            line.value = v.eyeTracking ? L"Eye tracked" : L"Fixed";
+            line.value = w.t(v.eyeTracking ? I18N(L"Eye tracked") : I18N(L"Fixed"));
         else if (items[i] == MenuItem::Overlay)
-            line.value = v.overlay.enabled ? L"On" : L"Off";
+            line.value = on_off(v.overlay.enabled);
         else if (items[i] == MenuItem::Clock)
-            line.value = v.clock.enabled ? L"On" : L"Off";
+            line.value = on_off(v.clock.enabled);
         else if (items[i] == MenuItem::HotkeyFooter)
-            line.value = v.hotkeyFooter ? L"On" : L"Off";
+            line.value = on_off(v.hotkeyFooter);
         else if (items[i] == MenuItem::CpuIsolateMain)
-            line.value = v.cpuIsolateMain ? L"On" : L"Off";
+            line.value = on_off(v.cpuIsolateMain);
         else if (items[i] == MenuItem::Crop)
-            line.value = v.crop ? L"On" : L"Off";
+            line.value = on_off(v.crop);
         else if (items[i] == MenuItem::Helmet)
-            line.value = v.helmet.on ? L"On" : L"Off";
+            line.value = on_off(v.helmet.on);
         else if (items[i] == MenuItem::HelmetDebug)
-            line.value = v.helmet.debugLight ? L"On" : L"Off";
+            line.value = on_off(v.helmet.debugLight);
         else if (items[i] == MenuItem::Visor)
-            line.value = kVisorPositionNames[static_cast<int>(v.helmet.visor)];
+            line.value = w.t(kVisorPositionNames[static_cast<int>(v.helmet.visor)]);
         else if (items[i] == MenuItem::HelmetSize)
-            line.value = std::to_wstring(v.helmet.size) + L"\u00b0";
+            line.value = std::to_wstring(v.helmet.size) + L"°";
         else if (items[i] == MenuItem::HelmetHeight)
-            line.value = degrees(v.helmet.height, L"up", L"down");
+            line.value = degrees(w, v.helmet.height, I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::FocusOffset)
-            line.value = degrees(v.offset.for_mode(v.eyeTracking), L"up", L"down");
+            line.value = degrees(w, v.offset.for_mode(v.eyeTracking), I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::GazeDeadzone)
-            line.value = !v.eyeTracking      ? L"Eye tracking off"
-                         : v.gazeDeadzone == 0 ? L"Off (follows every sample)"
+            line.value = !v.eyeTracking        ? std::wstring(w.t(I18N(L"Eye tracking off")))
+                         : v.gazeDeadzone == 0 ? std::wstring(w.t(I18N(L"Off (follows every sample)")))
                                                : gaze_deadzone_text(v.gazeDeadzone) + L"°";
         else if (items[i] == MenuItem::FocusQuadDistance)
             line.value = std::to_wstring(focus_quad_metres(v.focusQuadStep)) + L" m";
         else if (items[i] == MenuItem::Sharpening && v.sharpen == 0)
-            line.value = L"Off";
+            line.value = w.t(I18N(L"Off"));
         else if (items[i] == MenuItem::EyeOff)
-            line.value = v.eyeOff == 1 ? L"Left (right eye only)" : v.eyeOff == 2 ? L"Right (left eye only)" : L"None";
+            line.value = w.t(v.eyeOff == 1   ? I18N(L"Left (right eye only)")
+                             : v.eyeOff == 2 ? I18N(L"Right (left eye only)")
+                                             : I18N(L"None"));
         else if (items[i] == MenuItem::HelmetDetail)
-            line.value = kHelmetDetailNames[v.helmet.detail ? 1 : 0];
+            line.value = w.t(kHelmetDetailNames[v.helmet.detail ? 1 : 0]);
         else if (items[i] == MenuItem::HelmetDepth)
-            line.value = v.helmet.depth ? std::to_wstring(v.helmet.depth) + L" cm" : L"Far";
+            line.value = v.helmet.depth ? std::to_wstring(v.helmet.depth) + L" cm" : std::wstring(w.t(I18N(L"Far")));
         else if (items[i] == MenuItem::OverlayYaw)
-            line.value = degrees(v.overlay.yaw, L"right", L"left");
+            line.value = degrees(w, v.overlay.yaw, I18N(L"{degrees} right"), I18N(L"{degrees} left"));
         else if (items[i] == MenuItem::OverlayPitch)
-            line.value = degrees(v.overlay.pitch, L"up", L"down");
+            line.value = degrees(w, v.overlay.pitch, I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::OverlayWidth)
-            line.value = std::to_wstring(v.overlay.width) + L"\u00b0";
+            line.value = std::to_wstring(v.overlay.width) + L"°";
         else if (items[i] == MenuItem::ClockYaw)
-            line.value = degrees(v.clock.yaw, L"right", L"left");
+            line.value = degrees(w, v.clock.yaw, I18N(L"{degrees} right"), I18N(L"{degrees} left"));
         else if (items[i] == MenuItem::ClockPitch)
-            line.value = degrees(v.clock.pitch, L"up", L"down");
+            line.value = degrees(w, v.clock.pitch, I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::ClockWidth)
-            line.value = std::to_wstring(v.clock.width) + L"\u00b0";
+            line.value = std::to_wstring(v.clock.width) + L"°";
         else if (items[i] == MenuItem::MenuYaw)
-            line.value = degrees(v.placement.yaw, L"right", L"left");
+            line.value = degrees(w, v.placement.yaw, I18N(L"{degrees} right"), I18N(L"{degrees} left"));
         else if (items[i] == MenuItem::MenuPitch)
-            line.value = degrees(v.placement.pitch, L"up", L"down");
+            line.value = degrees(w, v.placement.pitch, I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::MenuWidth)
-            line.value = std::to_wstring(v.placement.width) + L"\u00b0";
+            line.value = std::to_wstring(v.placement.width) + L"°";
         else
             line.value = std::to_wstring(*value_of(v, items[i])) + L"%";
         // What is in effect when the asked value does not fit the launch size.
         if (items[i] == MenuItem::Periphery && fit.peripheryCapped) {
             line.capped = true;
-            line.value += L"  (" + percent(fit.periphery) + L" now)";
+            line.value += L"  " + w.f(I18N(L"({percent} now)"), {{L"percent", percent(fit.periphery)}});
         } else if (items[i] == MenuItem::Density && fit.focusCapped) {
             line.capped = true;
-            line.value += std::lround(fit.densityX) == std::lround(fit.densityY)
-                              ? L"  (" + percent(fit.densityX) + L" now)"
-                              : L"  (" + percent(fit.densityX) + L" x " + percent(fit.densityY) + L" now)";
+            line.value += L"  " + (std::lround(fit.densityX) == std::lround(fit.densityY)
+                                       ? w.f(I18N(L"({percent} now)"), {{L"percent", percent(fit.densityX)}})
+                                       : w.f(I18N(L"({width} x {height} now)"),
+                                             {{L"width", percent(fit.densityX)}, {L"height", percent(fit.densityY)}}));
         }
         lines.push_back(line);
     }

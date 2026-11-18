@@ -4,7 +4,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <windows.h>
@@ -14,6 +16,7 @@
 #include "games/lmu/game.h"
 #include "games/xplane/game.h"
 #include "ini_put.h"
+#include "lang.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 #include "test_util.h"
@@ -57,9 +60,46 @@ bool has_page(const SettingsMenu& m, MenuPage page) {
     return std::find(pages.begin(), pages.end(), page) != pages.end();
 }
 
+// `sim_qvfr_tests settings_menu_test --render <lang folder> <code> <out folder>`: each page of the menu, drawn in that
+// language, as page-<n>.bmp (32-bit, top-down), to look at a translation's fit without a game. Not part of the suite.
+int render_pages(const char* folder, const char* code, const char* out) {
+    lang::select(folder, std::wstring(code, code + std::strlen(code)));  // an ASCII code: de, pl, pt-BR
+    SettingsMenu m;
+    m.launch = {true, 50, 39, 39};
+    std::filesystem::create_directories(out);
+    for (int page = 0; page < static_cast<int>(menu_pages(m).size()); ++page) {
+        m.page = page;
+        m.selected = 1;
+        const std::vector<MenuLine> lines = menu_lines(m);
+        const std::vector<uint32_t> px = draw_menu_panel(menu_title(m), menu_resolution(m), menu_stats(m), lines,
+                                                         menu_notes(m), L"", menu_subtitle(m), L"", L"", false,
+                                                         menu_tabs(m), m.page, 1);
+        BITMAPFILEHEADER file{};
+        BITMAPINFOHEADER info{sizeof(info), kPanelWidth, -kPanelHeight, 1, 32, BI_RGB};
+        file.bfType = 0x4d42;
+        file.bfOffBits = sizeof(file) + sizeof(info);
+        file.bfSize = file.bfOffBits + static_cast<DWORD>(px.size() * 4);
+        std::vector<uint8_t> bgra(px.size() * 4);
+        for (size_t i = 0; i < px.size(); ++i) {  // RGBA8 premultiplied, over black
+            const uint32_t c = px[i];
+            bgra[i * 4 + 0] = static_cast<uint8_t>(c >> 16);
+            bgra[i * 4 + 1] = static_cast<uint8_t>(c >> 8);
+            bgra[i * 4 + 2] = static_cast<uint8_t>(c);
+            bgra[i * 4 + 3] = 255;
+        }
+        std::ofstream f(std::filesystem::path(out) / ("page-" + std::to_string(page) + ".bmp"), std::ios::binary);
+        f.write(reinterpret_cast<const char*>(&file), sizeof(file));
+        f.write(reinterpret_cast<const char*>(&info), sizeof(info));
+        f.write(reinterpret_cast<const char*>(bgra.data()), static_cast<std::streamsize>(bgra.size()));
+    }
+    return 0;
+}
+
 }  // namespace
 
-int SIM_QVFR_TEST_MAIN() {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
+    if (argc >= 5 && std::strcmp(argv[1], "--render") == 0)
+        return render_pages(argv[2], argv[3], argv[4]);
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
     check(menu_items(true).size() == 10 && menu_items(false).size() == 8 &&

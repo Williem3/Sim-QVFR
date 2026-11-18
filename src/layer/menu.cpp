@@ -20,6 +20,7 @@
 #include "games/game.h"
 #include "ini_put.h"
 #include "input/hotkeys.h"
+#include "lang.h"
 #include "log.h"
 #include "profile/profiles.h"
 #include "quad/focus_turn.h"
@@ -184,26 +185,32 @@ void menu_open(int64_t now) {
         menu.model.dlssState.clear();
         if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
             const focus_ngx::State d = focus_ngx::state();
+            // The panel's note (settings_menu.cpp menu_notes), in the player's language; never logged.
             const auto letter = [](int preset) {
                 return preset > 0 && preset <= 26 ? std::wstring(1, static_cast<wchar_t>(L'A' + preset - 1))
-                                                  : std::wstring(L"default");
+                                                  : std::wstring(lang::tr(L"default"));
             };
-            static const wchar_t* const kModes[] = {L"Performance", L"Balanced", L"Quality", L"Ultra Performance",
-                                                    L"Ultra Quality", L"DLAA"};
-            const std::wstring mode = d.gameQuality >= 0 && d.gameQuality <= 5 ? kModes[d.gameQuality] : L"?";
+            static const wchar_t* const kModes[] = {I18N(L"Performance"), I18N(L"Balanced"), I18N(L"Quality"),
+                                                    I18N(L"Ultra Performance"), I18N(L"Ultra Quality"), L"DLAA"};
+            const std::wstring mode = d.gameQuality >= 0 && d.gameQuality <= 5 ? lang::tr(kModes[d.gameQuality]) : L"?";
             if (!experiment.replayDlss) {
-                menu.model.dlssState = L"DLSS: off for the focus views (replay_dlss=0)";
+                menu.model.dlssState = lang::tr(L"DLSS: off for the focus views (replay_dlss=0)");
             } else if (!d.seen) {
-                menu.model.dlssState = L"DLSS: off in the game: periphery and focus without DLSS";
+                menu.model.dlssState = lang::tr(L"DLSS: off in the game: periphery and focus without DLSS");
             } else {
                 const bool dlaa = d.width == d.outWidth && d.height == d.outHeight;
-                const std::wstring focusMode = dlss_choice_name(kDlssFocusModes, experiment.replayDlssFocusScale);
+                const std::wstring focusMode =
+                    lang::tr(dlss_choice_name(kDlssFocusModes, experiment.replayDlssFocusScale));
                 if (!dlaa)  // the game renders its eyes smaller in its other modes, and the focus views with them
-                    menu.model.dlssState = L"Set the game's DLSS to DLAA (now " + mode + L"): the focus mode is picked here";
+                    menu.model.dlssState = lang::trf(
+                        L"Set the game's DLSS to DLAA (now {mode}): the focus mode is picked here", {{L"mode", mode}});
+                else if (d.focusRunning)
+                    menu.model.dlssState = lang::trf(L"DLSS: periphery DLAA preset {eye}, focus {mode} preset {preset}",
+                                                     {{L"eye", letter(d.eyePreset)}, {L"mode", focusMode},
+                                                      {L"preset", letter(d.focusPreset)}});
                 else
-                    menu.model.dlssState = L"DLSS: periphery DLAA preset " + letter(d.eyePreset) + L", focus " +
-                                           (d.focusRunning ? focusMode + L" preset " + letter(d.focusPreset)
-                                                           : std::wstring(L"not running"));
+                    menu.model.dlssState = lang::trf(L"DLSS: periphery DLAA preset {eye}, focus not running",
+                                                     {{L"eye", letter(d.eyePreset)}});
             }
         }
         if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
@@ -290,8 +297,8 @@ void menu_press(MenuKey key, int64_t now) {
         optimize.optimizer.cancel();
         log_line("optimize: stopped (a setting was changed)");
     }
-    {  // what was set, to check against what applies ("live:", "cheeky: settings applied")
-        const std::vector<MenuLine> lines = menu_lines(menu.model);
+    {  // what was set, to check against what applies ("live:", "cheeky: settings applied"); English in any language
+        const std::vector<MenuLine> lines = menu_lines(menu.model, false);
         const int i = menu.model.selected;
         if (i >= 0 && i < static_cast<int>(lines.size())) {
             // With its section (the launcher's card): a page has several "Horizontal" and "Size" lines.
@@ -299,7 +306,7 @@ void menu_press(MenuKey key, int64_t now) {
             for (int k = i; k >= 0 && section.empty(); --k)
                 if (lines[k].header)
                     section = L" / " + lines[k].label;
-            logf("settings menu: %ls%ls: %ls -> %ls", menu_page_name(menu.model).c_str(), section.c_str(),
+            logf("settings menu: %ls%ls: %ls -> %ls", menu_page_name(menu.model, false).c_str(), section.c_str(),
                  lines[i].label.c_str(), lines[i].value.c_str());
         }
     }

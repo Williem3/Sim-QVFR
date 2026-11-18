@@ -14,6 +14,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "engine/dlss_views.h"
 #include "input/hotkeys.h"
+#include "lang.h"
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/d3d11_compose_timer.h"
@@ -70,8 +71,12 @@ void menu_frame_line() {
         line = osd_menu_line(s, bad);
     } else if (!osd.placement.enabled) {  // on, its first numbers not in yet: nothing
         const Hotkey& h = hotkeys[static_cast<int>(HotkeyAction::Overlay)];
-        const std::wstring key = h.key.set() ? key_text(h.key) : h.pad.set() ? L"wheel " + control_text(h.pad.control) : L"";
-        line = key.empty() ? L"Turn the overlay on for frame times" : L"Overlay off: " + key + L" for frame times";
+        const std::wstring pad = h.pad.set() ? lang::trf(L"wheel {button}", {{L"button", control_text(h.pad.control)}})
+                                             : std::wstring();
+        const std::wstring key = h.key.set() ? key_text(h.key) : pad;
+        // The headset menu's line beside its title, in the player's language (lang.h).
+        line = key.empty() ? std::wstring(lang::tr(L"Turn the overlay on for frame times"))
+                           : lang::trf(L"Overlay off: {key} for frame times", {{L"key", key}});
     }
     if (line != menu.model.frameLine || bad != menu.model.frameBad) {
         menu.model.frameLine = line;
