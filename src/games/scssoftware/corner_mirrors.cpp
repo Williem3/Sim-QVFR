@@ -368,7 +368,7 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
     } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
            focus ? focus_fy() : g.fy, ~0u, ~0u};
-    const bool positioned = position && !pixel && focus && count <= kPositionAt;
+    const bool positioned = position && !pixel && count <= kPositionAt;  // the eye's pass: its size row alone
     if (positioned) {
         p.flags |= 8u;
         p.rectRow = position[0] >= 0 ? static_cast<uint32_t>(position[0]) : ~0u;
@@ -384,7 +384,8 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
     if (positioned) {  // the twin's two vectors, bound as their own 16-constant block
         const D3D11_BOX at = {kPositionAt * 16, 0, 0, (kPositionAt + 16) * 16, 1, 1};
         g.context->CopySubresourceRegion(ours, 0, kPositionAt * 16, 0, 0, set.out.Get(), 0, &at);
-        r.position = ours;
+        if (focus)
+            r.position = ours;
     }
     const UINT zero = 0, n = ((count + 15) / 16) * 16;  // ranged binds: multiples of 16 constants
     if (pixel)

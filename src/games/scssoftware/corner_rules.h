@@ -196,13 +196,17 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
     if (eq(a, whole) && isFlip(b)) {
         if (!pairAt(2))
             pairAt(3);
-        if ((flags & 8) && rectRow == 0 && sizeRow < count && isSize(at(sizeRow)) && box.z > 0 && box.w > 0) {
-            const float4 rect = asfloat(dst.Load4(0));  // v * rect.zw + rect.xy, now of v' = box.xy + v * box.zw
-            const float2 scale = rect.zw / box.zw;
-            dst.Store4(0, asuint(float4(rect.xy - box.xy * scale, scale)));
+        // The eye's own pass (flags & 2 clear) too: its vertex spans the eye's screen, so the size row with the eye's
+        // size makes v * size its screen pixel (the periphery's night lights, run of 2026-11-18); no twin, no remap.
+        if ((flags & 8) && rectRow == 0 && sizeRow < count && isSize(at(sizeRow))) {
             const float4 size = at(sizeRow);  // the game's: the eye's size
             const float2 texel = asfloat(dst.Load4(sizeRow * 16)).zw / asfloat(dst.Load4(sizeRow * 16)).xy;
             dst.Store4(sizeRow * 16, asuint(float4(size.xy, texel * size.xy)));
+        }
+        if ((flags & 10) == 10 && rectRow == 0 && sizeRow < count && isSize(at(sizeRow)) && box.z > 0 && box.w > 0) {
+            const float4 rect = asfloat(dst.Load4(0));  // v * rect.zw + rect.xy, now of v' = box.xy + v * box.zw
+            const float2 scale = rect.zw / box.zw;
+            dst.Store4(0, asuint(float4(rect.xy - box.xy * scale, scale)));
             // The clip position from v' undone: x = 2 v - 1; y = -(2 v - 1) * flip.x.
             const float s = b.x;
             dst.Store4(kPositionAt * 16, asuint(float4(box.zw, box.xy)));

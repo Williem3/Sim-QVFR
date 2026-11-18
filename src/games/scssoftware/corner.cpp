@@ -371,7 +371,16 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     bool vs, ps;
     {
         const Timed t(State::kTimeRewrites);
-        vs = rewrite(g.vs, false);
+        // A shader that turns its vertex into screen pixels (its position twin's rows): its size row keeps the eye's
+        // size, so those are the eye's pixels, not the corner's (the light list's tiles: the periphery's night lights).
+        int rows[2] = {-1, -1};
+        bool haveRows = false;
+        if (ID3D11VertexShader* s = nullptr; (g.context->VSGetShader(&s, nullptr, nullptr), s)) {
+            UINT size = sizeof(rows);
+            haveRows = SUCCEEDED(s->GetPrivateData(lmu::kFocusPositionRowsGuid, &size, rows)) && size == sizeof(rows);
+            s->Release();
+        }
+        vs = rewrite(g.vs, false, false, haveRows ? rows : nullptr);
         ps = rewrite(g.ps, true);
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.

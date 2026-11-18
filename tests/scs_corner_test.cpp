@@ -832,6 +832,16 @@ Out main(float2 v : POSITION) {
     check(texture, "position: its texture coordinates the replay's (the twins read as before)");
     check(pixels, "position: its screen pixels the eye's under the box (light list tiles)");
     check(close_to(after[3 * 4 + 2] / after[3 * 4 + 0], before[3 * 4 + 2] / before[3 * 4 + 0]), "position: the size row's zw / xy kept");
+    // The eye's own pass (no focus flag): the pair rewritten for the corner, but the size row the eye's (v * size the
+    // eye's screen pixel: the periphery's light tiles), its rectangle untouched.
+    {
+        auto q = p;
+        q.flags = 1 | 8, q.fx = q.fy = q.px = q.py = 0.4f;
+        const std::vector<float> eye = run_patch(device.Get(), context.Get(), cs.Get(), range, &q);
+        check(!eye.empty() && eye[12] == W && eye[13] == H && close_to(eye[14], 1) && close_to(eye[15], 1) &&
+                  close_to(eye[8], 0.4f) && eye[0] == 0 && eye[2] == 1,
+              "position: the eye's pass keeps the eye's size in the size row, the pair's scale the corner's");
+    }
     // Not the V1 shape (a rectangle left of a flip: V2): the identity, so the twin is the game's shader.
     const std::vector<float> v2 = {1, -0.5f, 0.5f, 0, 0, 0, 1, 1, W, H, 1 / W, 1 / H, 0, 0, 0, 0};
     const std::vector<float> other = run_patch(device.Get(), context.Get(), cs.Get(), v2, &p);
