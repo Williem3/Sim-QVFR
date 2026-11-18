@@ -211,7 +211,21 @@ private:
         if (!skipPs.empty())
             simqvfr::logf("scs focus: bisection: the replays of %zu pixel shaders are SKIPPED (scs_replay_skip_ps=%ls)",
                           skipPs.size(), psList);
-        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring, skipPs);
+        wchar_t dumpList[512] = L"";
+        GetPrivateProfileStringW(L"experiment", L"scs_dump_ps", L"", dumpList, 512, ini);
+        std::vector<uint64_t> dumpPs;
+        for (const wchar_t* p = dumpList; *p;) {
+            if (!iswxdigit(*p)) {
+                ++p;
+                continue;
+            }
+            wchar_t* end = nullptr;
+            dumpPs.push_back(_wcstoui64(p, &end, 16));
+            p = end;
+        }
+        if (!dumpPs.empty())
+            simqvfr::logf("scs focus: the constant ranges of %zu pixel shaders are saved (scs_dump_ps=%ls)", dumpPs.size(), dumpList);
+        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring, skipPs, dumpPs);
         if (skipLarge)
             simqvfr::log_line("scs focus: bisection: the replays with a pixel range over 128 vectors are SKIPPED (scs_replay_skip_large=1)");
         if (gpuTimes)

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../../dev_build.h"
@@ -451,6 +452,7 @@ void hang_check() {
 namespace {
 unsigned largeDumps = 0;
 uint64_t largeDumpFrame = 0;
+std::unordered_map<uint64_t, std::pair<unsigned, uint64_t>> psDumps;  // per shader: dumps so far, the last one's frame
 
 std::string vec_text(const float (&v)[4]) {
     char s[160];
@@ -461,9 +463,16 @@ std::string vec_text(const float (&v)[4]) {
 }
 }  // namespace
 
-void dump_large_range(unsigned n) {
-    if (largeDumps >= 4 || (largeDumps && g.stats.frames - largeDumpFrame < 300))
+void dump_large_range(unsigned n, uint64_t psId) {
+    if (psId) {  // scs_dump_ps: 6 per shader, 120 frames apart
+        auto& [count, frame] = psDumps[psId];
+        if (count >= 6 || (count && g.stats.frames - frame < 120))
+            return;
+        ++count;
+        frame = g.stats.frames;
+    } else if (largeDumps >= 4 || (largeDumps && g.stats.frames - largeDumpFrame < 300)) {
         return;
+    }
     ID3D11Buffer* bound = nullptr;
     UINT first = 0, count = 0;
     g.context->PSGetConstantBuffers1(0, 1, &bound, &first, &count);
@@ -488,9 +497,18 @@ void dump_large_range(unsigned n) {
     std::vector<float> data(bytes / 4);
     std::memcpy(data.data(), m.pData, bytes);
     g.context->Unmap(staging.Get(), 0);
-    ++largeDumps;
-    largeDumpFrame = g.stats.frames;
-    const std::wstring path = simqvfr::log_directory() + L"\\scs-large-" + std::to_wstring(largeDumps) + L".bin";
+    unsigned dumpNo = 0;
+    std::wstring path;
+    if (psId) {
+        dumpNo = psDumps[psId].first;
+        wchar_t name[64];
+        swprintf_s(name, L"\\scs-range-PS_%016llx-%u.bin", static_cast<unsigned long long>(psId), dumpNo);
+        path = simqvfr::log_directory() + name;
+    } else {
+        dumpNo = ++largeDumps;
+        largeDumpFrame = g.stats.frames;
+        path = simqvfr::log_directory() + L"\\scs-large-" + std::to_wstring(dumpNo) + L".bin";
+    }
     FILE* f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f) {
         fwrite(data.data(), 1, bytes, f);
@@ -498,8 +516,8 @@ void dump_large_range(unsigned n) {
     }
     auto* v = reinterpret_cast<float(*)[4]>(data.data());
     const int vectors = static_cast<int>(bytes / 16);
-    simqvfr::logf("scs focus: large range %u (frame %llu, replay %u, buffer %u bytes, %s): %d vectors from %u, saved as %ls",
-                  largeDumps, static_cast<unsigned long long>(g.stats.frames), n, bd.ByteWidth,
+    simqvfr::logf("scs focus: range %u of PS_%016llx (frame %llu, replay %u, buffer %u bytes, %s): %d vectors from %u, saved as %ls",
+                  dumpNo, static_cast<unsigned long long>(psId), static_cast<unsigned long long>(g.stats.frames), n, bd.ByteWidth,
                   bd.ByteWidth >= kMirrorMin ? "a mirror or the game's large buffer" : "the game's", vectors, first, path.c_str());
     // Where the focus view's rules (kCornerPatchCs with flags 2) would write in it.
     const float ones[4] = {1, 1, 1, 1}, last[4] = {0, 0, 0, 1};

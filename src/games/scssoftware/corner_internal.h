@@ -278,6 +278,7 @@ struct State {
     bool diagSkipLarge = false;
     bool diagDumpLarge = false;  // [experiment] scs_dump_large=1: dump_large_range
     std::vector<uint64_t> replaySkipPs;  // [experiment] scs_replay_skip_ps: the replays of these pixel shaders skipped
+    std::vector<uint64_t> dumpPs;        // [experiment] scs_dump_ps: these pixel shaders' ranges saved (dump_large_range)
     uint64_t skippedByPs = 0;
     uint64_t largeReplays = 0, largeSkipped = 0;
     uint32_t frameDraw = 0;  // this frame's draws in its eye passes (the markers' numbers)
@@ -465,7 +466,7 @@ void gpu_times_reset();      // release_all (the queries are the device's)
 // g.diagDumpLarge: the pixel range bound for a large replay (n: the frame's replay number), read back at once (a stall,
 // a few times a session) and written to logs\scs-large-<k>.bin, with the places the focus view's rules would match in
 // it logged. At most 4, 300 frames apart.
-void dump_large_range(unsigned n);
+void dump_large_range(unsigned n, uint64_t psId = 0);
 // Aftermath markers (probe/aftermath.h, [experiment] aftermath=1 in dev builds with the SDK): what the GPU reached last
 // when it hangs. A marker's number: its kind (top 4 bits), the frame (28 bits), and the kind's own value.
 enum MarkKind : uint64_t { kMarkDraw = 1, kMarkReplay = 2, kMarkReplayDone = 3, kMarkRelease = 4, kMarkReleaseDone = 5, kMarkFrameEnd = 6 };

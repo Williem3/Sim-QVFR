@@ -429,6 +429,8 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
             }
         }
         const bool skipPs = psId && std::find(g.replaySkipPs.begin(), g.replaySkipPs.end(), psId) != g.replaySkipPs.end();
+        if (psId && std::find(g.dumpPs.begin(), g.dumpPs.end(), psId) != g.dumpPs.end())
+            dump_large_range(n, psId);
         g.skippedByPs += skipPs ? 1 : 0;
         const bool skip = g.diagNoReplays || (n <= 64 && ((g.replaySkip >> (n - 1)) & 1)) || (large && g.diagSkipLarge) || skipPs;
         if (large) {
@@ -831,8 +833,9 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
-                     bool rewriteRing, const std::vector<uint64_t>& skipPs) {
+                     bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {
     g.replaySkipPs = skipPs;
+    g.dumpPs = dumpPs;
     g.gpuTimes = gpuTimes;
     g.diagSkipLarge = skipLarge;
     g.rewriteRing = rewriteRing;
