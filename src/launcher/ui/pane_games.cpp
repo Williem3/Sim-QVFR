@@ -139,7 +139,8 @@ void color_wheel(const Rect& r) {
 // A game's colour among the presets (the Games card's swatches; Custom… for any other): apart from the games' own colours
 // (theme_tokens.h kGamePalettes) and the sections' blue, red and yellow, so a game given one stands out.
 const uint32_t kColorPresets[] = {0x7a3db8, 0xc0267a, 0x4d7c0f, 0x8b5e34, 0x0e7490, 0x4b5563};
-const wchar_t* const kColorPresetNames[] = {L"Purple", L"Magenta", L"Olive", L"Brown", L"Teal blue", L"Slate"};
+const wchar_t* const kColorPresetNames[] = {I18N(L"Purple"), I18N(L"Magenta"), I18N(L"Olive"),
+                                            I18N(L"Brown"),  I18N(L"Teal blue"), I18N(L"Slate")};
 static_assert(std::size(kColorPresets) == 6, "six presets");
 
 // A preset chosen on the Games card: the edited game's colour, at once.
@@ -158,11 +159,11 @@ namespace {
 // A game's note on the Games card: why its switch is locked, that Steam didn't find it, or that it's hidden.
 std::wstring game_note(const games::GameInfo& game) {
     const bool shown = game_shown(game), locked = shown && shown_game_count() <= 1, found = installed(game);
-    return locked  ? L"The last game in the rail: show another to hide it."
-           : !found ? shown ? L"Not found by Steam: choose its folder in Launch checks."
-                            : L"Not found by Steam. Turn it on if it’s installed elsewhere."
+    return locked  ? tr(L"The last game in the rail: show another to hide it.")
+           : !found ? shown ? tr(L"Not found by Steam: choose its folder in Launch checks.")
+                            : tr(L"Not found by Steam. Turn it on if it’s installed elsewhere.")
            : shown  ? L""
-                    : L"Hidden. Its settings are kept for when you show it again.";
+                    : tr(L"Hidden. Its settings are kept for when you show it again.");
 }
 
 constexpr float kGameTextX = 36;
@@ -189,15 +190,15 @@ void game_row(const Rect& r, size_t i) {
         cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
     if (focused(kColorGame) && app.focusOption == static_cast<int>(i))
         focus_ring(swatch, 11);
-    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i), L"Change " + std::wstring(game->shortName) + L"’s colour",
-                        L"Change its colour"});
+    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i),
+                        trf(L"Change {game}’s colour", {{L"game", game->shortName}}), tr(L"Change its colour")});
     const float tx = r.x + kGameTextX, tw = r.w - kGameTextX - kSwitchW - t::kSpace4;
     const float dh = desc.empty() ? 0 : cv.measure_height(desc, t::kCallout, tw);
     const float ty = r.y + (r.h - t::kBody.lineHeight - (dh > 0 ? 2 + dh : 0)) / 2;
     cv.text(game->name, t::kBody, {tx, ty, tw, t::kBody.lineHeight}, col(app.c->label));
     if (!found) {
         const float nx = tx + std::ceil(cv.measure(game->name, t::kBody)) + t::kSpace2;
-        badge(nx, ty, 3, L"Not found", std::max(0.0f, tx + tw - nx));
+        badge(nx, ty, 3, tr(L"Not found"), std::max(0.0f, tx + tw - nx));
     }
     if (dh > 0)
         cv.text(desc, t::kCallout, {tx, ty + t::kBody.lineHeight + 2, tw, dh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
@@ -206,7 +207,8 @@ void game_row(const Rect& r, size_t i) {
     if (!locked) {
         if (focused(kGameShown) && app.focusOption == static_cast<int>(i))
             focus_ring(sw, t::kRadiusSwitch);
-        app.hits.push_back({kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i), L"", L"In the rail", shown ? 1 : 0});
+        app.hits.push_back(
+            {kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i), L"", tr(L"In the rail"), shown ? 1 : 0});
     }
     app.drawnLabels.push_back({game->name, app.drawingSection, r});
 }
@@ -217,9 +219,9 @@ void color_row(const Rect& r) {
     const games::GameInfo& game = color_game();
     const auto custom = app.s.gameColors.find(games::wide_id(game));
     const bool hasCustom = custom != app.s.gameColors.end();
-    const std::wstring label = L"Colour for " + std::wstring(game.shortName);
+    const std::wstring label = trf(L"Colour for {game}", {{L"game", game.shortName}});
     cv.text(label, t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
-    app.drawnLabels.push_back({L"Colour", app.drawingSection, r});
+    app.drawnLabels.push_back({tr(L"Colour"), app.drawingSection, r});
     float x = r.x;
     const float y = r.y + 28, d = 26;
     const auto swatch = [&](Ctl id, int option, uint32_t rgb, bool chosen, const std::wstring& tip) {
@@ -232,21 +234,24 @@ void color_row(const Rect& r) {
         app.hits.push_back({id, s.inset(-2, -2), option, tip, tip, chosen ? 1 : 0});
         x += d + 10;
     };
-    swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom, std::wstring(game.shortName) + L"’s own colour");
+    swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom,
+           trf(L"{game}’s own colour", {{L"game", game.shortName}}));
     for (int p = 0; p < static_cast<int>(std::size(kColorPresets)); ++p)
-        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p], kColorPresetNames[p]);
+        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p],
+               tr(kColorPresetNames[p]));
     const bool other = hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets);
-    const float bw = button_width(L"Custom…");
+    const std::wstring customLabel = tr(L"Custom…");
+    const float bw = button_width(customLabel);
     if (other)  // a colour of its own: shown before Custom…
-        swatch(kColorCustom, -1, custom->second, true, L"Its own colour");
-    button(kColorCustom, {std::min(x, r.right() - bw), y - 4, bw, t::kControlHeight}, L"Custom…", Btn::Secondary);
+        swatch(kColorCustom, -1, custom->second, true, tr(L"Its own colour"));
+    button(kColorCustom, {std::min(x, r.right() - bw), y - 4, bw, t::kControlHeight}, customLabel, Btn::Secondary);
 }
 
 }  // namespace
 
 // The Games card: which games are in the rail, and each one's colour (its marker on the rail).
 Card games_card() {
-    Card c{Tab::Game, L"Games in the rail"};
+    Card c{Tab::Game, tr(L"Games in the rail")};
     c.body = [](Body& b) {
         std::size_t count = 0;
         games::all_games(count);
@@ -255,7 +260,7 @@ Card games_card() {
             b.custom(game_row_height(i, b.width()), [i](const Rect& r) { game_row(r, i); });
         b.divider();
         b.custom(28 + 26, color_row);
-        b.note(L"A game’s colour marks it on the rail. Installed games are in the rail unless you hide them.");
+        b.note(tr(L"A game’s colour marks it on the rail. Installed games are in the rail unless you hide them."));
     };
     return c;
 }
@@ -266,34 +271,37 @@ std::wstring online_status(int& tone) {
     const games::GameInfo& g = games::launcher_game();
     if (g.antiCheatStart && app.s.antiCheat) {
         tone = 1;
-        return L"Online at your own risk: the anti-cheat can ban you";
+        return tr(L"Online at your own risk: the anti-cheat can ban you");
     }
     tone = 3;
-    return L"Offline sessions only";
+    return tr(L"Offline sessions only");
 }
 
 // Online racing, for every game: whether Sim-QVFR can be used online, and for a game with an anti-cheat bootstrapper (LMU)
 // the switch that starts it with its anti-cheat, at the player's risk.
 Card online_card() {
-    Card c{Tab::Game, L"Online racing"};
+    Card c{Tab::Game, tr(L"Online racing")};
     c.body = [](Body& b) {
         const games::GameInfo& g = games::launcher_game();
         int tone = 3;
         b.chip(tone == 3 ? 3 : tone, online_status(tone));
         if (!g.antiCheatStart) {
-            b.note(L"Sim-QVFR runs inside " + std::wstring(g.shortName) + L" and changes how it renders. Use it in offline "
-                   L"sessions, and don’t report problems you see with it to the game’s developers.");
+            b.note(trf(L"Sim-QVFR runs inside {game} and changes how it renders. Use it in offline sessions, and don’t "
+                       L"report problems you see with it to the game’s developers.",
+                       {{L"game", g.shortName}}));
             return;
         }
         const bool on = app.s.antiCheat;
-        b.toggle(kAntiCheat, L"Run with anti-cheat", on,
-                 on ? L"Starts " + std::wstring(g.shortName) + L" through its anti-cheat, as Steam does, with Sim-QVFR running."
-                    : L"Off: " + std::wstring(g.shortName) + L" starts without its anti-cheat, so online servers won’t let you in. "
-                      L"Turning it on asks you to accept the risk first.",
+        b.toggle(kAntiCheat, tr(L"Run with anti-cheat"), on,
+                 on ? trf(L"Starts {game} through its anti-cheat, as Steam does, with Sim-QVFR running.",
+                          {{L"game", g.shortName}})
+                    : trf(L"Off: {game} starts without its anti-cheat, so online servers won’t let you in. Turning it "
+                          L"on asks you to accept the risk first.",
+                          {{L"game", g.shortName}}),
                  false, Applies::NextLaunch);
         if (on)  // the risk, only while it's on (accepted when it was turned on)
-            b.note(L"Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it. You accepted "
-                   L"that risk: Sim-QVFR and its developer aren’t responsible for kicks or bans.");
+            b.note(tr(L"Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it. You "
+                      L"accepted that risk: Sim-QVFR and its developer aren’t responsible for kicks or bans."));
     };
     if (games::launcher_game().antiCheatStart)
         c.reset = [](Settings& s) { s.antiCheat = Settings{}.antiCheat; };
@@ -310,15 +318,15 @@ float color_panel(float x, float y, float w, bool draw) {
         const float px = r.x + r.h + t::kSpace6, pw = std::min(200.0f, r.right() - px);
         if (pw < 100)
             return;
-        app.canvas.text(L"On the rail", t::kSubheadline, {px, r.y + 20, pw, 18}, col(app.c->label_secondary));
+        app.canvas.text(tr(L"On the rail"), t::kSubheadline, {px, r.y + 20, pw, 18}, col(app.c->label_secondary));
         const Rect block{px, r.y + 44, pw, 64};
         app.canvas.fill(block, col(app.c->rail));
         app.canvas.fill({block.x, block.y, 4, block.h}, col(a.accent_fill));
         app.canvas.text(rail_abbreviation(game), t::kRailAbbrev, {block.x + 16, block.y + 10, pw - 20, 24}, col(app.c->rail_text));
         app.canvas.text(game.name, t::kRailName, {block.x + 16, block.y + 36, pw - 20, 16}, col(app.c->rail_text_muted));
     });
-    b.slider({kColorValue, L"Brightness", app.colorValue});
-    b.actions({{kColorReset, L"Use its own colour"}, {kPanelClose, L"Done", Btn::Primary}});
+    b.slider({kColorValue, tr(L"Brightness"), app.colorValue});
+    b.actions({{kColorReset, tr(L"Use its own colour")}, {kPanelClose, tr(L"Done"), Btn::Primary}});
     return b.height();
 }
 
@@ -326,15 +334,15 @@ float color_panel(float x, float y, float w, bool draw) {
 Card cpu_card() {
     Card c{Tab::Game, L"CPU", Applies::Live};
     c.body = [](Body& b) {
-        b.toggle(kCpuIsolateMain, L"Give the main thread a core of its own", app.s.cpuIsolateMain,
+        b.toggle(kCpuIsolateMain, tr(L"Give the main thread a core of its own"), app.s.cpuIsolateMain,
                  app.s.cpuIsolateMain
-                     ? L"On: the game thread that finishes each frame runs alone on one core, and the game’s other threads "
-                       L"(its physics among them) use the rest, so none slows it down by sharing that core."
-                     : L"Off (the default): the game’s threads share every core, as Windows places them.");
-        b.note(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs with 6 "
-               L"or more cores and two threads per core, and stays off if another tool (such as Process Lasso) already "
-               L"set the game’s CPU sets or affinity. Try it on and watch your frames; the headset menu’s CPU page "
-               L"changes it too.");
+                     ? tr(L"On: the game thread that finishes each frame runs alone on one core, and the game’s other "
+                          L"threads (its physics among them) use the rest, so none slows it down by sharing that core.")
+                     : tr(L"Off (the default): the game’s threads share every core, as Windows places them."));
+        b.note(tr(L"Only the game’s own threads move: no Windows setting or other program changes. It applies on CPUs "
+                  L"with 6 or more cores and two threads per core, and stays off if another tool (such as Process "
+                  L"Lasso) already set the game’s CPU sets or affinity. Try it on and watch your frames; the headset "
+                  L"menu’s CPU page changes it too."));
     };
     c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
     return c;

@@ -37,9 +37,7 @@
 
 #include <windows.h>
 
-// Marks English text for tools/lang_extract.py where it can't be translated yet (a constexpr table): the code passes
-// it through tr() where it shows. Expands to the literal itself.
-#define I18N(text) text
+#include "i18n.h"  // I18N(L"...") for tables
 
 namespace simqvfr::lang {
 

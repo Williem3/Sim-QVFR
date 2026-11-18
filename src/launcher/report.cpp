@@ -12,6 +12,7 @@
 #include <shlobj.h>
 
 #include "../json.h"
+#include "../lang.h"
 #include "../log_prefix.h"
 #include "../text.h"
 
@@ -815,59 +816,69 @@ SystemInfo system_info() {
 
 std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
     std::vector<Cause> out;
+    // Each cause in English (the report) and in the player's language (the launcher), from one template.
+    using Args = std::initializer_list<std::pair<const wchar_t*, std::wstring>>;
+    const auto add = [&out](const wchar_t* title, Args args, const wchar_t* fix) {
+        out.push_back({lang::fill(title, args), fix, lang::trf(title, args), lang::tr(fix)});
+    };
+    const auto percent = [](double v) { return formatted(L"%.0f", v); };
     const SessionInfo& session = rt.session;
     if (s.eyeTracking && rt.eyeTracker == EyeTracker::Missing)
-        out.push_back({L"Eye tracking is on, but the tracker sent nothing last session",
-                       L"The focus area stayed in the centre. Start the headset's eye tracking (and calibrate it) "
-                       L"before the game, or choose Fixed in Foveation."});
+        add(I18N(L"Eye tracking is on, but the tracker sent nothing last session"), {},
+            I18N(L"The focus area stayed in the centre. Start the headset's eye tracking (and calibrate it) "
+                 L"before the game, or choose Fixed in Foveation."));
     if (s.cheeky.load && (rt.cheekyStatus == L"missing" || rt.cheekyStatus == L"refused"))
-        out.push_back({L"Foveated DLSS did not start at the last launch (Cheeky " + rt.cheekyStatus + L")",
-                       rt.cheekyStatus == L"missing"
-                           ? L"Choose Cheeky's runtime (CheekyFoveatedDLSSRuntime.dll) in Foveated DLSS."
-                           : L"Cheeky's runtime refused to load: use the build the README lists, and check the session log."});
+        add(I18N(L"Foveated DLSS did not start at the last launch (Cheeky {status})"), {{L"status", rt.cheekyStatus}},
+            rt.cheekyStatus == L"missing"
+                ? I18N(L"Choose Cheeky's runtime (CheekyFoveatedDLSSRuntime.dll) in Foveated DLSS.")
+                : I18N(L"Cheeky's runtime refused to load: use the build the README lists, and check the session log."));
     if (rt.known() && readouts(s, rt).overRuntimeLimit)
-        out.push_back({L"The view is larger than the headset runtime allows",
-                       L"Lower the outer resolution or the focus density in Resolution."});
+        add(I18N(L"The view is larger than the headset runtime allows"), {},
+            I18N(L"Lower the outer resolution or the focus density in Resolution."));
     // The runtime composing (Pimax, Varjo): Sim-QVFR's focus area shows only inside the runtime's own focus views.
     if (s.mode == RenderMode::Qvfr && rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0 &&
         (s.width > rt.quadFocusWidth + 1 || s.height > rt.quadFocusHeight + 1))
-        out.push_back({L"The focus area (" + std::to_wstring(s.width) + L"% × " + std::to_wstring(s.height) +
-                           L"%) is larger than the runtime's own focus region (" + std::to_wstring(rt.quadFocusWidth) +
-                           L"% × " + std::to_wstring(rt.quadFocusHeight) + L"%)",
-                       L"With the runtime composing the views (Pimax, Varjo), the focus area shows only inside its own "
-                       L"focus region; past it, the outer resolution shows. Make the runtime's focus area larger (Pimax "
-                       L"Play, Varjo Base), or Sim-QVFR's no larger than it, in Resolution."});
+        add(I18N(L"The focus area ({width}% × {height}%) is larger than the runtime's own focus region "
+                 L"({runtime_width}% × {runtime_height}%)"),
+            {{L"width", std::to_wstring(s.width)}, {L"height", std::to_wstring(s.height)},
+             {L"runtime_width", std::to_wstring(rt.quadFocusWidth)}, {L"runtime_height", std::to_wstring(rt.quadFocusHeight)}},
+            I18N(L"With the runtime composing the views (Pimax, Varjo), the focus area shows only inside its own "
+                 L"focus region; past it, the outer resolution shows. Make the runtime's focus area larger (Pimax "
+                 L"Play, Varjo Base), or Sim-QVFR's no larger than it, in Resolution."));
     if (rt.vramUsedMb > 0 && rt.vramBudgetMb > 0 && rt.vramUsedMb >= 0.9 * rt.vramBudgetMb)
-        out.push_back({formatted(L"VRAM was nearly full (%.0f%% of what Windows allows the game)", 100 * rt.vramUsedMb / rt.vramBudgetMb),
-                       L"Stutter and hitches follow when it runs out. Lower the outer resolution or the focus density, "
-                       L"or the game's texture quality."});
+        add(I18N(L"VRAM was nearly full ({percent}% of what Windows allows the game)"),
+            {{L"percent", percent(100 * rt.vramUsedMb / rt.vramBudgetMb)}},
+            I18N(L"Stutter and hitches follow when it runs out. Lower the outer resolution or the focus density, "
+                 L"or the game's texture quality."));
     if (!session.known())
         return out;
     if (session.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos)
-        out.push_back({L"OpenXR Toolkit is loaded under Sim-QVFR",
-                       L"It adds about 0.8 ms to every frame's submission. If you don't use it for this game, switch it off in "
-                       L"OpenXR layers."});
+        add(I18N(L"OpenXR Toolkit is loaded under Sim-QVFR"), {},
+            I18N(L"It adds about 0.8 ms to every frame's submission. If you don't use it for this game, switch it off in "
+                 L"OpenXR layers."));
     if (session.limited == L"GPU")
-        out.push_back({formatted(L"The GPU was busy all the time (%.0f%%)", session.gpuBusy),
-                       L"This is the GPU's limit. Lower the outer resolution or the focus density, or the game's "
-                       L"graphics settings."});
+        add(I18N(L"The GPU was busy all the time ({percent}%)"), {{L"percent", percent(session.gpuBusy)}},
+            I18N(L"This is the GPU's limit. Lower the outer resolution or the focus density, or the game's "
+                 L"graphics settings."));
     double gameThread = 0;
-    for (const auto& [name, percent] : session.threads)
+    for (const auto& [name, busy] : session.threads)
         if (name == L"GameThread")
-            gameThread = percent;
+            gameThread = busy;
     if (session.limited.starts_with(L"CPU") || gameThread >= 90)
-        out.push_back({L"The game's CPU work limited the frame rate",
-                       L"QVFR lowers the GPU's work, not the CPU's. Lower the game's CPU-heavy settings (opponents, "
-                       L"mirrors, shadows)."});
+        add(I18N(L"The game's CPU work limited the frame rate"), {},
+            I18N(L"QVFR lowers the GPU's work, not the CPU's. Lower the game's CPU-heavy settings (opponents, "
+                 L"mirrors, shadows)."));
     if (session.halfRatePercent >= 1)
-        out.push_back({formatted(L"The headset runtime ran the game at half rate for %.0f%% of the session", session.halfRatePercent),
-                       L"When frames come close to the budget, the runtime's motion smoothing halves the frame rate for a "
-                       L"few seconds (Varjo does this). Turn motion smoothing off in the runtime's software (Varjo Base) to "
-                       L"compare, and give the CPU room: lower the game's CPU-heavy settings (opponents, mirrors, shadows)."});
+        add(I18N(L"The headset runtime ran the game at half rate for {percent}% of the session"),
+            {{L"percent", percent(session.halfRatePercent)}},
+            I18N(L"When frames come close to the budget, the runtime's motion smoothing halves the frame rate for a "
+                 L"few seconds (Varjo does this). Turn motion smoothing off in the runtime's software (Varjo Base) to "
+                 L"compare, and give the CPU room: lower the game's CPU-heavy settings (opponents, mirrors, shadows)."));
     else if (session.limited.starts_with(L"Pacing"))
-        out.push_back({formatted(L"%.0f%% of frames were late with neither the CPU nor the GPU full", session.latePercent),
-                       L"Often something else in the chain: another OpenXR layer, an overlay, or the runtime's motion "
-                       L"smoothing. Try with them off."});
+        add(I18N(L"{percent}% of frames were late with neither the CPU nor the GPU full"),
+            {{L"percent", percent(session.latePercent)}},
+            I18N(L"Often something else in the chain: another OpenXR layer, an overlay, or the runtime's motion "
+                 L"smoothing. Try with them off."));
     return out;
 }
 

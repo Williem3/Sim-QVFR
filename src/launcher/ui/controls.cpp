@@ -260,7 +260,7 @@ void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& it
 float segmented_width() {
     float w = 4;
     for (const auto& name : kColorNames)
-        w += t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(name, t::kBody) + 2;
+        w += t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(tr(name), t::kBody) + 2;
     return std::ceil(w - 2);
 }
 
@@ -270,7 +270,8 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
     app.canvas.fill(r, col(app.c->segment_track), t::kRadiusControl);
     float x = r.x + 2;
     for (int i = 0; i < 3; ++i) {
-        const float w = t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(kColorNames[i], t::kBody);
+        const wchar_t* name = tr(kColorNames[i]);
+        const float w = t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(name, t::kBody);
         const Rect item{x, r.y + 2, w, r.h - 4};
         const bool on = i == selected;
         if (on)  // the selected segment: ink on light, near-white on dark, its text inverted
@@ -281,12 +282,12 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
         if (on)  // the swatch keeps a light edge on the dark segment, a dark one on the light
             app.canvas.circle(item.x + t::kSpace3 + 5, item.y + item.h / 2, 5.5f, col(app.c->on_segment, 0.8f), false, 1);
         // On the selected segment its own text colour, also while disabled (the segment itself is faded then).
-        app.canvas.text(kColorNames[i], t::kBody, {item.x + t::kSpace3 + 16, item.y, w - t::kSpace3 - 16, item.h},
+        app.canvas.text(name, t::kBody, {item.x + t::kSpace3 + 16, item.y, w - t::kSpace3 - 16, item.h},
                         col(on ? app.c->on_segment : disabled ? app.c->label_tertiary : app.c->label));
         if (on && focused(id))
             focus_ring(item, t::kRadiusControl - 2);
         if (!disabled)
-            app.hits.push_back({id, item, i, L"", kColorNames[i], on ? 1 : 0});
+            app.hits.push_back({id, item, i, L"", name, on ? 1 : 0});
         x += w + 2;
     }
 }

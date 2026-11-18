@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../i18n.h"
+
 #ifdef SIM_QVFR_FFX
 #include <d3d12.h>
 #include <wincrypt.h>
@@ -88,7 +90,7 @@ Offer probe_offer(const std::wstring& folder) {
     ComPtr<IDXGIAdapter1> adapter;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
         FAILED(factory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)))) {
-        o.why = L"No graphics card was found.";
+        o.why = I18N(L"No graphics card was found.");
         return o;
     }
     DXGI_ADAPTER_DESC1 desc{};
@@ -98,7 +100,7 @@ Offer probe_offer(const std::wstring& folder) {
 #ifdef SIM_QVFR_FFX
     const std::wstring upscaler = folder + L"\\amd_fidelityfx_upscaler_dx12.dll", loader = folder + L"\\amd_fidelityfx_loader_dx12.dll";
     if (GetFileAttributesW(upscaler.c_str()) == INVALID_FILE_ATTRIBUTES || GetFileAttributesW(loader.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        o.why = L"AMD’s FSR files are missing from this copy of Sim-QVFR.";
+        o.why = I18N(L"AMD’s FSR files are missing from this copy of Sim-QVFR.");
         return o;
     }
     // Only AMD-signed copies, held open as checked until loaded.
@@ -107,7 +109,7 @@ Offer probe_offer(const std::wstring& folder) {
     if (loaderFile == INVALID_HANDLE_VALUE) {
         if (upscalerFile != INVALID_HANDLE_VALUE)
             CloseHandle(upscalerFile);
-        o.why = L"AMD’s FSR files in this copy of Sim-QVFR aren’t signed by AMD.";
+        o.why = I18N(L"AMD’s FSR files in this copy of Sim-QVFR aren’t signed by AMD.");
         return o;
     }
     // The upscaler first, by its full path: the loader then takes it, not a copy elsewhere. Both stay loaded (the
@@ -125,12 +127,12 @@ Offer probe_offer(const std::wstring& folder) {
             FreeLibrary(module);
         if (effect)
             FreeLibrary(effect);
-        o.why = L"AMD’s FSR files couldn’t be loaded.";
+        o.why = I18N(L"AMD’s FSR files couldn’t be loaded.");
         return o;
     }
     ComPtr<ID3D12Device> device;
     if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
-        o.why = L"The graphics card has no Direct3D 12.";
+        o.why = I18N(L"The graphics card has no Direct3D 12.");
         return o;
     }
     uint64_t count = 0;
@@ -140,7 +142,7 @@ Offer probe_offer(const std::wstring& folder) {
     q.device = device.Get();
     q.outputCount = &count;
     if (ffx.Query(nullptr, &q.header) != FFX_API_RETURN_OK || count == 0 || count > 64) {
-        o.why = L"AMD’s FSR offers nothing on this graphics card.";
+        o.why = I18N(L"AMD’s FSR offers nothing on this graphics card.");
         return o;
     }
     std::vector<uint64_t> ids(count);
@@ -148,7 +150,7 @@ Offer probe_offer(const std::wstring& folder) {
     q.versionIds = ids.data();
     q.versionNames = names.data();
     if (ffx.Query(nullptr, &q.header) != FFX_API_RETURN_OK) {
-        o.why = L"AMD’s FSR couldn’t list what it offers.";
+        o.why = I18N(L"AMD’s FSR couldn’t list what it offers.");
         return o;
     }
     for (uint64_t i = 0; i < count; ++i) {
@@ -164,7 +166,7 @@ Offer probe_offer(const std::wstring& folder) {
     o.checked = true;
 #else
     (void)folder;
-    o.why = L"This build has no AMD FSR.";
+    o.why = I18N(L"This build has no AMD FSR.");
 #endif
     return o;
 }

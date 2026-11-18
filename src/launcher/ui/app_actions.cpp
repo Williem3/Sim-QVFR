@@ -212,7 +212,7 @@ void changed(bool save) {
         const std::vector<std::wstring> diff = setting_changes(app.lastSaved, app.s);
         if (app.undoing) {
             app.undoChange.reset();
-            app.undoText = diff.empty() ? L"" : L"Undone: " + changes_text(diff, 2);
+            app.undoText = diff.empty() ? L"" : trf(L"Undone: {changes}", {{L"changes", changes_text(diff, 2)}});
         } else if (!diff.empty()) {
             app.undoChange = app.lastSaved;
             app.undoText = changes_text(diff, 2);
@@ -508,7 +508,7 @@ void start_launch();
 void launch() {
     if (!app.iniFound) {
         app.status = Status::Error;
-        app.error = L"sim-qvfr.ini not found next to the launcher.";
+        app.error = tr(L"sim-qvfr.ini not found next to the launcher.");
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
@@ -521,15 +521,15 @@ void launch() {
     refresh_checks();
     // Running already (from here or not): Launch checks says how, and Launch starts nothing.
     if (game_running()) {
-        jump_to({L"Launch checks", L"Launch checks", Pane::Game});
+        jump_to({tr(L"Launch checks"), tr(L"Launch checks"), Pane::Game});
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
     for (const Check& c : app.checks)
         if (c.id == "game" && c.tone == CheckTone::Bad) {  // its fix, Choose folder…, is in Launch checks
             app.status = Status::Error;
-            app.error = game_name() + L" not found: choose its folder in Launch checks.";
-            jump_to({L"Launch checks", L"Launch checks", Pane::Game});
+            app.error = trf(L"{game} not found: choose its folder in Launch checks.", {{L"game", game_name()}});
+            jump_to({tr(L"Launch checks"), tr(L"Launch checks"), Pane::Game});
             InvalidateRect(app.hwnd, nullptr, FALSE);
             return;
         }
@@ -543,9 +543,9 @@ void launch() {
         return;
     }
     Sheet s;
-    s.title = L"Launch " + game_name() + L" anyway?";
-    s.text = L"The launch checks found:\n" + problems;
-    s.buttons = {L"Show Checks", L"Launch Anyway"};
+    s.title = trf(L"Launch {game} anyway?", {{L"game", game_name()}});
+    s.text = trf(L"The launch checks found:\n{problems}", {{L"problems", problems}});
+    s.buttons = {tr(L"Show Checks"), tr(L"Launch Anyway")};
     s.focus = 0;
     s.danger = true;
     s.done = [](int button, const std::wstring&) {
@@ -553,7 +553,7 @@ void launch() {
             start_launch();
             return;
         }
-        jump_to({L"Launch checks", L"Launch checks", Pane::Game});
+        jump_to({tr(L"Launch checks"), tr(L"Launch checks"), Pane::Game});
         InvalidateRect(app.hwnd, nullptr, FALSE);
     };
     open_sheet(std::move(s));
@@ -570,7 +570,8 @@ void start_launch() {
     if (launch_game(false, report, &launched) != 0) {
         app.status = Status::Error;
         const size_t at = report.find(L"ERROR: ");
-        app.error = at == std::wstring::npos ? L"Launch failed." : report.substr(at + 7, report.find(L'\n', at) - at - 7);
+        app.error = at == std::wstring::npos ? std::wstring(tr(L"Launch failed."))
+                                             : report.substr(at + 7, report.find(L'\n', at) - at - 7);
     } else {
         // From here the watch says what became of it: running with Sim-QVFR, without it, closed or crashed.
         app.status = Status::Idle;

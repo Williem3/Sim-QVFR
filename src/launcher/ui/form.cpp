@@ -40,15 +40,13 @@ float row_height(const Row& row, float w) {
 
 float applies_tag(float x, float y, Applies applies) {
     const bool live = applies != Applies::NextLaunch;
-    const std::wstring text = applies == Applies::Live          ? L"Changes now"
-                              : applies == Applies::LiveLowered ? L"Now when lowered"
-                                                                : L"Next game start";
+    const std::wstring text = applies == Applies::Live          ? tr(L"Changes now")
+                              : applies == Applies::LiveLowered ? tr(L"Now when lowered")
+                                                                : tr(L"Next game start");
     const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
     app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), t::kRadiusControl);
     app.canvas.text(text, kBadgeStyle, r, col(live ? app.c->success : app.c->label_secondary), Align::Center);
-    int index = 0;
-    while (text != kHelp[index].label)
-        ++index;
+    const int index = help_index(text);
     app.hits.push_back({kHelpIcon, r, index});
     if (app.tip == index)
         app.tipAnchor = r;

@@ -27,7 +27,7 @@ void start_update_check() {
         if (fetch_releases(body, result->error)) {
             result->ok = newest_release(body, result->release);
             if (!result->ok)
-                result->error = L"GitHub lists no release";
+                result->error = tr(L"GitHub lists no release");  // About shows it
         }
         if (!PostMessageW(hwnd, kUpdateMessage, 0, reinterpret_cast<LPARAM>(result)))
             delete result;
@@ -52,10 +52,10 @@ void update_done(UpdateResult* r) {
 // answer; About's switch changes it).
 void ask_update_check() {
     Sheet s;
-    s.title = L"Check for updates automatically?";
-    s.text = L"When it starts, the launcher can ask GitHub for the newest Sim-QVFR release and tell you when there is one. "
-             L"Nothing else is sent, and nothing downloads by itself. You can change this in About.";
-    s.buttons = {L"Don’t Check", L"Check Automatically"};
+    s.title = tr(L"Check for updates automatically?");
+    s.text = tr(L"When it starts, the launcher can ask GitHub for the newest Sim-QVFR release and tell you when there "
+                L"is one. Nothing else is sent, and nothing downloads by itself. You can change this in About.");
+    s.buttons = {tr(L"Don’t Check"), tr(L"Check Automatically")};
     s.cancel = 0;
     s.done = [](int button, const std::wstring&) {
         app.s.updateAsked = true;
@@ -92,7 +92,7 @@ namespace {
 void run_install() {
     app.installing = true;
     app.installError.clear();
-    app.installProgress = {L"Starting", 0};
+    app.installProgress = {tr(L"Starting"), 0};  // About shows its step
     std::thread([hwnd = app.hwnd, folder = launcher_folder(), release = app.release, version = widen(SIM_QVFR_VERSION)] {
         // Progress as messages, at most one per percent or step.
         std::wstring lastStep;
@@ -122,16 +122,18 @@ void start_install() {
         return;
     refresh_checks();
     if (game_running()) {
-        notify(L"Close " + game_name() + L" first", L"Sim-QVFR’s layer is in use while the game runs, so it can’t be replaced yet.");
+        notify(trf(L"Close {game} first", {{L"game", game_name()}}),
+               tr(L"Sim-QVFR’s layer is in use while the game runs, so it can’t be replaced yet."));
         return;
     }
     const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
     Sheet s;
-    s.title = L"Install Sim-QVFR " + app.release.tag + L"?";
-    s.text = L"The launcher downloads it from GitHub (" + mb + L" MB), checks it, replaces its program files and restarts. "
-             L"Your settings, profiles, logs and any file you changed (your own helmet images) stay. The version you have now "
-             L"is kept in the update folder.";
-    s.buttons = {L"Cancel", L"Install"};
+    s.title = trf(L"Install Sim-QVFR {version}?", {{L"version", app.release.tag}});
+    s.text = trf(L"The launcher downloads it from GitHub ({size} MB), checks it, replaces its program files and "
+                 L"restarts. Your settings, profiles, logs and any file you changed (your own helmet images) stay. The "
+                 L"version you have now is kept in the update folder.",
+                 {{L"size", mb}});
+    s.buttons = {tr(L"Cancel"), tr(L"Install")};
     s.done = [](int button, const std::wstring&) {
         if (button == 1)
             run_install();
@@ -155,10 +157,12 @@ void install_done(InstallResult* r) {
     }
     const std::wstring path = module_path();  // the new launcher now: the old one moved into the backup
     Sheet s;
-    s.title = L"Sim-QVFR " + app.release.tag + L" is installed";
-    s.text = std::to_wstring(result->replaced + result->added) + L" files installed, " + std::to_wstring(result->kept) +
-             L" of yours kept. The version you had is in " + result->backup + L".";
-    s.buttons = {L"Restart Now"};
+    s.title = trf(L"Sim-QVFR {version} is installed", {{L"version", app.release.tag}});
+    s.text = trf(L"{installed} files installed, {kept} of yours kept. The version you had is in {folder}.",
+                 {{L"installed", std::to_wstring(result->replaced + result->added)},
+                  {L"kept", std::to_wstring(result->kept)},
+                  {L"folder", result->backup}});
+    s.buttons = {tr(L"Restart Now")};
     s.done = [exe = path](int, const std::wstring&) { restart_launcher(exe); };
     open_sheet(std::move(s));
 }
@@ -175,7 +179,7 @@ void restart_launcher(const std::wstring& exe) {
         CloseHandle(pi.hProcess);
         DestroyWindow(app.hwnd);
     } else {
-        app.installError = L"installed; start the launcher again to use it";
+        app.installError = tr(L"installed; start the launcher again to use it");
     }
 }
 

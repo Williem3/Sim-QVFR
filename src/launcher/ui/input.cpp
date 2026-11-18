@@ -47,13 +47,13 @@ void activate(Ctl id, int option) {
         return;
     case kSearchField: SetFocus(app.searchEdit); return;
     case kSheetButton: close_sheet(option); return;
-    case kChecksBadge: jump_to({L"Launch checks", L"Launch checks", Pane::Game}); return;
+    case kChecksBadge: jump_to({tr(L"Launch checks"), tr(L"Launch checks"), Pane::Game}); return;
     case kUndoBadge: undo_restore(); return;
     case kUndoChange: undo_change(); return;
     case kLaunchBadge: {
         const LaunchOutcome o = app.watch.outcome();
         if (o.link == LaunchLink::Diagnostics) {
-            jump_to({L"Diagnostics", L"Diagnostics", Pane::Game});
+            jump_to({tr(L"Diagnostics"), tr(L"Diagnostics"), Pane::Game});
         } else if (o.link == LaunchLink::Report) {
             if (o.state == LaunchState::Crashed)
                 app.reportKind = 1;  // kIssueKinds: Crash or freeze
@@ -85,23 +85,24 @@ void activate(Ctl id, int option) {
         if (id == kProfileUse || id == kProfileRevert) {
             use_profile(name);
             if (id == kProfileRevert && app.profileMatches)
-                app.profileMessage = L"Back to " + name + L".";
+                app.profileMessage = trf(L"Back to {name}.", {{L"name", name}});
         } else if (id == kProfileUpdate) {  // the settings now, into the profile in use: no question, it's its own button
             if (save_profile(profiles_folder(app.ini), settings_profile(app.s, name))) {
-                app.profileMessage = L"Updated " + name + L" with the settings you have now.";
+                app.profileMessage = trf(L"Updated {name} with the settings you have now.", {{L"name", name}});
             } else {
-                app.profileMessage = L"Couldn’t update " + name + L".";
+                app.profileMessage = trf(L"Couldn’t update {name}.", {{L"name", name}});
             }
             refresh_profiles();
         } else if (id == kProfileShare && load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking)) {
             app.profileMessage = copy_text(widen(share_profile(p)))
-                                     ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
-                                     : L"Couldn’t copy to the clipboard.";
+                                     ? trf(L"Copied {name} to the clipboard: paste it in a chat or a post.",
+                                           {{L"name", name}})
+                                     : std::wstring(tr(L"Couldn’t copy to the clipboard."));
         } else if (id == kProfileDelete) {
             Sheet s;
-            s.title = L"Delete " + name + L"?";
-            s.text = L"It goes from Your profiles. The settings you have now stay as they are.";
-            s.buttons = {L"Cancel", L"Delete"};
+            s.title = trf(L"Delete {name}?", {{L"name", name}});
+            s.text = tr(L"It goes from Your profiles. The settings you have now stay as they are.");
+            s.buttons = {tr(L"Cancel"), tr(L"Delete")};
             s.focus = 0;
             s.danger = true;
             s.done = [name](int button, const std::wstring&) {
@@ -110,7 +111,7 @@ void activate(Ctl id, int option) {
                 delete_profile(profiles_folder(app.ini), name);
                 if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
                     set_current_profile(app.ini.c_str(), L"");
-                app.profileMessage = L"Deleted " + name + L".";
+                app.profileMessage = trf(L"Deleted {name}.", {{L"name", name}});
                 refresh_profiles();
             };
             open_sheet(std::move(s));
@@ -143,11 +144,11 @@ void activate(Ctl id, int option) {
         }
         // On: only once the player has read and accepted that a kick or a ban is theirs to risk.
         Sheet s;
-        s.title = L"Run " + short_name() + L" with its anti-cheat?";
-        s.text = L"This lets you join online servers with Sim-QVFR running. The game’s anti-cheat can kick you, or ban your "
-                 L"account, for using Sim-QVFR.\n\nSim-QVFR and its developer are not responsible for any kick or ban. By "
-                 L"turning this on, you accept that risk and the responsibility for it.";
-        s.buttons = {L"Cancel", L"I accept the risk"};
+        s.title = trf(L"Run {game} with its anti-cheat?", {{L"game", short_name()}});
+        s.text = tr(L"This lets you join online servers with Sim-QVFR running. The game’s anti-cheat can kick you, or "
+                    L"ban your account, for using Sim-QVFR.\n\nSim-QVFR and its developer are not responsible for any "
+                    L"kick or ban. By turning this on, you accept that risk and the responsibility for it.");
+        s.buttons = {tr(L"Cancel"), tr(L"I accept the risk")};
         s.focus = 0;
         s.danger = true;
         s.done = [](int button, const std::wstring&) {

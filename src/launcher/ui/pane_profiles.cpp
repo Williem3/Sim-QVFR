@@ -15,8 +15,9 @@ namespace simqvfr::launcher::ui::win {
 
 // Profiles (profile/profiles.h): the presets, then the saved profiles, each with what it does and its buttons.
 float profiles_pane(float x, float y, float w, bool draw) {
-    static const wchar_t* const kPresetNotes[] = {L"The lightest load, for a steady frame rate.", L"Between the two.",
-                                                  L"The sharpest centre, for a fast GPU."};
+    static const wchar_t* const kPresetNotes[] = {I18N(L"The lightest load, for a steady frame rate."),
+                                                  I18N(L"Between the two."),
+                                                  I18N(L"The sharpest centre, for a fast GPU.")};
     const std::vector<Profile> presets = builtin_profiles(app.s.eyeTracking);
     // A row's buttons, right-aligned in its control rect: (id, label), each the profile's index as its option;
     // kNone: a green badge with the label instead ("In use").
@@ -60,18 +61,19 @@ float profiles_pane(float x, float y, float w, bool draw) {
         const bool preset = i < presets.size();
         std::vector<std::pair<Ctl, std::wstring>> buttons;
         if (changedSince && !preset)
-            buttons.push_back({kProfileUpdate, L"Update"});
-        buttons.push_back(changedSince ? std::pair<Ctl, std::wstring>{kProfileRevert, L"Revert"}
-                          : current    ? std::pair<Ctl, std::wstring>{kNone, L"In use"}
-                                       : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"});
-        const std::wstring changedNote = changedSince ? L"In use, changed since." : L"";
+            buttons.push_back({kProfileUpdate, tr(L"Update")});
+        buttons.push_back(changedSince ? std::pair<Ctl, std::wstring>{kProfileRevert, tr(L"Revert")}
+                          : current    ? std::pair<Ctl, std::wstring>{kNone, tr(L"In use")}
+                                       : std::pair<Ctl, std::wstring>{kProfileUse, tr(L"Use")});
+        const std::wstring changedNote = changedSince ? tr(L"In use, changed since.") : L"";
         if (preset) {
             Row r = buttons_row(i, buttons);
-            r.label = name;
-            r.desc = preset_summary(presets[i]) + L". " + kPresetNotes[i] + (changedNote.empty() ? L"" : L" " + changedNote);
+            r.label = tr(name);  // a preset's name in the player's language (profiles.cpp marks them)
+            r.desc = preset_summary(presets[i]) + L". " + tr(kPresetNotes[i]) +
+                     (changedNote.empty() ? L"" : L" " + changedNote);
             presetRows.push_back(r);
         } else {
-            buttons.insert(buttons.end(), {{kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            buttons.insert(buttons.end(), {{kProfileShare, tr(L"Share")}, {kProfileDelete, tr(L"Delete")}});
             Row r = buttons_row(i, buttons);
             r.label = name;
             r.desc = changedNote;
@@ -79,29 +81,32 @@ float profiles_pane(float x, float y, float w, bool draw) {
         }
     }
     float h = 0;
-    h += section(x, y + h, w, app.s.eyeTracking ? L"Presets for eye tracked foveation" : L"Presets for fixed foveation", presetRows,
-                 L"They set the resolution only; the Foveated mode (Foveation) picks the set.",
+    h += section(x, y + h, w,
+                 app.s.eyeTracking ? tr(L"Presets for eye tracked foveation") : tr(L"Presets for fixed foveation"),
+                 presetRows, tr(L"They set the resolution only; the Foveated mode (Foveation) picks the set."),
                  draw) +
          t::kSpace6;
     if (savedRows.empty()) {
         Row none;
-        none.label = L"None yet";
-        none.desc = L"Save the settings you have as a profile, or paste one someone shared with you.";
+        none.label = tr(L"None yet");
+        none.desc = tr(L"Save the settings you have as a profile, or paste one someone shared with you.");
         savedRows.push_back(none);
     }
     Row actions;
     actions.fullHeight = [](float) { return t::kControlHeight; };
     actions.full = [](const Rect& r) {
-        const float saveW = button_width(L"Save current settings…") + 24;
-        const float pasteW = button_width(L"Paste a shared profile") + 24;
-        button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, L"Save current settings…", Btn::Tint, kIconPlus);
-        button(kProfilePaste, {r.x + saveW + t::kSpace2, r.y, pasteW, t::kControlHeight}, L"Paste a shared profile", Btn::Ghost,
+        const std::wstring save = tr(L"Save current settings…"), paste = tr(L"Paste a shared profile");
+        const float saveW = button_width(save) + 24;
+        const float pasteW = button_width(paste) + 24;
+        button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, save, Btn::Tint, kIconPlus);
+        button(kProfilePaste, {r.x + saveW + t::kSpace2, r.y, pasteW, t::kControlHeight}, paste, Btn::Ghost,
                kIconPaste);
     };
     savedRows.push_back(actions);
-    h += section(x, y + h, w, L"Your profiles", savedRows,
-                 app.profileMessage.empty() ? L"Share copies one as a line of text; the headset menu switches between them."
-                                            : app.profileMessage,
+    h += section(x, y + h, w, tr(L"Your profiles"), savedRows,
+                 app.profileMessage.empty()
+                     ? std::wstring(tr(L"Share copies one as a line of text; the headset menu switches between them."))
+                     : app.profileMessage,
                  draw);
     return h;
 }
@@ -109,13 +114,13 @@ float profiles_pane(float x, float y, float w, bool draw) {
 void use_profile(const std::wstring& name) {
     Profile p;
     if (!load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking) || !apply_profile(app.ini.c_str(), p)) {
-        app.profileMessage = L"Couldn’t use " + name + L".";
+        app.profileMessage = trf(L"Couldn’t use {name}.", {{L"name", name}});
         return;
     }
     set_current_profile(app.ini.c_str(), p.name);
     app.s = load_settings(app.ini);
     changed();  // saved as the launcher saves, and to a running game
-    app.profileMessage = L"Using " + p.name + L".";
+    app.profileMessage = trf(L"Using {name}.", {{L"name", p.name}});
     refresh_profiles();
 }
 
@@ -126,7 +131,8 @@ void store_profile(const Profile& p, std::function<void()> then) {
     const std::wstring folder = profiles_folder(app.ini);
     const auto save = [p, folder, then] {
         if (!save_profile(folder, p)) {
-            notify(L"The profile couldn’t be saved", L"Sim-QVFR couldn’t write it in " + folder + L".");
+            notify(tr(L"The profile couldn’t be saved"),
+                   trf(L"Sim-QVFR couldn’t write it in {folder}.", {{L"folder", folder}}));
             return;
         }
         if (then)
@@ -138,9 +144,9 @@ void store_profile(const Profile& p, std::function<void()> then) {
         return;
     }
     Sheet s;
-    s.title = L"Replace " + p.name + L"?";
-    s.text = L"A profile named " + p.name + L" exists. Replacing it puts these settings in its place.";
-    s.buttons = {L"Cancel", L"Replace"};
+    s.title = trf(L"Replace {name}?", {{L"name", p.name}});
+    s.text = trf(L"A profile named {name} exists. Replacing it puts these settings in its place.", {{L"name", p.name}});
+    s.buttons = {tr(L"Cancel"), tr(L"Replace")};
     s.focus = 0;
     s.danger = true;
     s.done = [save](int button, const std::wstring&) {
@@ -153,24 +159,25 @@ void store_profile(const Profile& p, std::function<void()> then) {
 // Save current settings…: a name asked for in a sheet (`name` filled in), then the settings saved under it.
 void ask_profile_name(const std::wstring& name) {
     Sheet s;
-    s.title = L"Save current settings";
-    s.text = L"A profile holds every setting of the picture. Name the settings you have now.";
+    s.title = tr(L"Save current settings");
+    s.text = tr(L"A profile holds every setting of the picture. Name the settings you have now.");
     s.field = true;
-    s.fieldLabel = L"Name";
+    s.fieldLabel = tr(L"Name");
     s.fieldText = name;
-    s.buttons = {L"Cancel", L"Save"};
+    s.buttons = {tr(L"Cancel"), tr(L"Save")};
     s.done = [](int button, const std::wstring& typed) {
         if (button != 1)
             return;
         if (!valid_profile_name(typed)) {
-            notify(L"Choose another name",
-                   L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
+            notify(tr(L"Choose another name"),
+                   tr(L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, "
+                      L"Balanced, Quality)."),
                    [typed] { ask_profile_name(typed); });
             return;
         }
         store_profile(settings_profile(app.s, typed), [typed] {
             set_current_profile(app.ini.c_str(), typed);
-            app.profileMessage = L"Saved " + typed + L".";
+            app.profileMessage = trf(L"Saved {name}.", {{L"name", typed}});
             refresh_profiles();
         });
     };
@@ -187,16 +194,17 @@ void paste_profile() {
         text += c < 128 ? static_cast<char>(c) : '?';
     Profile p;
     if (!shared_profile(text, p)) {
-        notify(L"No shared profile on the clipboard", L"Copy the whole line that starts with QVFR1:, then try again.");
+        notify(tr(L"No shared profile on the clipboard"),
+               tr(L"Copy the whole line that starts with QVFR1:, then try again."));
         return;
     }
     store_profile(p, [name = p.name] {
         refresh_profiles();
-        app.profileMessage = L"Added " + name + L".";
+        app.profileMessage = trf(L"Added {name}.", {{L"name", name}});
         Sheet s;
-        s.title = L"Use " + name + L" now?";
-        s.text = L"It’s in Your profiles. Using it sets the picture to what it holds.";
-        s.buttons = {L"Not Now", L"Use It"};
+        s.title = trf(L"Use {name} now?", {{L"name", name}});
+        s.text = tr(L"It’s in Your profiles. Using it sets the picture to what it holds.");
+        s.buttons = {tr(L"Not Now"), tr(L"Use It")};
         s.done = [name](int button, const std::wstring&) {
             if (button == 1)
                 use_profile(name);

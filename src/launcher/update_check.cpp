@@ -11,6 +11,7 @@
 #include <winhttp.h>
 
 #include "../json.h"
+#include "../lang.h"
 #include "launch_plan.h"
 
 namespace simqvfr::launcher {
@@ -137,12 +138,13 @@ bool fetch_releases(std::string& body, std::wstring& error) {
             }
             ok = status == 200;
             if (!ok)
-                error = L"GitHub answered " + std::to_wstring(status);
+                error = lang::trf(L"GitHub answered {status}", {{L"status", std::to_wstring(status)}});
         } else {
-            error = L"GitHub could not be reached (error " + std::to_wstring(GetLastError()) + L")";
+            error = lang::trf(L"GitHub could not be reached (error {code})",
+                              {{L"code", std::to_wstring(GetLastError())}});
         }
     } else {
-        error = L"GitHub could not be reached";
+        error = lang::tr(L"GitHub could not be reached");
     }
     if (request)
         WinHttpCloseHandle(request);

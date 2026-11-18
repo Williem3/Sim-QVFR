@@ -22,15 +22,16 @@ namespace {
 // What a thread is, for the names users will see most (others: none).
 std::wstring thread_note(const std::wstring& name) {
     if (name == L"GameThread")
-        return L"The game's main thread, which here also submits each frame. Near 100% it limits the frame rate.";
+        return tr(L"The game's main thread, which here also submits each frame. Near 100% it limits the frame rate.");
     if (name == L"Physics")
-        return L"Waits for each physics step by spinning on the clock, so it always looks busy.";
+        return tr(L"Waits for each physics step by spinning on the clock, so it always looks busy.");
     if (name.find(L"aSeeVRClient") != std::wstring::npos)
-        return L"The Pimax eye tracker's client: it polls the tracker continuously, so it always looks busy.";
+        return tr(L"The Pimax eye tracker's client: it polls the tracker continuously, so it always looks busy.");
     if (name.find(L"virtualdesktop-openxr") != std::wstring::npos)
-        return L"Virtual Desktop's frame pacing: it waits for each frame by spinning on the clock, so it always looks busy.";
+        return tr(L"Virtual Desktop's frame pacing: it waits for each frame by spinning on the clock, so it always "
+                  L"looks busy.");
     if (name.find(L"Cheeky") != std::wstring::npos)
-        return L"Cheeky Foveated DLSS's frame generation.";
+        return tr(L"Cheeky Foveated DLSS's frame generation.");
     return L"";
 }
 
@@ -169,28 +170,35 @@ bool report_edit_fits() {
 // The Diagnostics card: the verdict first (frame rate against the headset's, slow frames against the frame's budget, what
 // limits the frame), then the sessions before it, the details behind a More, and the capture switches.
 Card diagnostics_card() {
-    Card c{Tab::Game, L"Diagnostics"};
+    Card c{Tab::Game, tr(L"Diagnostics")};
     const SessionInfo& last = app.runtime.session;
     if (last.known() && last.refreshHz > 0 && last.fps < last.refreshHz * 0.97)
-        c.chip = formatted(L"Below %.0f fps", last.refreshHz);
+        c.chip = trf(L"Below {fps} fps", {{L"fps", formatted(L"%.0f", last.refreshHz)}});
     c.body = [](Body& b) {
         const SessionInfo& s = app.runtime.session;
         const std::wstring dash = L"—";
         if (!s.known()) {
-            b.note(L"No session measured yet. Launch the game from here: this fills in while it runs, and keeps the last "
-                   L"session’s numbers after it closes.");
+            b.note(tr(L"No session measured yet. Launch the game from here: this fills in while it runs, and keeps the "
+                      L"last session’s numbers after it closes."));
         } else {
             std::wstring head = s.time + L"  ·  " + s.mode;
             if (s.refreshHz > 0)
                 head += formatted(L"  ·  %.0f Hz", s.refreshHz);
-            head += s.frameGeneration ? L"  ·  frame generation on" : L"  ·  frame generation off";
+            head += L"  ·  ";
+            head += s.frameGeneration ? tr(L"frame generation on") : tr(L"frame generation off");
             b.note(head);
             const double budget = s.refreshHz > 0 ? 1000 / s.refreshHz : 0;
-            b.row(L"Frame rate", s.refreshHz > 0 ? formatted(L"Target %.0f fps, the headset’s refresh.", s.refreshHz) : L"",
+            b.row(tr(L"Frame rate"),
+                  s.refreshHz > 0
+                      ? trf(L"Target {fps} fps, the headset’s refresh.", {{L"fps", formatted(L"%.0f", s.refreshHz)}})
+                      : L"",
                   formatted(L"%.1f fps", s.fps));
-            b.row(L"Slow frames", budget > 0 ? formatted(L"90th percentile; the frame’s budget is %.1f ms.", budget) : L"90th percentile.",
+            b.row(tr(L"Slow frames"),
+                  budget > 0
+                      ? trf(L"90th percentile; the frame’s budget is {ms} ms.", {{L"ms", formatted(L"%.1f", budget)}})
+                      : std::wstring(tr(L"90th percentile.")),
                   s.frameP90 > 0 ? formatted(L"%.2f ms", s.frameP90) : dash);
-            b.row(L"Limited by", L"", s.limited.empty() ? dash : s.limited);
+            b.row(tr(L"Limited by"), L"", s.limited.empty() ? dash : s.limited);
             // Against the session before it (what changed in between) and a run of the other kind (with or without QVFR).
             const int now = last_session_index();
             if (now >= 0) {
@@ -200,51 +208,65 @@ Card diagnostics_card() {
                     std::wstring desc = p.time;
                     if (!r.baseline) {
                         const std::vector<std::wstring> changes = setting_changes(p.settings, r.settings);
-                        desc += changes.empty() ? L"  ·  same settings" : L"  ·  after " + changes_text(changes);
+                        desc += L"  ·  ";
+                        desc += changes.empty() ? std::wstring(tr(L"same settings"))
+                                                : trf(L"after {changes}", {{L"changes", changes_text(changes)}});
                     }
-                    b.row(L"Previous session", desc, difference_text(r, p));
+                    b.row(tr(L"Previous session"), desc, difference_text(r, p));
                 }
                 if (const int other = other_kind_session(app.sessions, now); other >= 0) {
                     const SessionRecord& o = app.sessions[other];
-                    b.row(r.baseline ? L"With QVFR" : L"Without QVFR", o.time + (r.baseline ? L"" : L"  ·  the game’s own two views"),
+                    b.row(r.baseline ? tr(L"With QVFR") : tr(L"Without QVFR"),
+                          r.baseline ? o.time : o.time + L"  ·  " + tr(L"the game’s own two views"),
                           difference_text(r, o));
                 }
             }
-            b.more(L"details",
-                   {L"Late frames", L"Frame time", L"CPU frame time", L"GPU frame time", L"CPU in use", L"Busiest threads",
-                    L"Eye tracking lookup", L"Layer on the render thread", L"Layers below", L"VRAM"},
+            b.more(tr(L"details"),
+                   {tr(L"Late frames"), tr(L"Frame time"), tr(L"CPU frame time"), tr(L"GPU frame time"),
+                    tr(L"CPU in use"), tr(L"Busiest threads"), tr(L"Eye tracking lookup"),
+                    tr(L"Layer on the render thread"), tr(L"Layers below"), L"VRAM"},
                    [](Body& m) {
                        const SessionInfo& si = app.runtime.session;
                        const std::wstring none = L"—";
                        const double ms = si.refreshHz > 0 ? 1000 / si.refreshHz : 0;
-                       m.row(L"Frame time", L"Median and 90th percentile.",
+                       m.row(tr(L"Frame time"), tr(L"Median and 90th percentile."),
                              si.frameP50 > 0 ? formatted(L"%.2f ms", si.frameP50) + formatted(L"  ·  %.2f ms", si.frameP90) : none);
-                       m.row(L"Late frames", L"Frames that missed the headset’s refresh.",
+                       m.row(tr(L"Late frames"), tr(L"Frames that missed the headset’s refresh."),
                              si.latePercent >= 0 ? formatted(L"%.1f%%", si.latePercent) : none);
-                       m.row(L"CPU frame time",
-                             ms > 0 ? formatted(L"The render thread’s work; near %.1f ms the CPU limits the frame.", ms) : L"",
+                       m.row(tr(L"CPU frame time"),
+                             ms > 0 ? trf(L"The render thread’s work; near {ms} ms the CPU limits the frame.",
+                                          {{L"ms", formatted(L"%.1f", ms)}})
+                                    : L"",
                              si.cpuMs >= 0 ? formatted(L"%.2f ms", si.cpuMs) : none);
-                       m.row(L"GPU frame time", L"The whole GPU per game frame.",
-                             si.gpuMs >= 0 ? formatted(L"%.2f ms", si.gpuMs) + formatted(L"  ·  %.0f%% busy", si.gpuBusy) : none);
-                       m.row(L"CPU in use", L"All of the game’s threads together.",
-                             si.cores >= 0 ? formatted(L"%.1f cores", si.cores) : none);
-                       m.group(L"Busiest threads");
+                       m.row(tr(L"GPU frame time"), tr(L"The whole GPU per game frame."),
+                             si.gpuMs >= 0 ? formatted(L"%.2f ms", si.gpuMs) + L"  ·  " +
+                                                 trf(L"{percent}% busy", {{L"percent", formatted(L"%.0f", si.gpuBusy)}})
+                                           : none);
+                       m.row(tr(L"CPU in use"), tr(L"All of the game’s threads together."),
+                             si.cores >= 0 ? trf(L"{count} cores", {{L"count", formatted(L"%.1f", si.cores)}}) : none);
+                       m.group(tr(L"Busiest threads"));
                        if (si.threads.empty())
-                           m.row(L"Not measured", L"", none);
+                           m.row(tr(L"Not measured"), L"", none);
                        for (const auto& [name, percent] : si.threads)
-                           m.row(name, thread_note(name), formatted(L"%.0f%% of a core", percent));
-                       m.group(L"Layer and memory");
+                           m.row(name, thread_note(name),
+                                 trf(L"{percent}% of a core", {{L"percent", formatted(L"%.0f", percent)}}));
+                       m.group(tr(L"Layer and memory"));
                        if (si.gazeMs >= 0)
-                           m.row(L"Eye tracking lookup", L"On the layer’s own thread.", formatted(L"%.3f ms", si.gazeMs));
-                       m.row(L"Layer on the render thread", L"Sim-QVFR’s own time in each frame.",
+                           m.row(tr(L"Eye tracking lookup"), tr(L"On the layer’s own thread."),
+                                 formatted(L"%.3f ms", si.gazeMs));
+                       m.row(tr(L"Layer on the render thread"), tr(L"Sim-QVFR’s own time in each frame."),
                              si.layerMs >= 0 ? formatted(L"%.2f ms", si.layerMs) : none);
                        const bool toolkit = si.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos;
-                       m.row(L"Layers below",
-                             toolkit ? L"OpenXR Toolkit adds about 0.8 ms to every frame: switch it off in OpenXR layers if unused." : L"",
-                             si.layersBelow.empty() ? L"None" : friendly_layers(si.layersBelow));
+                       m.row(tr(L"Layers below"),
+                             toolkit ? tr(L"OpenXR Toolkit adds about 0.8 ms to every frame: switch it off in OpenXR "
+                                          L"layers if unused.")
+                                     : L"",
+                             si.layersBelow.empty() ? std::wstring(tr(L"None")) : friendly_layers(si.layersBelow));
                        if (app.runtime.vramUsedMb > 0)
-                           m.row(L"VRAM", L"The game’s use against what Windows allows it.",
-                                 formatted(L"%.1f GB", app.runtime.vramUsedMb / 1024) + formatted(L" of %.1f GB", app.runtime.vramBudgetMb / 1024));
+                           m.row(L"VRAM", tr(L"The game’s use against what Windows allows it."),
+                                 trf(L"{used} GB of {budget} GB",
+                                     {{L"used", formatted(L"%.1f", app.runtime.vramUsedMb / 1024)},
+                                      {L"budget", formatted(L"%.1f", app.runtime.vramBudgetMb / 1024)}}));
                    });
         }
         // The game's last few sessions, each with what changed since the one before it.
@@ -256,26 +278,30 @@ Card diagnostics_card() {
                 if (app.sessions[i].game == game)
                     recent.push_back(i);
             if (recent.size() > 1) {
-                b.group(L"Recent sessions");
+                b.group(tr(L"Recent sessions"));
                 for (size_t i : recent) {
                     const SessionRecord& r = app.sessions[i];
                     const int before = previous_session(app.sessions, i);
                     std::wstring desc;
                     if (r.baseline)
-                        desc = L"Without QVFR: the game’s own two views.";
+                        desc = tr(L"Without QVFR: the game’s own two views.");
                     else if (before < 0)
-                        desc = L"The oldest kept.";
+                        desc = tr(L"The oldest kept.");
                     else if (const std::vector<std::wstring> changes = setting_changes(app.sessions[before].settings, r.settings);
                              changes.empty())
-                        desc = L"Same settings as the one before.";
+                        desc = tr(L"Same settings as the one before.");
                     else
                         desc = changes_text(changes, 4) + L".";
                     std::wstring value = formatted(L"%.1f fps", r.fps);
                     if (r.frameP90 > 0)
                         value += formatted(L"  ·  %.2f ms", r.frameP90);
                     const std::wstring stint = stint_text(r);
-                    b.row(r.time + (stint.empty() ? L"" : L"  ·  " + stint) + (static_cast<int>(i) == now ? L"  ·  last" : L""),
-                          desc, value);
+                    std::wstring when = r.time;
+                    if (!stint.empty())
+                        when += L"  ·  " + stint;
+                    if (static_cast<int>(i) == now)
+                        when += L"  ·  " + std::wstring(tr(L"last"));
+                    b.row(when, desc, value);
                 }
             }
         }
@@ -284,37 +310,50 @@ Card diagnostics_card() {
         const auto tools = [](Body& m) {
             const std::wstring cpuKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::CpuCapture)].key);
             const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
-            m.toggle(kDiagCapture, L"CPU capture", app.s.cpuProfile,
-                     (cpuKey.empty() ? std::wstring(L"Its hotkey") : cpuKey) + L" while driving records 20 s of the busiest threads.",
+            m.toggle(kDiagCapture, tr(L"CPU capture"), app.s.cpuProfile,
+                     cpuKey.empty() ? std::wstring(tr(L"Its hotkey while driving records 20 s of the busiest threads."))
+                                    : trf(L"{key} while driving records 20 s of the busiest threads.",
+                                          {{L"key", cpuKey}}),
                      false, Applies::NextLaunch);
-            m.toggle(kDiagFrameCapture, L"Frame capture", app.s.frameCapture,
-                     (frameKey.empty() ? std::wstring(L"Its hotkey") : frameKey) + L" saves the frame the headset gets, as PNG files.",
+            m.toggle(kDiagFrameCapture, tr(L"Frame capture"), app.s.frameCapture,
+                     frameKey.empty() ? std::wstring(tr(L"Its hotkey saves the frame the headset gets, as PNG files."))
+                                      : trf(L"{key} saves the frame the headset gets, as PNG files.",
+                                            {{L"key", frameKey}}),
                      false, Applies::NextLaunch);
-            m.toggle(kDiagBaseline, L"Next launch without QVFR", app.s.baselineNext,
-                     L"Once, with QVFR off and still measured, to compare against.", false, Applies::NextLaunch);
+            m.toggle(kDiagBaseline, tr(L"Next launch without QVFR"), app.s.baselineNext,
+                     tr(L"Once, with QVFR off and still measured, to compare against."), false, Applies::NextLaunch);
             const std::wstring launches = std::to_wstring(app.s.debugLogs > 0 ? app.s.debugLogs : kDebugLogLaunches);
-            m.toggle(kDiagDebugLogs, L"Detailed logs", app.s.debugLogs > 0,
-                     app.s.debugLogs == 1 ? std::wstring(L"The next launch logs everything, for a bug report; then normal logs again.")
+            m.toggle(kDiagDebugLogs, tr(L"Detailed logs"), app.s.debugLogs > 0,
+                     app.s.debugLogs == 1
+                         ? std::wstring(
+                               tr(L"The next launch logs everything, for a bug report; then normal logs again."))
                      : app.s.debugLogs > 1
-                         ? L"The next " + launches + L" launches log everything, for a bug report; then normal logs again."
-                         : L"For a bug report: " + launches + L" launches that log everything, then normal logs again.",
+                         ? trf(L"The next {count} launches log everything, for a bug report; then normal logs again.",
+                               {{L"count", launches}})
+                         : trf(L"For a bug report: {count} launches that log everything, then normal logs again.",
+                               {{L"count", launches}}),
                      false, Applies::NextLaunch);
             const LogsUse& use = logs_use_now();
-            const std::wstring kept = L"The newest " + std::to_wstring(kKeepSessions) + L" sessions are kept.";
+            const std::wstring kept =
+                trf(L"The newest {count} sessions are kept.", {{L"count", std::to_wstring(kKeepSessions)}});
             if (use.diagnosticsBytes > 0)
-                m.action(L"Logs folder", kept + L" Captures stay until cleared: " + size_text(use.diagnosticsBytes) + L" of " +
-                                             size_text(use.bytes) + L".",
-                         kDiagClearCaptures, L"Clear captures");
+                m.action(tr(L"Logs folder"),
+                         kept + L" " +
+                             trf(L"Captures stay until cleared: {size} of {total}.",
+                                 {{L"size", size_text(use.diagnosticsBytes)}, {L"total", size_text(use.bytes)}}),
+                         kDiagClearCaptures, tr(L"Clear captures"));
             else
-                m.row(L"Logs folder", kept, size_text(use.bytes));
+                m.row(tr(L"Logs folder"), kept, size_text(use.bytes));
         };
         b.divider();
         if (app.s.cpuProfile || app.s.frameCapture || app.s.baselineNext || app.s.debugLogs > 0) {
-            b.group(L"Tools for comparing and bug reports");
+            b.group(tr(L"Tools for comparing and bug reports"));
             tools(b);
         } else {
-            b.more(L"tools for comparing and bug reports",
-                   {L"CPU capture", L"Frame capture", L"Next launch without QVFR", L"Detailed logs", L"Logs folder"}, tools);
+            b.more(tr(L"tools for comparing and bug reports"),
+                   {tr(L"CPU capture"), tr(L"Frame capture"), tr(L"Next launch without QVFR"), tr(L"Detailed logs"),
+                    tr(L"Logs folder")},
+                   tools);
         }
     };
     return c;

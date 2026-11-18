@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "../ini.h"
+#include "../lang.h"
 #include "../quad/gaze_deadzone.h"
 
 namespace simqvfr::launcher {
@@ -102,7 +103,7 @@ std::wstring stint_text(const SessionRecord& r) {
                                 : std::to_wstring(static_cast<int>(std::lround(r.seconds / 60))) + L" min";
     if (r.stint <= 1)
         return length;
-    const std::wstring stint = L"Stint " + std::to_wstring(r.stint);
+    const std::wstring stint = lang::trf(L"Stint {number}", {{L"number", std::to_wstring(r.stint)}});
     return length.empty() ? stint : stint + L" · " + length;
 }
 

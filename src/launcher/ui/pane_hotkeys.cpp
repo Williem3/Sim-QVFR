@@ -23,12 +23,12 @@ void open_pads() {
 // The wheels and controllers found, for the Hotkeys card's note.
 std::wstring pads_found() {
     if (!app.padsOpen)
-        return L"DirectInput isn’t available: wheel and controller buttons can’t be read.";
+        return tr(L"DirectInput isn’t available: wheel and controller buttons can’t be read.");
     std::wstring names;
     for (const auto& [id, name] : app.pads.devices())
         names += (names.empty() ? L"" : L", ") + name;
-    return names.empty() ? L"No wheel or controller found: plug it in, then come back to this tab."
-                         : L"Wheels and controllers found: " + names + L".";
+    return names.empty() ? std::wstring(tr(L"No wheel or controller found: plug it in, then come back to this tab."))
+                         : trf(L"Wheels and controllers found: {names}.", {{L"names", names}});
 }
 
 void end_capture() {
@@ -44,7 +44,8 @@ void start_capture(int action, bool pad) {
     if (pad) {
         open_pads();
         if (!app.padsOpen) {
-            notify(L"Wheel buttons can’t be read", L"DirectInput isn’t available, so wheel and controller buttons can’t be read.");
+            notify(tr(L"Wheel buttons can’t be read"),
+                   tr(L"DirectInput isn’t available, so wheel and controller buttons can’t be read."));
             return;
         }
         app.captureHeld = app.pads.poll();

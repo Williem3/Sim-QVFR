@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../i18n.h"
 #include "../text.h"
 #include "settings.h"
 
@@ -101,9 +102,9 @@ std::wstring openxr_runtime_name(const std::string& manifestJson, const std::wst
 
 // What the user says in the launcher before the issue opens: the kind of problem (kIssueKinds, 0: not
 // sure) and what happened, in their words.
-inline constexpr const wchar_t* kIssueKinds[] = {L"Not sure",      L"Crash or freeze", L"Performance",
-                                                 L"Visual glitch", L"Eye tracking",    L"Foveated DLSS or frame generation",
-                                                 L"Launcher"};
+inline constexpr const wchar_t* kIssueKinds[] = {I18N(L"Not sure"),      I18N(L"Crash or freeze"), I18N(L"Performance"),
+                                                 I18N(L"Visual glitch"), I18N(L"Eye tracking"),
+                                                 I18N(L"Foveated DLSS or frame generation"), I18N(L"Launcher")};
 inline constexpr int kIssueKindCount = static_cast<int>(sizeof(kIssueKinds) / sizeof(kIssueKinds[0]));
 // Each kind's issue form in .github/ISSUE_TEMPLATE (bug.yml for "Not sure"); its title prefix is the kind's
 // name ("Problem" for bug.yml).
@@ -113,8 +114,11 @@ static_assert(sizeof(kIssueTemplates) / sizeof(kIssueTemplates[0]) == kIssueKind
 
 // A known cause the last session shows, with what to try: the Diagnostics pane lists them before the report
 // (many problems end there), and the issue carries them as "Launcher checks".
+// A likely cause: in English (title, fix: the report and its issue text) and in the player's language (shownTitle,
+// shownFix: the launcher's Diagnostics, Report and Overview).
 struct Cause {
     std::wstring title, fix;
+    std::wstring shownTitle, shownFix;
 };
 std::vector<Cause> likely_causes(const Settings& settings, const RuntimeInfo& runtime);
 

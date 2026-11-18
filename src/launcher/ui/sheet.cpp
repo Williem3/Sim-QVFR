@@ -19,7 +19,7 @@ void open_sheet(Sheet sheet) {
     app.pressed = kNone;
     sheet.open = true;
     if (sheet.buttons.empty())
-        sheet.buttons = {L"OK"};
+        sheet.buttons = {tr(L"OK")};
     const int main = static_cast<int>(sheet.buttons.size()) - 1;
     sheet.cancel = std::clamp(sheet.cancel, 0, main);
     if (sheet.focus < 0 || sheet.focus > main)

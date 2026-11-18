@@ -43,7 +43,7 @@ bool own_upscaler_available(std::wstring* why) {
     if (!game_has(&games::GameFeatures::sideLoadedDlss))
         reason = not_yet();
     else if (app.s.mode != RenderMode::Qvfr)
-        reason = L"Available in Quad View Foveated Rendering.";
+        reason = tr(L"Available in Quad View Foveated Rendering.");
     if (why)
         *why = reason;
     return reason.empty();
@@ -54,7 +54,7 @@ bool own_dlss_available(std::wstring* why) {
     if (!own_upscaler_available(&reason))
         ;  // the game's or the mode's reason
     else if (fsr_pc())
-        reason = L"Needs an NVIDIA RTX graphics card (20 series or newer): none was found.";
+        reason = tr(L"Needs an NVIDIA RTX graphics card (20 series or newer): none was found.");
     if (why)
         *why = reason;
     return reason.empty();
@@ -69,11 +69,13 @@ std::wstring multi_view_way(bool full) {
     // has it, else instancing.
     if (const nvapi::Gpu* gpu = nvapi::two_views_gpu()) {
         if (!full)
-            return L"NVIDIA’s multi-view rendering";
-        return L"NVIDIA’s multi-view rendering, on your " + std::wstring(gpu->name.begin(), gpu->name.end());
+            return tr(L"NVIDIA’s multi-view rendering");
+        return trf(L"NVIDIA’s multi-view rendering, on your {gpu}",
+                   {{L"gpu", std::wstring(gpu->name.begin(), gpu->name.end())}});
     }
-    return full ? L"Sim-QVFR’s own multi-view rendering (instancing), since no NVIDIA RTX card (20 series or newer) was found"
-                : L"Sim-QVFR’s multi-view rendering";
+    return full ? tr(L"Sim-QVFR’s own multi-view rendering (instancing), since no NVIDIA RTX card (20 series or "
+                     L"newer) was found")
+                : tr(L"Sim-QVFR’s multi-view rendering");
 }
 
 bool own_nr_available(std::wstring* why) {
@@ -81,11 +83,11 @@ bool own_nr_available(std::wstring* why) {
     if (!own_dlss_available(&reason))
         ;  // DLSS's own reason
     else if (!app.s.dlss.on)
-        reason = L"Needs DLSS on: it works from DLSS’s depth and motion.";
+        reason = tr(L"Needs DLSS on: it works from DLSS’s depth and motion.");
     else if (app.s.nr.folder.empty())
-        reason = L"Choose your nvngx_dlssnr.dll first.";
+        reason = tr(L"Choose your nvngx_dlssnr.dll first.");
     else if (GetFileAttributesW((app.s.nr.folder + L"\\nvngx_dlssnr.dll").c_str()) == INVALID_FILE_ATTRIBUTES)
-        reason = L"nvngx_dlssnr.dll isn’t in the folder chosen for it.";
+        reason = tr(L"nvngx_dlssnr.dll isn’t in the folder chosen for it.");
     if (why)
         *why = reason;
     return reason.empty();
@@ -117,7 +119,7 @@ template <size_t N>
 std::vector<std::wstring> names_of(const DlssChoice (&list)[N]) {
     std::vector<std::wstring> out;
     for (const DlssChoice& c : list)
-        out.push_back(c.name);
+        out.push_back(tr(c.name));  // the tables' names are marked with I18N
     return out;
 }
 
@@ -133,29 +135,33 @@ Card resolution_card() {
     // The truck simulators' QVFR (the D3D11 layer's, GameFeatures::layerMultiView): every size live, inside the game's
     // own render size (scssoftware/corner.h corner_set_live), no launch ceiling.
     const bool layerSizes = game_has(&games::GameFeatures::layerMultiView);
-    Card c{Tab::Picture, L"Resolution", !qvfr() ? Applies::NextLaunch : layerSizes ? Applies::Live : Applies::LiveLowered};
+    Card c{Tab::Picture, tr(L"Resolution"), !qvfr() ? Applies::NextLaunch : layerSizes ? Applies::Live : Applies::LiveLowered};
     c.body = [](Body& b) {
         const Readouts ro = readouts(app.s, app.runtime);
         const bool known = app.runtime.known();
-        b.slider({kOuter, L"Periphery resolution", app.s.outer, L"%", known ? px(ro.outer) : L""});
+        b.slider({kOuter, tr(L"Periphery resolution"), app.s.outer, L"%", known ? px(ro.outer) : L""});
         if (qvfr()) {
-            b.slider({kInner, L"Focus density", app.s.inner, L"%", known ? px(ro.focus) : L""});
+            b.slider({kInner, tr(L"Focus density"), app.s.inner, L"%", known ? px(ro.focus) : L""});
             if (game_has(&games::GameFeatures::sharpening))
-                b.slider({kSharpen, L"Sharpening", app.s.sharpen, L"%", app.s.sharpen == 0 ? L"Off" : L""});
+                b.slider({kSharpen, tr(L"Sharpening"), app.s.sharpen, L"%", app.s.sharpen == 0 ? tr(L"Off") : L""});
             if (game_has(&games::GameFeatures::objectDetail))
-                b.slider({kObjectDetail, L"Object detail", app.s.objectDetail});
+                b.slider({kObjectDetail, tr(L"Object detail"), app.s.objectDetail});
         } else {
-            b.note(L"In Two-loop the focus density (" + percent(ro.focusDensity) +
-                   L") follows from Periphery resolution and the focus size. Focus density, sharpening and object detail are "
-                   L"set in Quad View Foveated Rendering.");
-            b.hidden(L"Periphery resolution", L"Quad View Foveated Rendering", {L"Focus density", L"Sharpening", L"Object detail"});
+            b.note(trf(L"In Two-loop the focus density ({density}) follows from Periphery resolution and the focus "
+                       L"size. Focus density, sharpening and object detail are set in Quad View Foveated Rendering.",
+                       {{L"density", percent(ro.focusDensity)}}));
+            b.hidden(tr(L"Periphery resolution"), tr(L"Quad View Foveated Rendering"),
+                     {tr(L"Focus density"), tr(L"Sharpening"), tr(L"Object detail")});
         }
-        b.note(known ? L"Percent of the headset’s " + std::to_wstring(app.runtime.width) + L" × " +
-                           std::to_wstring(app.runtime.height) + L" per eye; the periphery and the focus are set apart."
-                     : L"Percent of the headset’s resolution; pixel sizes appear after the first launch.");
+        b.note(known ? trf(L"Percent of the headset’s {width} × {height} per eye; the periphery and the focus are set "
+                           L"apart.",
+                           {{L"width", std::to_wstring(app.runtime.width)},
+                            {L"height", std::to_wstring(app.runtime.height)}})
+                     : std::wstring(tr(L"Percent of the headset’s resolution; pixel sizes appear after the first "
+                                       L"launch.")));
         if (qvfr() && game_has(&games::GameFeatures::layerMultiView)) {
-            b.note(L"Changes apply while you drive, inside the game’s own render size: the focus and the periphery share "
-                   L"it, so a large focus at a high Focus density leaves less room for the periphery.");
+            b.note(tr(L"Changes apply while you drive, inside the game’s own render size: the focus and the periphery "
+                      L"share it, so a large focus at a high Focus density leaves less room for the periphery."));
             return;
         }
         if (!qvfr() || !game_has(&games::GameFeatures::liveResolution))
@@ -165,16 +171,17 @@ Card resolution_card() {
         if (running_launch(launch)) {
             const int density = std::min(launch.focusWidth * 100 / std::max(1, app.s.width),
                                           launch.focusHeight * 100 / std::max(1, app.s.height));
-            b.note(L"This launch allows up to Periphery resolution " + std::to_wstring(launch.outer) +
-                   L"% and Focus density " + std::to_wstring(density) +
-                   L"% at this focus size. Higher applies at the next launch.");
+            b.note(trf(L"This launch allows up to Periphery resolution {periphery} and Focus density {density} at this "
+                       L"focus size. Higher applies at the next launch.",
+                       {{L"periphery", std::to_wstring(launch.outer) + L"%"},
+                        {L"density", std::to_wstring(density) + L"%"}}));
         } else {
-            b.note(L"Live changes go down from what you launch with, and back up to it: launch with your highest "
-                   L"settings, then lower them in the headset.");
+            b.note(tr(L"Live changes go down from what you launch with, and back up to it: launch with your highest "
+                      L"settings, then lower them in the headset."));
         }
         if (auto_fit_game())
-            b.note(L"In the headset, Auto-fit to headset rate sets these and the focus size to fill your GPU’s frame "
-                   L"budget while you drive (Right starts it, Left undoes it).");
+            b.note(tr(L"In the headset, Auto-fit to headset rate sets these and the focus size to fill your GPU’s "
+                      L"frame budget while you drive (Right starts it, Left undoes it)."));
     };
     c.reset = [](Settings& s) {
         const Settings d;
@@ -190,54 +197,59 @@ Card resolution_card() {
 
 void outline_color_row(Body& b) {
     b.custom(32, [](const Rect& r) {
-        app.canvas.text(L"Outline color", t::kBody, {r.x, r.y + 6, r.w / 2, 20}, col(app.c->label));
-        help_icon(L"Outline color", r.x + std::ceil(app.canvas.measure(L"Outline color", t::kBody)) + 6, r.y + 6);
+        const std::wstring label = tr(L"Outline color");
+        app.canvas.text(label, t::kBody, {r.x, r.y + 6, r.w / 2, 20}, col(app.c->label));
+        help_icon(label, r.x + std::ceil(app.canvas.measure(label, t::kBody)) + 6, r.y + 6);
         const float sw = segmented_width();
         segmented(kColor, {r.right() - sw, r.y, sw, 32}, static_cast<int>(app.s.color), false);
-        app.drawnLabels.push_back({L"Outline color", app.drawingSection, r});
+        app.drawnLabels.push_back({label, app.drawingSection, r});
     });
 }
 
 Card foveation_card() {
-    Card c{Tab::Picture, L"Foveation", Applies::Live};
+    Card c{Tab::Picture, tr(L"Foveation"), Applies::Live};
     if (eye_warning())
-        c.chip = L"Eye tracker not detected";
+        c.chip = tr(L"Eye tracker not detected");
     c.body = [](Body& b) {
         const Settings& s = app.s;
-        b.segments(kMode, L"Foveated mode", items_of(kMode), s.eyeTracking ? 0 : 1);
+        b.segments(kMode, tr(L"Foveated mode"), items_of(kMode), s.eyeTracking ? 0 : 1);
         if (eye_warning())
-            b.note(L"The focus region stays centred until a tracker connects.");
-        b.sliders({kWidth, L"Focus width", s.width}, {kHeight, L"Focus height", s.height});
+            b.note(tr(L"The focus region stays centred until a tracker connects."));
+        b.sliders({kWidth, tr(L"Focus width"), s.width}, {kHeight, tr(L"Focus height"), s.height});
         // A focus larger than the running game's launch renders at a lower density until the next launch.
         if (LaunchSizes launch; qvfr() && game_has(&games::GameFeatures::liveResolution) && running_launch(launch) &&
                                 (s.inner * s.width > launch.focusWidth * 100 + 50 ||
                                  s.inner * s.height > launch.focusHeight * 100 + 50))
-            b.note(L"Larger than this launch allows at your Focus density: it renders less dense until the next launch.");
-        b.segments(kShape, L"Shape", items_of(kShape), s.shape.corners ? 1 : 0);
+            b.note(tr(L"Larger than this launch allows at your Focus density: it renders less dense until the next "
+                      L"launch."));
+        b.segments(kShape, tr(L"Shape"), items_of(kShape), s.shape.corners ? 1 : 0);
         if (!s.shape.corners) {
-            b.slider({kCorner, L"Corner radius", s.corner});
-            b.hidden(L"Shape", L"Custom corners", {L"Top left in", L"Top right in", L"Bottom left in", L"Bottom right in"});
+            b.slider({kCorner, tr(L"Corner radius"), s.corner});
+            b.hidden(tr(L"Shape"), tr(L"Custom corners"),
+                     {tr(L"Top left in"), tr(L"Top right in"), tr(L"Bottom left in"), tr(L"Bottom right in")});
         } else {  // each corner's two insets, in the corners' order on the box
             const auto corner = [](Ctl id, const wchar_t* label) { return SliderSpec{id, label, *slider_value(id)}; };
-            b.sliders(corner(kShapeTopLeftIn, L"Top left in"), corner(kShapeTopLeftDown, L"Top left down"));
-            b.sliders(corner(kShapeTopRightIn, L"Top right in"), corner(kShapeTopRightDown, L"Top right down"));
-            b.sliders(corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"));
-            b.sliders(corner(kShapeBottomRightIn, L"Bottom right in"), corner(kShapeBottomRightUp, L"Bottom right up"));
-            b.hidden(L"Shape", L"Rectangle", {L"Corner radius"});
+            b.sliders(corner(kShapeTopLeftIn, tr(L"Top left in")), corner(kShapeTopLeftDown, tr(L"Top left down")));
+            b.sliders(corner(kShapeTopRightIn, tr(L"Top right in")), corner(kShapeTopRightDown, tr(L"Top right down")));
+            b.sliders(corner(kShapeBottomLeftIn, tr(L"Bottom left in")),
+                      corner(kShapeBottomLeftUp, tr(L"Bottom left up")));
+            b.sliders(corner(kShapeBottomRightIn, tr(L"Bottom right in")),
+                      corner(kShapeBottomRightUp, tr(L"Bottom right up")));
+            b.hidden(tr(L"Shape"), tr(L"Rectangle"), {tr(L"Corner radius")});
         }
-        b.slider({kFeather, L"Feather", s.feather});
-        b.note(L"See the edge of the sharp area? Raise Feather, or make the focus larger.");
+        b.slider({kFeather, tr(L"Feather"), s.feather});
+        b.note(tr(L"See the edge of the sharp area? Raise Feather, or make the focus larger."));
         if (s.eyeTracking) {
-            b.slider({kFocusOffset, L"Gaze offset", s.offset.gaze, L"°"});
-            b.slider({kGazeDeadzone, L"Gaze dead-zone", s.gazeDeadzone, L"°", L"", true});
+            b.slider({kFocusOffset, tr(L"Gaze offset"), s.offset.gaze, L"°"});
+            b.slider({kGazeDeadzone, tr(L"Gaze dead-zone"), s.gazeDeadzone, L"°", L"", true});
         } else {
-            b.slider({kFocusOffset, L"Vertical position", s.offset.fixed, L"°"});
-            b.hidden(L"Foveated mode", L"Eye tracked", {L"Gaze dead-zone", L"Gaze offset"});
+            b.slider({kFocusOffset, tr(L"Vertical position"), s.offset.fixed, L"°"});
+            b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"), {tr(L"Gaze dead-zone"), tr(L"Gaze offset")});
         }
         b.divider();
-        b.toggle(kOutline, L"Show focus outline", s.outline,
-                 s.outline ? L"Its edge in the headset, to see where it is." : L"Off");
-        b.reveal(kOutline, s.outline, L"Show focus outline", {L"Outline color"}, outline_color_row);
+        b.toggle(kOutline, tr(L"Show focus outline"), s.outline,
+                 s.outline ? tr(L"Its edge in the headset, to see where it is.") : tr(L"Off"));
+        b.reveal(kOutline, s.outline, tr(L"Show focus outline"), {tr(L"Outline color")}, outline_color_row);
     };
     c.reset = [](Settings& s) {
         const Settings d;
@@ -258,11 +270,11 @@ Card foveation_card() {
 // ---- Preview -----------------------------------------------------------------------------------
 
 Card preview_card() {
-    Card c{Tab::Picture, L"Preview"};
+    Card c{Tab::Picture, tr(L"Preview")};
     c.body = [](Body& b) {
         const float w = b.width();
         // One eye, or both: the crop's outer side is each eye's temple side, so it mirrors.
-        b.segments(kPreviewEye, L"Eye", {L"Left", L"Both", L"Right"}, std::clamp(app.previewEye, 0, 2));
+        b.segments(kPreviewEye, tr(L"Eye"), {tr(L"Left"), tr(L"Both"), tr(L"Right")}, std::clamp(app.previewEye, 0, 2));
         b.custom(preview(0, 0, w, false), [](const Rect& r) { preview(r.x, r.y, r.w, true); });
         b.custom(16, [](const Rect& r) { preview_legend(r.x, r.y, r.w, true); });
         b.divider();
@@ -275,44 +287,49 @@ Card preview_card() {
 
 void helmet_rows(Body& c) {
     const HelmetSettings& h = app.s.helmet;
-    c.slider({kHelmetRim, L"Rim", h.rim});
-    c.sliders({kHelmetCorners, L"Corners", h.corners}, {kHelmetLight, L"Lighting", h.light});
-    c.more(L"your own images", {L"Visor", L"Size", L"Height", L"Depth", L"Detail", L"Helmet images"}, [](Body& m) {
+    c.slider({kHelmetRim, tr(L"Rim"), h.rim});
+    c.sliders({kHelmetCorners, tr(L"Corners"), h.corners}, {kHelmetLight, tr(L"Lighting"), h.light});
+    c.more(tr(L"your own images"),
+           {tr(L"Visor"), tr(L"Size"), tr(L"Height"), tr(L"Depth"), tr(L"Detail"), tr(L"Helmet images")}, [](Body& m) {
         const HelmetSettings& hs = app.s.helmet;
-        m.buttons(L"Helmet images", L"top.png, bottom.png and visor.png in the helmet folder.", {{kHelmetFolder, L"Show folder"}});
-        m.segments(kVisor, L"Visor", items_of(kVisor), static_cast<int>(hs.visor));
-        m.sliders({kHelmetSize, L"Size", hs.size, L"°"}, {kHelmetHeight, L"Height", hs.height, L"°"});
-        m.slider({kHelmetDepth, L"Depth", hs.depth, L" cm"});
-        m.segments(kHelmetDetail, L"Detail", items_of(kHelmetDetail), hs.detail ? 1 : 0);
+        m.buttons(tr(L"Helmet images"), tr(L"top.png, bottom.png and visor.png in the helmet folder."),
+                  {{kHelmetFolder, tr(L"Show folder")}});
+        m.segments(kVisor, tr(L"Visor"), items_of(kVisor), static_cast<int>(hs.visor));
+        m.sliders({kHelmetSize, tr(L"Size"), hs.size, L"°"}, {kHelmetHeight, tr(L"Height"), hs.height, L"°"});
+        m.slider({kHelmetDepth, tr(L"Depth"), hs.depth, L" cm"});
+        m.segments(kHelmetDetail, tr(L"Detail"), items_of(kHelmetDetail), hs.detail ? 1 : 0);
     });
 }
 
 Card view_card() {
-    Card c{Tab::Picture, L"View & helmet", Applies::Live};
+    Card c{Tab::Picture, tr(L"View & helmet"), Applies::Live};
     c.body = [](Body& b) {
         const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
         if (!qvfr()) {
-            b.note(L"The crop and the helmet are available in Quad View Foveated Rendering.");
+            b.note(tr(L"The crop and the helmet are available in Quad View Foveated Rendering."));
             return;
         }
         if (crop) {
             const Settings& s = app.s;
-            b.toggle(kCropOn, L"Crop the view", s.crop,
-                     s.crop ? L"Skips the edges of each eye that a helmet covers." : L"Off");
-            b.reveal(kCropOn, s.crop, L"Crop the view", {L"Top", L"Bottom", L"Outer side (temple)", L"Inner side (nose)"}, [](Body& r) {
+            b.toggle(kCropOn, tr(L"Crop the view"), s.crop,
+                     s.crop ? tr(L"Skips the edges of each eye that a helmet covers.") : tr(L"Off"));
+            b.reveal(kCropOn, s.crop, tr(L"Crop the view"),
+                     {tr(L"Top"), tr(L"Bottom"), tr(L"Outer side (temple)"), tr(L"Inner side (nose)")}, [](Body& r) {
                 const Settings& cs = app.s;
-                r.sliders({kCropTop, L"Top", cs.cropTop}, {kCropBottom, L"Bottom", cs.cropBottom});
-                r.sliders({kCropOuter, L"Outer side (temple)", cs.cropOuter}, {kCropInner, L"Inner side (nose)", cs.cropInner});
+                r.sliders({kCropTop, tr(L"Top"), cs.cropTop}, {kCropBottom, tr(L"Bottom"), cs.cropBottom});
+                r.sliders({kCropOuter, tr(L"Outer side (temple)"), cs.cropOuter},
+                          {kCropInner, tr(L"Inner side (nose)"), cs.cropInner});
             });
         }
         if (crop && helmet)
             b.divider();
         if (helmet) {
             const bool on = app.s.helmet.on;
-            b.toggle(kHelmetOn, L"Show a helmet", on,
-                     on ? L"A visor opening around the view, lit by the scene." : L"Off");
-            b.reveal(kHelmetOn, on, L"Show a helmet",
-                     {L"Rim", L"Corners", L"Lighting", L"Visor", L"Size", L"Height", L"Depth", L"Detail", L"Helmet images"},
+            b.toggle(kHelmetOn, tr(L"Show a helmet"), on,
+                     on ? tr(L"A visor opening around the view, lit by the scene.") : tr(L"Off"));
+            b.reveal(kHelmetOn, on, tr(L"Show a helmet"),
+                     {tr(L"Rim"), tr(L"Corners"), tr(L"Lighting"), tr(L"Visor"), tr(L"Size"), tr(L"Height"),
+                      tr(L"Depth"), tr(L"Detail"), tr(L"Helmet images")},
                      helmet_rows);
         }
     };
@@ -348,21 +365,23 @@ bool rendering_shown() {
 }
 
 Card rendering_card() {
-    Card c{Tab::Picture, L"Rendering"};
+    Card c{Tab::Picture, tr(L"Rendering")};
     c.body = [](Body& b) {
         if (method_shown()) {  // Two-loop is legacy: the method shows only to leave it
-            b.popup(kMethod, L"Rendering method", kMethodNames[qvfr() ? 0 : 1], items_of(kMethod), Applies::NextLaunch);
-            b.note(L"Two-loop renders each headset frame twice. Switch to Quad View Foveated Rendering; Two-loop won’t be "
-                   L"offered again.");
+            b.popup(kMethod, tr(L"Rendering method"), tr(kMethodNames[qvfr() ? 0 : 1]), items_of(kMethod),
+                    Applies::NextLaunch);
+            b.note(tr(L"Two-loop renders each headset frame twice. Switch to Quad View Foveated Rendering; Two-loop "
+                      L"won’t be offered again."));
         }
         if (multi_view_game()) {
             if (!qvfr()) {
-                b.note(L"The focus view is drawn in Quad View Foveated Rendering.");
+                b.note(tr(L"The focus view is drawn in Quad View Foveated Rendering."));
             } else {
-                b.note(L"Each eye’s pass also draws its focus view, by " + multi_view_way(true) + L".");
+                b.note(trf(L"Each eye’s pass also draws its focus view, by {way}.",
+                           {{L"way", multi_view_way(true)}}));
                 if (game_has(&games::GameFeatures::layerMultiView))  // ATS, ETS2: the path starts with the first eye pass
-                    b.note(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the first frame "
-                           L"that draws the world for each eye.");
+                    b.note(tr(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the "
+                              L"first frame that draws the world for each eye."));
             }
         }
     };
@@ -380,28 +399,37 @@ void dlss_rows(Body& b) {
         const DlssSettings& d = app.s.dlss;
         const std::wstring dll = dlss_dll_path(d.folder, layer_folder()), version = file_version(dll);
         const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES, chosen = !d.folder.empty();
-        const std::wstring named = version.empty() ? std::wstring(L"Found") : L"Version " + version;
-        const std::wstring text = !chosen ? (found ? named + L", included with Sim-QVFR."
-                                                   : std::wstring(L"Missing from this copy of Sim-QVFR, so DLSS can’t run: install "
-                                                                  L"Sim-QVFR again, or turn DLSS off."))
-                                          : (found ? named + L", your choice." : std::wstring(L"Not where you chose it: the included one is used."));
+        std::wstring text;
+        if (!found)
+            text = !chosen ? tr(L"Missing from this copy of Sim-QVFR, so DLSS can’t run: install Sim-QVFR again, or "
+                                L"turn DLSS off.")
+                           : tr(L"Not where you chose it: the included one is used.");
+        else if (!chosen)
+            text = version.empty() ? std::wstring(tr(L"Found, included with Sim-QVFR."))
+                                   : trf(L"Version {version}, included with Sim-QVFR.", {{L"version", version}});
+        else
+            text = version.empty() ? std::wstring(tr(L"Found, your choice."))
+                                   : trf(L"Version {version}, your choice.", {{L"version", version}});
         std::vector<std::pair<Ctl, std::wstring>> buttons;
         if (chosen)
-            buttons.push_back({kDlssIncluded, L"Use included"});
-        buttons.push_back({kDlssFolder, L"Choose…"});
+            buttons.push_back({kDlssIncluded, tr(L"Use included")});
+        buttons.push_back({kDlssFolder, tr(L"Choose…")});
         b.buttons(L"nvngx_dlss.dll", text, buttons, Applies::NextLaunch);
-        b.popup(kDlssFocusMode, L"Focus views", kDlssFocusModes[dlss_choice_index(kDlssFocusModes, d.focusScale, true)].name,
+        b.popup(kDlssFocusMode, tr(L"Focus views"),
+                tr(kDlssFocusModes[dlss_choice_index(kDlssFocusModes, d.focusScale, true)].name),
                 names_of(kDlssFocusModes));
-        b.segments(kDlssFocusPreset, L"Focus preset", names_of(kDlssFocusPresets), dlss_choice_index(kDlssFocusPresets, d.focusPreset));
-        b.segments(kDlssEyePreset, L"Periphery preset", names_of(kDlssEyePresets), dlss_choice_index(kDlssEyePresets, d.eyePreset));
-        b.popup(kDlssSharpening, L"Texture sharpening",
-                kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name,
+        b.segments(kDlssFocusPreset, tr(L"Focus preset"), names_of(kDlssFocusPresets),
+                   dlss_choice_index(kDlssFocusPresets, d.focusPreset));
+        b.segments(kDlssEyePreset, tr(L"Periphery preset"), names_of(kDlssEyePresets),
+                   dlss_choice_index(kDlssEyePresets, d.eyePreset));
+        b.popup(kDlssSharpening, tr(L"Texture sharpening"),
+                tr(kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name),
                 names_of(kDlssTextureSharpening));
-        b.more(L"advanced options", {L"Other cars’ motion"}, [](Body& m) {
-            m.toggle(kDlssCarVectors, L"Other cars’ motion", app.s.dlss.carVectors,
-                     L"Keeps passing cars clean; turn off for headroom.", false, Applies::NextLaunch);
+        b.more(tr(L"advanced options"), {tr(L"Other cars’ motion")}, [](Body& m) {
+            m.toggle(kDlssCarVectors, tr(L"Other cars’ motion"), app.s.dlss.carVectors,
+                     tr(L"Keeps passing cars clean; turn off for headroom."), false, Applies::NextLaunch);
         });
-        b.note(L"A change rebuilds DLSS in a running game: a short stutter.");
+        b.note(tr(L"A change rebuilds DLSS in a running game: a short stutter."));
     }
 }
 
@@ -415,11 +443,11 @@ Card dlss_card() {
             return;
         }
         const bool on = app.s.dlss.on;
-        b.toggle(kDlssOn, L"Use DLSS", on,
-                 on ? L"DLAA on the periphery, DLAA or an upscale on the focus." : L"Off");
-        b.reveal(kDlssOn, on, L"Use DLSS",
-                 {L"nvngx_dlss.dll", L"Focus views", L"Focus preset", L"Periphery preset", L"Texture sharpening", L"Other cars’ motion",
-                  L"nvngx_dlssnr.dll", L"Use DLSS-NR"},
+        b.toggle(kDlssOn, tr(L"Use DLSS"), on,
+                 on ? tr(L"DLAA on the periphery, DLAA or an upscale on the focus.") : tr(L"Off"));
+        b.reveal(kDlssOn, on, tr(L"Use DLSS"),
+                 {L"nvngx_dlss.dll", tr(L"Focus views"), tr(L"Focus preset"), tr(L"Periphery preset"),
+                  tr(L"Texture sharpening"), tr(L"Other cars’ motion"), L"nvngx_dlssnr.dll", tr(L"Use DLSS-NR")},
                  dlss_rows);
     };
     c.reset = [](Settings& s) { s.dlss = DlssSettings{}; };  // its switch and options; the DLL back to the included one
@@ -428,24 +456,31 @@ Card dlss_card() {
 
 void nr_rows(Body& c) {
     const NrSettings& n = app.s.nr;
-    c.slider({kNrIntensity, L"Intensity", n.intensity});
-    c.popup(kNrStyle, L"Style", kNrStyles[dlss_choice_index(kNrStyles, n.style)].name, names_of(kNrStyles));
-    c.popup(kNrPreset, L"Preset", kNrPresets[dlss_choice_index(kNrPresets, n.preset)].name, names_of(kNrPresets));
-    c.slider({kNrFocusScale, L"Focus working size", n.focusScale});
-    c.toggle(kNrPeriphery, L"Periphery too", n.periphery,
-             n.periphery ? L"At least about 2 ms of GPU time more per eye." : L"Off: only the focus views");
-    c.reveal(kNrPeriphery, n.periphery, L"Periphery too", {L"Periphery working size", L"Periphery covered"}, [](Body& p) {
-        p.slider({kNrPeripheryScale, L"Periphery working size", app.s.nr.peripheryScale});
-        p.slider({kNrPeripheryCoverage, L"Periphery covered", app.s.nr.peripheryCoverage});
+    c.slider({kNrIntensity, tr(L"Intensity"), n.intensity});
+    c.popup(kNrStyle, tr(L"Style"), tr(kNrStyles[dlss_choice_index(kNrStyles, n.style)].name), names_of(kNrStyles));
+    c.popup(kNrPreset, tr(L"Preset"), tr(kNrPresets[dlss_choice_index(kNrPresets, n.preset)].name),
+            names_of(kNrPresets));
+    c.slider({kNrFocusScale, tr(L"Focus working size"), n.focusScale});
+    c.toggle(kNrPeriphery, tr(L"Periphery too"), n.periphery,
+             n.periphery ? tr(L"At least about 2 ms of GPU time more per eye.") : tr(L"Off: only the focus views"));
+    c.reveal(kNrPeriphery, n.periphery, tr(L"Periphery too"),
+             {tr(L"Periphery working size"), tr(L"Periphery covered")}, [](Body& p) {
+        p.slider({kNrPeripheryScale, tr(L"Periphery working size"), app.s.nr.peripheryScale});
+        p.slider({kNrPeripheryCoverage, tr(L"Periphery covered"), app.s.nr.peripheryCoverage});
     });
-    c.more(L"tuning", {L"Local tone", L"Local structure", L"Auto mask", L"Runs", L"Working size limit", L"Edge blend"}, [](Body& m) {
+    c.more(tr(L"tuning"),
+           {tr(L"Local tone"), tr(L"Local structure"), tr(L"Auto mask"), tr(L"Runs"), tr(L"Working size limit"),
+            tr(L"Edge blend")}, [](Body& m) {
         const NrSettings& nn = app.s.nr;
-        m.sliders({kNrLocalTone, L"Local tone", nn.localTone}, {kNrLocalStructure, L"Local structure", nn.localStructure});
-        m.toggle(kNrAutoMask, L"Auto mask", nn.autoMask, L"The model finds what it treats differently (skin) itself.");
-        m.segments(kNrOrder, L"Runs", items_of(kNrOrder), nn.beforeDlss ? 1 : 0);
-        m.sliders({kNrLimit, L"Working size limit", nn.workingLimit, L" MP", L"", true}, {kNrEdgeBlend, L"Edge blend", nn.edgeBlend});
+        m.sliders({kNrLocalTone, tr(L"Local tone"), nn.localTone},
+                  {kNrLocalStructure, tr(L"Local structure"), nn.localStructure});
+        m.toggle(kNrAutoMask, tr(L"Auto mask"), nn.autoMask,
+                 tr(L"The model finds what it treats differently (skin) itself."));
+        m.segments(kNrOrder, tr(L"Runs"), items_of(kNrOrder), nn.beforeDlss ? 1 : 0);
+        m.sliders({kNrLimit, tr(L"Working size limit"), nn.workingLimit, L" MP", L"", true},
+                  {kNrEdgeBlend, tr(L"Edge blend"), nn.edgeBlend});
     });
-    c.note(L"Preset, working sizes, order and the periphery rebuild DLSS-NR: a short stutter.");
+    c.note(tr(L"Preset, working sizes, order and the periphery rebuild DLSS-NR: a short stutter."));
 }
 
 Card nr_card() {
@@ -456,21 +491,24 @@ Card nr_card() {
         const std::wstring dll = n.folder.empty() ? std::wstring() : n.folder + L"\\nvngx_dlssnr.dll";
         const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES;
         const std::wstring version = found ? file_version(dll) : std::wstring();
-        const std::wstring text = n.folder.empty() ? L"Not included with Sim-QVFR: choose the one in a game that ships DLSS-NR."
-                                  : found          ? (version.empty() ? std::wstring(L"Found.") : L"Version " + version + L".")
-                                                   : std::wstring(L"Not found where you chose it.");
-        b.buttons(L"nvngx_dlssnr.dll", text, {{kNrFolder, L"Choose…"}}, Applies::NextLaunch);
+        const std::wstring text =
+            n.folder.empty() ? std::wstring(tr(L"Not included with Sim-QVFR: choose the one in a game that ships "
+                                               L"DLSS-NR."))
+            : found          ? (version.empty() ? std::wstring(tr(L"Found."))
+                                                : trf(L"Version {version}.", {{L"version", version}}))
+                             : std::wstring(tr(L"Not found where you chose it."));
+        b.buttons(L"nvngx_dlssnr.dll", text, {{kNrFolder, tr(L"Choose…")}}, Applies::NextLaunch);
         std::wstring why;
         const bool available = own_nr_available(&why);
         if (available)
-            b.toggle(kNrOn, L"Use DLSS-NR", n.on,
-                     n.on ? L"Experimental and heavy: about 2 ms of GPU time a megapixel, per view." : L"Off");
+            b.toggle(kNrOn, tr(L"Use DLSS-NR"), n.on,
+                     n.on ? tr(L"Experimental and heavy: about 2 ms of GPU time a megapixel, per view.") : tr(L"Off"));
         else if (!n.folder.empty())
             b.note(why);
-        b.reveal(kNrOn, available && n.on, L"Use DLSS-NR",
-                 {L"Intensity", L"Style", L"Preset", L"Focus working size", L"Periphery too", L"Periphery working size",
-                  L"Periphery covered", L"Local tone", L"Local structure", L"Auto mask", L"Runs", L"Working size limit",
-                  L"Edge blend"},
+        b.reveal(kNrOn, available && n.on, tr(L"Use DLSS-NR"),
+                 {tr(L"Intensity"), tr(L"Style"), tr(L"Preset"), tr(L"Focus working size"), tr(L"Periphery too"),
+                  tr(L"Periphery working size"), tr(L"Periphery covered"), tr(L"Local tone"), tr(L"Local structure"),
+                  tr(L"Auto mask"), tr(L"Runs"), tr(L"Working size limit"), tr(L"Edge blend")},
                  nr_rows);
     };
     c.reset = [](Settings& s) {  // its options; it stays on, and its DLL stays the player's
@@ -489,43 +527,47 @@ Card nr_card() {
 std::wstring fsr_offer_text() {
     const fsr::Offer& o = app.fsrOffer;
     if (app.fsrProbing || !o.checked)
-        return L"Asking AMD’s FSR which version your graphics card gets…";
+        return tr(L"Asking AMD’s FSR which version your graphics card gets…");
     if (!o.why.empty())
-        return o.why;
+        return tr(o.why);  // engine/fsr_probe.h's reason, marked there
     const std::wstring name = fsr::offer_name(o);
-    return name + L" on your " + o.gpu + (o.major >= 4 ? L": AMD’s machine-learned upscaler." : L": AMD’s analytic upscaler.") +
-           L" Included with Sim-QVFR.";
+    return o.major >= 4 ? trf(L"{fsr} on your {gpu}: AMD’s machine-learned upscaler. Included with Sim-QVFR.",
+                              {{L"fsr", name}, {L"gpu", o.gpu}})
+                        : trf(L"{fsr} on your {gpu}: AMD’s analytic upscaler. Included with Sim-QVFR.",
+                              {{L"fsr", name}, {L"gpu", o.gpu}});
 }
 
 void fsr_rows(Body& b) {
     const DlssSettings& d = app.s.dlss;
     b.note(fsr_offer_text());
-    b.popup(kDlssFocusMode, L"Focus views", kFsrFocusModes[dlss_choice_index(kFsrFocusModes, d.focusScale, true)].name,
-            names_of(kFsrFocusModes));
-    b.popup(kDlssSharpening, L"Texture sharpening",
-            kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name,
+    b.popup(kDlssFocusMode, tr(L"Focus views"),
+            tr(kFsrFocusModes[dlss_choice_index(kFsrFocusModes, d.focusScale, true)].name), names_of(kFsrFocusModes));
+    b.popup(kDlssSharpening, tr(L"Texture sharpening"),
+            tr(kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name),
             names_of(kDlssTextureSharpening));
-    b.more(L"advanced options", {L"Other cars’ motion"}, [](Body& m) {
-        m.toggle(kDlssCarVectors, L"Other cars’ motion", app.s.dlss.carVectors,
-                 L"Keeps passing cars clean; turn off for headroom.", false, Applies::NextLaunch);
+    b.more(tr(L"advanced options"), {tr(L"Other cars’ motion")}, [](Body& m) {
+        m.toggle(kDlssCarVectors, tr(L"Other cars’ motion"), app.s.dlss.carVectors,
+                 tr(L"Keeps passing cars clean; turn off for headroom."), false, Applies::NextLaunch);
     });
-    b.note(L"A change rebuilds FSR in a running game: a short stutter.");
+    b.note(tr(L"A change rebuilds FSR in a running game: a short stutter."));
 }
 
 // AMD FSR in DLSS's place: its switch is DLSS's ([dlss] on), its options DLSS's but the presets (FSR has none).
 Card fsr_card() {
-    Card c{Tab::Picture, L"FSR (experimental)", Applies::Live};
+    Card c{Tab::Picture, tr(L"FSR (experimental)"), Applies::Live};
     c.body = [](Body& b) {
         std::wstring why;
         if (!own_upscaler_available(&why)) {
             b.note(why);
             return;
         }
-        b.note(L"Experimental: Sim-QVFR’s FSR is built like its DLSS, but without AMD hardware to test on so far it has only "
-               L"run as FSR 3.1 on an NVIDIA card. FSR 4 is untested.");
+        b.note(tr(L"Experimental: Sim-QVFR’s FSR is built like its DLSS, but without AMD hardware to test on so far it "
+                  L"has only run as FSR 3.1 on an NVIDIA card. FSR 4 is untested."));
         const bool on = app.s.dlss.on;
-        b.toggle(kDlssOn, L"Use FSR", on, on ? L"Native AA on the periphery, native AA or an upscale on the focus." : L"Off");
-        b.reveal(kDlssOn, on, L"Use FSR", {L"Focus views", L"Texture sharpening", L"Other cars’ motion"}, fsr_rows);
+        b.toggle(kDlssOn, tr(L"Use FSR"), on,
+                 on ? tr(L"Native AA on the periphery, native AA or an upscale on the focus.") : tr(L"Off"));
+        b.reveal(kDlssOn, on, tr(L"Use FSR"),
+                 {tr(L"Focus views"), tr(L"Texture sharpening"), tr(L"Other cars’ motion")}, fsr_rows);
     };
     c.reset = [](Settings& s) {  // its switch and options; DLSS's own DLL choice kept
         const std::wstring folder = s.dlss.folder;
@@ -542,65 +584,81 @@ void cheeky_rows(Body& b) {
         const CheekySettings& k = app.s.cheeky;
         const std::wstring runtime = cheeky_runtime_path(app.ini, layer_folder());
         const bool found = GetFileAttributesW(runtime.c_str()) != INVALID_FILE_ATTRIBUTES;
-        b.buttons(L"Runtime",
-                  found ? L"Found." : L"Not installed: Cheeky is a separate download (see Launch checks’ How to install it), or choose where it is.",
-                  {{kCheekyRuntime, L"Choose…"}}, Applies::NextLaunch);
+        b.buttons(tr(L"Runtime"),
+                  found ? tr(L"Found.")
+                        : tr(L"Not installed: Cheeky is a separate download (see Launch checks’ How to install it), or "
+                             L"choose where it is."),
+                  {{kCheekyRuntime, tr(L"Choose…")}}, Applies::NextLaunch);
         const CheekyLayer layer = cheeky_layer_state();
-        b.info(L"OpenXR layer", layer == CheekyLayer::Enabled ? L"Installed" : layer == CheekyLayer::Disabled ? L"Turned off" : L"Not installed");
+        b.info(tr(L"OpenXR layer"), layer == CheekyLayer::Enabled    ? tr(L"Installed")
+                                    : layer == CheekyLayer::Disabled ? tr(L"Turned off")
+                                                                     : tr(L"Not installed"));
         if (layer != CheekyLayer::Enabled)
-            b.note(layer == CheekyLayer::Disabled ? L"Registered but turned off: run CheekyOpenXRSetup.exe again."
-                                                  : L"Install it with CheekyOpenXRSetup.exe from Cheeky’s release.");
+            b.note(layer == CheekyLayer::Disabled
+                       ? tr(L"Registered but turned off: run CheekyOpenXRSetup.exe again.")
+                       : tr(L"Install it with CheekyOpenXRSetup.exe from Cheeky’s release."));
         const std::wstring& status = app.runtime.cheekyStatus;
         if (status == L"missing")
-            b.note(L"At the last launch, Cheeky’s runtime was not found.");
+            b.note(tr(L"At the last launch, Cheeky’s runtime was not found."));
         else if (status == L"refused")
-            b.note(L"At the last launch, Cheeky did not start: see its log next to its runtime.");
+            b.note(tr(L"At the last launch, Cheeky did not start: see its log next to its runtime."));
         b.divider();
-        b.toggle(kCheekyOn, L"Foveated DLSS", k.processing, L"Off leaves the game’s own DLSS on every view.");
-        b.toggle(kCheekyOuter, L"Cheaper outer views", k.outerDlaa,
-                 k.outerDlaa ? L"Cheeky’s own DLAA pass on the periphery, at a lower resolution." : L"Off");
-        b.reveal(kCheekyOuter, k.outerDlaa, L"Cheaper outer views", {L"Outer DLAA scale", L"Outer preset"}, [](Body& r) {
-            r.slider({kCheekyScale, L"Outer DLAA scale", app.s.cheeky.outerScale});
-            r.popup(kCheekyOuterPreset, L"Outer preset", cheeky_preset_name(app.s.cheeky.outerPreset), items_of(kCheekyOuterPreset));
+        b.toggle(kCheekyOn, tr(L"Foveated DLSS"), k.processing, tr(L"Off leaves the game’s own DLSS on every view."));
+        b.toggle(kCheekyOuter, tr(L"Cheaper outer views"), k.outerDlaa,
+                 k.outerDlaa ? tr(L"Cheeky’s own DLAA pass on the periphery, at a lower resolution.") : tr(L"Off"));
+        b.reveal(kCheekyOuter, k.outerDlaa, tr(L"Cheaper outer views"),
+                 {tr(L"Outer DLAA scale"), tr(L"Outer preset")}, [](Body& r) {
+            r.slider({kCheekyScale, tr(L"Outer DLAA scale"), app.s.cheeky.outerScale});
+            r.popup(kCheekyOuterPreset, tr(L"Outer preset"), tr(cheeky_preset_name(app.s.cheeky.outerPreset)),
+                    items_of(kCheekyOuterPreset));
         });
-        b.popup(kCheekyFocusPreset, L"Focus preset", cheeky_preset_name(k.focusPreset), items_of(kCheekyFocusPreset));
-        b.more(L"experimental options", {L"Focus supersampling", L"Fix motion-vector blur", L"DLSS-NR", L"DLSS-NR preset", L"DLSS-NR passes"},
+        b.popup(kCheekyFocusPreset, tr(L"Focus preset"), tr(cheeky_preset_name(k.focusPreset)),
+                items_of(kCheekyFocusPreset));
+        b.more(tr(L"experimental options"),
+               {tr(L"Focus supersampling"), tr(L"Fix motion-vector blur"), L"DLSS-NR", tr(L"DLSS-NR preset"),
+                tr(L"DLSS-NR passes")},
                [](Body& m) {
                    const CheekySettings& ck = app.s.cheeky;
-                   m.slider({kCheekySupersampling, L"Focus supersampling", ck.supersampling});
-                   m.toggle(kCheekyMotionFix, L"Fix motion-vector blur", ck.motionFix, L"Cheeky’s workaround for smearing; adds GPU work.");
+                   m.slider({kCheekySupersampling, tr(L"Focus supersampling"), ck.supersampling});
+                   m.toggle(kCheekyMotionFix, tr(L"Fix motion-vector blur"), ck.motionFix,
+                            tr(L"Cheeky’s workaround for smearing; adds GPU work."));
                    m.toggle(kCheekyNr, L"DLSS-NR", ck.nr,
-                            ck.nr ? L"On the focus views (nvngx_dlssnr.dll next to the game)." : L"Off");
-                   m.reveal(kCheekyNr, ck.nr, L"DLSS-NR", {L"DLSS-NR preset", L"DLSS-NR passes"}, [](Body& r) {
-                       r.popup(kCheekyNrPreset, L"DLSS-NR preset", items_of(kCheekyNrPreset)[std::clamp(app.s.cheeky.nrPreset, 0, 2)],
+                            ck.nr ? tr(L"On the focus views (nvngx_dlssnr.dll next to the game).") : tr(L"Off"));
+                   m.reveal(kCheekyNr, ck.nr, L"DLSS-NR", {tr(L"DLSS-NR preset"), tr(L"DLSS-NR passes")}, [](Body& r) {
+                       r.popup(kCheekyNrPreset, tr(L"DLSS-NR preset"),
+                               items_of(kCheekyNrPreset)[std::clamp(app.s.cheeky.nrPreset, 0, 2)],
                                items_of(kCheekyNrPreset));
-                       r.popup(kCheekyNrPasses, L"DLSS-NR passes", items_of(kCheekyNrPasses)[std::clamp(app.s.cheeky.nrPasses - 1, 0, 2)],
+                       r.popup(kCheekyNrPasses, tr(L"DLSS-NR passes"),
+                               items_of(kCheekyNrPasses)[std::clamp(app.s.cheeky.nrPasses - 1, 0, 2)],
                                items_of(kCheekyNrPasses));
                    });
                });
         if (!game_has(&games::GameFeatures::frameGeneration))
-            b.note(L"Frame generation: " + not_yet());
+            b.note(trf(L"Frame generation: {reason}", {{L"reason", not_yet()}}));
     }
 }
 
 // Cheeky Foveated DLSS (ACE, ACC): its credit, its switch, the rest under the switch while it is on, its licence.
 Card cheeky_card() {
-    Card c{Tab::Picture, L"Foveated DLSS", Applies::Live};  // its switch: the next launch
+    Card c{Tab::Picture, tr(L"Foveated DLSS"), Applies::Live};  // its switch: the next launch
     c.body = [](Body& b) {
         // Cheeky's author asked for this credit, with the version, wherever the UI controls Cheeky.
         b.note(cheeky_version_label(app.runtime.cheekyVersion) +
-               (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L""));
+               (app.runtime.cheekyVersion.empty()
+                    ? L"  ·  " + std::wstring(tr(L"its version shows after a launch with it"))
+                    : std::wstring()));
         const bool on = app.s.cheeky.load;
-        b.toggle(kCheekyUse, L"Use Cheeky Foveated DLSS", on,
-                 on ? L"Cheeky’s DLSS runtime in the game: a cheaper periphery." : L"Off",
+        b.toggle(kCheekyUse, tr(L"Use Cheeky Foveated DLSS"), on,
+                 on ? tr(L"Cheeky’s DLSS runtime in the game: a cheaper periphery.") : tr(L"Off"),
                  false, Applies::NextLaunch);
-        b.reveal(kCheekyUse, on, L"Use Cheeky Foveated DLSS",
-                 {L"Runtime", L"OpenXR layer", L"Foveated DLSS", L"Cheaper outer views", L"Outer DLAA scale", L"Outer preset",
-                  L"Focus preset", L"Focus supersampling", L"Fix motion-vector blur", L"DLSS-NR", L"DLSS-NR preset", L"DLSS-NR passes",
-                  L"Frame generation"},
+        b.reveal(kCheekyUse, on, tr(L"Use Cheeky Foveated DLSS"),
+                 {tr(L"Runtime"), tr(L"OpenXR layer"), tr(L"Foveated DLSS"), tr(L"Cheaper outer views"),
+                  tr(L"Outer DLAA scale"), tr(L"Outer preset"), tr(L"Focus preset"), tr(L"Focus supersampling"),
+                  tr(L"Fix motion-vector blur"), L"DLSS-NR", tr(L"DLSS-NR preset"), tr(L"DLSS-NR passes"),
+                  tr(L"Frame generation")},
                  cheeky_rows);
-        b.note(L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the GNU GPL v3 "
-               L"(github.com/ClarkCheekyKent/CheekyFoveatedDLSS).");
+        b.note(tr(L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the GNU GPL v3 "
+                  L"(github.com/ClarkCheekyKent/CheekyFoveatedDLSS)."));
     };
     c.reset = [](Settings& s) {  // its switch and processing options; frame generation is its own card
         const CheekySettings d;
@@ -624,32 +682,34 @@ void frame_generation_rows(Body& b) {
     {
         const CheekySettings& k = app.s.cheeky;
         std::vector<std::wstring> items;
-        b.segments(kFgMultiplier, L"Multiplier", items_of(kFgMultiplier), choice_items(kFgMultiplier, items));
-        b.slider({kFgSize, L"Center region", k.fgSize});
-        b.segments(kFgScale, L"Center FG scale", items_of(kFgScale), choice_items(kFgScale, items));
-        b.segments(kFgPeriphery, L"Periphery FG scale", items_of(kFgPeriphery), choice_items(kFgPeriphery, items));
-        b.toggle(kFgBorder, L"Show the center region", k.fgBorder, L"Outlines it in the headset, to check it follows your eyes.");
-        b.more(L"timing", {L"Release game"}, [](Body& m) {
+        b.segments(kFgMultiplier, tr(L"Multiplier"), items_of(kFgMultiplier), choice_items(kFgMultiplier, items));
+        b.slider({kFgSize, tr(L"Center region"), k.fgSize});
+        b.segments(kFgScale, tr(L"Center FG scale"), items_of(kFgScale), choice_items(kFgScale, items));
+        b.segments(kFgPeriphery, tr(L"Periphery FG scale"), items_of(kFgPeriphery), choice_items(kFgPeriphery, items));
+        b.toggle(kFgBorder, tr(L"Show the center region"), k.fgBorder,
+                 tr(L"Outlines it in the headset, to check it follows your eyes."));
+        b.more(tr(L"timing"), {tr(L"Release game")}, [](Body& m) {
             std::vector<std::wstring> releases;
             const int i = choice_items(kFgRelease, releases);
-            m.popup(kFgRelease, L"Release game", releases[static_cast<size_t>(i)], releases);
+            m.popup(kFgRelease, tr(L"Release game"), releases[static_cast<size_t>(i)], releases);
         });
-        b.note(L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off. Lower scales use less GPU time "
-               L"and memory.");
+        b.note(tr(L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off. Lower scales use "
+                  L"less GPU time and memory."));
     }
 }
 
 // Cheeky's frame generation (ACE): its switch, its options under it while it is on. It follows Foveated DLSS, whose
 // switch shows it.
 Card frame_generation_card() {
-    Card c{Tab::Picture, L"Frame generation", Applies::Live};
+    Card c{Tab::Picture, tr(L"Frame generation"), Applies::Live};
     c.follows = true;
     c.body = [](Body& b) {
         const bool on = app.s.cheeky.fg;
-        b.toggle(kFgOn, L"Frame generation", on,
-                 on ? L"Generated frames between the game’s, from its depth and motion." : L"Off");
-        b.reveal(kFgOn, on, L"Frame generation",
-                 {L"Multiplier", L"Center region", L"Center FG scale", L"Periphery FG scale", L"Show the center region", L"Release game"},
+        b.toggle(kFgOn, tr(L"Frame generation"), on,
+                 on ? tr(L"Generated frames between the game’s, from its depth and motion.") : tr(L"Off"));
+        b.reveal(kFgOn, on, tr(L"Frame generation"),
+                 {tr(L"Multiplier"), tr(L"Center region"), tr(L"Center FG scale"), tr(L"Periphery FG scale"),
+                  tr(L"Show the center region"), tr(L"Release game")},
                  frame_generation_rows);
     };
     c.reset = [](Settings& s) {  // its switch and options

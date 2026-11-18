@@ -78,10 +78,14 @@ void set_panel_from(float x, float y) {
 int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     int selected = 0;
     items.clear();
+    const auto add_all = [&items](const auto& names) {  // a table's names, each in the player's language
+        for (const auto& name : names)
+            items.push_back(tr(name));
+    };
     if (owner == kOverviewProfile)
         return overview_profile(items);
     if (owner == kPreviewEye) {
-        items = {L"Left", L"Both", L"Right"};
+        items = {tr(L"Left"), tr(L"Both"), tr(L"Right")};
         return std::clamp(app.previewEye, 0, 2);
     }
     if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
@@ -93,14 +97,14 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
             if (focus || p.value != 0) {
                 if (p.value == value)
                     selected = static_cast<int>(items.size());
-                items.push_back(p.name);
+                items.push_back(tr(p.name));
             }
     } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
                owner == kDlssSharpening) {  // DLSS in LMU
         const auto fill = [&items, &selected](const auto& list, int value) {
             items.clear();
             for (const DlssChoice& c : list)
-                items.push_back(c.name);
+                items.push_back(tr(c.name));
             selected = dlss_choice_index(list, value, true);
         };
         if (owner == kDlssFocusMode && fsr_pc())  // AMD FSR's names: native AA for DLAA
@@ -118,52 +122,54 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
         items.clear();
         if (style)
             for (const DlssChoice& c : kNrStyles)
-                items.push_back(c.name);
+                items.push_back(tr(c.name));
         else
             for (const DlssChoice& c : kNrPresets)
-                items.push_back(c.name);
+                items.push_back(tr(c.name));
         selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
     } else if (owner == kNrOrder) {
-        items = {L"After DLSS", L"Before DLSS"};
+        items = {tr(L"After DLSS"), tr(L"Before DLSS")};
         selected = app.s.nr.beforeDlss ? 1 : 0;
     } else if (owner == kCheekyNrPreset) {
-        items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
+        add_all(kCheekyNrPresets);
         selected = app.s.cheeky.nrPreset;
     } else if (owner == kFgMultiplier) {
         items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
         selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
     } else if (owner == kFgRelease) {
-        items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
+        add_all(kCheekyFgReleaseNames);
         selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
     } else if (owner == kFgScale || owner == kFgPeriphery) {
         items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
         selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
     } else if (owner == kVisor) {
-        items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
+        add_all(kVisorPositionNames);
         selected = static_cast<int>(app.s.helmet.visor);
     } else if (owner == kShape) {
-        items.assign(std::begin(kShapeNames), std::end(kShapeNames));
+        add_all(kShapeNames);
         selected = app.s.shape.corners ? 1 : 0;
     } else if (owner == kDiagKind) {
-        items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
+        add_all(kIssueKinds);
         selected = app.reportKind;
     } else if (owner == kLanguage) {
         selected = language_items(items);
     } else if (owner == kHelmetDetail) {
-        items = {L"Performance", L"Detail"};  // 2048 or 4096 a side: the help says so
+        add_all(kHelmetDetailNames);  // 2048 or 4096 a side: the help says so
         selected = app.s.helmet.detail ? 1 : 0;
     } else if (owner == kEyeOff) {
-        items = {L"None", L"Left", L"Right"};  // [quad] eye_off's 0, 1, 2
+        items = {tr(L"None"), tr(L"Left"), tr(L"Right")};  // [quad] eye_off's 0, 1, 2
         selected = std::clamp(app.s.eyeOff, 0, 2);
     } else if (owner == kLayerProfile) {
-        items = {kLayerProfileNames[0], kLayerProfileNames[1]};
+        add_all(kLayerProfileNames);
         selected = app.layerProfile;
     } else if (owner == kCheekyNrPasses) {
-        items = {L"1 pass", L"2 passes", L"3 passes"};
+        items = {tr(L"1 pass"), tr(L"2 passes"), tr(L"3 passes")};
         selected = app.s.cheeky.nrPasses - 1;
     } else {
-        items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
-                                           : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
+        if (owner == kMethod)
+            add_all(kMethodNames);
+        else
+            add_all(kModeNames);
         selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
     }
     return selected;
@@ -219,7 +225,7 @@ void open_card_menu(int card) {
     for (const Hit& h : app.hits)
         if (h.id == kCardMenu && h.option == card)
             p.anchor = h.r;
-    p.items = {L"Reset this card…"};
+    p.items = {tr(L"Reset this card…")};
     p.actions = {card};
     p.selected = -1;
     p.hover = 0;
@@ -258,8 +264,10 @@ void open_profile_menu() {
     };
     const Readouts ro = readouts(app.s, app.runtime);
     add(PopupRow::Note,
-        std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Periphery " + std::to_wstring(app.s.outer) + L"%  ·  Focus density " +
-            std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%",
+        std::wstring(tr(app.s.eyeTracking ? kModeNames[0] : kModeNames[1])) + L"  ·  " +
+            trf(L"Periphery {percent}", {{L"percent", std::to_wstring(app.s.outer) + L"%"}}) + L"  ·  " +
+            trf(L"Focus density {percent}",
+                {{L"percent", std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%"}}),
         0);
     add(PopupRow::Separator, L"", 0);
     const int current = profile_index(app.profileCurrent);
@@ -271,21 +279,25 @@ void open_profile_menu() {
         const bool inUse = static_cast<int>(i) == current;
         if (inUse)
             p.selected = static_cast<int>(p.items.size());
-        add(PopupRow::Item, app.profileNames[i] + (inUse && !app.profileMatches ? L"  ·  changed since" : L""), static_cast<int>(i));
+        const std::wstring changedSince =
+            inUse && !app.profileMatches ? L"  ·  " + std::wstring(tr(L"changed since")) : std::wstring();
+        add(PopupRow::Item, (i < presets ? std::wstring(tr(app.profileNames[i])) : app.profileNames[i]) + changedSince,
+            static_cast<int>(i));
     }
     add(PopupRow::Separator, L"", 0);
     if (current >= 0 && !app.profileMatches) {
         if (static_cast<size_t>(current) >= presets)
-            add(PopupRow::Item, L"Update " + app.profileCurrent + L" with these settings", kActUpdate);
-        add(PopupRow::Item, L"Revert to " + app.profileCurrent, kActRevert);
+            add(PopupRow::Item, trf(L"Update {profile} with these settings", {{L"profile", app.profileCurrent}}),
+                kActUpdate);
+        add(PopupRow::Item, trf(L"Revert to {profile}", {{L"profile", app.profileCurrent}}), kActRevert);
     }
-    add(PopupRow::Item, L"Save current settings…", kActSave);
-    add(PopupRow::Item, L"Paste a shared profile", kActPaste);
-    add(PopupRow::Item, L"Manage profiles…", kActManage);
+    add(PopupRow::Item, tr(L"Save current settings…"), kActSave);
+    add(PopupRow::Item, tr(L"Paste a shared profile"), kActPaste);
+    add(PopupRow::Item, tr(L"Manage profiles…"), kActManage);
     add(PopupRow::Separator, L"", 0);
     if (app.undoChange)
-        add(PopupRow::Item, L"Undo " + app.undoText + L" (Ctrl+Z)", kActUndo);
-    add(PopupRow::Item, L"Restore defaults for " + short_name() + L"…", kActRestore);
+        add(PopupRow::Item, trf(L"Undo {change} (Ctrl+Z)", {{L"change", app.undoText}}), kActUndo);
+    add(PopupRow::Item, trf(L"Restore defaults for {game}…", {{L"game", short_name()}}), kActRestore);
     p.hover = p.selected;
     p.open = true;
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -457,10 +469,13 @@ void choose_cheeky_runtime() {
     wcsncpy_s(path, current.c_str(), _TRUNCATE);
     OPENFILENAMEW ofn{sizeof(ofn)};
     ofn.hwndOwner = app.hwnd;
-    ofn.lpstrFilter = L"Cheeky runtime (CheekyFoveatedDLSSRuntime.dll)\0CheekyFoveatedDLSSRuntime.dll\0DLL files\0*.dll\0";
+    // name\0pattern\0 pairs: the names in the player's language, the patterns as they are.
+    std::wstring filter = trf(L"Cheeky runtime ({file})", {{L"file", L"CheekyFoveatedDLSSRuntime.dll"}});
+    filter += std::wstring(L"\0CheekyFoveatedDLSSRuntime.dll\0", 31) + tr(L"DLL files") + std::wstring(L"\0*.dll\0", 7);
+    ofn.lpstrFilter = filter.c_str();
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"Choose Cheeky Foveated DLSS's runtime";
+    ofn.lpstrTitle = tr(L"Choose Cheeky Foveated DLSS's runtime");
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn) && app.iniFound) {
         save_cheeky_runtime(app.ini, path);
@@ -480,7 +495,7 @@ void choose_dlss_dll() {
     ofn.lpstrFilter = L"NVIDIA DLSS (nvngx_dlss.dll)\0nvngx_dlss.dll\0";
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlss.dll (DLSS 310 or newer)";
+    ofn.lpstrTitle = tr(L"Choose NVIDIA’s nvngx_dlss.dll (DLSS 310 or newer)");
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
         std::wstring folder = path;
@@ -506,7 +521,7 @@ void choose_nr_dll() {
     ofn.lpstrFilter = L"NVIDIA DLSS-NR (nvngx_dlssnr.dll)\0nvngx_dlssnr.dll\0";
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlssnr.dll (from a game that ships DLSS-NR)";
+    ofn.lpstrTitle = tr(L"Choose NVIDIA’s nvngx_dlssnr.dll (from a game that ships DLSS-NR)");
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
         std::wstring folder = path;
@@ -533,7 +548,7 @@ void choose_game_folder() {
     DWORD options = 0;
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
-    const std::wstring title = L"Choose " + game_name() + L"’s folder";
+    const std::wstring title = trf(L"Choose {game}’s folder", {{L"game", game_name()}});
     dialog->SetTitle(title.c_str());
     std::wstring picked;
     if (SUCCEEDED(dialog->Show(app.hwnd))) {
@@ -552,13 +567,14 @@ void choose_game_folder() {
         return;
     const std::wstring folder = game_folder_from(picked, game);
     if (folder.empty()) {
-        notify(L"That folder doesn’t hold " + game_name(),
-               picked + L" has no " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " + game_name() + L".");
+        notify(trf(L"That folder doesn’t hold {game}", {{L"game", game_name()}}),
+               trf(L"{folder} has no {exe}. Choose the folder Steam’s Browse local files opens for {game}.",
+                   {{L"folder", picked}, {L"exe", game.exeName}, {L"game", game_name()}}));
         return;
     }
     if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + games::wide_id(game)).c_str(), folder.c_str(),
                                                      app.ini.c_str())) {
-        notify(L"The folder couldn’t be saved", L"sim-qvfr.ini wasn’t found next to the launcher.");
+        notify(tr(L"The folder couldn’t be saved"), tr(L"sim-qvfr.ini wasn’t found next to the launcher."));
         return;
     }
     app.iniText = ini_text();

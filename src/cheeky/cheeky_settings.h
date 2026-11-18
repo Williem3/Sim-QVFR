@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include "../ini_put.h"
+#include "../i18n.h"
 
 namespace simqvfr {
 
@@ -51,7 +52,8 @@ struct CheekySettings {
 inline constexpr int kCheekyFgMultiplierMax = 4, kCheekyFgSizeMin = 10, kCheekyFgSizeMax = 100, kCheekyFgSizeStep = 5;
 // The release points offered, in order, and their names; anything else is 8.
 inline constexpr int kCheekyFgReleasePoints[] = {5, 8, 3};
-inline constexpr const wchar_t* kCheekyFgReleaseNames[] = {L"Never (5)", L"Capture (8)", L"Generated (3)"};
+inline constexpr const wchar_t* kCheekyFgReleaseNames[] = {I18N(L"Never (5)"), I18N(L"Capture (8)"),
+                                                           I18N(L"Generated (3)")};
 inline int cheeky_fg_release(int point) { return point == 5 || point == 3 ? point : 8; }
 inline int cheeky_fg_release_index(int point) {
     const int p = cheeky_fg_release(point);
@@ -63,7 +65,7 @@ inline int cheeky_fg_quarter(int percent) { return std::clamp((percent + 12) / 2
 inline constexpr int kCheekyScaleMin = 20, kCheekyScaleMax = 100, kCheekyScaleStep = 5;
 inline constexpr int kCheekySupersamplingMin = 100, kCheekySupersamplingMax = 200, kCheekySupersamplingStep = 5;
 inline constexpr int kCheekyNrPassesMax = 3;
-inline constexpr const wchar_t* kCheekyNrPresets[] = {L"Default", L"A (Original)", L"B (Faster)"};
+inline constexpr const wchar_t* kCheekyNrPresets[] = {I18N(L"Default"), I18N(L"A (Original)"), I18N(L"B (Faster)")};
 inline constexpr int kCheekyNrPresetMax = static_cast<int>(std::size(kCheekyNrPresets)) - 1;
 
 // Cheeky's preset choices (its overlay's), value and name. The outer views have no game default.
@@ -71,8 +73,8 @@ struct CheekyPreset {
     int value;
     const wchar_t* name;
 };
-inline constexpr CheekyPreset kCheekyPresets[] = {{0, L"Game default"}, {5, L"E (fastest)"}, {10, L"J"},
-                                                  {11, L"K"},           {12, L"L"},             {13, L"M"}};
+inline constexpr CheekyPreset kCheekyPresets[] = {{0, I18N(L"Game default")}, {5, I18N(L"E (fastest)")}, {10, L"J"},
+                                                  {11, L"K"}, {12, L"L"}, {13, L"M"}};
 
 inline const wchar_t* cheeky_preset_name(int value) {
     for (const CheekyPreset& p : kCheekyPresets)

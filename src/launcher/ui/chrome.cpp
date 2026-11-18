@@ -28,7 +28,7 @@ float pane_content(float x, float y, float w, bool draw) {
 
 namespace {
 
-constexpr const wchar_t* kPaneLabels[] = {L"Overview", L"Picture", L"Headset", L"Game"};
+constexpr const wchar_t* kPaneLabels[] = {I18N(L"Overview"), I18N(L"Picture"), I18N(L"Headset"), I18N(L"Game")};
 
 static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
@@ -37,8 +37,8 @@ static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 // A page this game has: every one (a game's own features are cards and rows the Picture tab leaves out).
 bool pane_shown(int) { return true; }
 
-// A page's name in the page strip and as its title.
-const wchar_t* pane_label(int pane) { return kPaneLabels[std::clamp(pane, 0, kPanes - 1)]; }
+// A page's name in the page strip and as its title, in the current language.
+const wchar_t* pane_label(int pane) { return tr(kPaneLabels[std::clamp(pane, 0, kPanes - 1)]); }
 
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {

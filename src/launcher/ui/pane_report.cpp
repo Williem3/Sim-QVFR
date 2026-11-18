@@ -67,7 +67,7 @@ void export_logs() {
         show_in_explorer(zip);
     } else {
         app.status = Status::Error;
-        app.error = L"Could not write the logs' zip: " + error;
+        app.error = trf(L"Could not write the logs' zip: {error}", {{L"error", error}});
         app.exportZip.clear();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -97,7 +97,7 @@ void report_issue() {
         show_in_explorer(zip);
     } else {
         app.status = Status::Error;
-        app.error = L"Could not write the report's zip: " + error;
+        app.error = trf(L"Could not write the report's zip: {error}", {{L"error", error}});
         report.zipName.clear();
         app.reportZip.clear();
         InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -161,26 +161,30 @@ float report_pane(float x, float y, float w, bool draw) {
         std::vector<Row> rows;
         for (const Cause& c : causes) {
             Row row;
-            row.label = c.title;
-            row.desc = c.fix;
+            row.label = c.shownTitle;  // the report carries the English (report.cpp)
+            row.desc = c.shownFix;
             row.control = [](const Rect&) {};  // text only
             rows.push_back(row);
         }
-        h += section(x, y + h, w, L"Before you report", rows,
-                     L"What the launcher noticed about the last session, and what to try. The report includes these.", draw);
+        h += section(x, y + h, w, tr(L"Before you report"), rows,
+                     tr(L"What the launcher noticed about the last session, and what to try. The report includes "
+                        L"these."),
+                     draw);
         h += t::kSpace6;
     }
     Row kind;
-    kind.label = L"Kind of problem";
-    const std::vector<std::wstring> kinds(std::begin(kIssueKinds), std::end(kIssueKinds));
+    kind.label = tr(L"Kind of problem");
+    std::vector<std::wstring> kinds;  // as shown; the report writes the English (kIssueKinds)
+    for (const wchar_t* k : kIssueKinds)
+        kinds.push_back(tr(k));
     kind.controlW = popup_width(kinds.data(), kIssueKindCount, 160);
     kind.controlH = t::kControlHeight;
-    kind.control = [](const Rect& r) { popup_button(kDiagKind, r, kIssueKinds[app.reportKind], false); };
+    kind.control = [](const Rect& r) { popup_button(kDiagKind, r, tr(kIssueKinds[app.reportKind]), false); };
     Row description;
     constexpr float kEditH = 96;
     description.fullHeight = [](float) { return t::kBody.lineHeight + t::kSpace2 + kEditH; };
     description.full = [](const Rect& r) {
-        app.canvas.text(L"What happened?", t::kBody, {r.x, r.y, r.w, t::kBody.lineHeight}, col(app.c->label));
+        app.canvas.text(tr(L"What happened?"), t::kBody, {r.x, r.y, r.w, t::kBody.lineHeight}, col(app.c->label));
         const Rect field{r.x, r.y + t::kBody.lineHeight + t::kSpace2, r.w, kEditH};
         app.canvas.fill(field, col(app.c->field_bg), t::kRadiusControl);
         app.canvas.stroke(field, col(app.c->control_border), 1, t::kRadiusControl);
@@ -192,21 +196,22 @@ float report_pane(float x, float y, float w, bool draw) {
             std::wstring text(static_cast<size_t>(GetWindowTextLengthW(app.reportEdit)), L'\0');
             GetWindowTextW(app.reportEdit, text.data(), static_cast<int>(text.size()) + 1);
             app.canvas.push_clip(field);
-            app.canvas.text(text.empty() ? L"What you saw, and what you expected instead." : text, t::kBody,
-                            app.reportEditRect, col(text.empty() ? app.c->label_secondary : app.c->label), Align::Leading,
-                            false, true);
+            const std::wstring shown =
+                text.empty() ? std::wstring(tr(L"What you saw, and what you expected instead.")) : text;
+            app.canvas.text(shown, t::kBody, app.reportEditRect,
+                            col(text.empty() ? app.c->label_secondary : app.c->label), Align::Leading, false, true);
             app.canvas.pop_clip();
         }
     };
     Row report;
     report.fullHeight = [](float) { return t::kControlHeight; };
     report.full = [](const Rect& r) {
-        const float reportW = button_width(L"Report an issue");
-        button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
+        const float reportW = button_width(tr(L"Report an issue"));
+        button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, tr(L"Report an issue"), true);
     };
-    h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Needs a free GitHub account. Opens a bug report on GitHub with the details filled in, and zips the logs "
-                 L"for you to drag into it.",
+    h += section(x, y + h, w, tr(L"Describe the problem"), {kind, description, report},
+                 tr(L"Needs a free GitHub account. Opens a bug report on GitHub with the details filled in, and zips "
+                    L"the logs for you to drag into it."),
                  draw);
     if (!app.reportZip.empty()) {
         h += t::kSpace6;
@@ -218,34 +223,41 @@ float report_pane(float x, float y, float w, bool draw) {
 // The Get help card: what the last session points to, then reporting an issue (its panel), exporting the logs alone,
 // copying the summary, the logs folder.
 Card help_card() {
-    Card c{Tab::Game, L"Get help"};
+    Card c{Tab::Game, tr(L"Get help")};
     c.body = [](Body& b) {
         const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
         if (causes.empty())
-            b.note(L"Nothing stood out in the last session.");
-        for (size_t i = 0; i < causes.size() && i < 2; ++i)
-            b.row(causes[i].title, causes[i].fix, L"");
+            b.note(tr(L"Nothing stood out in the last session."));
+        for (size_t i = 0; i < causes.size() && i < 2; ++i)  // the report carries the English (report.cpp)
+            b.row(causes[i].shownTitle, causes[i].shownFix, L"");
         if (causes.size() > 2) {
             std::vector<std::wstring> labels;
             for (size_t i = 2; i < causes.size(); ++i)
-                labels.push_back(causes[i].title);
-            b.more(std::to_wstring(causes.size() - 2) + L" more causes", labels, [causes](Body& m) {
+                labels.push_back(causes[i].shownTitle);
+            const size_t more = causes.size() - 2;
+            b.more(more == 1 ? trf(L"{count} more cause", {{L"count", L"1"}})
+                             : trf(L"{count} more causes", {{L"count", std::to_wstring(more)}}),
+                   labels, [causes](Body& m) {
                 for (size_t i = 2; i < causes.size(); ++i)
-                    m.row(causes[i].title, causes[i].fix, L"");
+                    m.row(causes[i].shownTitle, causes[i].shownFix, L"");
             });
         }
-        b.actions({{kReportOpen, L"Report an issue…", Btn::Primary}});
-        b.note(L"Needs a free GitHub account: it opens a bug report on the developer’s GitHub page with the details filled in, "
-               L"and zips the logs for you to drag into it.");
+        b.actions({{kReportOpen, tr(L"Report an issue…"), Btn::Primary}});
+        b.note(tr(L"Needs a free GitHub account: it opens a bug report on the developer’s GitHub page with the details "
+                  L"filled in, and zips the logs for you to drag into it."));
         // No GitHub account, or asked for the logs alone: other ways, behind a More.
-        b.more(L"other ways to share", {L"Export logs", L"Copy summary", L"Open logs folder"}, [](Body& m) {
-            m.actions({{kDiagExport, L"Save the logs as a zip"}, {kDiagCopy, L"Copy summary"}, {kDiagLogs, L"Open logs folder"}});
-            m.note(L"No GitHub account? Save the logs as a zip and send it where you ask for help, with a few words on what "
-                   L"happened.");
+        b.more(tr(L"other ways to share"), {tr(L"Export logs"), tr(L"Copy summary"), tr(L"Open logs folder")},
+               [](Body& m) {
+            m.actions({{kDiagExport, tr(L"Save the logs as a zip")},
+                       {kDiagCopy, tr(L"Copy summary")},
+                       {kDiagLogs, tr(L"Open logs folder")}});
+            m.note(tr(L"No GitHub account? Save the logs as a zip and send it where you ask for help, with a few words "
+                      L"on what happened."));
         });
         if (!app.exportZip.empty()) {
             const size_t slash = app.exportZip.find_last_of(L'\\');
-            b.note(L"Saved " + (slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1)) + L" and shown in Explorer.");
+            b.note(trf(L"Saved {file} and shown in Explorer.",
+                       {{L"file", slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1)}}));
         }
     };
     return c;
@@ -272,14 +284,14 @@ float report_zip_section(float x, float y, float w, bool draw) {
         const float tx = tile.x + t::kSpace4 + iw + t::kSpace3, tw = tile.right() - t::kSpace4 - tx;
         const size_t slash = app.reportZip.find_last_of(L'\\');
         const std::wstring name = slash == std::wstring::npos ? app.reportZip : app.reportZip.substr(slash + 1);
-        app.canvas.text(L"Drag this onto the GitHub issue", t::kHeadline, {tx, tile.y + 9, tw, t::kHeadline.lineHeight},
-                        col(app.c->label));
-        app.canvas.text(name + L"  ·  click to show it in Explorer", t::kCallout,
+        app.canvas.text(tr(L"Drag this onto the GitHub issue"), t::kHeadline,
+                        {tx, tile.y + 9, tw, t::kHeadline.lineHeight}, col(app.c->label));
+        app.canvas.text(name + L"  ·  " + tr(L"click to show it in Explorer"), t::kCallout,
                         {tx, tile.y + 9 + t::kHeadline.lineHeight + 2, tw, t::kCallout.lineHeight}, col(app.c->label_secondary));
         app.hits.push_back({kDiagZip, tile});
     };
-    return section(x, y, w, L"Attach the logs", {zip},
-                   L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box.", draw);
+    return section(x, y, w, tr(L"Attach the logs"), {zip},
+                   tr(L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box."), draw);
 }
 
 }  // namespace

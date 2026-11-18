@@ -13,6 +13,7 @@
 #include "../settings.h"
 #include "../update_check.h"
 #include "../../games/game.h"
+#include "../../profile/profiles.h"
 #include "launcher_version.h"
 #include "window_state.h"
 #include "controls.h"
@@ -29,7 +30,8 @@ const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Game},
 };
 
-constexpr const wchar_t* kTabLabels[kTabs] = {L"Overview", L"Picture", L"Headset", L"Game"};
+// English, as identities; tab_label() and the top bar show them through tr().
+constexpr const wchar_t* kTabLabels[kTabs] = {I18N(L"Overview"), I18N(L"Picture"), I18N(L"Headset"), I18N(L"Game")};
 
 // A tab's colour (its shape, its underline): ink for Overview, then blue, red and yellow.
 uint32_t tab_color(Tab tab) {
@@ -107,10 +109,6 @@ struct StatusNow {
     Ctl link = kNone;
 };
 
-std::wstring plural(size_t n, const wchar_t* one, const wchar_t* many) {
-    return std::to_wstring(n) + L" " + (n == 1 ? one : many);
-}
-
 std::wstring launch_word(LaunchState state) {
     switch (state) {
     case LaunchState::Starting: return tr(L"Starting…");
@@ -138,41 +136,48 @@ StatusNow status_now() {
         warn += c.tone == CheckTone::Warn ? 1 : 0;
     }
     const auto checks_text = [&](const Check& first) {
-        return first.title + (bad + warn > 1 ? L"  ·  " + std::to_wstring(bad + warn - 1) + L" more" : L"");
+        return first.title +
+               (bad + warn > 1 ? L"  ·  " + trf(L"{count} more", {{L"count", std::to_wstring(bad + warn - 1)}}) : L"");
     };
     if (app.status == Status::Starting)
-        return {3, L"Starting…", L"Starting " + game_name() + L"…"};
+        return {3, tr(L"Starting…"), trf(L"Starting {game}…", {{L"game", game_name()}})};
     if (app.status == Status::Error)
-        return {2, L"Error", app.error};
+        return {2, tr(L"Error"), app.error};
     if (!app.iniFound)
-        return {2, L"No settings file", L"sim-qvfr.ini not found next to the launcher."};
+        return {2, tr(L"No settings file"), tr(L"sim-qvfr.ini not found next to the launcher.")};
     if (app.undoRestore)
-        return {3, L"Defaults restored · Undo", L"Defaults restored for " + short_name() + L". Click or press Ctrl+Z to undo.",
+        return {3, tr(L"Defaults restored · Undo"),
+                trf(L"Defaults restored for {game}. Click or press Ctrl+Z to undo.", {{L"game", short_name()}}),
                 kUndoBadge};
     if (launchFirst)
         return launch_status();
     if (const Check* b = first_with(app.checks, CheckTone::Bad))
-        return {2, plural(bad, L"problem", L"problems"), checks_text(*b), kChecksBadge};
+        return {2,
+                bad == 1 ? trf(L"{count} problem", {{L"count", std::to_wstring(bad)}})
+                         : trf(L"{count} problems", {{L"count", std::to_wstring(bad)}}),
+                checks_text(*b), kChecksBadge};
     if (eye_warning())
-        return {1, L"No eye tracker", L"Eye tracker not detected"};
+        return {1, tr(L"No eye tracker"), tr(L"Eye tracker not detected")};
     if (app.runtime.known() && ro.overRuntimeLimit)
-        return {1, L"Too large", L"Larger than the runtime’s maximum image size"};
+        return {1, tr(L"Too large"), tr(L"Larger than the runtime’s maximum image size")};
     if (const Check* w = first_with(app.checks, CheckTone::Warn))
-        return {1, plural(warn, L"to check", L"to check"), checks_text(*w), kChecksBadge};
+        return {1, trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}), checks_text(*w), kChecksBadge};
     if (app.live == Live::NextLaunch)
-        return {1, L"Partly live",
-                app.s.mode == RenderMode::Qvfr ? L"Applied live up to the launch resolution · the rest at the next launch"
-                                               : L"Foveation applied live · resolution and method at the next launch"};
+        return {1, tr(L"Partly live"),
+                app.s.mode == RenderMode::Qvfr
+                    ? tr(L"Applied live up to the launch resolution · the rest at the next launch")
+                    : tr(L"Foveation applied live · resolution and method at the next launch")};
     if (app.live == Live::Applied)
-        return {0, L"Applied live", L"Applied to the running game"};
+        return {0, tr(L"Applied live"), tr(L"Applied to the running game")};
     if (watching)
         return launch_status();
     if (app.update == Update::Available)
-        return {3, app.installing ? L"Installing…" : L"Update available",
-                app.installing ? L"Installing Sim-QVFR " + app.release.tag + L"…"
-                               : L"Sim-QVFR " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
+        return {3, app.installing ? tr(L"Installing…") : tr(L"Update available"),
+                app.installing ? trf(L"Installing Sim-QVFR {version}…", {{L"version", app.release.tag}})
+                               : trf(L"Sim-QVFR {version} is available", {{L"version", app.release.tag}}) +
+                                     (installable() ? L" · " + std::wstring(tr(L"Install")) : L""),
                 kUpdateBadge};
-    return {0, L"Ready", L"Ready to launch"};
+    return {0, tr(L"Ready"), tr(L"Ready to launch")};
 }
 
 uint32_t tone_color(int tone) {
@@ -209,7 +214,8 @@ Tab tab_of(Pane pane) {
     return Tab::Overview;
 }
 
-const wchar_t* tab_label(Tab tab) { return kTabLabels[static_cast<int>(tab)]; }
+// A tab's name as shown (the current language).
+const wchar_t* tab_label(Tab tab) { return tr(kTabLabels[static_cast<int>(tab)]); }
 
 // The tab's pages this game has (the DLSS page only where the game has DLSS).
 std::vector<Pane> tab_pages(Tab tab) {
@@ -302,13 +308,13 @@ void rail(float H) {
             "14 9.9 8 13.5 8 13.5Z",
             {cx - hs / 2, by + heartR - hs / 2 + 1, hs, hs}, 16, col(app.c->on_red), 0, true);
     if (!compact)
-        cv.text(L"Support on Ko-fi", {11, 13, 700, false}, {0, by + 2 * heartR + t::kSpace2, W, t::kRailName.lineHeight},
-                col(app.c->rail_text), Align::Center);
+        cv.text(tr(L"Support on Ko-fi"), {11, 13, 700, false},
+                {0, by + 2 * heartR + t::kSpace2, W, t::kRailName.lineHeight}, col(app.c->rail_text), Align::Center);
     if (pointer_in(kofi))
         cv.circle(cx, by + heartR, heartR + 3, col(0xffffff, 0.5f), false, 1.5f);
     if (focused(kSupport))
         cv.stroke(kofi.inset(6, -3), col(app.c->rail_text), 2, t::kRadiusControl);
-    app.hits.push_back({kSupport, kofi, -1, L"Support Sim-QVFR on Ko-fi"});
+    app.hits.push_back({kSupport, kofi, -1, tr(L"Support Sim-QVFR on Ko-fi")});
     by += kofi.h + t::kSpace3;
     // The version (About), with a dot when an update is available.
     // A release's version without its commit ("1.0.5-beta (a78fc1f)"); a development build the release it is headed for.
@@ -324,8 +330,10 @@ void rail(float H) {
     if (focused(kVersion))
         cv.stroke(vr.inset(6, -2), col(app.c->rail_text), 2, t::kRadiusControl);
     app.hits.push_back({kVersion, vr.inset(0, -4), -1,  // 24 high: the smallest target (WCAG 2.5.8)
-                        app.update == Update::Available ? L"Sim-QVFR " + app.release.tag + L" is available: About and updates"
-                                                        : L"About Sim-QVFR and updates"});
+                        app.update == Update::Available
+                            ? trf(L"Sim-QVFR {version} is available: About and updates",
+                                  {{L"version", app.release.tag}})
+                            : std::wstring(tr(L"About Sim-QVFR and updates"))});
 }
 
 // ---- Top bar -----------------------------------------------------------------------------------
@@ -339,22 +347,26 @@ void topbar(float W) {
     cv.line(x0, H - 0.5f, W, H - 0.5f, col(app.c->line), 1);
     // The right side's parts, from the right.
     const bool running = game_running();
-    const std::wstring launchLabel = running ? short_name() + L" is running" : L"Launch " + short_name();
+    const std::wstring launchLabel = running ? trf(L"{game} is running", {{L"game", short_name()}})
+                                              : trf(L"Launch {game}", {{L"game", short_name()}});
     float launchPad = 20;  // Launch's side padding
     const auto launch_width = [&] {
         return running ? button_width(launchLabel) : std::ceil(cv.measure(launchLabel, kPrimaryLabel)) + 16 + 10 + 2 * launchPad;
     };
     const StatusNow status = status_now();
-    const std::wstring profile = !app.profileCurrent.empty() && app.profileMatches ? app.profileCurrent : L"Custom";
+    // The profile in use (a preset's name in the player's language), else Custom.
+    const std::wstring profile = app.profileCurrent.empty() || !app.profileMatches ? std::wstring(tr(L"Custom"))
+                                 : is_preset_name(app.profileCurrent)              ? tr(app.profileCurrent)
+                                                                                   : app.profileCurrent;
     const float chevronW = 8 + 12;
-    const float prefixW = std::ceil(cv.measure(L"Profile: ", t::kBody));
+    const float prefixW = std::ceil(cv.measure(tr(L"Profile: "), t::kBody));
     const float nameW = std::ceil(cv.measure(profile, t::kBodyStrong));
     const float statusTextW = std::ceil(cv.measure(status.word, t::kBodyMedium));
     // Tabs' widths at full spacing.
     const auto tabs_width = [&](float tabPad) {
         float w = 0;
         for (int i = 0; i < kTabs; ++i)
-            w += tabPad + 10 + 8 + std::ceil(cv.measure(kTabLabels[i], t::kTabLabel)) + tabPad;
+            w += tabPad + 10 + 8 + std::ceil(cv.measure(tab_label(static_cast<Tab>(i)), t::kTabLabel)) + tabPad;
         return w;
     };
     bool withPrefix = true;
@@ -403,20 +415,20 @@ void topbar(float W) {
         cv.fill(pr, col(open || pointer_in(pr) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
         float tx = pr.x + 12;
         if (withPrefix) {
-            cv.text(L"Profile: ", t::kBody, {tx, pr.y, prefixW + 2, pr.h}, col(app.c->label_secondary));
+            cv.text(tr(L"Profile: "), t::kBody, {tx, pr.y, prefixW + 2, pr.h}, col(app.c->label_secondary));
             tx += prefixW;
         }
         cv.text(profile, t::kBodyStrong, {tx, pr.y, nameW + 2, pr.h}, col(app.c->label));
         cv.path("M1.5 4.5L5 8l3.5-3.5", {pr.right() - 8 - 12, pr.y + (pr.h - 12) / 2, 10, 12}, 10, col(app.c->label_secondary), 1.5f);
         if (focused(kProfileMenu))
             focus_ring(pr, t::kRadiusControl);
-        app.hits.push_back({kProfileMenu, pr, -1, L"Profiles, saving and restoring defaults"});
+        app.hits.push_back({kProfileMenu, pr, -1, tr(L"Profiles, saving and restoring defaults")});
     }
     // Find a setting and the theme button.
     x -= 8 + 32;
     {
         const Rect r{x, (H - 32) / 2, 32, 32};
-        icon_button(kSearch, r, L"Find a setting (Ctrl+K)");
+        icon_button(kSearch, r, tr(L"Find a setting (Ctrl+K)"));
         const Color c = col(app.c->label);
         cv.circle(r.x + 14.5f, r.y + 14.5f, 5, c, false, 1.6f);
         cv.line(r.x + 18.2f, r.y + 18.2f, r.x + 22, r.y + 22, c, 1.6f);
@@ -432,19 +444,20 @@ void topbar(float W) {
     float tx = x0 + pad;
     for (int i = 0; i < kTabs; ++i) {
         const Tab tab = static_cast<Tab>(i);
-        const float lw = std::ceil(cv.measure(kTabLabels[i], t::kTabLabel));
+        const wchar_t* label = tab_label(tab);
+        const float lw = std::ceil(cv.measure(label, t::kTabLabel));
         const Rect r{tx, 0, tabPad + 10 + 8 + lw + tabPad, H};
         if (r.right() > x - 16)
             break;  // no room (the minimum window leaves room for all four)
         const bool selected = tab == current, over = pointer_in(r);
         tab_shape(tab, r.x + tabPad + 5, H / 2, 10);
-        cv.text(kTabLabels[i], t::kTabLabel, {r.x + tabPad + 18, 0, lw + 4, H},
+        cv.text(label, t::kTabLabel, {r.x + tabPad + 18, 0, lw + 4, H},
                 col(selected || over ? app.c->text : app.c->text_muted));
         if (selected)
             cv.fill({r.x + tabPad - 4, H - 3, r.w - 2 * tabPad + 8, 3}, col(tab_color(tab)));
         if (selected && focused(kTopTab))
             focus_ring(r.inset(4, 12), t::kRadiusControl);
-        app.hits.push_back({kTopTab, r, i, L"", kTabLabels[i], selected ? 1 : 0});
+        app.hits.push_back({kTopTab, r, i, L"", label, selected ? 1 : 0});
         tx = r.right();
     }
 }
@@ -488,7 +501,7 @@ void undo_bar(float W, float H) {
     Canvas& cv = app.canvas;
     const float left = rail_width(), pad = 16, h = 44;
     const bool canUndo = app.undoChange.has_value();
-    const std::wstring undo = L"Undo";
+    const std::wstring undo = tr(L"Undo");
     const float uw = canUndo ? std::ceil(cv.measure(undo, t::kBodyStrong)) + 24 : 0;
     const float tw = std::min(std::ceil(cv.measure(app.undoText, t::kBody)) + 2, W - left - 64 - uw - 3 * pad);
     const float w = pad + tw + (canUndo ? pad + uw : 0) + pad;
@@ -504,7 +517,8 @@ void undo_bar(float W, float H) {
         cv.text(undo, t::kBodyStrong, u, col(app.c->yellow), Align::Center);
         if (focused(kUndoChange))
             focus_ring(u, t::kRadiusControl);
-        app.hits.push_back({kUndoChange, u, -1, L"Undo (Ctrl+Z)", L"Undo " + app.undoText});
+        app.hits.push_back(
+            {kUndoChange, u, -1, tr(L"Undo (Ctrl+Z)"), trf(L"Undo {change}", {{L"change", app.undoText}})});
     }
 }
 

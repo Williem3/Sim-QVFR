@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include "../ini_put.h"
+#include "../i18n.h"
 #include "dlss_settings.h"
 
 namespace simqvfr {
@@ -72,8 +73,9 @@ struct NrSettings {
     bool operator==(const NrSettings&) const = default;
 };
 
-inline constexpr DlssChoice kNrPresets[] = {{0, L"Default"}, {1, L"A (original)"}, {2, L"B (faster)"}};
-inline constexpr DlssChoice kNrStyles[] = {{0, L"Standard"}, {1, L"Natural"}, {2, L"Cinematic"}};
+inline constexpr DlssChoice kNrPresets[] = {
+    {0, I18N(L"Default")}, {1, I18N(L"A (original)")}, {2, I18N(L"B (faster)")}};
+inline constexpr DlssChoice kNrStyles[] = {{0, I18N(L"Standard")}, {1, I18N(L"Natural")}, {2, I18N(L"Cinematic")}};
 inline constexpr int kNrScaleMin = 25, kNrCoverageMin = 20, kNrEdgeMax = 30, kNrExposureMin = 25, kNrExposureMax = 400;
 inline constexpr int kNrLimitMin = 3, kNrLimitMax = 40;  // tenths of a megapixel a view
 inline constexpr int kNrGainMin = 110, kNrGainMax = 1000;
