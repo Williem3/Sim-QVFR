@@ -400,6 +400,8 @@ runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics
 memory. The anti-cheat may kick you or ban your account for that. Turning it on, you knowingly take
 responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off
 with it on.
+Before each Run with anti-cheat launch the launcher checks that Windows trusts Sim-QVFR's signature
+(Easy Anti-Cheat's "Untrusted system file" otherwise) and, if not, says why and what to do.
 LMU-Quad-View-Mod (by Dan Suzuki, https://github.com/DSuzuki35/LMU-Quad-View-Mod) inspired this work;
 Sim-QVFR's LMU support is written separately and works differently (the views drawn inside the game
 and composed by Sim-QVFR itself, or by a Pimax or Varjo runtime, nothing else to install). Try both
