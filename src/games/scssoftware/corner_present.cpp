@@ -290,7 +290,9 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
             const UINT cw = static_cast<UINT>(std::max(1, static_cast<int32_t>(std::lround(r.extent.width * g.fx))));
             const UINT ch = static_cast<UINT>(std::max(1, static_cast<int32_t>(std::lround(r.extent.height * g.fy))));
             State::Chain* chain = chain_of(view.subImage.swapchain, enumerate);
-            if (chain && chain->scaled && r.offset.x == 0 && r.offset.y == 0 && view.subImage.imageArrayIndex == 0) {
+            if (chain && chain->fullThisFrame) {
+                ++g.fullSent;  // drawn at full size (corner_releasing): its rectangle as the game gave it, uncut
+            } else if (chain && chain->scaled && r.offset.x == 0 && r.offset.y == 0 && view.subImage.imageArrayIndex == 0) {
                 ++g.upscaled;  // scaled back at its release: its rectangle as the game gave it
             } else {
                 ++g.upscaleMisses;
@@ -299,6 +301,7 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
             }
             if (chain) {
                 chain->scaled = false;
+                chain->fullThisFrame = false;
                 chain->eye = static_cast<int>(v);
             }
             g.views.push_back(view);
@@ -359,8 +362,35 @@ void corner_releasing(XrSwapchain chain) {
         std::lock_guard lock(g.frameMutex);
         shoot(image, chainIdx, released, true, false);
     }
+    // How the game's final blit into this image went (corner.cpp): taken and cleared for the image's next frame.
+    uint8_t blitAs = 0;
+    {
+        std::lock_guard lock(g.frameMutex);
+        if (chainIdx >= 0 && static_cast<size_t>(chainIdx) < g.chains.size()) {
+            std::vector<uint8_t>& b = g.chains[chainIdx].blitAs;
+            if (released < b.size()) {
+                blitAs = b[released];
+                b[released] = 0;
+            }
+        }
+    }
     if (!active)
         return;  // a frame without its eyes in the corner: the image as the game drew it
+    if (blitAs == 2) {  // drawn at full size although the frame counts as cornered: scaling its top-left up would
+        std::lock_guard lock(g.frameMutex);  // spread the sky over the view for a frame (the blue flash): as drawn
+        if (static_cast<size_t>(chainIdx) < g.chains.size()) {
+            g.chains[chainIdx].scaled = false;
+            g.chains[chainIdx].fullThisFrame = true;
+        }
+        ++g.fullImages;
+        if (g.fullLogged < 20) {
+            ++g.fullLogged;
+            simqvfr::logf("scs corner: frame %llu: an eye image drawn at full size in a frame counted as cornered (chain %d "
+                          "image %u): sent as drawn, not scaled back",
+                          static_cast<unsigned long long>(g.stats.frames), chainIdx, released);
+        }
+        return;
+    }
     if (!onThread) {
         if (g.otherThreadReleases++ == 0)
             simqvfr::log_line("scs corner: a swapchain image released off the render thread: not scaled (the corner is cut "

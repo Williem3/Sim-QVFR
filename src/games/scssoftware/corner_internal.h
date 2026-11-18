@@ -91,6 +91,10 @@ struct State {
     ComPtr<ID3D11Buffer> params;
     uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
     uint64_t geometryDraws = 0;  // non-indexed scene draws (particles: rain) given their focus view
+    int boundChain = -1;          // the headset image bound (g.chains index, image index), with boundSwapchain
+    uint32_t boundImage = 0;
+    uint64_t fullImages = 0, fullSent = 0;  // eye images drawn at full size in a cornered frame: not scaled back
+    int fullLogged = 0;
     bool forceUiRedraw = false;  // [experiment] scs_force_ui_redraw=1 (dev builds): redraw_focus for every UI draw
     bool redrawFocus = false;  // this draw (onto the headset's image, no twin) is drawn again for the focus view after it
     uint64_t redraws = 0, redrawsOutOfBounds = 0;
@@ -157,6 +161,10 @@ struct State {
         // image and released this one unscaled: the small copy popping in).
         std::deque<uint32_t> held;
         bool scaled = false;                   // scaled back at this frame's release
+        // Per image: how the game's last full-screen blit into it went this frame (1 into the corner, 2 at full size:
+        // a frame the corner didn't hold, sent as drawn), cleared at its release; fullThisFrame: such an image was released.
+        std::vector<uint8_t> blitAs;
+        bool fullThisFrame = false;
         int eye = -1;                          // the view it is submitted for (xrEndFrame)
     };
     std::vector<Chain> chains;
