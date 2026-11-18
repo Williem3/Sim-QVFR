@@ -556,6 +556,8 @@ extern const Help kHelp[];
 // kHelp by a label as drawn (current language or English): its index (-1 none) and its text in the current language.
 int help_index(const std::wstring& label);
 const wchar_t* help_for(const std::wstring& label);
+// shell.cpp: `text` cut to `w` in `style` with an ellipsis when it doesn't fit.
+std::wstring fit(const std::wstring& text, const t::TypeStyle& style, float w);
 void help_icon(const std::wstring& label, float x, float y);
 void help_tip();
 

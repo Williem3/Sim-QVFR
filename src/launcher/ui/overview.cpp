@@ -77,7 +77,8 @@ bool qvfr_mode() { return app.s.mode == RenderMode::Qvfr; }
 
 // ---- The game's panel ----------------------------------------------------------------------------
 
-// The profile as four segments: the three presets of this foveated mode, then Custom (the profile menu).
+// The profile as four segments: the three presets of this foveated mode, then Custom (the profile menu). Too narrow
+// for the names (a longer language), each segment gets its share by its name's width and the name is cut ("…").
 void profile_segments(const Rect& r) {
     Canvas& cv = app.canvas;
     std::vector<std::wstring> items;
@@ -93,18 +94,21 @@ void profile_segments(const Rect& r) {
     const float extra = std::max(0.0f, (room - natural) / items.size());
     float x = r.x + 2;
     for (size_t i = 0; i < items.size(); ++i) {
-        const float iw = natural > room ? room / items.size() : widths[i] + extra;
+        const float iw = natural > room ? room * widths[i] / natural : widths[i] + extra;
         const Rect item{x, r.y + 2, iw, r.h - 4};
         const bool on = static_cast<int>(i) == selected;
         if (on)
             cv.fill(item, col(app.c->segment_selected), t::kRadiusControl - 2);
         else if (pointer_in(item))
             cv.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
-        cv.text(items[i], kSegment, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
+        const std::wstring shown = fit(items[i], kSegment, item.w - 8);
+        cv.text(shown, kSegment, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
         if (on && focused(kOverviewProfile))
             focus_ring(item, t::kRadiusControl - 2);
         app.hits.push_back({kOverviewProfile, item, static_cast<int>(i),
-                            i + 1 == items.size() ? tr(L"Saved profiles and more: the profile menu") : L"",
+                            i + 1 == items.size() ? std::wstring(tr(L"Saved profiles and more: the profile menu"))
+                            : shown != items[i]   ? items[i]
+                                                  : std::wstring(),
                             trf(L"Profile: {name}", {{L"name", items[i]}}), on ? 1 : 0});
         x = item.right() + 2;
     }
@@ -568,7 +572,9 @@ void kofi_tile(const Rect& r) {
             true);
     const float by = r.bottom() - kTilePad - 18;
     cv.path(kIconHeart, {r.x + kTilePad, by + 2, 14, 14}, 16, col(app.c->yellow), 0, true);
-    cv.text(tr(L"Support on Ko-fi"), t::kTabLabel, {r.x + kTilePad + 22, by, inner - 22, 18}, col(app.c->rail_text));
+    // Clear of the red circle in the corner (46 round, its centre 22 in from the right): a longer language is cut.
+    const float labelX = r.x + kTilePad + 22, labelW = std::max(0.0f, r.right() - 22 - 46 - 8 - labelX);
+    cv.text(fit(tr(L"Support on Ko-fi"), t::kTabLabel, labelW), t::kTabLabel, {labelX, by, labelW, 18}, col(app.c->rail_text));
     if (focused(kKofiTile))
         focus_ring(r, t::kRadiusGroup);
     app.hits.push_back(

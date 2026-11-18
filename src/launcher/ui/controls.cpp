@@ -87,18 +87,20 @@ void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const c
     if (bg.alpha > 0)
         app.canvas.fill(r, bg, radius);
     const t::TypeStyle textStyle = style == Btn::Launch ? kPrimaryLabel : kButtonLabel;
+    // A label wider than the button (a longer language in a fixed-width button) is cut; the hit keeps it whole.
+    const std::wstring shown = fit(label, textStyle, r.w - (icon ? 16 + 8 : 0) - 16);
     if (icon) {
-        const float tw = std::ceil(app.canvas.measure(label, textStyle)), iw = 16, gap = 8;
+        const float tw = std::ceil(app.canvas.measure(shown, textStyle)), iw = 16, gap = 8;
         const float x0 = r.x + (r.w - tw - iw - gap) / 2;
         app.canvas.path(icon, {x0, r.y + (r.h - iw) / 2, iw, iw}, 16, style == Btn::Support ? col(app.c->red) : fg, 1.6f,
                         icon == kIconPlay || icon == kIconHeart);
-        app.canvas.text(label, textStyle, {x0 + iw + gap, r.y, tw + 2, r.h}, fg);
+        app.canvas.text(shown, textStyle, {x0 + iw + gap, r.y, tw + 2, r.h}, fg);
     } else {
-        app.canvas.text(label, textStyle, r, fg, Align::Center);
+        app.canvas.text(shown, textStyle, r, fg, Align::Center);
     }
     if (focused(id) && (option < 0 || app.focusOption == option))
         focus_ring(r, radius);
-    app.hits.push_back({id, r, option, L"", label});
+    app.hits.push_back({id, r, option, shown != label ? label : std::wstring(), label});
 }
 
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
@@ -118,7 +120,7 @@ void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disable
                     t::kRadiusControl);
     // Its edge at 3:1 in both themes (field-border): the fill alone is too close to the card.
     app.canvas.stroke(r, col(app.c->control_border, disabled ? 0.4f : 1), 1, t::kRadiusControl);
-    app.canvas.text(value, t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
+    app.canvas.text(fit(value, t::kBody, r.w - t::kSpace3 - 30), t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
                     col(disabled ? app.c->label_tertiary : app.c->label));
     // Chevron 8 x 12, 12px from the trailing edge.
     app.canvas.path("M1.5 4.25L4 1.75l2.5 2.5M1.5 7.75L4 10.25l2.5-2.5", {r.right() - 20, r.y + (r.h - 12) / 2, 8, 12},

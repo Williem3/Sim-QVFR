@@ -189,7 +189,9 @@ uint32_t tone_color(int tone) {
     }
 }
 
-// `text` cut to `w` in `style`, with an ellipsis when it doesn't fit.
+}  // namespace
+
+// `text` cut to `w` in `style`, with an ellipsis when it doesn't fit (a longer language's words in a fixed place).
 std::wstring fit(const std::wstring& text, const t::TypeStyle& style, float w) {
     if (app.canvas.measure(text, style) <= w)
         return text;
@@ -198,8 +200,6 @@ std::wstring fit(const std::wstring& text, const t::TypeStyle& style, float w) {
         s.pop_back();
     return s.empty() ? std::wstring() : s + L"…";
 }
-
-}  // namespace
 
 uint32_t section_color(Tab tab) { return tab_color(tab); }
 
@@ -307,9 +307,11 @@ void rail(float H) {
     cv.path("M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 "
             "14 9.9 8 13.5 8 13.5Z",
             {cx - hs / 2, by + heartR - hs / 2 + 1, hs, hs}, 16, col(app.c->on_red), 0, true);
-    if (!compact)
-        cv.text(tr(L"Support on Ko-fi"), {11, 13, 700, false},
+    if (!compact) {
+        const t::TypeStyle kofiStyle{11, 13, 700, false};
+        cv.text(fit(tr(L"Support on Ko-fi"), kofiStyle, W - 2 * t::kSpace2), kofiStyle,
                 {0, by + 2 * heartR + t::kSpace2, W, t::kRailName.lineHeight}, col(app.c->rail_text), Align::Center);
+    }
     if (pointer_in(kofi))
         cv.circle(cx, by + heartR, heartR + 3, col(0xffffff, 0.5f), false, 1.5f);
     if (focused(kSupport))
@@ -339,7 +341,8 @@ void rail(float H) {
 // ---- Top bar -----------------------------------------------------------------------------------
 
 // The top bar: the tabs at the left; the theme button, Find a setting, the profile menu, the status and Launch at the
-// right. Narrow windows drop the profile button's "Profile:", then tighten the tabs, then shorten the status.
+// right. Narrow windows (or a language with longer words) drop the profile button's "Profile:", then tighten the tabs,
+// then drop the game's name from Launch, then shorten the status, and last shorten the tabs' names (never a tab).
 void topbar(float W) {
     Canvas& cv = app.canvas;
     const float x0 = rail_width(), H = t::kTopbarHeight, pad = t::kSpace4;
@@ -347,8 +350,9 @@ void topbar(float W) {
     cv.line(x0, H - 0.5f, W, H - 0.5f, col(app.c->line), 1);
     // The right side's parts, from the right.
     const bool running = game_running();
-    const std::wstring launchLabel = running ? trf(L"{game} is running", {{L"game", short_name()}})
-                                              : trf(L"Launch {game}", {{L"game", short_name()}});
+    const std::wstring launchFull = running ? trf(L"{game} is running", {{L"game", short_name()}})
+                                             : trf(L"Launch {game}", {{L"game", short_name()}});
+    std::wstring launchLabel = launchFull;  // without the game's name when there's no room (its tip keeps it)
     float launchPad = 20;  // Launch's side padding
     const auto launch_width = [&] {
         return running ? button_width(launchLabel) : std::ceil(cv.measure(launchLabel, kPrimaryLabel)) + 16 + 10 + 2 * launchPad;
@@ -380,6 +384,8 @@ void topbar(float W) {
         withPrefix = false;
     if (tabs_width(tabPad) + right_width() > room)
         tabPad = 10;
+    if (tabs_width(tabPad) + right_width() > room)
+        launchLabel = running ? tr(L"Game running") : tr(L"Launch");
     if (tabs_width(tabPad) + right_width() > room)  // then the status's words (its tip keeps the sentence)
         statusW = std::max(8.0f, room - tabs_width(tabPad) - (right_width() - statusW));
     if (tabs_width(tabPad) + right_width() > room) {  // the narrowest windows (880): all four tabs still fit
@@ -393,6 +399,8 @@ void topbar(float W) {
         button(kLaunch, launchR, launchLabel, Btn::Secondary);
     else
         button(kLaunch, launchR, launchLabel, Btn::Launch, kIconPlay);
+    if (launchLabel != launchFull && !app.hits.empty() && app.hits.back().id == kLaunch)
+        app.hits.back().tip = launchFull;
     // The status: a dot and its words in its tone's colour; its sentence as the tip; clicked, what it links to.
     float x = launchR.x - 16 - statusW;
     {
@@ -439,16 +447,18 @@ void topbar(float W) {
         icon_button(kThemeToggle, r, theme_tip());
         theme_glyph({r.x + 8, r.y + 8, 16, 16}, col(app.c->label));
     }
-    // The tabs: a shape and the name; the selected one in full colour with a rule under it in the tab's colour.
+    // The tabs: a shape and the name; the selected one in full colour with a rule under it in the tab's colour. Still
+    // too wide, each name is cut to an equal share of the room ("…"; the full name as its tip and accessible name).
     const Tab current = tab_of(app.pane);
+    const float tabsRoom = x - 16 - (x0 + pad);
+    const float labelMax = tabs_width(tabPad) > tabsRoom ? std::max(24.0f, tabsRoom / kTabs - (2 * tabPad + 18)) : 1e9f;
     float tx = x0 + pad;
     for (int i = 0; i < kTabs; ++i) {
         const Tab tab = static_cast<Tab>(i);
-        const wchar_t* label = tab_label(tab);
+        const std::wstring full = tab_label(tab);
+        const std::wstring label = std::ceil(cv.measure(full, t::kTabLabel)) > labelMax ? fit(full, t::kTabLabel, labelMax) : full;
         const float lw = std::ceil(cv.measure(label, t::kTabLabel));
         const Rect r{tx, 0, tabPad + 10 + 8 + lw + tabPad, H};
-        if (r.right() > x - 16)
-            break;  // no room (the minimum window leaves room for all four)
         const bool selected = tab == current, over = pointer_in(r);
         tab_shape(tab, r.x + tabPad + 5, H / 2, 10);
         cv.text(label, t::kTabLabel, {r.x + tabPad + 18, 0, lw + 4, H},
@@ -457,7 +467,7 @@ void topbar(float W) {
             cv.fill({r.x + tabPad - 4, H - 3, r.w - 2 * tabPad + 8, 3}, col(tab_color(tab)));
         if (selected && focused(kTopTab))
             focus_ring(r.inset(4, 12), t::kRadiusControl);
-        app.hits.push_back({kTopTab, r, i, L"", label, selected ? 1 : 0});
+        app.hits.push_back({kTopTab, r, i, label != full ? full : std::wstring(), full, selected ? 1 : 0});
         tx = r.right();
     }
 }
