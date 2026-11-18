@@ -100,6 +100,11 @@ public:
             default: return QvfrMultiView::none;
         }
     }
+    void qvfr_set_look(double feather, double cornerRadius, bool border, const float (&color)[4]) override {
+        corner_set_look(static_cast<float>(feather), static_cast<float>(cornerRadius), border, color);
+        simqvfr::logf("scs: the focus box's look at launch: feather %.0f%%, corners %.0f%%, outline %d", feather * 100,
+                      cornerRadius * 100, border ? 1 : 0);
+    }
     void live_view(const LiveView& v) override {
         const int corner = static_cast<int>(std::lround(v.periphery * 100)), fx = static_cast<int>(std::lround(v.focusX * 100)),
                   fy = static_cast<int>(std::lround(v.focusY * 100)), density = static_cast<int>(std::lround(v.density * 100));

@@ -216,6 +216,14 @@ public:
         bool gaze = true;               // eye tracking
     };
     virtual void live_view(const LiveView& view) { (void)view; }
+    // The focus box's look at launch (the ini's feather, corner radius, outline and its colour), before any live_view: a
+    // game composing its own box (the SCS corner) starts from it, not from defaults until the ini first changes.
+    virtual void qvfr_set_look(double feather, double cornerRadius, bool border, const float (&color)[4]) {
+        (void)feather;
+        (void)cornerRadius;
+        (void)border;
+        (void)color;
+    }
     // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
     // it begins, the runtime may have no views to answer with.
     virtual void session_running(bool running) { (void)running; }
