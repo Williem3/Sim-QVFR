@@ -13,6 +13,7 @@
 #include <windows.h>
 
 #include "../ini_put.h"
+#include "../i18n.h"
 #include "dlss_math.h"
 
 namespace simqvfr {
@@ -41,17 +42,20 @@ struct DlssChoice {
     const wchar_t* name;
 };
 inline constexpr DlssChoice kDlssFocusModes[] = {
-    {100, L"DLAA"}, {77, L"Ultra quality"}, {67, L"Quality"}, {58, L"Balanced"}, {50, L"Performance"}};
+    {100, L"DLAA"}, {77, I18N(L"Ultra quality")}, {67, I18N(L"Quality")}, {58, I18N(L"Balanced")},
+    {50, I18N(L"Performance")}};
 // The same modes as AMD FSR names them (engine/fsr_upscale.h): its native AA for DLAA; FSR takes any render size.
 inline constexpr DlssChoice kFsrFocusModes[] = {
-    {100, L"Native AA"}, {77, L"Ultra quality"}, {67, L"Quality"}, {58, L"Balanced"}, {50, L"Performance"}};
+    {100, I18N(L"Native AA")}, {77, I18N(L"Ultra quality")}, {67, I18N(L"Quality")}, {58, I18N(L"Balanced")},
+    {50, I18N(L"Performance")}};
 // The focus views' preset: NGX's default for the mode (K; M at Performance), or either.
-inline constexpr DlssChoice kDlssFocusPresets[] = {{0, L"Default"}, {11, L"K"}, {13, L"M"}};
+inline constexpr DlssChoice kDlssFocusPresets[] = {{0, I18N(L"Default")}, {11, L"K"}, {13, L"M"}};
 // The eyes': K, the steadier, or F, the older model at about half the cost with more aliasing (eye tracking keeps that
 // out of where you look; K suits a fixed focus).
-inline constexpr DlssChoice kDlssEyePresets[] = {{11, L"K (steadier)"}, {6, L"F (cheaper)"}};
+inline constexpr DlssChoice kDlssEyePresets[] = {{11, I18N(L"K (steadier)")}, {6, I18N(L"F (cheaper)")}};
 // Textures sampled sharper where DLSS works (NVIDIA's mip bias): off, the focus views only, or the eyes too.
-inline constexpr DlssChoice kDlssTextureSharpening[] = {{0, L"Off"}, {1, L"Focus only"}, {2, L"Focus and periphery"}};
+inline constexpr DlssChoice kDlssTextureSharpening[] = {
+    {0, I18N(L"Off")}, {1, I18N(L"Focus only")}, {2, I18N(L"Focus and periphery")}};
 
 // `value`'s place in `list`: the exact one, else (`nearest`) the closest value, else the first.
 template <size_t N>

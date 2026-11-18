@@ -74,7 +74,7 @@ std::wstring where(const SearchEntry& e) {
     if (!e.section.empty() && e.section != e.label)
         s += L" › " + e.section;
     if (!e.hiddenBy.empty())
-        s += L"  ·  shows with " + e.hiddenBy;
+        s += L"  ·  " + trf(L"shows with {setting}", {{L"setting", e.hiddenBy}});
     return s;
 }
 
@@ -176,8 +176,9 @@ void search_card() {
     app.hits.push_back({kSearchField, field});
     float y = field.bottom() + 8;
     if (hint) {
-        const std::wstring text = field_text().empty() ? L"Type a setting’s name: Feather, Crop, Hotkeys, DLSS…"
-                                                       : L"No setting matches “" + field_text() + L"”.";
+        const std::wstring text = field_text().empty()
+                                      ? std::wstring(tr(L"Type a setting’s name: Feather, Crop, Hotkeys, DLSS…"))
+                                      : trf(L"No setting matches “{text}”.", {{L"text", field_text()}});
         cv.text(text, t::kCallout, {card.x + 16, y, card.w - 32, 44}, col(app.c->label_secondary));
         return;
     }
@@ -293,7 +294,7 @@ void create_search_edit() {
     if (!app.searchEdit)
         return;
     SendMessageW(app.searchEdit, EM_SETLIMITTEXT, 60, 0);
-    SendMessageW(app.searchEdit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Find a setting"));
+    SendMessageW(app.searchEdit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Find a setting")));
     SetPropW(app.searchEdit, L"simqvfr.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.searchEdit, GWLP_WNDPROC)));
     SetWindowLongPtrW(app.searchEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(search_edit_proc));
 }

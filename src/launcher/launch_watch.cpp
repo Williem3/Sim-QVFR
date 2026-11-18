@@ -6,6 +6,7 @@
 #include <filesystem>
 
 #include "../games/game.h"
+#include "../lang.h"
 #include "launch_plan.h"
 #include "report.h"
 #include "settings.h"
@@ -102,29 +103,40 @@ std::wstring loader_error(const std::string& output) {
 }
 
 LaunchOutcome launch_outcome(const LaunchSeen& seen, const std::wstring& name) {
+    using lang::tr;
+    using lang::trf;
     const std::wstring openxr = seen.loaderError.empty() ? L"" : L" · OpenXR: " + seen.loaderError;
+    const std::wstring report = L" · " + std::wstring(tr(L"Report an issue"));
     if (!seen.exited) {
         if (seen.layerLoaded)
-            return {LaunchState::Running, 0, name + L" is running with Sim-QVFR", LaunchLink::Diagnostics};
+            return {LaunchState::Running, 0, trf(L"{game} is running with Sim-QVFR", {{L"game", name}}),
+                    LaunchLink::Diagnostics};
         if (!seen.loaderError.empty())
-            return {LaunchState::NoLayer, 2, name + L" started without Sim-QVFR" + openxr, LaunchLink::Report};
+            return {LaunchState::NoLayer, 2, trf(L"{game} started without Sim-QVFR", {{L"game", name}}) + openxr,
+                    LaunchLink::Report};
         if (seen.seconds >= kLayerLoadSeconds)
-            return {LaunchState::NotLoaded, 1, L"Sim-QVFR hasn’t loaded in " + name + L" yet · Report an issue", LaunchLink::Report};
-        return {LaunchState::Starting, 3, L"Starting " + name + L"…", LaunchLink::None};
+            return {LaunchState::NotLoaded, 1, trf(L"Sim-QVFR hasn’t loaded in {game} yet", {{L"game", name}}) + report,
+                    LaunchLink::Report};
+        return {LaunchState::Starting, 3, trf(L"Starting {game}…", {{L"game", name}}), LaunchLink::None};
     }
+    const std::wstring ran = duration_text(seen.ranSeconds);
     if (seen.hang)
-        return {LaunchState::Crashed, 2, name + L" stopped responding after " + duration_text(seen.ranSeconds) + L" · Report an issue",
+        return {LaunchState::Crashed, 2,
+                trf(L"{game} stopped responding after {time}", {{L"game", name}, {L"time", ran}}) + report,
                 LaunchLink::Report};
     if (seen.crashReport || crash_exit_code(seen.exitCode))
         return {LaunchState::Crashed, 2,
-                name + (seen.layerLoaded ? L" crashed after " + duration_text(seen.ranSeconds) : L" crashed while starting") +
-                    L" · Report an issue",
+                (seen.layerLoaded ? trf(L"{game} crashed after {time}", {{L"game", name}, {L"time", ran}})
+                                  : trf(L"{game} crashed while starting", {{L"game", name}})) +
+                    report,
                 LaunchLink::Report};
     if (!seen.layerLoaded)
         return {LaunchState::ClosedNoLayer, 1,
-                name + L" closed without loading Sim-QVFR" + (openxr.empty() ? L" · Report an issue" : openxr), LaunchLink::Report};
+                trf(L"{game} closed without loading Sim-QVFR", {{L"game", name}}) + (openxr.empty() ? report : openxr),
+                LaunchLink::Report};
     return {LaunchState::Closed, 0,
-            name + L" closed after " + duration_text(seen.ranSeconds) + (seen.fps > 0 ? L" · " + fps_text(seen.fps) : L""),
+            trf(L"{game} closed after {time}", {{L"game", name}, {L"time", ran}}) +
+                (seen.fps > 0 ? L" · " + fps_text(seen.fps) : L""),
             LaunchLink::Diagnostics};
 }
 

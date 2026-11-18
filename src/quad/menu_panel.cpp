@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "../lang.h"
 #include "../log.h"
 
 namespace simqvfr {
@@ -46,6 +47,18 @@ int text_width(HDC dc, HFONT font, const std::wstring& s) {
     SIZE size{};
     GetTextExtentPoint32W(dc, s.c_str(), static_cast<int>(s.size()), &size);
     return static_cast<int>(size.cx);
+}
+
+// A label and its value on one row `width` px wide ("Launch max  4775x1250 (6.0 MP)"): the value whole, the label cut
+// with an ellipsis when the two don't fit (a longer language; English fits).
+std::wstring label_value(HDC dc, HFONT font, const std::wstring& label, const std::wstring& value, int width) {
+    const std::wstring gap = L"  ", ellipsis = L"…";
+    if (text_width(dc, font, label + gap + value) <= width)
+        return label + gap + value;
+    std::wstring cut = label;
+    while (!cut.empty() && text_width(dc, font, cut + ellipsis + gap + value) > width)
+        cut.pop_back();
+    return cut.empty() ? value : cut + ellipsis + gap + value;
 }
 
 }  // namespace
@@ -116,25 +129,54 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
           tabFont = font(26, FW_SEMIBOLD), headingFont = font(24, FW_SEMIBOLD);
     SetBkMode(dc, TRANSPARENT);
     fill(dc, 0, 0, kPanelWidth, kPanelHeight, kBackground);
-    text(dc, titleFont, title, kMargin, 16, kPanelWidth - kMargin, 16 + kTitleHeight, kLabel, DT_LEFT);
+    // The title, cut with an ellipsis where a longer language would run past the panel or leave the frame times beside
+    // it less than kFrameRoom.
+    constexpr int kFrameRoom = 200;
+    const int titleWidth = std::min(text_width(dc, titleFont, title),
+                                    kPanelWidth - 2 * kMargin - (frame.empty() ? 0 : kFrameRoom + 28));
+    text(dc, titleFont, title, kMargin, 16, frame.empty() ? kPanelWidth - kMargin : kMargin + titleWidth + 1,
+         16 + kTitleHeight, kLabel, DT_LEFT | DT_END_ELLIPSIS);
     // The frame times, from the performance overlay, beside the title: a step's effect without turning to the overlay.
-    if (!frame.empty()) {  // right-aligned, after the title (the longest, "QVFR (API path) settings", leaves ~480 px)
-        SelectObject(dc, titleFont);
-        SIZE size{};
-        GetTextExtentPoint32W(dc, title.c_str(), static_cast<int>(title.size()), &size);
-        text(dc, smallFont, frame, kMargin + static_cast<int>(size.cx) + 28, 16, kPanelWidth - kMargin, 16 + kTitleHeight,
+    if (!frame.empty())  // right-aligned, after the title (the longest, "QVFR (API path) settings", leaves ~480 px)
+        text(dc, smallFont, frame, kMargin + titleWidth + 28, 16, kPanelWidth - kMargin, 16 + kTitleHeight,
              frameBad ? kCapped : kDim, DT_RIGHT | DT_END_ELLIPSIS);
-    }
     int y = 16 + kTitleHeight;
     // The pages as tabs: the current one filled, as the launcher's tab rail marks where you are.
     {
         int x = kMargin - 14;
+        // Each tab its name's width; names too long for the strip together (a longer language) share it: the longest
+        // cut to an even share, with an ellipsis.
+        const int strip = kPanelWidth - 2 * kMargin + 28;
+        std::vector<int> widths;
+        int total = 0;
+        for (const std::wstring& name : tabs) {
+            widths.push_back(text_width(dc, tabFont, name) + 28);
+            total += widths.back() + 8;
+        }
+        if (total - 8 > strip && !tabs.empty()) {
+            int room = strip - 8 * (static_cast<int>(tabs.size()) - 1), wide = static_cast<int>(tabs.size());
+            for (bool changed = true; changed && wide > 0;) {  // the narrow ones keep their width, the rest share
+                changed = false;
+                const int share = room / wide;
+                for (int& w : widths)
+                    if (w > 0 && w <= share) {
+                        room -= w;
+                        --wide;
+                        w = -w;  // kept (marked)
+                        changed = true;
+                    }
+            }
+            const int share = wide > 0 ? room / wide : 0;
+            for (int& w : widths)
+                w = w < 0 ? -w : share;
+        }
         for (size_t i = 0; i < tabs.size(); ++i) {
-            const int w = text_width(dc, tabFont, tabs[i]) + 28;
+            const int w = widths[i];
             const bool on = static_cast<int>(i) == tab;
             if (on)
                 fill(dc, x, y + 4, x + w, y + kTabsHeight - 8, kHighlight);
-            text(dc, tabFont, tabs[i], x, y + 4, x + w, y + kTabsHeight - 8, on ? kLabel : kDim, DT_CENTER);
+            text(dc, tabFont, tabs[i], x + 4, y + 4, x + w - 4, y + kTabsHeight - 8, on ? kLabel : kDim,
+                 DT_CENTER | DT_END_ELLIPSIS);
             x += w + 8;
         }
         if (!tabs.empty())
@@ -143,21 +185,27 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     }
     // ACE's render target: the most this launch allows and what renders now.
     if (resolution.shown) {
-        text(dc, smallFont, L"Launch max  " + resolution.max, kMargin, y, kPanelWidth / 2, y + 36, kDim, DT_LEFT);
-        text(dc, smallFont, L"Now  " + resolution.current, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel,
-             DT_RIGHT);
+        const int half = kPanelWidth / 2 - kMargin;  // each side's room: the label cut, never the size
+        text(dc, smallFont, label_value(dc, smallFont, lang::tr(L"Launch max"), resolution.max, half), kMargin, y,
+             kPanelWidth / 2, y + 36, kDim, DT_LEFT);
+        text(dc, smallFont, label_value(dc, smallFont, lang::tr(L"Now"), resolution.current, half), kPanelWidth / 2, y,
+             kPanelWidth - kMargin, y + 36, kLabel, DT_RIGHT);
         y += 36;
     }
     if (!subtitle.empty()) {  // the Foveated DLSS page: Cheeky's credit line
-        text(dc, smallFont, subtitle, kMargin, y, kPanelWidth - kMargin, y + 36, kDim, DT_LEFT);
+        text(dc, smallFont, subtitle, kMargin, y, kPanelWidth - kMargin, y + 36, kDim, DT_LEFT | DT_END_ELLIPSIS);
     } else {
         // The focus area's sharpness at its centre and what the foveation saves.
+        const int half = kPanelWidth / 2 - kMargin;
         const std::wstring ppd = stats.centerPpd > 0 ? std::to_wstring(stats.centerPpd) : L"\u2014";
-        const std::wstring saved = stats.savedPercent >= 0 ? std::to_wstring(stats.savedPercent) + L"%"
-                                                           : L"None (" + std::to_wstring(-stats.savedPercent) + L"% more)";
-        text(dc, smallFont, L"Center PPD  " + ppd, kMargin, y, kPanelWidth / 2, y + 36, kLabel, DT_LEFT);
-        text(dc, smallFont, L"Pixels saved  " + saved, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel,
-             DT_RIGHT);
+        const std::wstring saved =
+            stats.savedPercent >= 0
+                ? std::to_wstring(stats.savedPercent) + L"%"
+                : lang::trf(L"None ({percent}% more)", {{L"percent", std::to_wstring(-stats.savedPercent)}});
+        text(dc, smallFont, label_value(dc, smallFont, lang::tr(L"Center PPD"), ppd, half), kMargin, y, kPanelWidth / 2,
+             y + 36, kLabel, DT_LEFT);
+        text(dc, smallFont, label_value(dc, smallFont, lang::tr(L"Pixels saved"), saved, half), kPanelWidth / 2, y,
+             kPanelWidth - kMargin, y + 36, kLabel, DT_RIGHT);
     }
     y += 36 + 8;
     // A setting's line: its label up to its value (the launcher's long names never run under it), the value right.
@@ -167,14 +215,16 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
         const std::wstring value = line.selected ? L"◀  " + line.value + L"  ▶" : line.value;
         // The arrows come from a fallback font that GetTextExtentPoint32 measures narrower than it draws: room added.
         const int valueWidth = text_width(dc, lineFont, value) + (line.selected ? 24 : 0);
-        const int valueLeft = std::max(kPanelWidth / 2 - 160, kPanelWidth - kMargin - valueWidth);
+        // The value whole, right-aligned, as far left as it needs (a longer language; the label is cut shorter), to 120
+        // px from the margin at most.
+        const int valueLeft = std::max(kMargin + 120, kPanelWidth - kMargin - valueWidth);
         text(dc, lineFont, line.label, kMargin, top, valueLeft - 16, top + kLineHeight, kLabel, DT_LEFT | DT_END_ELLIPSIS);
         text(dc, lineFont, value, valueLeft - 24, top, kPanelWidth - kMargin, top + kLineHeight, line.capped ? kCapped : kLabel,
              DT_RIGHT);
     };
     std::vector<std::wstring> red;
     if (resolution.capped)
-        red.push_back(L"Asked for " + resolution.asked + L": more than the max");
+        red.push_back(lang::trf(L"Asked for {size}: more than the max", {{L"size", resolution.asked}}));
     red.insert(red.end(), notes.begin(), notes.end());
     // The page switch, pinned; under it the list from `first`, as much as fits above the notes.
     if (!lines.empty()) {
@@ -192,7 +242,8 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
             break;
         if (line.header) {  // the card's name, with a rule over it
             fill(dc, kMargin, y + 8, kPanelWidth - kMargin, y + 9, kDim);
-            text(dc, headingFont, line.label, kMargin, y + 10, kPanelWidth - kMargin, y + kMenuHeaderHeight, kHeading, DT_LEFT);
+            text(dc, headingFont, line.label, kMargin, y + 10, kPanelWidth - kMargin, y + kMenuHeaderHeight, kHeading,
+                 DT_LEFT | DT_END_ELLIPSIS);
         } else {
             draw_line(line, y);
         }
@@ -207,7 +258,8 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     if (!footer.empty())  // the in-game hotkeys, over the menu's own hint
         text(dc, smallFont, footer, kMargin, kPanelHeight - 96, kPanelWidth - kMargin, kPanelHeight - 56, kDim,
              DT_LEFT | DT_END_ELLIPSIS);
-    text(dc, smallFont, hint, kMargin, kPanelHeight - 56, kPanelWidth - kMargin, kPanelHeight - 16, kDim, DT_LEFT);
+    text(dc, smallFont, hint, kMargin, kPanelHeight - 56, kPanelWidth - kMargin, kPanelHeight - 16, kDim,
+         DT_LEFT | DT_END_ELLIPSIS);
     GdiFlush();
     // GDI writes BGRx; the swapchain wants RGBA with the panel's alpha (rounded corners), premultiplied (osd.h).
     const auto* src = static_cast<const uint32_t*>(bits);

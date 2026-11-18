@@ -34,11 +34,12 @@
 #include <windows.h>
 
 #include "../ini.h"
+#include "../i18n.h"
 
 namespace simqvfr {
 
 enum class VisorPosition { Closed, Half, Open };
-inline constexpr const wchar_t* kVisorPositionNames[] = {L"Closed", L"Half", L"Open"};
+inline constexpr const wchar_t* kVisorPositionNames[] = {I18N(L"Closed"), I18N(L"Half"), I18N(L"Open")};
 
 struct HelmetSettings {
     bool on = false;      // enabled
@@ -62,7 +63,7 @@ inline constexpr int kHelmetRimMax = 20, kHelmetCornersMax = 100, kHelmetLightMa
 inline constexpr int kHelmetSizeMin = 40, kHelmetSizeMax = 160, kHelmetHeightMax = 30, kHelmetTravelMax = 100;
 inline constexpr uint32_t kHelmetPerformanceSide = 2048, kHelmetDetailSide = 4096;
 inline uint32_t helmet_layer_side(const HelmetSettings& h) { return h.detail ? kHelmetDetailSide : kHelmetPerformanceSide; }
-inline constexpr const wchar_t* kHelmetDetailNames[] = {L"Performance", L"Detail"};
+inline constexpr const wchar_t* kHelmetDetailNames[] = {I18N(L"Performance"), I18N(L"Detail")};
 inline constexpr int kHelmetDepthMin = 3, kHelmetDepthMax = 150;  // centimetres; 0 is far (kHelmetFarM)
 inline int helmet_depth(int cm) { return cm <= 0 ? 0 : std::clamp(cm, kHelmetDepthMin, kHelmetDepthMax); }
 inline constexpr double kHelmetFarM = 10;  // depth 0: the quad's distance (no parallax to speak of)

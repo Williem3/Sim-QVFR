@@ -7,11 +7,14 @@
 #include <tlhelp32.h>
 
 #include "../games/game.h"
+#include "../lang.h"
 
 namespace simqvfr::launcher {
 namespace {
 
 namespace fs = std::filesystem;
+using lang::tr;
+using lang::trf;
 
 constexpr wchar_t kToolkitKey[] = L"SOFTWARE\\OpenXR_Toolkit";
 
@@ -138,32 +141,34 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
 
     // The game and its build.
     if (in.gameExe.empty()) {
-        Check& c = add("game", CheckTone::Bad, name + L" not found",
-                       L"Steam doesn’t list it in any of its libraries. Choose its folder: the one Steam’s Browse local "
-                       L"files opens.");
+        Check& c = add("game", CheckTone::Bad, trf(L"{game} not found", {{L"game", name}}),
+                       tr(L"Steam doesn’t list it in any of its libraries. Choose its folder: the one Steam’s "
+                          L"Browse local files opens."));
         c.fix = CheckFix::ChooseGameFolder;
-        c.fixLabel = L"Choose folder…";
+        c.fixLabel = tr(L"Choose folder…");
     } else {
         switch (in.build) {
         case BuildState::Supported:
-            add("build", CheckTone::Ok, L"Game build supported",
-                exe + L" is the build this version of Sim-QVFR was made for.");
+            add("build", CheckTone::Ok, tr(L"Game build supported"),
+                trf(L"{exe} is the build this version of Sim-QVFR was made for.", {{L"exe", exe}}));
             break;
         case BuildState::Hashing:
-            add("build", CheckTone::Pending, L"Checking the game build…",
-                L"Reading " + exe + L" to compare it with the build Sim-QVFR supports.");
+            add("build", CheckTone::Pending, tr(L"Checking the game build…"),
+                trf(L"Reading {exe} to compare it with the build Sim-QVFR supports.", {{L"exe", exe}}));
             break;
         case BuildState::Unknown:
-            add("build", CheckTone::Warn, L"Game build not checked",
-                exe + L" could not be read: " + in.gameExe);
+            add("build", CheckTone::Warn, tr(L"Game build not checked"),
+                trf(L"{exe} could not be read: {path}", {{L"exe", exe}, {L"path", in.gameExe}}));
             break;
         case BuildState::Unsupported: {
-            Check& c = add("build", method ? CheckTone::Bad : CheckTone::Warn, name + L" was updated",
-                           L"Its " + exe + L" isn’t the build this version of Sim-QVFR supports, so Sim-QVFR "
-                           L"stays off and the game runs as normal, without foveated rendering. Look for an Sim-QVFR "
-                           L"release for the new build.");
+            Check& c = add("build", method ? CheckTone::Bad : CheckTone::Warn,
+                           trf(L"{game} was updated", {{L"game", name}}),
+                           trf(L"Its {exe} isn’t the build this version of Sim-QVFR supports, so Sim-QVFR "
+                               L"stays off and the game runs as normal, without foveated rendering. Look for an "
+                               L"Sim-QVFR release for the new build.",
+                               {{L"exe", exe}}));
             c.fix = CheckFix::OpenReleases;
-            c.fixLabel = L"Check for an update";
+            c.fixLabel = tr(L"Check for an update");
             c.confirm = method;
             break;
         }
@@ -172,66 +177,80 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
 
     // Steam and the game: the launch refuses without the one or with the other.
     if (in.steamRunning) {
-        add("steam", CheckTone::Ok, L"Steam is running", shortName + L" needs it to start.");
+        add("steam", CheckTone::Ok, tr(L"Steam is running"), trf(L"{game} needs it to start.", {{L"game", shortName}}));
     } else {
-        Check& c = add("steam", CheckTone::Bad, L"Steam isn’t running", shortName + L" needs Steam. Start it, then launch.");
+        Check& c = add("steam", CheckTone::Bad, tr(L"Steam isn’t running"),
+                       trf(L"{game} needs Steam. Start it, then launch.", {{L"game", shortName}}));
         c.fix = CheckFix::StartSteam;
-        c.fixLabel = L"Start Steam";
+        c.fixLabel = tr(L"Start Steam");
     }
     // Administrator rights: the game inherits them, and the OpenXR loader then ignores the launch's layer folder. The
     // launch registers its layers where that loader looks (explicit_layers.h), unless that is turned off.
     const bool byShell = in.parent.empty() || _wcsicmp(in.parent.c_str(), L"explorer.exe") == 0;
     if (in.elevated && in.elevatedRegistration) {
-        add("elevated", CheckTone::Warn, L"Sim-QVFR is running as administrator",
-            shortName + L" starts with administrator rights too, and OpenXR then looks for layers only in Windows’ "
-            L"machine-wide list. Each launch adds Sim-QVFR’s own entries to it and takes them out when " + shortName +
-                L" closes; nothing else in the list changes. To launch with normal rights instead, " +
-                (byShell ? std::wstring(L"open the launcher with a normal double-click, not Run as administrator (and "
-                                        L"untick Run this program as an administrator on the Compatibility tab of "
-                                        L"sim-qvfr-launcher.exe’s Properties, if it is ticked).")
-                         : L"open the launcher with a double-click, not from " + in.parent + L"."));
+        add("elevated", CheckTone::Warn, tr(L"Sim-QVFR is running as administrator"),
+            trf(L"{game} starts with administrator rights too, and OpenXR then looks for layers only in Windows’ "
+                L"machine-wide list. Each launch adds Sim-QVFR’s own entries to it and takes them out when {game} "
+                L"closes; nothing else in the list changes.",
+                {{L"game", shortName}}) +
+                L" " +
+                (byShell ? std::wstring(tr(L"To launch with normal rights instead, open the launcher with a normal "
+                                           L"double-click, not Run as administrator (and untick Run this program as an "
+                                           L"administrator on the Compatibility tab of sim-qvfr-launcher.exe’s "
+                                           L"Properties, if it is ticked)."))
+                         : trf(L"To launch with normal rights instead, open the launcher with a double-click, not from "
+                               L"{program}.",
+                               {{L"program", in.parent}})));
     } else if (in.elevated) {
-        Check& c = add("elevated", method ? CheckTone::Bad : CheckTone::Warn, L"Sim-QVFR is running as administrator",
-                       shortName + L" would start with administrator rights too, and OpenXR then ignores Sim-QVFR: "
-                       L"the game starts on the desktop instead of in VR. " +
-                           (byShell ? std::wstring(L"Close the launcher and open it with a normal double-click, not "
-                                                   L"Run as administrator. If it still shows this, untick Run this "
-                                                   L"program as an administrator on the Compatibility tab of "
-                                                   L"sim-qvfr-launcher.exe’s Properties, under Change settings for all "
-                                                   L"users too.")
-                                    : L"It was started by " + in.parent + L", which runs as administrator. Close the "
-                                      L"launcher and open it with a double-click instead.") +
-                           L" (Registering Sim-QVFR for administrator launches is off: elevated_registration=0 in "
-                           L"sim-qvfr.ini.)");
+        Check& c = add("elevated", method ? CheckTone::Bad : CheckTone::Warn,
+                       tr(L"Sim-QVFR is running as administrator"),
+                       trf(L"{game} would start with administrator rights too, and OpenXR then ignores Sim-QVFR: "
+                           L"the game starts on the desktop instead of in VR.",
+                           {{L"game", shortName}}) +
+                           L" " +
+                           (byShell ? std::wstring(tr(L"Close the launcher and open it with a normal double-click, not "
+                                                      L"Run as administrator. If it still shows this, untick Run this "
+                                                      L"program as an administrator on the Compatibility tab of "
+                                                      L"sim-qvfr-launcher.exe’s Properties, under Change settings for "
+                                                      L"all users too."))
+                                    : trf(L"It was started by {program}, which runs as administrator. Close the "
+                                          L"launcher and open it with a double-click instead.",
+                                          {{L"program", in.parent}})) +
+                           L" " +
+                           tr(L"(Registering Sim-QVFR for administrator launches is off: elevated_registration=0 in "
+                              L"sim-qvfr.ini.)"));
         c.confirm = method;
     } else {
-        add("elevated", CheckTone::Ok, L"Not running as administrator",
-            shortName + L" starts with normal rights, as OpenXR needs to load Sim-QVFR.");
+        add("elevated", CheckTone::Ok, tr(L"Not running as administrator"),
+            trf(L"{game} starts with normal rights, as OpenXR needs to load Sim-QVFR.", {{L"game", shortName}}));
     }
 
     // Running with Sim-QVFR (this launcher's launch, or one before it) is how it should be; running without it,
     // a launch would start a second copy.
     if (in.gameRunning && in.gameHasLayer)
-        add("game_running", CheckTone::Ok, name + L" is running with Sim-QVFR",
-            L"Changes here reach it as you make them; resolution beyond its launch size waits for the next launch.");
+        add("game_running", CheckTone::Ok, trf(L"{game} is running with Sim-QVFR", {{L"game", name}}),
+            tr(L"Changes here reach it as you make them; resolution beyond its launch size waits for the next "
+               L"launch."));
     else if (in.gameRunning && in.gameStarting)
-        add("game_running", CheckTone::Ok, name + L" is starting",
-            L"Launched from here. Sim-QVFR loads when the game starts VR.");
+        add("game_running", CheckTone::Ok, trf(L"{game} is starting", {{L"game", name}}),
+            tr(L"Launched from here. Sim-QVFR loads when the game starts VR."));
     else if (in.gameRunning)
-        add("game_running", CheckTone::Bad, name + L" is already running",
-            L"It runs without Sim-QVFR. Close it first: the launch starts a new copy of the game with Sim-QVFR.");
+        add("game_running", CheckTone::Bad, trf(L"{game} is already running", {{L"game", name}}),
+            tr(L"It runs without Sim-QVFR. Close it first: the launch starts a new copy of the game with Sim-QVFR."));
 
     // OpenComposite, for a game that reaches OpenXR through it.
     if (game.openComposite && in.openComposite != OpenComposite::Unknown) {
         if (in.openComposite == OpenComposite::Installed) {
-            add("opencomposite", CheckTone::Ok, L"OpenComposite installed",
-                shortName + L" reaches your headset’s OpenXR runtime through it.");
+            add("opencomposite", CheckTone::Ok, tr(L"OpenComposite installed"),
+                trf(L"{game} reaches your headset’s OpenXR runtime through it.", {{L"game", shortName}}));
         } else {
-            Check& c = add("opencomposite", CheckTone::Bad, L"OpenComposite isn’t installed",
-                           shortName + L" uses SteamVR’s OpenVR; Sim-QVFR needs it on OpenXR, through OpenComposite. "
-                           L"Without it the game starts without foveated rendering. The guide shows the one file to copy.");
+            Check& c = add("opencomposite", CheckTone::Bad, tr(L"OpenComposite isn’t installed"),
+                           trf(L"{game} uses SteamVR’s OpenVR; Sim-QVFR needs it on OpenXR, through OpenComposite. "
+                               L"Without it the game starts without foveated rendering. The guide shows the one file "
+                               L"to copy.",
+                               {{L"game", shortName}}));
             c.fix = CheckFix::OpenGuide;
-            c.fixLabel = L"Open the guide";
+            c.fixLabel = tr(L"Open the guide");
             c.fixTarget = kOpenCompositeGuideUrl;
             c.confirm = method;
         }
@@ -241,112 +260,125 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     if (!in.cheekyLoaders.empty()) {
         for (const std::wstring& loader : in.cheekyLoaders) {
             Check& c = add("cheeky_loader", CheckTone::Bad,
-                           L"Cheeky’s " + fs::path(loader).filename().wstring() + L" is in the game folder",
-                           L"It’s Cheeky Foveated DLSS’s own loader. The game can fail to start with it there, and "
-                           L"Sim-QVFR loads Cheeky itself. Move it out of the game folder.");
+                           trf(L"Cheeky’s {file} is in the game folder",
+                               {{L"file", fs::path(loader).filename().wstring()}}),
+                           tr(L"It’s Cheeky Foveated DLSS’s own loader. The game can fail to start with it there, and "
+                              L"Sim-QVFR loads Cheeky itself. Move it out of the game folder."));
             c.fix = CheckFix::ShowFile;
-            c.fixLabel = L"Show file";
+            c.fixLabel = tr(L"Show file");
             c.fixTarget = loader;
             c.confirm = true;
         }
     } else if (!in.gameExe.empty()) {
-        add("cheeky_loader", CheckTone::Ok, L"No Cheeky loader in the game folder",
-            L"Neither dxgi.dll nor version.dll there is Cheeky Foveated DLSS’s loader.");
+        add("cheeky_loader", CheckTone::Ok, tr(L"No Cheeky loader in the game folder"),
+            tr(L"Neither dxgi.dll nor version.dll there is Cheeky Foveated DLSS’s loader."));
     }
 
     // Sim-QVFR's own DLSS, when it is on: its nvngx_dlss.dll (the one Sim-QVFR includes, or
     // the player's choice) and its version (made for the 310 series, DLSS 4).
     if (in.ownDlss) {
-        const std::wstring where = in.ownDlssPath.empty() ? std::wstring(L"the folder chosen") : in.ownDlssPath;
+        const std::wstring where = in.ownDlssPath.empty() ? std::wstring(tr(L"the folder chosen")) : in.ownDlssPath;
         if (!in.ownDlssFound && in.ownDlssIncluded) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS is on, but NVIDIA’s DLSS file is missing",
-                           L"This copy of Sim-QVFR has no nvngx_dlss.dll (it should be at " + where + L"). " + shortName +
-                               L" runs without DLSS until you install Sim-QVFR again from its release zip, or turn DLSS off.");
+            Check& c = add("own_dlss", CheckTone::Warn, tr(L"DLSS is on, but NVIDIA’s DLSS file is missing"),
+                           trf(L"This copy of Sim-QVFR has no nvngx_dlss.dll (it should be at {path}). {game} runs "
+                               L"without DLSS until you install Sim-QVFR again from its release zip, or turn DLSS off.",
+                               {{L"path", where}, {L"game", shortName}}));
             c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open DLSS";
+            c.fixLabel = tr(L"Open DLSS");
         } else if (!in.ownDlssFound) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"The DLSS file you chose isn’t there",
-                           L"There is no nvngx_dlss.dll at " + where +
-                               L", so DLSS uses the one Sim-QVFR includes. Choose another, or Use included.");
+            Check& c = add("own_dlss", CheckTone::Warn, tr(L"The DLSS file you chose isn’t there"),
+                           trf(L"There is no nvngx_dlss.dll at {path}, so DLSS uses the one Sim-QVFR includes. Choose "
+                               L"another, or Use included.",
+                               {{L"path", where}}));
             c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open DLSS";
+            c.fixLabel = tr(L"Open DLSS");
         } else if (!in.ownDlssVersion.empty() && version_major(in.ownDlssVersion) < kCheekyDlssMajor) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS " + in.ownDlssVersion + L" is older than 310",
-                           L"Sim-QVFR is made for DLSS 310 or newer (DLSS 4): with an older nvngx_dlss.dll the "
-                           L"presets may not apply, or DLSS may not start. Choose a newer one, or Use included.");
+            Check& c = add("own_dlss", CheckTone::Warn,
+                           trf(L"DLSS {version} is older than 310", {{L"version", in.ownDlssVersion}}),
+                           tr(L"Sim-QVFR is made for DLSS 310 or newer (DLSS 4): with an older nvngx_dlss.dll the "
+                              L"presets may not apply, or DLSS may not start. Choose a newer one, or Use included."));
             c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open DLSS";
+            c.fixLabel = tr(L"Open DLSS");
         } else {
             add("own_dlss", CheckTone::Ok,
-                L"DLSS ready" + (in.ownDlssVersion.empty() ? std::wstring() : L" (" + in.ownDlssVersion + L")"),
-                (in.ownDlssIncluded ? L"The nvngx_dlss.dll Sim-QVFR includes, at " : L"Your nvngx_dlss.dll, at ") +
-                    in.ownDlssPath + L".");
+                in.ownDlssVersion.empty() ? std::wstring(tr(L"DLSS ready"))
+                                          : trf(L"DLSS ready ({version})", {{L"version", in.ownDlssVersion}}),
+                in.ownDlssIncluded
+                    ? trf(L"The nvngx_dlss.dll Sim-QVFR includes, at {path}.", {{L"path", in.ownDlssPath}})
+                    : trf(L"Your nvngx_dlss.dll, at {path}.", {{L"path", in.ownDlssPath}}));
         }
     }
 
     // Cheeky Foveated DLSS, when it is on.
     if (in.cheekyLoad) {
         if (!in.cheekyRuntimeFound) {
-            Check& c = add("cheeky_runtime", CheckTone::Bad, L"Foveated DLSS is on, but Cheeky isn’t installed",
-                           L"Cheeky Foveated DLSS is a separate download, and its files aren’t in Sim-QVFR’s folder, so the "
-                           L"game would run without it. Turn it off, or install it.");
+            Check& c = add("cheeky_runtime", CheckTone::Bad, tr(L"Foveated DLSS is on, but Cheeky isn’t installed"),
+                           tr(L"Cheeky Foveated DLSS is a separate download, and its files aren’t in Sim-QVFR’s "
+                              L"folder, so the game would run without it. Turn it off, or install it."));
             c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open Foveated DLSS";
+            c.fixLabel = tr(L"Open Foveated DLSS");
         }
         if (in.cheekyLayer != CheekyLayer::Enabled) {
             Check& c = add("cheeky_layer", CheckTone::Bad,
-                           in.cheekyLayer == CheekyLayer::Disabled ? L"Foveated DLSS is on, but Cheeky’s VR add-on is turned off"
-                                                                   : L"Foveated DLSS is on, but Cheeky’s VR add-on isn’t installed",
-                           L"Cheeky needs its own small VR add-on, which its installer (CheekyOpenXRSetup.exe, in Cheeky’s "
-                           L"official download) sets up. Turn Foveated DLSS off, or install it.");
+                           in.cheekyLayer == CheekyLayer::Disabled
+                               ? tr(L"Foveated DLSS is on, but Cheeky’s VR add-on is turned off")
+                               : tr(L"Foveated DLSS is on, but Cheeky’s VR add-on isn’t installed"),
+                           tr(L"Cheeky needs its own small VR add-on, which its installer (CheekyOpenXRSetup.exe, in "
+                              L"Cheeky’s official download) sets up. Turn Foveated DLSS off, or install it."));
             c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open Foveated DLSS";
+            c.fixLabel = tr(L"Open Foveated DLSS");
         }
         if (in.cheekyRuntimeFound && in.cheekyLayer == CheekyLayer::Enabled)
-            add("cheeky", CheckTone::Ok, L"Cheeky Foveated DLSS ready", L"Its runtime and its OpenXR layer were found.");
+            add("cheeky", CheckTone::Ok, tr(L"Cheeky Foveated DLSS ready"),
+                tr(L"Its runtime and its OpenXR layer were found."));
 
         // The game's DLSS: Cheeky's own passes (its periphery pass, its presets) need the 310 series.
         if (!in.dlssVersion.empty()) {
             if (version_major(in.dlssVersion) >= kCheekyDlssMajor) {
-                add("dlss_version", CheckTone::Ok, shortName + L"’s DLSS is " + in.dlssVersion,
-                    L"New enough for Foveated DLSS.");
+                add("dlss_version", CheckTone::Ok,
+                    trf(L"{game}’s DLSS is {version}", {{L"game", shortName}, {L"version", in.dlssVersion}}),
+                    tr(L"New enough for Foveated DLSS."));
             } else {
-                Check& c = add("dlss_version", CheckTone::Warn, shortName + L"’s DLSS is too old for Foveated DLSS",
-                               shortName + L" has DLSS " + in.dlssVersion + L". Foveated DLSS needs DLSS 310 or newer "
-                               L"(DLSS 4): with an older one Cheeky can’t make its own periphery pass, and the game’s "
-                               L"DLSS runs as it is. Replace nvngx_dlss.dll with a newer one (a tool such as DLSS Swapper "
-                               L"does it, or the NVIDIA app’s DLSS override); Steam’s file check puts the original back.");
+                Check& c = add("dlss_version", CheckTone::Warn,
+                               trf(L"{game}’s DLSS is too old for Foveated DLSS", {{L"game", shortName}}),
+                               trf(L"{game} has DLSS {version}. Foveated DLSS needs DLSS 310 or newer "
+                                   L"(DLSS 4): with an older one Cheeky can’t make its own periphery pass, and the "
+                                   L"game’s DLSS runs as it is. Replace nvngx_dlss.dll with a newer one (a tool such "
+                                   L"as DLSS Swapper does it, or the NVIDIA app’s DLSS override); Steam’s file check "
+                                   L"puts the original back.",
+                                   {{L"game", shortName}, {L"version", in.dlssVersion}}));
                 c.fix = CheckFix::ShowFile;
-                c.fixLabel = L"Show the file";
+                c.fixLabel = tr(L"Show the file");
                 c.fixTarget = in.dlssPath;
             }
         }
 
         const int toolkit = rank(in.layers, kToolkitLayer), cheeky = rank(in.layers, kCheekyLayer);
         if (toolkit >= 0 && cheeky >= 0 && toolkit > cheeky) {
-            Check& c = add("toolkit_order", CheckTone::Bad, L"OpenXR Toolkit is below Cheeky’s layer",
-                           L"The game can crash at start in this order. Move OpenXR Toolkit above Cheeky’s layer.");
+            Check& c = add("toolkit_order", CheckTone::Bad, tr(L"OpenXR Toolkit is below Cheeky’s layer"),
+                           tr(L"The game can crash at start in this order. Move OpenXR Toolkit above Cheeky’s layer."));
             c.fix = CheckFix::OpenLayers;
-            c.fixLabel = L"Open OpenXR layers";
+            c.fixLabel = tr(L"Open OpenXR layers");
             c.confirm = true;
         }
         if (in.cheekyFg && toolkit >= 0 && in.toolkitTurbo == 1) {
-            Check& c = add("toolkit_turbo", CheckTone::Bad, L"OpenXR Toolkit’s Turbo mode is on",
-                           shortName + L" crashes with Turbo mode and Cheeky’s frame generation together. Turning it off changes "
-                           L"Toolkit’s setting for " + shortName + L" only.");
+            Check& c = add("toolkit_turbo", CheckTone::Bad, tr(L"OpenXR Toolkit’s Turbo mode is on"),
+                           trf(L"{game} crashes with Turbo mode and Cheeky’s frame generation together. Turning it off "
+                               L"changes Toolkit’s setting for {game} only.",
+                               {{L"game", shortName}}));
             c.fix = CheckFix::TurboOff;
-            c.fixLabel = L"Turn off";
+            c.fixLabel = tr(L"Turn off");
             c.confirm = true;
         }
     }
 
     // Eye tracking at the last launch.
     if (method && in.eyeTracked && in.eyeTracker == EyeTracker::Missing) {
-        Check& c = add("eye_tracking", CheckTone::Warn, L"No eye tracking at the last launch",
-                       L"The focus area stayed in the centre. Check that the headset’s eye tracker is on and calibrated, "
-                       L"or choose Fixed foveation.");
+        Check& c = add("eye_tracking", CheckTone::Warn, tr(L"No eye tracking at the last launch"),
+                       tr(L"The focus area stayed in the centre. Check that the headset’s eye tracker is on and "
+                          L"calibrated, or choose Fixed foveation."));
         c.fix = CheckFix::OpenFoveation;
-        c.fixLabel = L"Open Foveation";
+        c.fixLabel = tr(L"Open Foveation");
     }
     return out;
 }

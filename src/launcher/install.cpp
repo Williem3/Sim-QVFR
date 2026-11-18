@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include "../lang.h"
 #include "../sha256_file.h"
 #include "launch_plan.h"
 
@@ -14,6 +15,8 @@ namespace simqvfr::launcher {
 namespace {
 
 namespace fs = std::filesystem;
+using lang::tr;
+using lang::trf;
 
 constexpr unsigned long long kMaxDownload = 256ull << 20;  // far more than a release zip
 constexpr wchar_t kSettingsFile[] = L"sim-qvfr.ini";
@@ -47,7 +50,7 @@ bool download(const std::string& url, const fs::path& file, unsigned long long s
     parts.lpszUrlPath = path;
     parts.dwUrlPathLength = static_cast<DWORD>(std::size(path));
     if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS) {
-        error = L"the download address isn't one to trust";
+        error = tr(L"the download address isn't one to trust");
         return false;
     }
     HINTERNET session = WinHttpOpen(L"sim-qvfr-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
@@ -79,19 +82,21 @@ bool download(const std::string& url, const fs::path& file, unsigned long long s
                 got += read;
                 if (got > kMaxDownload || got > size) {
                     ok = false;
-                    error = L"the download is larger than the release says";
+                    error = tr(L"the download is larger than the release says");
                 }
-                progress({L"Downloading", size ? static_cast<double>(got) / size : 0});
+                progress({tr(L"Downloading"), size ? static_cast<double>(got) / size : 0});
             }
             if (ok && got != size) {
                 ok = false;
-                error = L"the download ended early (" + std::to_wstring(got) + L" of " + std::to_wstring(size) + L" bytes)";
+                error = trf(L"the download ended early ({got} of {size} bytes)",
+                            {{L"got", std::to_wstring(got)}, {L"size", std::to_wstring(size)}});
             }
         } else {
-            error = status ? L"GitHub answered " + std::to_wstring(status) : L"GitHub could not be reached";
+            error = status ? trf(L"GitHub answered {status}", {{L"status", std::to_wstring(status)}})
+                           : std::wstring(tr(L"GitHub could not be reached"));
         }
     } else {
-        error = L"GitHub could not be reached";
+        error = tr(L"GitHub could not be reached");
     }
     if (out != INVALID_HANDLE_VALUE)
         CloseHandle(out);
@@ -99,7 +104,7 @@ bool download(const std::string& url, const fs::path& file, unsigned long long s
         if (h)
             WinHttpCloseHandle(h);
     if (!ok && error.empty())
-        error = L"the download failed";
+        error = tr(L"the download failed");
     return ok;
 }
 
@@ -112,7 +117,7 @@ bool unpack(const fs::path& zip, const fs::path& into, std::wstring& error) {
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, into.c_str(), &si, &pi)) {
-        error = L"Windows' tar.exe couldn't start (error " + std::to_wstring(GetLastError()) + L")";
+        error = trf(L"Windows' tar.exe couldn't start (error {code})", {{L"code", std::to_wstring(GetLastError())}});
         return false;
     }
     CloseHandle(pi.hThread);
@@ -123,7 +128,7 @@ bool unpack(const fs::path& zip, const fs::path& into, std::wstring& error) {
         TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hProcess);
     if (!done || code != 0) {
-        error = L"the zip couldn't be unpacked";
+        error = tr(L"the zip couldn't be unpacked");
         return false;
     }
     return true;
@@ -204,7 +209,7 @@ InstallResult install_release(const std::wstring& folderText, const std::string&
     const fs::path folder = folderText, update = folder / L"update", staged = update / L"staged";
     std::error_code ec;
     if (!trusted_download(url) || sha256.size() != 64 || size == 0 || size > kMaxDownload) {
-        r.error = L"the release's download isn't one to trust";
+        r.error = tr(L"the release's download isn't one to trust");
         return r;
     }
     fs::remove_all(staged, ec);
@@ -212,16 +217,16 @@ InstallResult install_release(const std::wstring& folderText, const std::string&
     const fs::path zip = update / L"release.zip";
 
     // 1. Download, and the zip as GitHub has it.
-    progress({L"Downloading", 0});
+    progress({tr(L"Downloading"), 0});
     if (!download(url, zip, size, progress, r.error))
         return r;
-    progress({L"Checking the download", 1});
+    progress({tr(L"Checking the download"), 1});
     if (lower(sha256_file(zip.c_str())) != lower(sha256)) {
-        r.error = L"the download doesn't match the release (its SHA-256 differs)";
+        r.error = tr(L"the download doesn't match the release (its SHA-256 differs)");
         return r;
     }
     // 2. Unpacked, each file as its SHA256.txt says.
-    progress({L"Unpacking", 0});
+    progress({tr(L"Unpacking"), 0});
     if (!unpack(zip, staged, r.error))
         return r;
     return install_staged(folder.wstring(), staged.wstring(), oldVersion, progress);
@@ -236,14 +241,14 @@ InstallResult install_staged(const std::wstring& folderText, const std::wstring&
     std::error_code ec;
     const std::map<std::wstring, std::string> release = read_hash_list(staged / kHashList);
     if (!release.count(L"sim-qvfr-launcher.exe") || !release.count(L"layer\\sim-qvfr.dll")) {
-        r.error = L"the release has no launcher or layer in it";
+        r.error = tr(L"the release has no launcher or layer in it");
         return r;
     }
     int checked = 0;
     for (const auto& [path, hash] : release) {
-        progress({L"Checking the files", static_cast<double>(++checked) / release.size()});
+        progress({tr(L"Checking the files"), static_cast<double>(++checked) / release.size()});
         if (lower(sha256_file((staged / path).c_str())) != hash) {
-            r.error = path + L" in the release doesn't match its SHA256.txt";
+            r.error = trf(L"{file} in the release doesn't match its SHA256.txt", {{L"file", path}});
             return r;
         }
     }
@@ -255,13 +260,13 @@ InstallResult install_staged(const std::wstring& folderText, const std::wstring&
     plan.push_back({kHashList, fs::exists(folder / kHashList, ec) ? InstallAction::Replace : InstallAction::Add});  // last: the new list
 
     // 4. Old files into the backup, new ones in place; on a failure, everything back as it was.
-    progress({L"Installing", 0});
+    progress({tr(L"Installing"), 0});
     fs::remove_all(backup, ec);
     std::vector<std::wstring> moved, added;
     bool ok = true;
     for (size_t i = 0; i < plan.size() && ok; ++i) {
         const InstallStep& s = plan[i];
-        progress({L"Installing", static_cast<double>(i + 1) / plan.size()});
+        progress({tr(L"Installing"), static_cast<double>(i + 1) / plan.size()});
         if (s.action == InstallAction::KeepSettings || s.action == InstallAction::KeepChanged) {
             ++r.kept;
             continue;
@@ -274,14 +279,16 @@ InstallResult install_staged(const std::wstring& folderText, const std::wstring&
             fs::create_directories((backup / s.path).parent_path(), ec);
             // A rename: allowed for the running launcher, and the same volume as update\.
             if (!MoveFileExW(target.c_str(), (backup / s.path).c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                r.error = L"couldn't move " + s.path + L" aside (error " + std::to_wstring(GetLastError()) + L"): is it in use?";
+                r.error = trf(L"couldn't move {file} aside (error {code}): is it in use?",
+                              {{L"file", s.path}, {L"code", std::to_wstring(GetLastError())}});
                 ok = false;
                 break;
             }
             moved.push_back(s.path);
         }
         if (!CopyFileW(source.c_str(), target.c_str(), FALSE)) {
-            r.error = L"couldn't write " + s.path + L" (error " + std::to_wstring(GetLastError()) + L")";
+            r.error = trf(L"couldn't write {file} (error {code})",
+                          {{L"file", s.path}, {L"code", std::to_wstring(GetLastError())}});
             ok = false;
             break;
         }

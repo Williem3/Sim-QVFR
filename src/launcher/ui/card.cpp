@@ -390,7 +390,8 @@ void Body::more(const std::wstring& label, const std::vector<std::wstring>& hidd
     const bool open = app.moreOpen.count(key) > 0;
     const float y = y_ + h_, h = 24;
     if (draw_) {
-        const std::wstring text = (open ? L"Hide " : L"Show ") + label;
+        const std::wstring text =
+            open ? trf(L"Hide {name}", {{L"name", label}}) : trf(L"Show {name}", {{L"name", label}});
         const float tw = std::ceil(app.canvas.measure(text, t::kBodyMedium));
         const Rect r{x_ - 4, y, tw + 8 + 18, h};
         const int index = static_cast<int>(app.moreKeys.size());
@@ -439,8 +440,9 @@ void draw_card(const Card& card, const Rect& r, int index) {
         if (!card.chip.empty())
             spoken += L", " + card.chip;
         if (card.applies != Applies::None)
-            spoken += card.applies == Applies::Live ? L", changes now" : card.applies == Applies::LiveLowered ? L", changes now when lowered"
-                                                                                                             : L", at the next game start";
+            spoken += L", " + std::wstring(card.applies == Applies::Live          ? tr(L"changes now")
+                                           : card.applies == Applies::LiveLowered ? tr(L"changes now when lowered")
+                                                                                  : tr(L"at the next game start"));
         reader_text({r.x, r.y, r.w, kHeaderH}, spoken, 2);
     }
     section_shape(card.section, r.x + kPad + 5, hy + 11, 10);
@@ -455,13 +457,13 @@ void draw_card(const Card& card, const Rect& r, int index) {
             cv.circle(m.x + 14 + i * 5.5f, m.y + 14, 1.6f, col(app.c->label_secondary), true);
         if (focused(kCardMenu) && app.focusOption == index)
             focus_ring(m, t::kRadiusControl);
-        app.hits.push_back({kCardMenu, m, index, L"Card menu: reset this card"});
+        app.hits.push_back({kCardMenu, m, index, tr(L"Card menu: reset this card")});
         right = m.x - 8;
     }
     if (card.applies != Applies::None) {
-        const std::wstring text = card.applies == Applies::Live          ? L"Changes now"
-                                  : card.applies == Applies::LiveLowered ? L"Now when lowered"
-                                                                         : L"Next game start";
+        const std::wstring text = card.applies == Applies::Live          ? tr(L"Changes now")
+                                  : card.applies == Applies::LiveLowered ? tr(L"Now when lowered")
+                                                                         : tr(L"Next game start");
         const float tw = std::ceil(cv.measure(text, kBadgeStyle)) + 16;
         applies_tag(right - tw, hy + 2, card.applies);
         right -= tw + 8;
@@ -512,9 +514,9 @@ void reset_card(int index) {
     const std::wstring title = app.cardTitles[static_cast<size_t>(index)];
     const auto reset = app.cardResets[static_cast<size_t>(index)];
     Sheet s;
-    s.title = L"Reset " + title + L"?";
-    s.text = L"Its settings go back to their defaults. The other cards stay as they are.";
-    s.buttons = {L"Cancel", L"Reset"};
+    s.title = trf(L"Reset {card}?", {{L"card", title}});
+    s.text = tr(L"Its settings go back to their defaults. The other cards stay as they are.");
+    s.buttons = {tr(L"Cancel"), tr(L"Reset")};
     s.focus = 0;
     s.danger = true;
     s.done = [reset](int button, const std::wstring&) {

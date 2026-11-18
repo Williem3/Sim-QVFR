@@ -16,10 +16,10 @@ namespace simqvfr::launcher::ui::win {
 
 std::wstring panel_title(PanelKind kind) {
     switch (kind) {
-    case PanelKind::Report: return L"Report an issue";
-    case PanelKind::Color: return L"Colour for " + std::wstring(color_game().name);
-    case PanelKind::Profiles: return L"Manage profiles";
-    case PanelKind::About: return L"About";
+    case PanelKind::Report: return tr(L"Report an issue");
+    case PanelKind::Color: return trf(L"Colour for {game}", {{L"game", color_game().name}});
+    case PanelKind::Profiles: return tr(L"Manage profiles");
+    case PanelKind::About: return tr(L"About");
     default: return L"";
     }
 }
@@ -103,7 +103,7 @@ void panel_overlay() {
     cv.path("M4 4L12 12M12 4L4 12", {close.x + 6, close.y + 6, 16, 16}, 16, col(app.c->label), 1.6f);
     if (focused(kPanelClose))
         focus_ring(close, t::kRadiusControl);
-    app.hits.push_back({kPanelClose, close, -1, L"Close (Esc)"});
+    app.hits.push_back({kPanelClose, close, -1, tr(L"Close (Esc)")});
     // The content, scrolled.
     const Rect body{card.x + pad, card.y + headerH, inner, h - headerH - pad};
     app.panelBody = body;

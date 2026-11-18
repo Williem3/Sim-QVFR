@@ -30,7 +30,8 @@ float osd_height_deg(int widthDeg) { return panel_height_deg(widthDeg, static_ca
 float clock_height_deg(int widthDeg) { return panel_height_deg(widthDeg, static_cast<float>(kClockHeight) / kClockWidth); }
 
 std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
-    return v == 0 ? L"0°" : std::to_wstring(std::abs(v)) + L"° " + (v > 0 ? plus : minus);
+    // `plus` and `minus` are whole texts with {degrees} ("{degrees} right"), marked with I18N where they are passed.
+    return v == 0 ? L"0°" : trf(v > 0 ? plus : minus, {{L"degrees", std::to_wstring(std::abs(v)) + L"°"}});
 }
 
 }  // namespace
@@ -146,10 +147,11 @@ float placement_preview(float x, float y, float w, bool draw) {
 // How to use the placement preview. Returns its height.
 float placement_caption(float x, float y, float w, bool draw) {
     const bool osd = app.s.osd.enabled, clock = app.s.clock.enabled;
-    const std::wstring caption = osd && clock ? L"Drag the menu, the overlay or the clock to place it. Headsets’ fields of view vary."
-                                 : osd        ? L"Drag the menu or the overlay to place it. Headsets’ fields of view vary."
-                                 : clock      ? L"Drag the menu or the clock to place it. Headsets’ fields of view vary."
-                                              : L"Drag the panel to place it. Headsets’ fields of view vary.";
+    const std::wstring caption =
+        osd && clock ? tr(L"Drag the menu, the overlay or the clock to place it. Headsets’ fields of view vary.")
+        : osd        ? tr(L"Drag the menu or the overlay to place it. Headsets’ fields of view vary.")
+        : clock      ? tr(L"Drag the menu or the clock to place it. Headsets’ fields of view vary.")
+                     : tr(L"Drag the panel to place it. Headsets’ fields of view vary.");
     const float ch = app.canvas.measure_height(caption, t::kSubheadline, w);
     if (draw)
         app.canvas.text(caption, t::kSubheadline, {x, y, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
@@ -162,12 +164,14 @@ float placement_readouts(float x, float y, float w, bool draw) {
     std::snprintf(size, sizeof(size), "%d° × %d°", app.s.menuWidth, static_cast<int>(std::lround(menu_height_deg(app.s.menuWidth))));
     std::snprintf(metres, sizeof(metres), "%.2f m", 2 * kMenuDistance * std::tan(app.s.menuWidth * 3.14159265 / 360));
     std::snprintf(distance, sizeof(distance), "%.1f m", kMenuDistance);
-    float h = eyebrow(x, y, w, L"Headset menu", draw) + t::kSpace2;
-    h += readout(x, y + h, w, L"Horizontal", degrees(app.s.menuYaw, L"right", L"left"), draw) + 6;
-    h += readout(x, y + h, w, L"Vertical", degrees(app.s.menuPitch, L"up", L"down"), draw) + 6;
-    h += readout(x, y + h, w, L"Panel size", widen(size), draw) + 6;
-    h += readout(x, y + h, w, L"Panel width", widen(metres), draw) + 6;
-    h += readout(x, y + h, w, L"Distance", widen(distance), draw);
+    float h = eyebrow(x, y, w, tr(L"Headset menu"), draw) + t::kSpace2;
+    h += readout(x, y + h, w, tr(L"Horizontal"),
+                 degrees(app.s.menuYaw, I18N(L"{degrees} right"), I18N(L"{degrees} left")), draw) + 6;
+    h += readout(x, y + h, w, tr(L"Vertical"), degrees(app.s.menuPitch, I18N(L"{degrees} up"), I18N(L"{degrees} down")),
+                 draw) + 6;
+    h += readout(x, y + h, w, tr(L"Panel size"), widen(size), draw) + 6;
+    h += readout(x, y + h, w, tr(L"Panel width"), widen(metres), draw) + 6;
+    h += readout(x, y + h, w, tr(L"Distance"), widen(distance), draw);
     return h;
 }
 

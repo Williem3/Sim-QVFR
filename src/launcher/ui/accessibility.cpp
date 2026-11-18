@@ -128,7 +128,8 @@ bool popup_ctl(Ctl id) {
     case kDlssSharpening:
     case kNrStyle:
     case kNrPreset:
-    case kDiagKind: return true;
+    case kDiagKind:
+    case kLanguage: return true;
     default: return false;
     }
 }
@@ -142,22 +143,23 @@ std::wstring popup_value(Ctl id) {
 std::wstring own_name(const Hit& h) {
     switch (h.id) {
     case kText: return h.name;
-    case kSearch: return L"Find a setting (Ctrl+K)";
-    case kProfileMenu: return L"Profile menu";
-    case kThemeToggle: return L"Theme";
-    case kLaunch: return L"Launch " + game_name();
-    case kVersion: return L"About Sim-QVFR";
-    case kSupport: return L"Support Sim-QVFR on Ko-fi";
-    case kPanelClose: return L"Close";
+    case kSearch: return tr(L"Find a setting (Ctrl+K)");
+    case kProfileMenu: return tr(L"Profile menu");
+    case kThemeToggle: return tr(L"Theme");
+    case kLanguage: return tr(L"Language");
+    case kLaunch: return trf(L"Launch {game}", {{L"game", game_name()}});
+    case kVersion: return tr(L"About Sim-QVFR");
+    case kSupport: return tr(L"Support Sim-QVFR on Ko-fi");
+    case kPanelClose: return tr(L"Close");
     case kCardMenu:
         return h.option >= 0 && h.option < static_cast<int>(app.cardTitles.size())
-                   ? app.cardTitles[static_cast<size_t>(h.option)] + L" card menu"
-                   : L"Card menu";
+                   ? trf(L"{card} card menu", {{L"card", app.cardTitles[static_cast<size_t>(h.option)]}})
+                   : std::wstring(tr(L"Card menu"));
     case kSheetButton:
         return h.option >= 0 && h.option < static_cast<int>(app.sheet.buttons.size()) ? app.sheet.buttons[static_cast<size_t>(h.option)]
                                                                                      : L"";
     case kSheetField: return app.sheet.fieldLabel;
-    case kDiagDescription: return L"What happened?";
+    case kDiagDescription: return tr(L"What happened?");
     default: break;
     }
     const std::wstring row = row_label(h);
@@ -212,7 +214,7 @@ bool info_of(const Key& k, Info& out) {
         out.type = item ? UIA_MenuItemControlTypeId : UIA_TextControlTypeId;
         out.state = item && k.option == app.popup.selected ? 1 : -1;
         if (out.state == 1)
-            out.name += L", chosen";
+            out.name = trf(L"{name}, chosen", {{L"name", out.name}});
         return true;
     }
     const Hit* h = find_hit(k);
@@ -225,7 +227,7 @@ bool info_of(const Key& k, Info& out) {
     out.name = own_name(*h);
     const bool swatch = h->id == kColorReset || h->id == kColorPreset || h->id == kColorCustom;
     if (swatch && h->state == 1)
-        out.name += L", chosen";
+        out.name = trf(L"{name}, chosen", {{L"name", out.name}});
     // Its help: a switch's line under its label, then its tip or the setting's own help.
     std::wstring help = h->desc;
     std::wstring more = h->tip;
@@ -383,7 +385,7 @@ public:
                 ret->lVal = kHeadingLevelNone + info.heading;
             }
             break;
-        case UIA_ProviderDescriptionPropertyId: set_string(ret, L"Sim-QVFR launcher"); break;
+        case UIA_ProviderDescriptionPropertyId: set_string(ret, tr(L"Sim-QVFR launcher")); break;
         default: break;
         }
         return S_OK;

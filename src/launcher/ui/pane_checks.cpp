@@ -18,9 +18,10 @@ namespace simqvfr::launcher::ui::win {
 // Launch checks (preflight.h) as a card: the verdict first, then what needs attention, each with its fix, then what is
 // ready behind a More.
 Card checks_card() {
-    Card c{Tab::Game, L"Launch checks"};
+    Card c{Tab::Game, tr(L"Launch checks")};
     c.body = [](Body& b) {
-        static const wchar_t* const kToneText[] = {L"OK", L"Check", L"Problem", L"Checking"};  // CheckTone's order
+        static const wchar_t* const kToneText[] = {I18N(L"OK"), I18N(L"Check"), I18N(L"Problem"),
+                                                   I18N(L"Checking")};  // CheckTone's order
         size_t bad = 0, warn = 0;
         std::vector<size_t> attention, ready;
         for (size_t i = 0; i < app.checks.size(); ++i) {
@@ -30,27 +31,31 @@ Card checks_card() {
             (tone == CheckTone::Bad || tone == CheckTone::Warn ? attention : ready).push_back(i);
         }
         if (bad > 0)
-            b.chip(2, std::to_wstring(bad) + (bad == 1 ? L" problem" : L" problems") + L" · Launch will ask you to confirm first");
+            b.chip(2, bad == 1 ? trf(L"{count} problem · Launch will ask you to confirm first", {{L"count", L"1"}})
+                               : trf(L"{count} problems · Launch will ask you to confirm first",
+                                     {{L"count", std::to_wstring(bad)}}));
         else if (warn > 0)
-            b.chip(1, std::to_wstring(warn) + L" to check");
+            b.chip(1, trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}));
         else
-            b.chip(0, L"Ready to launch");
+            b.chip(0, tr(L"Ready to launch"));
         const auto check_row = [](Body& r, size_t i) {
             const Check& k = app.checks[i];
             const std::wstring feature = check_feature(k);
             const bool attention = k.tone == CheckTone::Bad || k.tone == CheckTone::Warn;
             if (attention && !feature.empty()) {  // a way out first: turn it off; then install it (Cheeky) or its own fix
                 r.row(k.title, k.detail, L"");  // the card's chip says it's a problem: its title gets the width
-                std::vector<Body::ButtonSpec> ways = {{kCheckOff, L"Turn " + feature + L" off", Btn::Primary, nullptr, static_cast<int>(i)}};
+                std::vector<Body::ButtonSpec> ways = {{kCheckOff, trf(L"Turn {feature} off", {{L"feature", feature}}),
+                                                       Btn::Primary, nullptr, static_cast<int>(i)}};
                 if (k.id == "cheeky_runtime" || k.id == "cheeky_layer")
-                    ways.push_back({kCheckGuide, L"How to install it", Btn::Secondary, nullptr, static_cast<int>(i)});
+                    ways.push_back(
+                        {kCheckGuide, tr(L"How to install it"), Btn::Secondary, nullptr, static_cast<int>(i)});
                 else if (!k.fixLabel.empty())
                     ways.push_back({kCheckFix, k.fixLabel, Btn::Secondary, nullptr, static_cast<int>(i)});
                 r.actions(ways);
             } else if (!k.fixLabel.empty()) {
                 r.action(k.title, k.detail, kCheckFix, k.fixLabel, static_cast<int>(i));
             } else {
-                r.status(k.title, k.detail, static_cast<int>(k.tone), kToneText[static_cast<int>(k.tone)]);
+                r.status(k.title, k.detail, static_cast<int>(k.tone), tr(kToneText[static_cast<int>(k.tone)]));
             }
         };
         for (size_t i : attention)
@@ -59,7 +64,9 @@ Card checks_card() {
         for (size_t i : ready)
             labels.push_back(app.checks[i].title);
         if (!ready.empty())
-            b.more(attention.empty() ? L"all " + std::to_wstring(ready.size()) + L" checks" : std::to_wstring(ready.size()) + L" ready checks", labels,
+            b.more(attention.empty() ? trf(L"all {count} checks", {{L"count", std::to_wstring(ready.size())}})
+                                     : trf(L"{count} ready checks", {{L"count", std::to_wstring(ready.size())}}),
+                   labels,
                    [ready, check_row](Body& m) {
                        for (size_t i : ready)
                            check_row(m, i);
@@ -105,19 +112,22 @@ void fix_check(const Check& c) {
         return;
     }
     case CheckFix::OpenLayers:  // the card, its list open
-        jump_to({L"OpenXR layers", L"OpenXR layers", Pane::Game, L"", L"OpenXR layers/" + std::wstring(kLayersMore)});
+        jump_to({tr(L"OpenXR layers"), tr(L"OpenXR layers"), Pane::Game, L"",
+                 std::wstring(tr(L"OpenXR layers")) + L"/" + tr(kLayersMore)});
         return;
     case CheckFix::OpenDlss: {  // the card with DLSS's switch, highlighted
         const bool own = game_has(&games::GameFeatures::sideLoadedDlss);
-        jump_to({own ? (fsr_pc() ? L"Use FSR" : L"Use DLSS") : L"Use Cheeky Foveated DLSS",
-                 own ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : L"Foveated DLSS", Pane::Picture});
+        jump_to({own ? (fsr_pc() ? tr(L"Use FSR") : tr(L"Use DLSS")) : tr(L"Use Cheeky Foveated DLSS"),
+                 own ? (fsr_pc() ? tr(L"FSR (experimental)") : L"DLSS") : tr(L"Foveated DLSS"), Pane::Picture});
         return;
     }
-    case CheckFix::OpenFoveation: jump_to({L"Foveation", L"Foveation", Pane::Picture}); return;
+    case CheckFix::OpenFoveation: jump_to({tr(L"Foveation"), tr(L"Foveation"), Pane::Picture}); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
-            notify(L"Turbo mode is still on", L"OpenXR Toolkit’s settings for " + short_name() +
-                                                  L" couldn’t be changed. Turn Turbo mode off in Toolkit’s menu in the game.");
+            notify(tr(L"Turbo mode is still on"),
+                   trf(L"OpenXR Toolkit’s settings for {game} couldn’t be changed. Turn Turbo mode off in Toolkit’s "
+                       L"menu in the game.",
+                       {{L"game", short_name()}}));
         break;
     case CheckFix::ChooseGameFolder: choose_game_folder(); break;
     case CheckFix::None: return;

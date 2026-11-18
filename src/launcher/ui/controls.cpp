@@ -87,18 +87,20 @@ void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const c
     if (bg.alpha > 0)
         app.canvas.fill(r, bg, radius);
     const t::TypeStyle textStyle = style == Btn::Launch ? kPrimaryLabel : kButtonLabel;
+    // A label wider than the button (a longer language in a fixed-width button) is cut; the hit keeps it whole.
+    const std::wstring shown = fit(label, textStyle, r.w - (icon ? 16 + 8 : 0) - 16);
     if (icon) {
-        const float tw = std::ceil(app.canvas.measure(label, textStyle)), iw = 16, gap = 8;
+        const float tw = std::ceil(app.canvas.measure(shown, textStyle)), iw = 16, gap = 8;
         const float x0 = r.x + (r.w - tw - iw - gap) / 2;
         app.canvas.path(icon, {x0, r.y + (r.h - iw) / 2, iw, iw}, 16, style == Btn::Support ? col(app.c->red) : fg, 1.6f,
                         icon == kIconPlay || icon == kIconHeart);
-        app.canvas.text(label, textStyle, {x0 + iw + gap, r.y, tw + 2, r.h}, fg);
+        app.canvas.text(shown, textStyle, {x0 + iw + gap, r.y, tw + 2, r.h}, fg);
     } else {
-        app.canvas.text(label, textStyle, r, fg, Align::Center);
+        app.canvas.text(shown, textStyle, r, fg, Align::Center);
     }
     if (focused(id) && (option < 0 || app.focusOption == option))
         focus_ring(r, radius);
-    app.hits.push_back({id, r, option, L"", label});
+    app.hits.push_back({id, r, option, shown != label ? label : std::wstring(), label});
 }
 
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
@@ -118,7 +120,7 @@ void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disable
                     t::kRadiusControl);
     // Its edge at 3:1 in both themes (field-border): the fill alone is too close to the card.
     app.canvas.stroke(r, col(app.c->control_border, disabled ? 0.4f : 1), 1, t::kRadiusControl);
-    app.canvas.text(value, t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
+    app.canvas.text(fit(value, t::kBody, r.w - t::kSpace3 - 30), t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
                     col(disabled ? app.c->label_tertiary : app.c->label));
     // Chevron 8 x 12, 12px from the trailing edge.
     app.canvas.path("M1.5 4.25L4 1.75l2.5 2.5M1.5 7.75L4 10.25l2.5-2.5", {r.right() - 20, r.y + (r.h - 12) / 2, 8, 12},
@@ -260,7 +262,7 @@ void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& it
 float segmented_width() {
     float w = 4;
     for (const auto& name : kColorNames)
-        w += t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(name, t::kBody) + 2;
+        w += t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(tr(name), t::kBody) + 2;
     return std::ceil(w - 2);
 }
 
@@ -270,7 +272,8 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
     app.canvas.fill(r, col(app.c->segment_track), t::kRadiusControl);
     float x = r.x + 2;
     for (int i = 0; i < 3; ++i) {
-        const float w = t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(kColorNames[i], t::kBody);
+        const wchar_t* name = tr(kColorNames[i]);
+        const float w = t::kSpace3 * 2 + 10 + 6 + app.canvas.measure(name, t::kBody);
         const Rect item{x, r.y + 2, w, r.h - 4};
         const bool on = i == selected;
         if (on)  // the selected segment: ink on light, near-white on dark, its text inverted
@@ -281,12 +284,12 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
         if (on)  // the swatch keeps a light edge on the dark segment, a dark one on the light
             app.canvas.circle(item.x + t::kSpace3 + 5, item.y + item.h / 2, 5.5f, col(app.c->on_segment, 0.8f), false, 1);
         // On the selected segment its own text colour, also while disabled (the segment itself is faded then).
-        app.canvas.text(kColorNames[i], t::kBody, {item.x + t::kSpace3 + 16, item.y, w - t::kSpace3 - 16, item.h},
+        app.canvas.text(name, t::kBody, {item.x + t::kSpace3 + 16, item.y, w - t::kSpace3 - 16, item.h},
                         col(on ? app.c->on_segment : disabled ? app.c->label_tertiary : app.c->label));
         if (on && focused(id))
             focus_ring(item, t::kRadiusControl - 2);
         if (!disabled)
-            app.hits.push_back({id, item, i, L"", kColorNames[i], on ? 1 : 0});
+            app.hits.push_back({id, item, i, L"", name, on ? 1 : 0});
         x += w + 2;
     }
 }

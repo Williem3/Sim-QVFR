@@ -35,6 +35,7 @@
 #include "../engine/nvapi_gpus.h"
 #include "../games/game.h"
 #include "../ini.h"
+#include "../lang.h"
 #include "../log_prefix.h"
 #include "../profile/profiles.h"
 #include "../probe/hang_dump.h"
@@ -690,9 +691,9 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
         const std::string hash = system_request_hash(text);
         const std::wstring exe = module_path();
         if (hash.empty() || exe.empty())
-            return L"the machine-wide layers can't be requested; nothing was written";
+            return lang::tr(L"the machine-wide layers can't be requested; nothing was written");
         if (!write_file(request, text))
-            return L"cannot write " + request + L"; nothing was written";
+            return lang::trf(L"cannot write {file}; nothing was written", {{L"file", request}});
         // The hash travels on the command line, which nothing but this process sets: the elevated copy refuses a
         // request file changed after it was written here.
         const std::wstring parameters = L"--apply-system-layers \"" + request + L"\" " + widen(hash);
@@ -706,8 +707,9 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
         if (!ShellExecuteExW(&info) || !info.hProcess) {
             const DWORD started = GetLastError();
             DeleteFileW(request.c_str());
-            return started == ERROR_CANCELLED ? L"administrator rights were declined; the layers are unchanged"
-                                              : L"the elevated launcher did not start; the layers are unchanged";
+            return started == ERROR_CANCELLED
+                       ? lang::tr(L"administrator rights were declined; the layers are unchanged")
+                       : lang::tr(L"the elevated launcher did not start; the layers are unchanged");
         }
         const DWORD waited = WaitForSingleObject(info.hProcess, 60000);
         DWORD code = 1;
@@ -718,15 +720,20 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
         DeleteFileW(request.c_str());
         DeleteFileW((request + L".error").c_str());
         if (waited != WAIT_OBJECT_0)
-            return L"the elevated launcher did not finish within a minute; your own layers are unchanged";
+            return lang::tr(L"the elevated launcher did not finish within a minute; your own layers are unchanged");
         if (code == 2)
-            return L"the elevated launcher refused the request (changed after it was written?); the layers are unchanged";
+            return lang::tr(L"the elevated launcher refused the request (changed after it was written?); the layers "
+                            L"are unchanged");
         if (code != 0)
-            return (why.empty() ? L"writing the machine-wide layers failed" : widen(why)) + L"; your own layers are unchanged";
+            return lang::trf(L"{error}; your own layers are unchanged",
+                             {{L"error", why.empty() ? std::wstring(lang::tr(L"writing the machine-wide layers failed"))
+                                                     : widen(why)}});
     }
     if (!write_hive(false, want, error))
-        return system_needs_admin(current, want) ? L"the machine-wide layers were written, but your own failed: " + error
-                                                 : error;
+        return system_needs_admin(current, want)
+                   ? lang::trf(L"the machine-wide layers were written, but your own failed: {error}",
+                               {{L"error", error}})
+                   : error;
     return {};
 }
 

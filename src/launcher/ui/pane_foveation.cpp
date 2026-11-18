@@ -138,9 +138,10 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         }
         const t::TypeStyle tiny{9.5f * k, 12 * k, 400, false};
         if (known) {
-            app.canvas.text(L"Focus " + dims(ro.focus), tiny, R(fx + 6, fy + 4, W - fx - 6, 12), col(app.c->preview_label), Align::Leading, false);
-            app.canvas.text(L"Periphery " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
-                            Align::Leading, false);
+            app.canvas.text(trf(L"Focus {size}", {{L"size", dims(ro.focus)}}), tiny, R(fx + 6, fy + 4, W - fx - 6, 12),
+                            col(app.c->preview_label), Align::Leading, false);
+            app.canvas.text(trf(L"Periphery {size}", {{L"size", dims(ro.outer)}}), tiny,
+                            R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label), Align::Leading, false);
         }
         rt->PopLayer();
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
@@ -160,9 +161,10 @@ float preview(float x, float y, float w, bool draw) {
     if (draw) {
         preview_eye(x, y, half, true, false);
         preview_eye(x + half + gap, y, half, true, true);
-        app.canvas.text(L"Left eye", t::kSubheadline, {x, y + h + 4, half, 16}, col(app.c->label_secondary), Align::Center);
-        app.canvas.text(L"Right eye", t::kSubheadline, {x + half + gap, y + h + 4, half, 16}, col(app.c->label_secondary),
+        app.canvas.text(tr(L"Left eye"), t::kSubheadline, {x, y + h + 4, half, 16}, col(app.c->label_secondary),
                         Align::Center);
+        app.canvas.text(tr(L"Right eye"), t::kSubheadline, {x + half + gap, y + h + 4, half, 16},
+                        col(app.c->label_secondary), Align::Center);
     }
     return h + 4 + 16;
 }
@@ -173,13 +175,15 @@ float preview_legend(float x, float y, float w, bool draw) {
         const Rect focusKey{x, y + 3, 10, 10};
         app.canvas.fill(focusKey, col(app.c->preview_focus), 2);
         app.canvas.stroke(focusKey, col(app.c->accent), 1, 2);
-        const std::wstring focusText = app.s.eyeTracking && !eye_warning() ? L"Focus, follows your eyes" : L"Focus, fixed";
+        const std::wstring focusText =
+            app.s.eyeTracking && !eye_warning() ? tr(L"Focus, follows your eyes") : tr(L"Focus, fixed");
         const float fw = std::ceil(app.canvas.measure(focusText, t::kSubheadline));
         app.canvas.text(focusText, t::kSubheadline, {x + 16, y, fw + 2, 16}, col(app.c->label_secondary));
         const float cx = x + 16 + fw + t::kSpace4;
         app.canvas.fill({cx, y + 3, 10, 10}, col(app.c->preview_canvas), 2);
         app.canvas.stroke({cx, y + 3, 10, 10}, col(app.c->label_muted), 1, 2);
-        app.canvas.text(L"Not rendered", t::kSubheadline, {cx + 16, y, std::max(0.0f, x + w - cx - 16), 16}, col(app.c->label_secondary));
+        app.canvas.text(tr(L"Not rendered"), t::kSubheadline, {cx + 16, y, std::max(0.0f, x + w - cx - 16), 16},
+                        col(app.c->label_secondary));
     }
     return 16;
 }
@@ -225,25 +229,30 @@ float readouts_card(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known();
     const std::wstring dash = L"—";
-    float h = eyebrow(x, y, w, L"Per eye", draw) + t::kSpace2;
-    h += readout(x, y + h, w, L"Headset", known ? dims(ro.runtime) : dash, draw) + 6;
-    h += readout(x, y + h, w, L"Periphery view", known ? dims(ro.outer) : dash, draw) + 6;
-    h += readout(x, y + h, w, L"Focus view", known ? dims(ro.focus) : dash, draw) + 6;
-    h += readout(x, y + h, w, L"Center sharpness", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) + L" PPD" : dash,
-                 draw);
+    float h = eyebrow(x, y, w, tr(L"Per eye"), draw) + t::kSpace2;
+    h += readout(x, y + h, w, tr(L"Headset"), known ? dims(ro.runtime) : dash, draw) + 6;
+    h += readout(x, y + h, w, tr(L"Periphery view"), known ? dims(ro.outer) : dash, draw) + 6;
+    h += readout(x, y + h, w, tr(L"Focus view"), known ? dims(ro.focus) : dash, draw) + 6;
+    h += readout(x, y + h, w, tr(L"Center sharpness"),
+                 ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) + L" PPD" : dash, draw);
     h += t::kSpace3;
     if (draw)
         app.canvas.line(x, y + h, x + w, y + h, col(app.c->separator), 1);
     h += t::kSpace3;
     char mp[24], of[24];
     std::snprintf(mp, sizeof(mp), "%.2f M", ro.pixels / 1e6);
-    std::snprintf(of, sizeof(of), "of %.2f M", ro.runtimePixels / 1e6);
-    h += readout(x, y + h, w, L"Pixels per frame", known ? widen(mp) : dash, draw, known ? widen(of) : L"") + 6;
+    std::snprintf(of, sizeof(of), "%.2f M", ro.runtimePixels / 1e6);
+    h += readout(x, y + h, w, tr(L"Pixels per frame"), known ? widen(mp) : dash, draw,
+                 known ? trf(L"of {total}", {{L"total", widen(of)}}) : L"") + 6;
     h += meter(x, y + h, w, known && ro.runtimePixels > 0 ? ro.pixels / ro.runtimePixels : 0, app.c->accent_fill, draw) + 6;
     if (known) {
         const int savedPercent = static_cast<int>(std::lround(ro.saved * 100));
-        const std::wstring saved = savedPercent >= 0 ? std::to_wstring(savedPercent) + L"% fewer pixels than full resolution"
-                                                     : std::to_wstring(-savedPercent) + L"% more pixels than full resolution";
+        const std::wstring saved =
+            savedPercent >= 0
+                ? trf(L"{percent} fewer pixels than full resolution",
+                      {{L"percent", std::to_wstring(savedPercent) + L"%"}})
+                : trf(L"{percent} more pixels than full resolution",
+                      {{L"percent", std::to_wstring(-savedPercent) + L"%"}});
         if (draw)
             app.canvas.text(saved, t::kCallout, {x, y + h, w, 17}, col(savedPercent >= 0 ? app.c->success : app.c->warning));
         h += 17;
@@ -254,9 +263,10 @@ float readouts_card(float x, float y, float w, bool draw) {
     char gb[24], budget[24] = "";
     std::snprintf(gb, sizeof(gb), "%.1f GB", vram.mb / 1024);
     if (vram.budgetMb > 0)
-        std::snprintf(budget, sizeof(budget), "of %.1f GB", vram.budgetMb / 1024);
+        std::snprintf(budget, sizeof(budget), "%.1f GB", vram.budgetMb / 1024);
     const bool vramKnown = known && vram.mb > 0;
-    h += readout(x, y + h, w, L"VRAM, estimated", vramKnown ? widen(gb) : dash, draw, vramKnown ? widen(budget) : L"") + 6;
+    const std::wstring ofBudget = vramKnown && budget[0] ? trf(L"of {total}", {{L"total", widen(budget)}}) : L"";
+    h += readout(x, y + h, w, tr(L"VRAM, estimated"), vramKnown ? widen(gb) : dash, draw, ofBudget) + 6;
     const double share = vram.budgetMb > 0 ? vram.mb / vram.budgetMb : 0;
     h += meter(x, y + h, w, vramKnown ? share : 0,
                share > 0.9 ? app.c->danger : share > 0.75 ? app.c->warning : app.c->accent_fill, draw);

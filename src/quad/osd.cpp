@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include "../ini.h"
+#include "../lang.h"
 
 namespace simqvfr {
 
@@ -231,20 +232,23 @@ OsdSummary osd_summary(const OsdInput& in) {
     return s;
 }
 
+// The card's words in the player's language (lang.h): every text the card and the menu's frame line show (none of it
+// is logged). Units, numbers, CPU / GPU / VRAM and product names stay as they are.
 std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
     std::vector<OsdTile> tiles;
     {
-        OsdTile t{L"Frame rate", s.shownFps > 0 ? format(L"%.0f", s.shownFps) : L"—", L"fps"};
+        OsdTile t{lang::tr(L"Frame rate"), s.shownFps > 0 ? format(L"%.0f", s.shownFps) : L"—", L"fps"};
         if (in.fg == OsdFg::On && s.fps > 0)
-            t.detail = format(L"game %.0f  ·  %.0f Hz", s.fps, s.refreshHz);
+            t.detail = lang::trf(L"game {fps}  ·  {hz} Hz",
+                                 {{L"fps", format(L"%.0f", s.fps)}, {L"hz", format(L"%.0f", s.refreshHz)}});
         else if (s.refreshHz > 0)
-            t.detail = format(L"of %.0f Hz", s.refreshHz);
+            t.detail = lang::trf(L"of {hz} Hz", {{L"hz", format(L"%.0f", s.refreshHz)}});
         tiles.push_back(t);
     }
     {
-        OsdTile t{L"Frame time", s.frameMs > 0 ? format(L"%.1f", s.frameMs) : L"—", L"ms"};
+        OsdTile t{lang::tr(L"Frame time"), s.frameMs > 0 ? format(L"%.1f", s.frameMs) : L"—", L"ms"};
         if (s.frameMs > 0 && s.budgetMs > 0) {
-            t.detail = format(L"target %.1f ms", s.budgetMs);
+            t.detail = lang::trf(L"target {ms} ms", {{L"ms", format(L"%.1f", s.budgetMs)}});
             t.tone = s.frameMs <= 1.05 * s.budgetMs ? OsdTone::Good : s.frameMs <= 1.25 * s.budgetMs ? OsdTone::Warn : OsdTone::Bad;
         }
         tiles.push_back(t);
@@ -252,7 +256,9 @@ std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
     const auto processor = [&](const wchar_t* label, double ms, double headroomPercent) {
         OsdTile t{label, ms >= 0 ? format(L"%.1f", ms) : L"—", ms >= 0 ? L"ms" : L""};
         if (ms >= 0 && s.budgetMs > 0) {
-            t.detail = headroomPercent >= 0 ? format(L"%.0f%% headroom", headroomPercent) : format(L"%.0f%% over", -headroomPercent);
+            t.detail = headroomPercent >= 0
+                           ? lang::trf(L"{percent}% headroom", {{L"percent", format(L"%.0f", headroomPercent)}})
+                           : lang::trf(L"{percent}% over", {{L"percent", format(L"%.0f", -headroomPercent)}});
             t.tone = headroom_tone(headroomPercent);
         }
         return t;
@@ -260,9 +266,9 @@ std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
     // The CPU's time per frame: the render thread's work or the busiest thread's, whichever is longer (the
     // headroom's measure; the cells below show both).
     tiles.push_back(processor(L"CPU", std::max(s.cpuMs, s.cpuThreadMs), s.cpuHeadroom));
-    OsdTile gpu = processor(s.gpuWhole ? L"GPU (all work)" : L"GPU", s.gpuMs, s.gpuHeadroom);
+    OsdTile gpu = processor(s.gpuWhole ? lang::tr(L"GPU (all work)") : L"GPU", s.gpuMs, s.gpuHeadroom);
     if (s.gpuMs < 0 && in.gpuBusyPercent >= 0)  // no timestamps (not QVFR): the GPU's busy share
-        gpu.detail = format(L"%.0f%% busy", in.gpuBusyPercent);
+        gpu.detail = lang::trf(L"{percent}% busy", {{L"percent", format(L"%.0f", in.gpuBusyPercent)}});
     tiles.push_back(gpu);
     return tiles;
 }
@@ -270,31 +276,33 @@ std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
 std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     std::vector<OsdRow> rows;
     {
-        OsdRow r{L"Pacing"};
+        OsdRow r{lang::tr(L"Pacing")};
         if (s.frameMs <= 0 || s.budgetMs <= 0) {
             r.value = L"—";
         } else {
             // Green smooth (under 1% of frames missed a refresh), yellow inconsistent (under 5%), red poor.
-            r.value = (s.missedPercent < 1 ? std::wstring(L"Smooth") : format(L"%.0f%% missed", s.missedPercent)) +
+            const std::wstring missed = format(L"%.0f", s.missedPercent);
+            r.value = (s.missedPercent < 1 ? std::wstring(lang::tr(L"Smooth"))
+                                           : lang::trf(L"{percent}% missed", {{L"percent", missed}})) +
                       format(L"  ±%.1f ms", s.jitterMs);
             r.tone = s.missedPercent < 1 ? OsdTone::Good : s.missedPercent < 5 ? OsdTone::Warn : OsdTone::Bad;
         }
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Limited by"};
+        OsdRow r{lang::tr(L"Limited by")};
         r.pill = true;
         switch (s.bound) {
         case OsdBound::Gpu: r.value = L"GPU"; r.tone = OsdTone::Warn; break;
         case OsdBound::Cpu: r.value = L"CPU"; r.tone = OsdTone::Warn; break;
-        case OsdBound::Pacing: r.value = L"Pacing"; r.tone = OsdTone::Warn; break;
-        case OsdBound::None: r.value = L"Neither"; r.tone = OsdTone::Good; break;
+        case OsdBound::Pacing: r.value = lang::tr(L"Pacing"); r.tone = OsdTone::Warn; break;
+        case OsdBound::None: r.value = lang::tr(L"Neither"); r.tone = OsdTone::Good; break;
         case OsdBound::Unknown: r.value = L"—"; r.pill = false; break;
         }
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Frame p90 · 1% low"};
+        OsdRow r{lang::tr(L"Frame p90 · 1% low")};
         r.value = s.frameP90Ms > 0 ? format(L"%.1f ms · %.0f fps", s.frameP90Ms, s.low1Fps) : L"—";
         // Coloured as a bar: within one refresh green, two yellow, more red (a p90 a little over the budget is the
         // CPU's jitter, which the runtime absorbs).
@@ -307,7 +315,7 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     {
         // The GPU's time per ACE frame, by who used it (ms): ACE's queue, frame generation, the layer, the rest.
         const auto part = [](double ms) { return ms >= 0 ? format(L"%.1f", ms) : std::wstring(L"—"); };
-        OsdRow r{L"GPU ms: game/FG/layer/rest"};
+        OsdRow r{lang::tr(L"GPU ms: game/FG/layer/rest")};
         r.value = s.gpuWhole ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / " +
                                    part(s.gpuRestMs)
                   : s.gpuGameMs >= 0 ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / —"
@@ -315,19 +323,24 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Busiest game thread"};
+        OsdRow r{lang::tr(L"Busiest game thread")};
         if (in.cpuBusiestPercent < 0) {
             r.value = L"—";
         } else {
-            std::wstring who = in.cpuBusiestIsRender ? L"render" : in.cpuBusiestName.substr(0, 12);
+            // The thread's own name (the game's) as it is; the render thread's in the player's language.
+            std::wstring who =
+                in.cpuBusiestIsRender ? std::wstring(lang::tr(L"render")) : in.cpuBusiestName.substr(0, 12);
             r.value = format(L"%.0f%%", in.cpuBusiestPercent) + (who.empty() ? L"" : L" · " + who);
             r.tone = in.cpuBusiestPercent >= 95 ? OsdTone::Bad : in.cpuBusiestPercent >= 85 ? OsdTone::Warn : OsdTone::Good;
         }
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Render thread"};
-        r.value = s.cpuBusyMs >= 0 ? format(L"%.1f busy · %.1f blocked", s.cpuBusyMs, s.cpuBlockedMs) : L"—";
+        OsdRow r{lang::tr(L"Render thread")};
+        r.value = s.cpuBusyMs >= 0 ? lang::trf(L"{busy} busy · {blocked} blocked",
+                                               {{L"busy", format(L"%.1f", s.cpuBusyMs)},
+                                                {L"blocked", format(L"%.1f", s.cpuBlockedMs)}})
+                                   : L"—";
         rows.push_back(r);
     }
     {
@@ -344,32 +357,32 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Frame generation"};
+        OsdRow r{lang::tr(L"Frame generation")};
         r.pill = true;
         if (in.fg == OsdFg::On) {
-            r.value = format(L"On · %.0fx", static_cast<double>(std::max(1, in.fgMultiplier)));
+            r.value = lang::tr(L"On") + format(L" · %.0fx", static_cast<double>(std::max(1, in.fgMultiplier)));
             if (in.fgOutputFps > 0)
                 r.value += format(L" · %.0f fps", in.fgOutputFps);
             r.tone = OsdTone::Good;
         } else if (in.fg == OsdFg::Starting) {
-            r.value = in.fgState.empty() ? L"Starting" : in.fgState;
+            r.value = in.fgState.empty() ? std::wstring(lang::tr(L"Starting")) : in.fgState;  // Cheeky's own words
             r.tone = OsdTone::Warn;
         } else {
-            r.value = L"Off";
+            r.value = lang::tr(L"Off");
         }
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Eye tracking"};
+        OsdRow r{lang::tr(L"Eye tracking")};
         r.pill = true;
         switch (in.gaze) {
-        case OsdGaze::Off: r.value = L"Off"; break;
-        case OsdGaze::Unavailable: r.value = L"Not available"; r.tone = OsdTone::Bad; break;
-        case OsdGaze::Tracking: r.value = L"Tracking"; r.tone = OsdTone::Good; break;
-        case OsdGaze::Partial: r.value = L"Partial"; r.tone = OsdTone::Warn; break;
-        case OsdGaze::Lost: r.value = L"Lost"; r.tone = OsdTone::Bad; break;
-        case OsdGaze::Runtime: r.value = L"Tracking · runtime"; r.tone = OsdTone::Good; break;
-        case OsdGaze::RuntimeStill: r.value = L"Runtime · still"; r.tone = OsdTone::Warn; break;
+        case OsdGaze::Off: r.value = lang::tr(L"Off"); break;
+        case OsdGaze::Unavailable: r.value = lang::tr(L"Not available"); r.tone = OsdTone::Bad; break;
+        case OsdGaze::Tracking: r.value = lang::tr(L"Tracking"); r.tone = OsdTone::Good; break;
+        case OsdGaze::Partial: r.value = lang::tr(L"Partial"); r.tone = OsdTone::Warn; break;
+        case OsdGaze::Lost: r.value = lang::tr(L"Lost"); r.tone = OsdTone::Bad; break;
+        case OsdGaze::Runtime: r.value = lang::tr(L"Tracking · runtime"); r.tone = OsdTone::Good; break;
+        case OsdGaze::RuntimeStill: r.value = lang::tr(L"Runtime · still"); r.tone = OsdTone::Warn; break;
         }
         rows.push_back(r);
     }
@@ -390,16 +403,17 @@ std::wstring osd_menu_line(const OsdSummary& s, bool& bad) {
     if (s.gpuMs >= 0)
         line += L"GPU " + ms(s.gpuMs);
     if (cpu >= 0)
-        line += (line.empty() ? L"CPU " : L" \u00b7 CPU ") + ms(cpu);
+        line += (line.empty() ? L"CPU " : L" · CPU ") + ms(cpu);
     const double used = std::max(s.gpuMs, cpu);
     if (s.budgetMs > 0 && used >= 0) {
         const double left = s.budgetMs - used;
-        line += (line.empty() ? L"" : L" \u00b7 ") + (left >= 0 ? ms(left) + L" left" : ms(-left) + L" over");
+        line += (line.empty() ? L"" : L" · ") + (left >= 0 ? lang::trf(L"{ms} left", {{L"ms", ms(left)}})
+                                                              : lang::trf(L"{ms} over", {{L"ms", ms(-left)}}));
         bad = left < 0;
     }
     wchar_t missed[32];
-    swprintf_s(missed, L"%.0f%% missed", s.missedPercent);
-    line += (line.empty() ? L"" : L" \u00b7 ") + std::wstring(missed);
+    swprintf_s(missed, L"%.0f", s.missedPercent);
+    line += (line.empty() ? L"" : L" · ") + lang::trf(L"{percent}% missed", {{L"percent", missed}});
     bad = bad || s.missedPercent >= 1;
     return line;
 }
@@ -413,14 +427,14 @@ std::wstring osd_clock(int hour, int minute) {
 }
 
 OsdRow osd_badge(const OsdInput& in) {
-    OsdRow r{L"Multi-view"};
+    OsdRow r{lang::tr(L"Multi-view")};
     r.pill = true;
-    switch (in.multiView) {
+    switch (in.multiView) {  // MVR and SMVR are names: English in every language
     case OsdMultiView::None: break;
     case OsdMultiView::Mvr: r.value = L"MVR"; r.tone = OsdTone::Good; break;
     case OsdMultiView::Smvr: r.value = L"SMVR"; r.tone = OsdTone::Good; break;
-    case OsdMultiView::Fallback: r.value = L"Fallback"; r.tone = OsdTone::Warn; break;
-    case OsdMultiView::EyesOnly: r.value = L"Eyes only"; r.tone = OsdTone::Warn; break;
+    case OsdMultiView::Fallback: r.value = lang::tr(L"Fallback"); r.tone = OsdTone::Warn; break;
+    case OsdMultiView::EyesOnly: r.value = lang::tr(L"Eyes only"); r.tone = OsdTone::Warn; break;
     }
     if (in.dlss && !r.value.empty())  // only while it runs: a pass the tracker lost has no DLSS either
         r.value += L" + " + (in.upscaler.empty() ? std::wstring(L"DLSS") : in.upscaler);

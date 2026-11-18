@@ -27,6 +27,8 @@ namespace {
 // The game's name on its yellow header, and the profile's segments (four in the panel's width).
 constexpr t::TypeStyle kGameTitle = {30.0f, 32.0f, 900, false, t::Family::Jost, true, 0.0f};
 constexpr t::TypeStyle kSegment = {12.0f, 16.0f, 600, false, t::Family::Inter, false, 0.0f};
+// The segments' names a size down, for a language whose names don't fit at kSegment (before any is cut).
+constexpr t::TypeStyle kSegmentSmall = {10.5f, 14.0f, 600, false, t::Family::Inter, false, 0.0f};
 
 constexpr float kPanelW = 320, kPad = 20, kGap = 16, kTileMinW = 200, kTilePad = 16, kChartH = 96;
 constexpr int kChartBars = 5;
@@ -41,19 +43,23 @@ std::wstring fixed(const wchar_t* format, double v) {
 
 // "2026-11-12 14:35" as "12 Nov, 14:35" (anything else as it is).
 std::wstring short_time(const std::wstring& time) {
-    static const wchar_t* const kMonths[] = {L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
-                                             L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec"};
+    static const wchar_t* const kMonths[] = {I18N(L"Jan"), I18N(L"Feb"), I18N(L"Mar"), I18N(L"Apr"),
+                                             I18N(L"May"), I18N(L"Jun"), I18N(L"Jul"), I18N(L"Aug"),
+                                             I18N(L"Sep"), I18N(L"Oct"), I18N(L"Nov"), I18N(L"Dec")};
     int y = 0, mo = 0, d = 0, h = 0, mi = 0;
     if (swscanf_s(time.c_str(), L"%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) != 5 || mo < 1 || mo > 12)
         return time;
-    wchar_t buf[32];
-    std::swprintf(buf, std::size(buf), L"%d %s, %02d:%02d", d, kMonths[mo - 1], h, mi);
-    return buf;
+    wchar_t clock[16];
+    std::swprintf(clock, std::size(clock), L"%02d:%02d", h, mi);
+    return trf(L"{day} {month}, {time}",
+               {{L"day", std::to_wstring(d)}, {L"month", tr(kMonths[mo - 1])}, {L"time", clock}});
 }
 
-// "22° left" (positive: `plus`).
+// "22° left" (positive: `plus`; both English with {degrees}, marked I18N where they are written).
 std::wstring degrees_to(int v, const wchar_t* plus, const wchar_t* minus) {
-    return v == 0 ? L"centred" : std::to_wstring(std::abs(v)) + L"° " + (v > 0 ? plus : minus);
+    if (v == 0)
+        return tr(L"centred");
+    return trf(v > 0 ? plus : minus, {{L"degrees", std::to_wstring(std::abs(v))}});
 }
 
 // The selected game's sessions in the history, newest first.
@@ -73,43 +79,59 @@ bool qvfr_mode() { return app.s.mode == RenderMode::Qvfr; }
 
 // ---- The game's panel ----------------------------------------------------------------------------
 
-// The profile as four segments: the three presets of this foveated mode, then Custom (the profile menu).
+// The profile as four segments: the three presets of this foveated mode, then Custom (the profile menu). Too narrow
+// for the names (a longer language), each segment gets its share by its name's width and the name is cut ("…").
 void profile_segments(const Rect& r) {
     Canvas& cv = app.canvas;
     std::vector<std::wstring> items;
     const int selected = choice_items(kOverviewProfile, items);
     cv.fill(r, col(app.c->segment_track), t::kRadiusControl);
-    std::vector<float> widths;
-    float natural = 0;
-    for (const std::wstring& item : items) {
-        widths.push_back(std::ceil(cv.measure(item, kSegment)));
-        natural += widths.back();
-    }
     const float room = r.w - 4 - 2 * (items.size() - 1);
+    const auto measure_all = [&](const t::TypeStyle& style, std::vector<float>& widths) {
+        float total = 0;
+        widths.clear();
+        for (const std::wstring& item : items) {
+            widths.push_back(std::ceil(cv.measure(item, style)) + 12);  // 6 each side
+            total += widths.back();
+        }
+        return total;
+    };
+    std::vector<float> widths;
+    float natural = measure_all(kSegment, widths);
+    t::TypeStyle style = kSegment;
+    if (natural > room) {
+        style = kSegmentSmall;
+        natural = measure_all(style, widths);
+    }
     const float extra = std::max(0.0f, (room - natural) / items.size());
     float x = r.x + 2;
     for (size_t i = 0; i < items.size(); ++i) {
-        const float iw = natural > room ? room / items.size() : widths[i] + extra;
+        const float iw = natural > room ? room * widths[i] / natural : widths[i] + extra;
         const Rect item{x, r.y + 2, iw, r.h - 4};
         const bool on = static_cast<int>(i) == selected;
         if (on)
             cv.fill(item, col(app.c->segment_selected), t::kRadiusControl - 2);
         else if (pointer_in(item))
             cv.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
-        cv.text(items[i], kSegment, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
+        const std::wstring shown = fit(items[i], style, item.w - 8);
+        cv.text(shown, style, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
         if (on && focused(kOverviewProfile))
             focus_ring(item, t::kRadiusControl - 2);
         app.hits.push_back({kOverviewProfile, item, static_cast<int>(i),
-                            i + 1 == items.size() ? L"Saved profiles and more: the profile menu" : L"", L"Profile: " + items[i], on ? 1 : 0});
+                            i + 1 == items.size() ? std::wstring(tr(L"Saved profiles and more: the profile menu"))
+                            : shown != items[i]   ? items[i]
+                                                  : std::wstring(),
+                            trf(L"Profile: {name}", {{L"name", items[i]}}), on ? 1 : 0});
         x = item.right() + 2;
     }
 }
 
 // What the picture is, in a line: "Eye tracked · Outer 20% · Focus 150%".
 std::wstring picture_summary() {
-    std::wstring s = app.s.eyeTracking ? L"Eye tracked" : L"Fixed";
-    s += L" · Periphery " + percent_of(app.s.outer);
-    s += qvfr_mode() ? L" · Focus density " + percent_of(app.s.inner) : L" · Two-loop";
+    std::wstring s = app.s.eyeTracking ? tr(L"Eye tracked") : tr(L"Fixed");
+    s += L" · " + trf(L"Periphery {percent}", {{L"percent", percent_of(app.s.outer)}});
+    s += L" · " + (qvfr_mode() ? trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}})
+                               : std::wstring(tr(L"Two-loop")));
     return s;
 }
 
@@ -117,7 +139,8 @@ std::wstring picture_summary() {
 std::wstring saved_profile_line() {
     if (app.profileCurrent.empty() || is_preset_name(app.profileCurrent))
         return L"";
-    return L"Profile: " + app.profileCurrent + (app.profileMatches ? L"" : L", changed since");
+    return app.profileMatches ? trf(L"Profile: {name}", {{L"name", app.profileCurrent}})
+                              : trf(L"Profile: {name}, changed since", {{L"name", app.profileCurrent}});
 }
 
 // The last few sessions' frame rates as bars, oldest left, the newest in blue, the target as a dashed red line; a tip
@@ -131,17 +154,20 @@ void session_chart(const Rect& r, const std::vector<const SessionRecord*>& sessi
     if (top <= 0)
         top = 1;
     const float gap = 8, bw = (r.w - gap * (kChartBars - 1)) / kChartBars, base = r.bottom() - 2;
-    std::wstring tip = L"The last " + std::to_wstring(n) + (n == 1 ? L" session: " : L" sessions, oldest first: ");
+    std::wstring values;  // the frame rates, oldest first
     for (size_t k = 0; k < n; ++k) {
         const SessionRecord& s = *sessions[n - 1 - k];
         const size_t slot = kChartBars - n + k;
         const float bh = std::max(2.0f, static_cast<float>(std::max(0.0, s.fps) / top) * (r.h - 4));
         cv.fill({r.x + slot * (bw + gap), base - bh, bw, bh}, col(k + 1 == n ? app.c->blue : app.c->field_border));
-        tip += (k ? L", " : L"") + fixed(L"%.1f", s.fps);
+        values += (k ? L", " : L"") + fixed(L"%.1f", s.fps);
     }
-    tip += L" fps";
+    const std::wstring count = std::to_wstring(n);
+    std::wstring tip = n == 1 ? trf(L"The last {count} session: {values} fps", {{L"count", count}, {L"values", values}})
+                              : trf(L"The last {count} sessions, oldest first: {values} fps",
+                                    {{L"count", count}, {L"values", values}});
     if (target > 0) {
-        tip += fixed(L"; the target is %.0f fps.", target);
+        tip += trf(L"; the target is {fps} fps.", {{L"fps", fixed(L"%.0f", target)}});
         const float ty = base - static_cast<float>(target / top) * (r.h - 4);
         for (float dx = 0; dx < r.w; dx += 10)
             cv.line(r.x + dx, ty, r.x + std::min(r.w, dx + 6), ty, col(app.c->red), 2);
@@ -172,21 +198,24 @@ float game_panel(float x, float y, float w, bool draw) {
         cv.circle(x + w - 36, y + 36, 74, col(app.c->ink, 0.07f), true);
         cv.pop_clip();
         cv.path("M0 10L5 0.5L10 10Z", {x + kPad, y + kPad + 2, 10, 10}, 10, col(app.c->ink), 0, true);
-        cv.text(L"Selected game", t::kFootnote, {x + kPad + 16, y + kPad, inner - 16, 14}, col(app.c->ink));
+        cv.text(tr(L"Selected game"), t::kFootnote, {x + kPad + 16, y + kPad, inner - 16, 14}, col(app.c->ink));
         cv.text(name, kGameTitle, {x + kPad, y + kPad + 22, inner, nameH + 2}, col(app.c->ink), Align::Leading, false, true);
-        reader_text(head, L"Selected game: " + name, 1);
+        reader_text(head, trf(L"Selected game: {game}", {{L"game", name}}), 1);
     }
     float by = y + headH + kPad;
     // The profile and what the picture is.
     if (draw)
-        cv.text(L"Profile", t::kFootnote, {x + kPad, by, inner, 14}, col(app.c->label_muted));
+        cv.text(tr(L"Profile"), t::kFootnote, {x + kPad, by, inner, 14}, col(app.c->label_muted));
     by += 14 + 8;
     if (draw)
         profile_segments({x + kPad, by, inner, 34});
     by += 34 + 4;
-    if (draw)  // the presets' trade-off, in words
-        cv.text(L"Performance: more frames  ·  Quality: sharper", t::kSubheadline, {x + kPad, by, inner, 16}, col(app.c->label_muted));
-    by += 16 + 10;
+    // The presets' trade-off, in words (on two lines where a language needs them).
+    const std::wstring tradeOff = tr(L"Performance: more frames  ·  Quality: sharper");
+    const float th = std::max(16.0f, cv.measure_height(tradeOff, t::kSubheadline, inner));
+    if (draw)
+        cv.text(tradeOff, t::kSubheadline, {x + kPad, by, inner, th + 2}, col(app.c->label_muted), Align::Leading, false, true);
+    by += th + 10;
     const std::wstring summary = picture_summary(), saved = saved_profile_line();
     const float sh = cv.measure_height(summary, t::kCallout, inner);
     if (draw) {
@@ -210,11 +239,13 @@ float game_panel(float x, float y, float w, bool draw) {
             const float bw = std::min(inner, badge_width(online));
             badge(x + kPad, by + 1, tone, online, inner);
             const int index = static_cast<int>(app.overviewTargets.size());
-            app.overviewTargets.push_back({L"Online racing", L"Online racing", Pane::Game});
+            // Its card, by its title as drawn.
+            app.overviewTargets.push_back({tr(L"Online racing"), tr(L"Online racing"), Pane::Game});
             const Rect r{x + kPad, by - 1, bw, 24};
             if (focused(kOverviewCard) && app.focusOption == index)
                 focus_ring(r, t::kRadiusControl);
-            app.hits.push_back({kOverviewCard, r, index, L"Online racing: open its card", L"Online racing: " + online});
+            app.hits.push_back({kOverviewCard, r, index, tr(L"Online racing: open its card"),
+                                trf(L"Online racing: {status}", {{L"status", online}})});
         }
         by += 24;
     }
@@ -225,19 +256,23 @@ float game_panel(float x, float y, float w, bool draw) {
     // The last session.
     const std::vector<const SessionRecord*> sessions = game_sessions();
     if (draw) {
-        cv.text(L"Last session", t::kFootnote, {x + kPad, by + 2, inner, 14}, col(app.c->label));
+        cv.text(tr(L"Last session"), t::kFootnote, {x + kPad, by + 2, inner, 14}, col(app.c->label));
         // When, and how long it covers: the stint since the last settings change, the headset menu's moments left out.
         const std::wstring when = sessions.empty() ? L""
                                   : stint_text(*sessions.front()).empty()
                                       ? short_time(sessions.front()->time)
                                       : stint_text(*sessions.front()) + L" · " + short_time(sessions.front()->time);
-        reader_text({x + kPad, by, inner, 18}, sessions.empty() ? L"Last session" : L"Last session, " + when, 3);
+        reader_text({x + kPad, by, inner, 18},
+                    sessions.empty() ? std::wstring(tr(L"Last session"))
+                                     : trf(L"Last session, {when}", {{L"when", when}}),
+                    3);
         if (!sessions.empty())
             cv.text(when, t::kCallout, {x + kPad, by, inner, 18}, col(app.c->label_secondary), Align::Trailing);
     }
     by += 18 + 10;
     if (sessions.empty()) {
-        const std::wstring empty = L"No sessions yet. Launch " + game_name() + L" from here and this fills in while you drive.";
+        const std::wstring empty = trf(L"No sessions yet. Launch {game} from here and this fills in while you drive.",
+                                       {{L"game", game_name()}});
         const float eh = cv.measure_height(empty, t::kCallout, inner);
         if (draw) {
             reader_text({x + kPad, by, inner, eh}, empty);
@@ -254,10 +289,11 @@ float game_panel(float x, float y, float w, bool draw) {
             uint32_t color;
         };
         const Figure figures[3] = {
-            {fixed(L"%.1f", last.fps), target > 0 ? fixed(L"fps · target %.0f", target) : L"fps", app.c->label},
-            {last.frameP90 > 0 ? fixed(L"%.1f", last.frameP90) : L"—", L"ms, slow frames", app.c->label},
+            {fixed(L"%.1f", last.fps),
+             target > 0 ? trf(L"fps · target {fps}", {{L"fps", fixed(L"%.0f", target)}}) : L"fps", app.c->label},
+            {last.frameP90 > 0 ? fixed(L"%.1f", last.frameP90) : L"—", tr(L"ms, slow frames"), app.c->label},
             {saving ? percent_of(static_cast<int>(std::lround(ro.saved * 100))) : L"—",
-             last.baseline ? L"pixels saved (QVFR was off)" : L"pixels saved", app.c->blue_text},
+             last.baseline ? tr(L"pixels saved (QVFR was off)") : tr(L"pixels saved"), app.c->blue_text},
         };
         const float colW = inner / 3;
         float labelH = 0;
@@ -281,10 +317,13 @@ float game_panel(float x, float y, float w, bool draw) {
         by += kChartH + 8;
         if (draw) {
             const size_t n = std::min<size_t>(sessions.size(), kChartBars);
-            cv.text(n == 1 ? L"Last session" : L"Last " + std::to_wstring(n) + L" sessions", t::kSubheadline,
+            cv.text(n == 1 ? std::wstring(tr(L"Last session"))
+                           : trf(L"Last {count} sessions", {{L"count", std::to_wstring(n)}}),
+                    t::kSubheadline,
                     {x + kPad, by, inner, 16}, col(app.c->label_secondary));
             if (target > 0)
-                cv.text(fixed(L"Dashed line: %.0f fps target", target), t::kSubheadline, {x + kPad, by, inner, 16},
+                cv.text(trf(L"Dashed line: {fps} fps target", {{L"fps", fixed(L"%.0f", target)}}), t::kSubheadline,
+                        {x + kPad, by, inner, 16},
                         col(app.c->label_secondary), Align::Trailing);
         }
         by += 16;
@@ -294,10 +333,10 @@ float game_panel(float x, float y, float w, bool draw) {
             const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
             std::wstring head, line;
             if (!causes.empty()) {
-                head = causes.front().title;
-                line = causes.front().fix;
+                head = causes.front().shownTitle;
+                line = causes.front().shownFix;
             } else if (target > 0 && last.fps >= target * 0.97) {
-                head = fixed(L"Smooth: at your headset’s %.0f fps.", target);
+                head = trf(L"Smooth: at your headset’s {fps} fps.", {{L"fps", fixed(L"%.0f", target)}});
             }
             if (!head.empty()) {
                 const float hh = cv.measure_height(head, t::kBodyStrong, inner);
@@ -318,7 +357,8 @@ float game_panel(float x, float y, float w, bool draw) {
 
 // ---- The summary cards -----------------------------------------------------------------------------
 
-// A summary card: its title, a line or two in plain words, a chip, and the card it opens (its title, its page).
+// A summary card: its title, a line or two in plain words, a chip, and the card it opens (its title, its page; in
+// English, marked I18N, shown through tr() as the card's title is drawn).
 struct Tile {
     std::wstring title, line1, line2, chip;
     int tone = 3;  // badge's tones: 0 good, 1 warning, 2 problem, 3 neutral
@@ -330,43 +370,54 @@ std::vector<Tile> picture_tiles() {
     std::vector<Tile> out;
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known(), q = qvfr_mode();
-    out.push_back({L"Resolution",
-                   q ? L"Periphery " + percent_of(app.s.outer) + L" · Focus density " + percent_of(app.s.inner)
-                     : L"Periphery " + percent_of(app.s.outer) + L" · Two-loop",
-                   known ? px(ro.outer) + L" periphery" : L"Pixel sizes after the first launch", L"", 3, L"Resolution"});
-    Tile fov{L"Foveation",
-             std::wstring(app.s.eyeTracking ? L"Follows your eyes" : L"Fixed in the middle") + L" · focus " +
-                 std::to_wstring(app.s.width) + L" × " + std::to_wstring(app.s.height) + L"%",
-             L"", app.s.outline ? L"Outline on" : L"Outline off", 3, L"Foveation"};
+    const std::wstring periphery = trf(L"Periphery {percent}", {{L"percent", percent_of(app.s.outer)}});
+    const std::wstring density =
+        q ? trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}}) : std::wstring(tr(L"Two-loop"));
+    out.push_back({tr(L"Resolution"), periphery + L" · " + density,
+                   known ? trf(L"{size} periphery", {{L"size", px(ro.outer)}})
+                         : std::wstring(tr(L"Pixel sizes after the first launch")),
+                   L"", 3, I18N(L"Resolution")});
+    const std::wstring focusSize = std::to_wstring(app.s.width) + L" × " + std::to_wstring(app.s.height) + L"%";
+    Tile fov{tr(L"Foveation"),
+             std::wstring(app.s.eyeTracking ? tr(L"Follows your eyes") : tr(L"Fixed in the middle")) + L" · " +
+                 trf(L"focus {size}", {{L"size", focusSize}}),
+             L"", app.s.outline ? tr(L"Outline on") : tr(L"Outline off"), 3, I18N(L"Foveation")};
     if (eye_warning()) {
-        fov.chip = L"Eye tracker not detected";
+        fov.chip = tr(L"Eye tracker not detected");
         fov.tone = 1;
     }
     out.push_back(fov);
     const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
     if (crop || helmet) {
-        std::wstring line = crop ? (app.s.crop ? L"Crop on" : L"Crop off") : L"";
+        std::wstring line = crop ? (app.s.crop ? tr(L"Crop on") : tr(L"Crop off")) : L"";
         if (helmet)
-            line += (line.empty() ? L"" : L" · ") + std::wstring(app.s.helmet.on ? L"Helmet on" : L"Helmet off");
-        out.push_back({L"View & helmet", line,
-                       !q ? L"In Quad View Foveated Rendering only" : crop && app.s.crop ? L"Edges cropped" : L"Whole view rendered",
-                       L"", 3, L"View & helmet"});
+            line += (line.empty() ? L"" : L" · ") +
+                    std::wstring(app.s.helmet.on ? tr(L"Helmet on") : tr(L"Helmet off"));
+        out.push_back({tr(L"View & helmet"), line,
+                       !q                     ? tr(L"In Quad View Foveated Rendering only")
+                       : crop && app.s.crop ? tr(L"Edges cropped")
+                                              : tr(L"Whole view rendered"),
+                       L"", 3, I18N(L"View & helmet")});
     }
     const bool ownDlss = game_has(&games::GameFeatures::sideLoadedDlss), cheeky = game_has(&games::GameFeatures::foveatedDlss),
                multiView = multi_view_game();
     if (method_shown() || ownDlss || cheeky || multiView) {
-        std::wstring line = q ? L"" : L"Legacy method (Two-loop)";
+        std::wstring line = q ? L"" : tr(L"Legacy method (Two-loop)");
         const auto add = [&line](const std::wstring& part) { line += (line.empty() ? L"" : L" · ") + part; };
         if (multiView && q)
-            add(L"Focus view by " + multi_view_way());
+            add(trf(L"Focus view by {way}", {{L"way", multi_view_way()}}));
         if (ownDlss)
-            add(std::wstring(upscaler_name()) + (own_upscaler_available() && app.s.dlss.on ? L" on" : L" off"));
+            add(own_upscaler_available() && app.s.dlss.on ? trf(L"{upscaler} on", {{L"upscaler", upscaler_name()}})
+                                                          : trf(L"{upscaler} off", {{L"upscaler", upscaler_name()}}));
         if (cheeky)
-            add(app.s.cheeky.load ? L"Foveated DLSS on" : L"Foveated DLSS off");
+            add(app.s.cheeky.load ? tr(L"Foveated DLSS on") : tr(L"Foveated DLSS off"));
         if (line.empty())
-            line = L"Sim-QVFR draws the views";
+            line = tr(L"Sim-QVFR draws the views");
         // It opens the DLSS card where the game has one (its switch is there), else Rendering.
-        out.push_back({L"Rendering", line, L"", L"", 3, ownDlss ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : cheeky ? L"Foveated DLSS" : L"Rendering"});
+        out.push_back({tr(L"Rendering"), line, L"", L"", 3,
+                       ownDlss  ? (fsr_pc() ? I18N(L"FSR (experimental)") : I18N(L"DLSS"))
+                       : cheeky ? I18N(L"Foveated DLSS")
+                                : I18N(L"Rendering")});
     }
     for (Tile& tile : out)
         tile.pane = Pane::Picture;
@@ -384,16 +435,19 @@ std::wstring menu_keys() {
     const std::wstring up = text(HotkeyAction::MenuUp), p = prefix(up, L"Up");
     if (p != L"?" && p == prefix(text(HotkeyAction::MenuDown), L"Down") && p == prefix(text(HotkeyAction::MenuLeft), L"Left") &&
         p == prefix(text(HotkeyAction::MenuRight), L"Right"))
-        return p + L"arrows";
-    return up.empty() ? L"No menu keys" : up + L", " + text(HotkeyAction::MenuDown) + L"…";
+        return trf(L"{modifiers}arrows", {{L"modifiers", p}});
+    return up.empty() ? std::wstring(tr(L"No menu keys")) : up + L", " + text(HotkeyAction::MenuDown) + L"…";
 }
 
 std::vector<Tile> headset_tiles() {
     std::vector<Tile> out;
-    out.push_back({L"Headset menu",
-                   L"Menu " + degrees_to(app.s.menuYaw, L"right", L"left") + L", " + degrees_to(app.s.menuPitch, L"up", L"down"),
-                   std::to_wstring(app.s.menuWidth) + L"° wide", app.s.osd.enabled ? L"Overlay on" : L"Overlay off", 3,
-                   L"Headset menu", Pane::Headset});
+    out.push_back({tr(L"Headset menu"),
+                   trf(L"Menu {yaw}, {pitch}",
+                       {{L"yaw", degrees_to(app.s.menuYaw, I18N(L"{degrees}° right"), I18N(L"{degrees}° left"))},
+                        {L"pitch", degrees_to(app.s.menuPitch, I18N(L"{degrees}° up"), I18N(L"{degrees}° down"))}}),
+                   trf(L"{degrees}° wide", {{L"degrees", std::to_wstring(app.s.menuWidth)}}),
+                   app.s.osd.enabled ? tr(L"Overlay on") : tr(L"Overlay off"), 3, I18N(L"Headset menu"),
+                   Pane::Headset});
     const std::wstring open = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::MenuToggle)].key);
     int pads = 0;
     bool clash = false;
@@ -405,9 +459,12 @@ std::vector<Tile> headset_tiles() {
                 hotkey_clash(app.s.hotkeys, static_cast<HotkeyAction>(a), true) >= 0;
     }
     // No key of its own opens the menu by default: a menu key's first press does.
-    out.push_back({L"Hotkeys", open.empty() ? menu_keys() : open + L" opens the menu · " + menu_keys(),
-                   pads == 0 ? L"No wheel buttons set" : std::to_wstring(pads) + (pads == 1 ? L" wheel button set" : L" wheel buttons set"),
-                   clash ? L"Clash" : L"", 1, L"Hotkeys", Pane::Headset});
+    out.push_back({tr(L"Hotkeys"),
+                   open.empty() ? menu_keys() : trf(L"{key} opens the menu", {{L"key", open}}) + L" · " + menu_keys(),
+                   pads == 0   ? std::wstring(tr(L"No wheel buttons set"))
+                   : pads == 1 ? trf(L"{count} wheel button set", {{L"count", std::to_wstring(pads)}})
+                               : trf(L"{count} wheel buttons set", {{L"count", std::to_wstring(pads)}}),
+                   clash ? tr(L"Clash") : L"", 1, I18N(L"Hotkeys"), Pane::Headset});
     return out;
 }
 
@@ -424,34 +481,44 @@ std::vector<Tile> game_tiles() {
                 first = c.title;
         }
     if (bad + warn > 0)
-        out.push_back({L"Launch checks", first, L"",
-                       bad > 0 ? std::to_wstring(bad) + (bad == 1 ? L" problem" : L" problems") : std::to_wstring(warn) + L" to check",
-                       bad > 0 ? 2 : 1, L"Launch checks", Pane::Game});
+        out.push_back({tr(L"Launch checks"), first, L"",
+                       bad == 1  ? trf(L"{count} problem", {{L"count", std::to_wstring(bad)}})
+                       : bad > 0 ? trf(L"{count} problems", {{L"count", std::to_wstring(bad)}})
+                                 : trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}),
+                       bad > 0 ? 2 : 1, I18N(L"Launch checks"), Pane::Game});
     const std::vector<const SessionRecord*> sessions = game_sessions();
-    Tile diag{L"Diagnostics",
-              sessions.empty()        ? L"No sessions yet"
-              : sessions.size() == 1 ? L"1 session recorded"
-                                      : std::to_wstring(sessions.size()) + L" sessions recorded",
-              !sessions.empty() && !sessions.front()->limited.empty() ? L"Limited by " + sessions.front()->limited : L"", L"", 1,
-              L"Diagnostics", Pane::Game};
+    Tile diag{tr(L"Diagnostics"),
+              sessions.empty()        ? std::wstring(tr(L"No sessions yet"))
+              : sessions.size() == 1 ? trf(L"{count} session recorded", {{L"count", L"1"}})
+                                      : trf(L"{count} sessions recorded",
+                                            {{L"count", std::to_wstring(sessions.size())}}),
+              !sessions.empty() && !sessions.front()->limited.empty()
+                  ? trf(L"Limited by {what}", {{L"what", sessions.front()->limited}})
+                  : L"",
+              L"", 1, I18N(L"Diagnostics"), Pane::Game};
     if (const double target = target_hz(); !sessions.empty() && target > 0 && sessions.front()->fps < target * 0.97)
-        diag.chip = fixed(L"Below %.0f fps", target);
+        diag.chip = trf(L"Below {fps} fps", {{L"fps", fixed(L"%.0f", target)}});
     out.push_back(diag);
     std::size_t count = 0;
     games::all_games(count);
     const games::GameInfo& game = games::launcher_game();
-    out.push_back({L"Games", std::to_wstring(shown_game_count()) + L" of " + std::to_wstring(count) + L" games shown",
-                   game.antiCheatStart ? (app.s.antiCheat ? L"Anti-cheat on" : L"Anti-cheat off") : L"", L"", 3,
-                   L"Games in the rail", Pane::Game});
+    out.push_back({tr(L"Games"),
+                   trf(L"{shown} of {count} games shown",
+                       {{L"shown", std::to_wstring(shown_game_count())}, {L"count", std::to_wstring(count)}}),
+                   game.antiCheatStart ? (app.s.antiCheat ? tr(L"Anti-cheat on") : tr(L"Anti-cheat off")) : L"", L"", 3,
+                   I18N(L"Games in the rail"), Pane::Game});
     int below = 0;
     for (const PlannedLayer& l : app.layerPlan.layers)
         below += l.on ? 1 : 0;
     const bool lastIsThisGame = !sessions.empty() && sessions.front()->id == session_id(app.runtime.session.log);
-    out.push_back({L"OpenXR layers",
-                   below == 0 ? L"No other VR add-ons"
-                              : std::to_wstring(below) + (below == 1 ? L" other VR add-on" : L" other VR add-ons"),
-                   lastIsThisGame && app.runtime.session.layerMs >= 0 ? fixed(L"%.2f ms per frame", app.runtime.session.layerMs) : L"",
-                   L"", 3, L"OpenXR layers", Pane::Game});
+    out.push_back({tr(L"OpenXR layers"),
+                   below == 0   ? std::wstring(tr(L"No other VR add-ons"))
+                   : below == 1 ? trf(L"{count} other VR add-on", {{L"count", std::to_wstring(below)}})
+                                : trf(L"{count} other VR add-ons", {{L"count", std::to_wstring(below)}}),
+                   lastIsThisGame && app.runtime.session.layerMs >= 0
+                       ? trf(L"{ms} ms per frame", {{L"ms", fixed(L"%.2f", app.runtime.session.layerMs)}})
+                       : L"",
+                   L"", 3, I18N(L"OpenXR layers"), Pane::Game});
     return out;
 }
 
@@ -471,7 +538,8 @@ float tile_height(const Tile& tile, float w) {
 void draw_tile(const Tile& tile, const Rect& r) {
     Canvas& cv = app.canvas;
     const int index = static_cast<int>(app.overviewTargets.size());
-    app.overviewTargets.push_back({tile.opens, tile.opens, tile.pane});
+    const std::wstring opens = tr(tile.opens);  // the card's title as it is drawn
+    app.overviewTargets.push_back({opens, opens, tile.pane});
     cv.fill(r, col(app.c->surface), t::kRadiusGroup);
     if (pointer_in(r))
         cv.stroke(r.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusGroup);
@@ -512,16 +580,19 @@ void kofi_tile(const Rect& r) {
     if (pointer_in(r))
         cv.stroke(r.inset(0.5f, 0.5f), col(app.c->rail_text_muted), 1, t::kRadiusGroup);
     const float inner = r.w - 2 * kTilePad;
-    const std::wstring line = L"Made by one sim racer, in spare time.";  // its hit's name says what it does
+    const std::wstring line = tr(L"Made by one sim racer, in spare time.");  // its hit's name says what it does
     const float lh = cv.measure_height(line, t::kCallout, inner - 20);
     cv.text(line, t::kCallout, {r.x + kTilePad, r.y + kTilePad, inner - 20, lh + 2}, col(app.c->rail_text), Align::Leading, false,
             true);
     const float by = r.bottom() - kTilePad - 18;
     cv.path(kIconHeart, {r.x + kTilePad, by + 2, 14, 14}, 16, col(app.c->yellow), 0, true);
-    cv.text(L"Support on Ko-fi", t::kTabLabel, {r.x + kTilePad + 22, by, inner - 22, 18}, col(app.c->rail_text));
+    // Clear of the red circle in the corner (46 round, its centre 22 in from the right): a longer language is cut.
+    const float labelX = r.x + kTilePad + 22, labelW = std::max(0.0f, r.right() - 22 - 46 - 8 - labelX);
+    cv.text(fit(tr(L"Support on Ko-fi"), t::kTabLabel, labelW), t::kTabLabel, {labelX, by, labelW, 18}, col(app.c->rail_text));
     if (focused(kKofiTile))
         focus_ring(r, t::kRadiusGroup);
-    app.hits.push_back({kKofiTile, r, -1, L"Support Sim-QVFR on Ko-fi (opens ko-fi.com)", L"Support Sim-QVFR on Ko-fi"});
+    app.hits.push_back(
+        {kKofiTile, r, -1, tr(L"Support Sim-QVFR on Ko-fi (opens ko-fi.com)"), tr(L"Support Sim-QVFR on Ko-fi")});
 }
 
 // A group's header: its section's shape, its name in capitals and a rule in its colour to the right edge.
@@ -572,11 +643,11 @@ int overview_profile(std::vector<std::wstring>& items) {
     const std::vector<Profile> presets = builtin_profiles(app.s.eyeTracking);
     int selected = -1;
     for (size_t i = 0; i < presets.size(); ++i) {
-        items.push_back(presets[i].name);
+        items.push_back(tr(presets[i].name));  // shown only: a segment is chosen by its index
         if (app.profileMatches && _wcsicmp(presets[i].name.c_str(), app.profileCurrent.c_str()) == 0)
             selected = static_cast<int>(i);
     }
-    items.push_back(L"Custom");
+    items.push_back(tr(L"Custom"));
     return selected >= 0 ? selected : static_cast<int>(items.size()) - 1;
 }
 
@@ -601,7 +672,8 @@ float overview_page(float x, float y, float w, bool draw) {
     const float rx = side ? x + pw + 24 : x, rw = side ? w - pw - 24 : w;
     float ry = side ? y : y + ph + 24;
     if (app.sessions.empty()) {  // no race yet with Sim-QVFR: what to do, in one line
-        const std::wstring hello = L"You’re set. Pick your game on the left, then press Launch. Changes here save as you make them.";
+        const std::wstring hello =
+            tr(L"You’re set. Pick your game on the left, then press Launch. Changes here save as you make them.");
         const float th = app.canvas.measure_height(hello, t::kBody, rw - 2 * kTilePad - 8);
         const Rect r{rx, ry, rw, th + 2 * 12};
         if (draw) {

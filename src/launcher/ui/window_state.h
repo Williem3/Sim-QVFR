@@ -24,12 +24,16 @@
 #include "../../games/game.h"
 #include "../../input/hotkeys.h"
 #include "../../input/pad_input.h"
+#include "../../lang.h"
 #include "canvas.h"
 #include "theme_tokens.h"
 
 namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
+// The launcher's text in the chosen language (lang.h): tr(L"English"), trf(L"… {name} …", {{L"name", value}}).
+using lang::tr;
+using lang::trf;
 
 // The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
 // headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
@@ -98,6 +102,8 @@ enum Ctl {
     kCpuIsolateMain,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
+    // The About pane's language ([launcher] language; lang.h): a pop-up of Windows' language, English and lang\*.ini.
+    kLanguage,
     // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
     // (option the same), the colour wheel, its brightness, and the game's own colour back.
     kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset, kAntiCheat,
@@ -147,7 +153,7 @@ struct FocusStop {
 // The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
 enum class ThemeChoice { System, Light, Dark };
 
-inline constexpr wchar_t kLayerProfileNames[2][40] = {L"Launches from here", L"Every app"};
+inline constexpr wchar_t kLayerProfileNames[2][40] = {I18N(L"Launches from here"), I18N(L"Every app")};
 
 inline constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 
@@ -156,7 +162,7 @@ inline constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 inline constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 
 // The OpenXR layers card's More (its list, for troubleshooting): Launch checks' Open OpenXR layers opens it.
-inline constexpr wchar_t kLayersMore[] = L"the add-ons and their order";
+inline constexpr wchar_t kLayersMore[] = I18N(L"the add-ons and their order");
 
 // The README's guide to installing Cheeky Foveated DLSS (a launch check's How to install).
 inline constexpr wchar_t kCheekyGuideUrl[] = L"https://github.com/Williem3/Sim-QVFR#foveated-dlss-optional-nvidia-rtx-only";
@@ -196,9 +202,9 @@ inline constexpr UINT_PTR kCaptureTimer = 2;
 inline constexpr UINT kCaptureMs = 30;
 
 // The hotkeys' names, in HotkeyAction's order.
-inline constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close", L"Up",      L"Down",         L"Left",
-                                                          L"Right",         L"Overlay",       L"Helmet visor",
-                                                          L"CPU capture",   L"Frame capture"};
+inline constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {
+    I18N(L"Open or close"), I18N(L"Up"),          I18N(L"Down"),        I18N(L"Left"),         I18N(L"Right"),
+    I18N(L"Overlay"),       I18N(L"Helmet visor"), I18N(L"CPU capture"), I18N(L"Frame capture")};
 
 struct Hit {
     Ctl id;
@@ -272,13 +278,14 @@ void open_sheet(Sheet sheet);
 // A notice with OK; `then` once it's closed.
 void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then = nullptr);
 
-inline constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced (legacy)"};
+inline constexpr wchar_t kMethodNames[2][40] = {I18N(L"Quad View Foveated Rendering"),
+                                                I18N(L"Two-loop Foveated Interlaced (legacy)")};
 
-inline constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
+inline constexpr wchar_t kModeNames[2][16] = {I18N(L"Eye tracked"), I18N(L"Fixed")};
 
-inline constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
+inline constexpr wchar_t kColorNames[3][8] = {I18N(L"Teal"), I18N(L"Magenta"), I18N(L"Green")};
 
-inline constexpr wchar_t kShapeNames[2][16] = {L"Rectangle", L"Custom corners"};
+inline constexpr wchar_t kShapeNames[2][16] = {I18N(L"Rectangle"), I18N(L"Custom corners")};
 
 inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, kDefaultHeight = 838;  // a 1280 x 800 page
 
@@ -347,6 +354,11 @@ struct App {
     // Report an issue: the kind (kIssueKinds) and the description, a native multi-line edit over the canvas
     // at reportEditRect (empty when this frame drew none), with its font and background brush.
     int reportKind = 0;
+    // The launcher's language ([launcher] language: auto, en or a lang\ file's code), the files found when the
+    // launcher started (read_language) and the code in use ("" for English).
+    std::wstring languageChoice = L"auto";
+    std::vector<lang::Info> languages;
+    std::wstring languageInUse;
     HWND reportEdit = nullptr;
     Rect reportEditRect;
     HFONT reportFont = nullptr;
@@ -509,6 +521,11 @@ COLORREF colorref(uint32_t rgb);
 t::Accent builtin_accent(const games::GameInfo& game);
 t::Accent game_accent(const games::GameInfo& game);
 ThemeChoice read_theme_choice();
+// [launcher] language read and its lang\ file made current (at start-up), and the About pane's pop-up: its items
+// (Windows' language, English, each file in its own name) and the choice saved and applied at once.
+void read_language();
+int language_items(std::vector<std::wstring>& items);
+void choose_language(int option);
 void cycle_theme();
 void apply_theme();
 bool eye_warning();
@@ -536,7 +553,11 @@ void install_done(InstallResult* r);
 
 // help.cpp
 extern const Help kHelp[];
+// kHelp by a label as drawn (current language or English): its index (-1 none) and its text in the current language.
+int help_index(const std::wstring& label);
 const wchar_t* help_for(const std::wstring& label);
+// shell.cpp: `text` cut to `w` in `style` with an ellipsis when it doesn't fit.
+std::wstring fit(const std::wstring& text, const t::TypeStyle& style, float w);
 void help_icon(const std::wstring& label, float x, float y);
 void help_tip();
 

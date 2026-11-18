@@ -15,6 +15,8 @@
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "input/hotkeys.h"
+#include "ini.h"
+#include "lang.h"
 #include "log.h"
 #include "quad/focus_shape.h"
 #include "quad/fov_crop.h"
@@ -23,6 +25,7 @@
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "layer/config.h"
 #include "probe/focus_ngx.h"
 #include "games/ace/replay_probe.h"
 
@@ -195,6 +198,28 @@ namespace {
 
 constexpr int64_t kLiveCheckMs = 250;
 
+// The headset menu's and overlay's language ([launcher] language, lang.h): from the launcher's own ini (SIM_QVFR_SETTINGS,
+// where its Language card writes, so a change reaches the running game), else the game's copy. Loaded here, on the ini
+// worker (each pass), never on the render thread; the menu and overlay show it from their next drawing.
+}  // namespace
+
+void follow_language(const wchar_t* ini) {
+    static std::wstring loaded = L"";  // nothing yet
+    wchar_t settings[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", settings, MAX_PATH);
+    const wchar_t* from = n > 0 && n < MAX_PATH ? settings : ini;
+    std::wstring choice = ini_get(from, L"launcher", L"language", L"auto");
+    if (choice.empty())
+        choice = L"auto";
+    if (choice == loaded)
+        return;
+    loaded = choice;
+    const std::wstring code = lang::select(lang::folder_near(layer_directory()), choice);
+    logf("language: %ls (%ls)", code.empty() ? L"English" : code.c_str(), choice.c_str());
+}
+
+namespace {
+
 IniSnapshot read_snapshot(const wchar_t* ini) {
     IniSnapshot s;
     s.live = read_live(ini);
@@ -224,6 +249,8 @@ void ini_worker_loop() {
         lock.unlock();
         for (auto& w : writes)
             w.write();
+        if (!ini.empty())  // every pass (one key, ~0.25 ms): the launcher's ini changes without the game's changing
+            follow_language(ini.c_str());
         // After its own writes it reads the ini whatever its write time says (a write can leave it unchanged).
         std::optional<IniSnapshot> snapshot;
         WIN32_FILE_ATTRIBUTE_DATA attributes{};

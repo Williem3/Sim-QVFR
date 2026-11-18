@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include "../ini.h"
+#include "../i18n.h"
 #include "../text.h"
 
 namespace simqvfr {
@@ -24,10 +25,10 @@ struct Preset {
 // Each keeps periphery_scale + focus_density x focus_percent under 1 (a 4000-pixel-wide headset's views fit
 // the runtime's 8192-pixel limit). Eye tracked: a small, dense area that follows the eyes.
 constexpr Preset kEyeTrackedPresets[] = {
-    {L"Performance", 20, 140, 25, 25}, {L"Balanced", 25, 160, 28, 28}, {L"Quality", 25, 180, 30, 30}};
+    {I18N(L"Performance"), 20, 140, 25, 25}, {I18N(L"Balanced"), 25, 160, 28, 28}, {I18N(L"Quality"), 25, 180, 30, 30}};
 // Fixed: a larger area, wider than tall (the eyes move off the centre more sideways), a little less dense.
 constexpr Preset kFixedPresets[] = {
-    {L"Performance", 25, 120, 35, 30}, {L"Balanced", 25, 140, 40, 35}, {L"Quality", 25, 160, 42, 38}};
+    {I18N(L"Performance"), 25, 120, 35, 30}, {I18N(L"Balanced"), 25, 140, 40, 35}, {I18N(L"Quality"), 25, 160, 42, 38}};
 constexpr const Preset (&kPresets)[3] = kEyeTrackedPresets;  // the names, the same in both sets
 
 constexpr char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
