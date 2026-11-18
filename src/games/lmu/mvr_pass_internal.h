@@ -247,11 +247,13 @@ struct State {
     UINT vsViewOffset = ~0u, vsViewProjOffset = ~0u;
     UINT viewCbOffset = ~0u, viewProjCbOffset = ~0u;
     float viewPair[32] = {};  // view, then viewProj (row-major, as the buffer holds them)
-    static constexpr int kViewPairs = 4;
+    // Room for the shadow cascades' and cube maps' cameras that pass 0 draws before its scene (the eye's own comes
+    // after them: when full, the oldest goes).
+    static constexpr int kViewPairs = 16;
     struct PassPairs {
         float pair[kViewPairs][32] = {};
-        int count = 0;
-        uint64_t frame = 0;  // carFrame they were drawn in
+        int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
+        uint64_t frame = 0;                  // carFrame they were drawn in
     } passPairs[2];
     CarMotion cars;
     uint64_t carFrame = 0;

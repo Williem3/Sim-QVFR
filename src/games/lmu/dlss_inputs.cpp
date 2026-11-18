@@ -52,8 +52,8 @@ bool renderer_matrices(int eye, float (&view)[16], float (&projection)[16], bool
 // The pass's view and projection from what its draws uploaded (view_pair.h): of this frame's pairs in the pass, the one
 // whose projection is the eye's. Any build. `why` (when false): none drawn yet, or none of them the eye's.
 bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const char** why = nullptr) {
-    float pairs[4][32];
-    const int n = mvr_view_pairs(eye, pairs, 4);
+    float pairs[16][32];
+    const int n = mvr_view_pairs(eye, pairs, 16);
     float expected[16];
     if (!n || !qvfr_frame_eye_projection(eye, expected)) {
         if (why)
@@ -87,14 +87,14 @@ void say_miss(int eye, const char* why) {
     if (missSaid >= 3)
         return;
     ++missSaid;
-    float pairs[4][32], expected[16] = {};
-    const int n = mvr_view_pairs(eye, pairs, 4);
+    float pairs[16][32], expected[16] = {};
+    const int n = mvr_view_pairs(eye, pairs, 16);
     const bool haveEye = qvfr_frame_eye_projection(eye, expected);
-    char text[512];
+    char text[1024];
     int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d without its own (%s); the eye's m0 "
                             "%.5f m5 %.5f m8 %.5f m9 %.5f%s; %d pairs:",
                             eye, why, expected[0], expected[5], expected[8], expected[9], haveEye ? "" : " (none)", n);
-    for (int i = 0; i < n && len > 0 && len < static_cast<int>(sizeof(text)); ++i) {
+    for (int i = 0; i < n && i < 6 && len > 0 && len < static_cast<int>(sizeof(text)) - 96; ++i) {
         float v[16], vp[16], p[16];
         std::memcpy(v, pairs[i], sizeof(v));
         std::memcpy(vp, pairs[i] + 16, sizeof(vp));

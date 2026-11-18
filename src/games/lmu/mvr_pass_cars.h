@@ -424,13 +424,21 @@ void keep_view_pair() {
     State::PassPairs& p = g.passPairs[g.pass];
     if (p.frame != g.carFrame) {
         p.frame = g.carFrame;
-        p.count = 0;
+        p.count = p.next = 0;
+        p.last = -1;
     }
+    // Most draws repeat the draw before's camera: that one first, the rest only when it changed.
+    if (p.last >= 0 && std::memcmp(p.pair[p.last], g.viewPair, sizeof(g.viewPair)) == 0)
+        return;
     for (int i = 0; i < p.count; ++i)
-        if (std::memcmp(p.pair[i], g.viewPair, sizeof(g.viewPair)) == 0)
+        if (std::memcmp(p.pair[i], g.viewPair, sizeof(g.viewPair)) == 0) {
+            p.last = i;
             return;
-    if (p.count < State::kViewPairs)
-        std::memcpy(p.pair[p.count++], g.viewPair, sizeof(g.viewPair));
+        }
+    const int at = p.count < State::kViewPairs ? p.count++ : p.next;
+    p.next = (at + 1) % State::kViewPairs;
+    std::memcpy(p.pair[at], g.viewPair, sizeof(g.viewPair));
+    p.last = at;
 }
 
 int car_draw(UINT count, UINT start, INT base) {
