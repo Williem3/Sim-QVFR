@@ -371,8 +371,8 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     bool vs, ps;
     {
         const Timed t(State::kTimeRewrites);
-        vs = rewrite(g.vs, g.vsCb.Get(), false);
-        ps = rewrite(g.ps, g.psCb.Get(), true);
+        vs = rewrite(g.vs, false);
+        ps = rewrite(g.ps, true);
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
     if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
@@ -500,15 +500,18 @@ bool make_resources() {
     if (FAILED(g.device->CreateComputeShader(mirrorCode->GetBufferPointer(), mirrorCode->GetBufferSize(), nullptr,
                                              &g.mirrorCs)))
         return false;
-    return SUCCEEDED(g.device->CreateBuffer(&raw, nullptr, &g.rawIn)) &&
-           SUCCEEDED(g.device->CreateBuffer(&rawOut, nullptr, &g.rawOut)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.vsCb)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.psCb)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.vsCbFocus)) &&
-           SUCCEEDED(g.device->CreateBuffer(&cb, nullptr, &g.psCbFocus)) &&
-           SUCCEEDED(g.device->CreateBuffer(&params, nullptr, &g.params)) &&
-           SUCCEEDED(g.device->CreateShaderResourceView(g.rawIn.Get(), &sv, &g.rawInView)) &&
-           SUCCEEDED(g.device->CreateUnorderedAccessView(g.rawOut.Get(), &uv, &g.rawOutView)) &&
+    g.rewriteSets.assign(g.rewriteRing ? kRewriteSets : 1, {});
+    for (State::RewriteSet& s : g.rewriteSets)
+        if (FAILED(g.device->CreateBuffer(&raw, nullptr, &s.in)) || FAILED(g.device->CreateBuffer(&rawOut, nullptr, &s.out)) ||
+            FAILED(g.device->CreateBuffer(&cb, nullptr, &s.cb)) ||
+            FAILED(g.device->CreateShaderResourceView(s.in.Get(), &sv, &s.inView)) ||
+            FAILED(g.device->CreateUnorderedAccessView(s.out.Get(), &uv, &s.outView))) {
+            g.rewriteSets.clear();
+            return false;
+        }
+    simqvfr::logf("scs corner: %zu rewrite buffer sets (%s)", g.rewriteSets.size(),
+                  g.rewriteRing ? "a fresh one for every rewrite" : "one, reused: scs_rewrite_ring=0");
+    return SUCCEEDED(g.device->CreateBuffer(&params, nullptr, &g.params)) &&
            SUCCEEDED(g.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &g.patchCs));
 }
 
@@ -597,10 +600,9 @@ void release_all() {
     g.ps = Range{};
     g.vsFocus = Range{};
     g.psFocus = Range{};
-    g.rawIn.Reset(), g.rawOut.Reset(), g.params.Reset(), g.vsCb.Reset(), g.psCb.Reset(), g.vsCbFocus.Reset(),
-        g.psCbFocus.Reset();
-    g.rawInView.Reset();
-    g.rawOutView.Reset();
+    g.params.Reset();
+    g.rewriteSets.clear();
+    g.nextRewriteSet = 0;
     g.patchCs.Reset();
     g.mirrorCs.Reset();
     g.mirrorIdCount.store(0, std::memory_order_release);  // first: the other threads stop comparing
@@ -815,9 +817,11 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     return true;
 }
 
-void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge) {
+void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
+                     bool rewriteRing) {
     g.gpuTimes = gpuTimes;
     g.diagSkipLarge = skipLarge;
+    g.rewriteRing = rewriteRing;
     g.diagDumpLarge = dumpLarge;
     g.diagNoDraws = noDraws;
     g.diagNoReplays = noReplays;

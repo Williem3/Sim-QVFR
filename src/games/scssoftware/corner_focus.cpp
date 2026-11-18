@@ -302,8 +302,8 @@ void replay(UINT vertices, UINT start) {
     }
     if (swapped)
         g.context->PSSetShaderResources(0, kSlots, bind);
-    rewrite(g.vsFocus, g.vsCbFocus.Get(), false, true);
-    rewrite(g.psFocus, g.psCbFocus.Get(), true, true);
+    rewrite(g.vsFocus, false, true);
+    rewrite(g.psFocus, true, true);
     const D3D11_RECT f = focus_rect_in(g.boundW, g.boundH);
     const D3D11_VIEWPORT vp = {static_cast<float>(f.left), 0, static_cast<float>(f.right - f.left),
                                static_cast<float>(f.bottom), g.viewportCount ? g.viewports[0].MinDepth : 0,

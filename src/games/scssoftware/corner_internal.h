@@ -87,9 +87,20 @@ struct State {
     D3D11_RECT scissors[kMaxViews] = {};
     UINT scissorCount = 0;
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
-    ComPtr<ID3D11Buffer> rawIn, rawOut, params, vsCb, psCb, vsCbFocus, psCbFocus;
-    ComPtr<ID3D11ShaderResourceView> rawInView;
-    ComPtr<ID3D11UnorderedAccessView> rawOutView;
+    ComPtr<ID3D11Buffer> params;
+    // A draw's rewritten range (rewrite): the game's copied in, the compute shader's output, the constant buffer bound for
+    // the draw. A ring of sets, a fresh one for every rewrite: with one set, the next rewrite wrote the buffers while the
+    // GPU could still be running the draw before it, and on the user's RTX 5070 Ti (2026-11-17) a long full-screen pass
+    // (the tone mapping's) read another pass's constants, turned its debug number print on and printed a NaN: a digit
+    // loop of ~4 billion steps, the GPU hang (Aftermath dump of run 8). [experiment] scs_rewrite_ring=0: one set again.
+    struct RewriteSet {
+        ComPtr<ID3D11Buffer> in, out, cb;
+        ComPtr<ID3D11ShaderResourceView> inView;
+        ComPtr<ID3D11UnorderedAccessView> outView;
+    };
+    std::vector<RewriteSet> rewriteSets;
+    unsigned nextRewriteSet = 0;
+    bool rewriteRing = true;
     ComPtr<ID3D11ComputeShader> patchCs, mirrorCs;
     std::vector<Mirror> mirrors;
     ComPtr<ID3D11Buffer> bigIn, bigOut;  // the mirrors' scratch, as large as the largest
@@ -325,6 +336,7 @@ struct State {
 extern State g;
 
 constexpr int kBurstFrames = 20;
+constexpr unsigned kRewriteSets = 64;  // more than a frame's full-screen passes and their replays in flight
 constexpr UINT kLargeRange = 128;  // a replay's pixel range this large: the light list's size, not a pass's few vectors
 constexpr uint64_t kEvictFrames = 900;  // twins unused this long are let go (evict_unused)
 
@@ -398,7 +410,7 @@ void release_orphans();
 void swap_bound(bool on);
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
-bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false);
+bool rewrite(Range& r, bool pixel, bool focus = false);
 void put_back(Range& r, bool pixel);
 
 // corner_eye_order.cpp

@@ -282,7 +282,7 @@ bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buf
 
 // The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy) and bound in its place for this draw
 // (put_back undoes it). False: left as the game bound it.
-bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
+bool rewrite(Range& r, bool pixel, bool focus) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
     if (pixel)
@@ -310,8 +310,13 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
     count = std::min(count, kMaxVectors);
     if (!count)
         return false;
+    if (g.rewriteSets.empty()) {
+        r = Range{};
+        return false;
+    }
+    const State::RewriteSet& set = g.rewriteSets[g.nextRewriteSet++ % g.rewriteSets.size()];  // a set no draw in flight reads
     const D3D11_BOX box = {first * 16, 0, 0, (first + count) * 16, 1, 1};
-    g.context->CopySubresourceRegion(g.rawIn.Get(), 0, 0, 0, 0, game_of(buf), 0, &box);  // the game's own data
+    g.context->CopySubresourceRegion(set.in.Get(), 0, 0, 0, 0, game_of(buf), 0, &box);  // the game's own data
     // The rules read only what the shader declares: a range is bound in blocks of 16 vectors, and past the shader's own
     // lie the pooled buffer's leftovers (S5 run 4: a leftover matrix pair there had the focus rule rewrite the depth of
     // field's weights: far terrain black for single frames).
@@ -352,9 +357,10 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus) {
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
-    run_cs(g.patchCs.Get(), g.rawInView.Get(), g.rawOutView.Get(), &p, 1);
+    run_cs(g.patchCs.Get(), set.inView.Get(), set.outView.Get(), &p, 1);
     const D3D11_BOX outBox = {0, 0, 0, count * 16, 1, 1};
-    g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, g.rawOut.Get(), 0, &outBox);
+    ID3D11Buffer* ours = set.cb.Get();
+    g.context->CopySubresourceRegion(ours, 0, 0, 0, 0, set.out.Get(), 0, &outBox);
     const UINT zero = 0, n = ((count + 15) / 16) * 16;  // ranged binds: multiples of 16 constants
     if (pixel)
         g.context->PSSetConstantBuffers1(0, 1, &ours, &zero, &n);

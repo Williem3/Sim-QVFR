@@ -192,7 +192,8 @@ private:
         const bool gpuTimes = GetPrivateProfileIntW(L"experiment", L"scs_gpu_times", simqvfr::kDevBuild ? 1 : 0, ini) != 0;
         const bool skipLarge = GetPrivateProfileIntW(L"experiment", L"scs_replay_skip_large", 0, ini) != 0;
         const bool dumpLarge = GetPrivateProfileIntW(L"experiment", L"scs_dump_large", 0, ini) != 0;
-        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge);
+        const bool ring = GetPrivateProfileIntW(L"experiment", L"scs_rewrite_ring", 1, ini) != 0;
+        corner_set_diag(noDraws, noReplays, skip, gpuTimes, skipLarge, dumpLarge, ring);
         if (skipLarge)
             simqvfr::log_line("scs focus: bisection: the replays with a pixel range over 128 vectors are SKIPPED (scs_replay_skip_large=1)");
         if (gpuTimes)
