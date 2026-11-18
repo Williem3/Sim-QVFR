@@ -123,6 +123,8 @@ void* detour_for(int h, int n) {
             return LeanDetours<kHookDepth, &om_set_depth_stencil_state, void, ID3D11DepthStencilState*, UINT>::get(n);
         case kHookExecute: return Detours<kHookExecute, &execute_command_list, ID3D11CommandList*, BOOL>::get(n);
         case kHookVPGet: return ViewportReadDetours::get(n);
+        case kHookCSUav:
+            return Detours<kHookCSUav, &cs_set_uavs, UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*>::get(n);
         default: return nullptr;
     }
 }
@@ -132,6 +134,8 @@ void* detour_for(int h, int n) {
 // from single-pass stereo (it happens mid-pass, where d3d11's other modes can't be looked for): without either MVR's
 // hooks are as before.
 bool wanted(int h) {
+    if (h == kHookCSUav)  // FSR seen at the d3d11 level: only on a build whose FSR setting can't be read
+        return g.fsrWatch;
     if (h == kHookPS)
         return g.biasHooks || g.slotsOn;
     if (h == kHookVSCB)  // always: the remap at b13 kept over the game's binds of it

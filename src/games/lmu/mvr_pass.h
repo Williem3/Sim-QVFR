@@ -73,6 +73,8 @@ inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12
                           kExecuteCommandList = 58, kHSSetShader = 60, kDSSetShader = 64;
 // The game's reads of its viewports (YEBIS's start reads the bound one to size its region): given the game's own.
 inline constexpr unsigned kRSGetViewports = 95;
+// FSR seen at the d3d11 level (mvr_fsr_watch): its compute pass's writes into the eye's image.
+inline constexpr unsigned kCSSetUnorderedAccessViews = 68;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
 // DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
 // PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
@@ -85,7 +87,8 @@ inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        
                                        kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
                                        kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
                                        kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
-                                       kOMSetDepthStencilState, kExecuteCommandList, kRSGetViewports};
+                                       kOMSetDepthStencilState, kExecuteCommandList, kRSGetViewports,
+                                       kCSSetUnorderedAccessViews};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -174,6 +177,14 @@ void mvr_test_reads_as_game(bool on);
 // the focus final is then taken from. `eye0`, `eye1`: the eyes' images (compared only; the bind of one after the
 // composite is where FSR has written it), null while unknown.
 void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1);
+// Whether FSR is on, seen at the d3d11 level, for a game build whose FSR setting can't be read: FSR's sharpening pass
+// writes the eye's image from a compute shader (an unordered access view of it; the final blit draws it instead). On
+// before mvr_pass_install: CSSetUnorderedAccessViews is hooked. mvr_fsr_written: an eye's image (mvr_fsr's) bound for
+// compute writes since the last call (it starts again).
+void mvr_fsr_watch(bool on);
+bool mvr_fsr_written();
+// The size of the scene target the last tracked pass began on (the game's main targets); false before the first.
+bool mvr_scene_size(unsigned& width, unsigned& height);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips

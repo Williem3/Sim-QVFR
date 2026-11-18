@@ -288,6 +288,25 @@ void rs_get_viewports(RSGetViewportsFn real, const void* caller, ID3D11DeviceCon
     }
 }
 
+// Compute writes bound (mvr_fsr_watch, a build whose FSR setting can't be read): FSR's sharpening writes the eye's
+// image from a compute shader, so its view of the image bound here says FSR is on. Passed on first, untouched.
+void cs_set_uavs(ID3D11DeviceContext* context, UINT start, UINT n, ID3D11UnorderedAccessView* const* uavs,
+                 const UINT* counts) {
+    call_real<kHookCSUav>(context, start, n, uavs, counts);
+    if (!g.fsrWatch || g.fsrUavSeen || !uavs || !ours(context) || (!g.fsrEye[0] && !g.fsrEye[1]))
+        return;
+    for (UINT i = 0; i < n && i < D3D11_1_UAV_SLOT_COUNT; ++i) {
+        if (!uavs[i])
+            continue;
+        ComPtr<ID3D11Resource> r;
+        uavs[i]->GetResource(&r);
+        if (r && (r.Get() == g.fsrEye[0] || r.Get() == g.fsrEye[1])) {
+            g.fsrUavSeen = true;
+            return;
+        }
+    }
+}
+
 void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n, const D3D11_RECT* rects) {
     if (!ours(context) || (n && !rects) || n > kMaxRects) {
         realRSSetScissorRects(context, n, rects);

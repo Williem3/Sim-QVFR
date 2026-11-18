@@ -417,6 +417,20 @@ void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1) {
     g.fsrEye[1] = eye1;
 }
 
+void mvr_fsr_watch(bool on) { g.fsrWatch = on; }
+
+bool mvr_fsr_written() {
+    const bool seen = g.fsrUavSeen;
+    g.fsrUavSeen = false;
+    return seen;
+}
+
+bool mvr_scene_size(unsigned& width, unsigned& height) {
+    width = tr.sceneSizeW;
+    height = tr.sceneSizeH;
+    return width && height;
+}
+
 void mvr_focus_replay(bool on) {
     g.focusReplay = on;
     if (!on) {  // nothing doubled after the passes any more (R5's fallback switches it off mid-session)

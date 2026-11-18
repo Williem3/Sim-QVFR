@@ -166,7 +166,8 @@ bool menu_record(simqvfr::Views4Frame& f, float (&uv)[4][4]) {
     f = {};
     for (int e = 0; e < 2; ++e) {
         float eyeM[16], focusM[16];
-        std::memcpy(eyeM, slot_matrix(e, 0), sizeof(eyeM));
+        if (!slot_matrix(e, 0, eyeM))
+            return false;
         FocusBox box;
         clamp_focus_centre(eyeM, fx, fy, cx[e], cy[e]);
         if (!focus_projection(eyeM, fx, fy, cx[e], cy[e], box, focusM))

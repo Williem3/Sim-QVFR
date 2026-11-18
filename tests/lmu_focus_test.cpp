@@ -321,6 +321,45 @@ int SIM_QVFR_TEST_MAIN() {
               "final texels: at most the target, at least one");
     }
 
+    // Any game build (qvfr_frame.cpp "any build"): the eye projection from the FOV the game was handed, and the render
+    // scale from the main targets' size, agree with what the game's own would give.
+    {
+        const float t[4] = {static_cast<float>(l), static_cast<float>(r), static_cast<float>(d), static_cast<float>(u)};
+        float fromFov[16];
+        check(lmu::projection_from_tangents(t, fromFov) && lmu::projection_shape(fromFov),
+              "build-free: the projection from the FOV has the slots' shape");
+        const int at[4] = {0, 5, 8, 9};
+        bool same = true;
+        for (int i : at)
+            same = same && close_to(fromFov[i], eye[i], 1e-5);
+        check(same, "build-free: its m0, m5, m8, m9 are the game's projection's");
+        lmu::FocusBox a, b;
+        float fa[16], fb[16];
+        check(lmu::focus_projection(eye, 0.3, 0.25, 0.1, -0.05, a, fa) &&
+                  lmu::focus_projection(fromFov, 0.3, 0.25, 0.1, -0.05, b, fb),
+              "build-free: a focus box from either");
+        const lmu::ClipRemap ra = lmu::clip_remap(eye, fa), rb = lmu::clip_remap(fromFov, fb);
+        check(close_to(ra.a, rb.a, 1e-5) && close_to(ra.b, rb.b, 1e-5) && close_to(ra.c, rb.c, 1e-5) &&
+                  close_to(ra.d, rb.d, 1e-5) && close_to(a.rect[0], b.rect[0], 1e-6) && close_to(a.rect[3], b.rect[3], 1e-6),
+              "build-free: the same clip remap and box in the eye's image");
+        const float flat[4] = {0.5f, 0.5f, -1, 1};
+        float untouched[16] = {7};
+        check(!lmu::projection_from_tangents(flat, untouched) && untouched[0] == 7, "build-free: an empty FOV refused");
+
+        check(lmu::render_scale_from_sizes(1203, 1084, 1562, 1407) == 0.77f, "build-free: 1203 x 1084 of 1562 x 1407 is 0.77");
+        check(lmu::render_scale_from_sizes(1562, 1407, 1562, 1407) == 1.0f, "build-free: the recommended size is 1");
+        for (int p = 50; p <= 200; ++p) {
+            const float s = static_cast<float>(p) * 0.01f;
+            const unsigned w = lmu::scaled_size(2016, s), h = lmu::scaled_size(2224, s);
+            const float back = lmu::render_scale_from_sizes(w, h, 2016, 2224);
+            if (lmu::scaled_size(2016, back) != w || lmu::scaled_size(2224, back) != h) {
+                check(false, "build-free: every whole percent's sizes give a scale that makes them again");
+                break;
+            }
+        }
+        check(lmu::render_scale_from_sizes(0, 1084, 1562, 1407) == 0, "build-free: no sizes yet: 0");
+    }
+
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
     return failures ? 1 : 0;
 }

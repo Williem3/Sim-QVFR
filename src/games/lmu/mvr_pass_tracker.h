@@ -101,6 +101,8 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
         char what[96];
         std::snprintf(what, sizeof(what), "%ux%u format %d x%u", d.Width, d.Height, static_cast<int>(d.Format),
                       d.SampleDesc.Count);
+        tr.sceneSizeW = d.Width;  // the main targets' size, for the pass's work (qvfr_frame.cpp main_size)
+        tr.sceneSizeH = d.Height;
         track_begin(what);
         tr.sceneTarget = msaa ? r0.Get() : nullptr;  // raw, compared only
         tr.singleSample = learned;

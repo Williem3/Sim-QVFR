@@ -330,6 +330,8 @@ struct State {
     bool observeShape = true, lastFrameFinals = false;
     int shapeMissing[2] = {}, shapeMissingLast[2] = {};  // mvr_shape_missing: each eye pass's first step not seen
     ID3D11Resource* fsrEye[2] = {};
+    // mvr_fsr_watch: CSSetUnorderedAccessViews hooked, and whether an eye's image was bound there since it was last read.
+    bool fsrWatch = false, fsrUavSeen = false;
     ComPtr<ID3D11Resource> eyeFinal[2];
     bool finalThisFrame[2] = {};
     unsigned finalW[2] = {}, finalH[2] = {};
@@ -479,6 +481,9 @@ struct Tracker {
     bool sceneLogged = false;
     bool smallLogged = false;  // a too-small candidate for the scene's target has been said
     MvrTrackStats stats;
+    // The size of the scene target the last tracked pass began on: the game's main targets (mvr_scene_size), set before
+    // its driveBegin.
+    unsigned sceneSizeW = 0, sceneSizeH = 0;
     TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
     uint64_t loggedFrames = 0;
     int detailsLogged = 0;

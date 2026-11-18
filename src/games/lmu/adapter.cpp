@@ -86,7 +86,8 @@ public:
             // ini's): as the player's.
             {
                 const simqvfr::DlssSettings player = s.ini ? simqvfr::read_dlss_settings(s.ini) : simqvfr::DlssSettings{};
-                const bool playerCars = player.on && player.carVectors;
+                // (only where DLSS can run: a build Sim-QVFR was made for, see below)
+                const bool playerCars = player.on && player.carVectors && qvfr_frame_known_build();
                 const int track = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, s.ini))
                                         : 0;
                 const int slots =
@@ -127,9 +128,15 @@ public:
         // keys: lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a comparison); lmu_dlss_view_inverse,
         // lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's gate (lmu_dlss_gate=1) or the picture
         // say they are the other way round.
+        // Any game build (qvfr_frame.h qvfr_frame_known_build): lmu_build_free=1 takes the game's facts from OpenXR and
+        // Direct3D on a known build too, as on any other.
+        run.buildFree = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_build_free", 0, s.ini) != 0;
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
-        dlssPossible_ = run.trackerDrives;
+        // Sim-QVFR's DLSS (and FSR in its place, and DLSS-NR on it) takes each pass's view matrices from the game's
+        // renderer (dlss_inputs.cpp): a build abi.h's addresses are from only.
+        const bool knownBuild = qvfr_frame_known_build();
+        dlssPossible_ = run.trackerDrives && knownBuild;
         if (s.ini) {
             const auto key = [&](const wchar_t* name, int fallback) {
                 return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
@@ -172,6 +179,14 @@ public:
             if (dlss.views && !run.trackerDrives) {
                 simqvfr::log_line("lmu dlss: asked for, but this run has no multi-view path: off");
                 dlss.views = 0;
+            }
+            if (!knownBuild) {  // no view matrices to give it: neither DLSS nor FSR in its place
+                if (dlss.views)
+                    simqvfr::log_line("lmu dlss: asked for, but this game build isn't one Sim-QVFR was made for (its view "
+                                      "matrices are read in the game's renderer): off, QVFR runs without it");
+                dlss.views = 0;
+                dlss.upscaler = 0;
+                dlss.fsrWhereNoDlss = false;
             }
         }
         dlss_use_lmu_inputs();  // the pass's matrices from the game's renderer
@@ -243,16 +258,22 @@ public:
     }
     // DLAA's jitter (engine/dlss_views.h): the last thing done to the FOV the game locates.
     void qvfr_jitter_views(XrView* views, uint32_t count) override {
-        if (qvfr_)
+        if (qvfr_) {
             simqvfr::dlss_jitter_views(views, count);
+            qvfr_frame_game_views(views, count);  // the FOV as the game gets it: its eye projections on any build
+        }
     }
+    // The eye size the game is offered: its eye targets' size on any build (qvfr_frame.h).
+    void views_offered(uint32_t width, uint32_t height) override { qvfr_frame_offered(width, height); }
     // The player's DLSS settings changed in the launcher or the headset menu: the module takes them between frames.
     void qvfr_set_dlss(const simqvfr::DlssSettings& settings) override {
         if (!qvfr_ || settings == dlssSettings_)
             return;
         if (settings.on && !dlssPossible_) {
             if (!dlssRefusedLogged_)
-                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path: off");
+                simqvfr::log_line(qvfr_frame_known_build()
+                                      ? "lmu dlss: turned on, but this run has no multi-view path: off"
+                                      : "lmu dlss: turned on, but this game build isn't one Sim-QVFR was made for: off");
             dlssRefusedLogged_ = true;
             dlssSettings_ = settings;
             return;
