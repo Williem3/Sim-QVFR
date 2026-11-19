@@ -69,6 +69,7 @@ bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as 
 bool makeBiasTwins = false;  // texture sharpening on at launch ([dlss] texture_sharpening): pixel shaders' mip bias twins
 bool markWorldMatrix = false;  // [experiment] lmu_car_track=1: each vertex shader's worldMatrix slot (kVsWorldMatrixGuid)
 bool makeSlotTwins = false;    // [experiment] lmu_car_vectors >= 1 (with lmu_car_track): pixel shaders' slot twins
+bool makeSlotNormals = false;  // night car lighting on at launch: the slot twins write the game's normal too (RT2)
 bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 bool forceInstanced = false;  // [experiment] multi_view_software=1: instancing even where NVIDIA's is there
@@ -123,9 +124,27 @@ struct WorldPlace {
     UINT slot = ~0u, offset = 0;
     UINT view = ~0u, viewProj = ~0u;
     UINT omni[4] = {~0u, 0, 0, 0};  // night car lighting: the floodlights' slot, offsets and length (kVsOmniLightsGuid)
+    bool normalRows = false;        // night car lighting: the normal in TEXCOORD2-4's z (kVsGameNormalGuid)
 };
 std::unordered_map<uint64_t, WorldPlace> worldSlots;
 std::unordered_map<uint64_t, bool> paintShaders;  // night car lighting: a car body's lacquer shader, by bytecode
+std::unordered_map<uint64_t, bool> slotNormals;   // night car lighting: the slot twin writes the game's normal
+std::unordered_map<uint64_t, bool> slotAos;       // and its baked ambient occlusion
+
+// Night car lighting: the texture register of the shader's baked ambient occlusion (LMU's car shaders name it
+// aoSpecularMap, the body's aoSpecMask; its .y multiplies the ambient light in 54 of 55 captured shaders). ~0u: none.
+UINT ao_texture_register(const void* code, size_t size) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return ~0u;
+    for (const char* name : {"aoSpecularMap", "aoSpecMask"}) {
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (SUCCEEDED(r->GetResourceBindingDescByName(name, &bind)) && bind.Type == D3D_SIT_TEXTURE &&
+            bind.Dimension == D3D_SRV_DIMENSION_TEXTURE2D)
+            return bind.BindPoint;
+    }
+    return ~0u;
+}
 
 // Night car lighting (car_light.h): where the shader reads its floodlights, GlobalCBFloats_OmniLights' omniPosRad and
 // omniRGBDelta (float4 arrays of the same length in one buffer). False: it reads none.
@@ -449,6 +468,7 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                 if (omni_lights_place(code, size, omni))
                     std::memcpy(at.omni, omni, sizeof(omni));
             }
+            at.normalRows = dxbc::vertex_normal_rows(static_cast<const uint8_t*>(code), size);
             std::lock_guard guard(twinMutex);
             worldSlots[id] = at;
         }
@@ -461,6 +481,10 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
             }
             if (at.omni[0] != ~0u)
                 (*shader)->SetPrivateData(kVsOmniLightsGuid, sizeof(at.omni), at.omni);
+        }
+        if (at.normalRows) {
+            const UINT one = 1;
+            (*shader)->SetPrivateData(kVsGameNormalGuid, sizeof(one), &one);
         }
     }
     // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
@@ -641,23 +665,46 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         }
         std::string refusedWhy;
         int failed = 0;
+        bool normal = false, ao = false;
         if (!seen) {
-            const dxbc::SlotOutput s = dxbc::add_slot_output(bytes, size);
+            dxbc::SlotOutputOptions options;
+            if (makeSlotNormals) {
+                options.normalReg = 2;  // night car lighting: the game's normal beside the slot
+                options.aoResource = ao_texture_register(code, size);  // and its baked occlusion in the w
+                options.aoComponent = 1;
+            }
+            const dxbc::SlotOutput s = dxbc::add_slot_output(bytes, size, options);
             if (s.bytecode.empty())
                 refusedWhy = s.error;
             else if (FAILED(currentHook->pixel(device, s.bytecode.data(), s.bytecode.size(), nullptr, &pair.first)))
                 ++failed;
+            normal = s.normal && pair.first;
+            ao = normal && s.ao;
             if (makeBiasTwins) {
                 const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(bytes, size);
-                const dxbc::SlotOutput sb = b.bytecode.empty() ? dxbc::SlotOutput{}
-                                                               : dxbc::add_slot_output(b.bytecode.data(), b.bytecode.size());
+                const dxbc::SlotOutput sb = b.bytecode.empty()
+                                                ? dxbc::SlotOutput{}
+                                                : dxbc::add_slot_output(b.bytecode.data(), b.bytecode.size(), options);
                 if (!sb.bytecode.empty() &&
                     FAILED(currentHook->pixel(device, sb.bytecode.data(), sb.bytecode.size(), nullptr, &pair.second)))
                     ++failed;
+                normal = normal && (sb.bytecode.empty() || sb.normal);
+                ao = ao && normal && (sb.bytecode.empty() || sb.ao);
             }
             std::lock_guard guard(twinMutex);
             slotTwins[id] = pair;
+            slotNormals[id] = normal;
+            slotAos[id] = ao;
+        } else {
+            std::lock_guard guard(twinMutex);
+            normal = slotNormals[id];
+            ao = slotAos[id];
         }
+        const UINT one = 1;
+        if (normal)
+            (*shader)->SetPrivateData(kPsSlotNormalGuid, sizeof(one), &one);
+        if (ao)
+            (*shader)->SetPrivateData(kPsSlotAoGuid, sizeof(one), &one);
         if (pair.first)
             (*shader)->SetPrivateDataInterface(kMvrSlotTwinGuid, pair.first.Get());
         if (pair.second)
@@ -666,6 +713,8 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         stats.slotTwinned += pair.first ? 1 : 0;
         stats.slotBiasTwinned += pair.second ? 1 : 0;
         stats.slotFailed += static_cast<uint64_t>(failed);
+        stats.slotNormals += normal ? 1 : 0;
+        stats.slotAos += ao ? 1 : 0;
         if (!refusedWhy.empty())
             ++stats.slotRefused[refusedWhy];
     }
@@ -790,6 +839,7 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
         // Night car lighting on at launch needs the slots too (car_light.h): they say which pixels are cars'.
         const bool carLight = ini && simqvfr::read_car_lighting(ini).on;
         makeSlotTwins = attach && ini && (slots > 0 || playerCars || carLight);
+        makeSlotNormals = makeSlotTwins && carLight;
         (void)track;
     }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
@@ -909,10 +959,12 @@ void mvr_probe_frame_end() {
         for (const auto& [why, count] : stats.slotRefused)
             slotWhy += (slotWhy.empty() ? "" : ", ") + why + " x" + std::to_string(count);
         simqvfr::logf("lmu mvr probe: car slots: %llu pixel shaders given a slot twin, %llu a slot twin of their mip bias "
-                      "twin%s%s%s, %llu not created",
+                      "twin%s%s%s, %llu not created; %llu of the twins write the game's normal, %llu its baked occlusion "
+                      "too (night car lighting)",
                       static_cast<unsigned long long>(stats.slotTwinned),
                       static_cast<unsigned long long>(stats.slotBiasTwinned), slotWhy.empty() ? "" : " (refused: ",
-                      slotWhy.c_str(), slotWhy.empty() ? "" : ")", static_cast<unsigned long long>(stats.slotFailed));
+                      slotWhy.c_str(), slotWhy.empty() ? "" : ")", static_cast<unsigned long long>(stats.slotFailed),
+                      static_cast<unsigned long long>(stats.slotNormals), static_cast<unsigned long long>(stats.slotAos));
     }
 }
 

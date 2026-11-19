@@ -12,8 +12,14 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11shader.h>
+#include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include <filesystem>
+#include <fstream>
+
+#include "engine/dxbc_patch.h"
 #include "games/lmu/car_light.h"
 #include "quad/car_lighting.h"
 #include "test_util.h"
@@ -80,6 +86,29 @@ void settings_checks() {
     check(simqvfr::car_lighting() == back, "settings: the live state holds what was set");
     simqvfr::set_car_lighting(simqvfr::CarLighting{});
     DeleteFileW(ini.c_str());
+}
+
+// The comparison image (dev builds' Ctrl+Alt+L): the two views side by side under a bar with the labels, opaque.
+void compare_checks() {
+    constexpr unsigned w = 64, h = 40;
+    std::vector<uint8_t> before(size_t{w} * h * 4), after(size_t{w} * h * 4);
+    for (size_t i = 0; i < before.size(); i += 4) {
+        before[i] = 40;  // B
+        before[i + 3] = 255;
+        after[i + 2] = 200;  // R
+        after[i + 3] = 255;
+    }
+    wchar_t dir[MAX_PATH];
+    GetTempPathW(MAX_PATH, dir);
+    const std::wstring path = std::wstring(dir) + L"lmu_car_light_compare_test.png";
+    DeleteFileW(path.c_str());
+    check(lmu::car_light_side_by_side(path, before, after, w, h, L"Before", L"After"), "compare: the side by side written");
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    check(GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a) && a.nFileSizeLow > 100,
+          "compare: the PNG is there");
+    check(!lmu::car_light_side_by_side(path, before, after, w, h + 1, L"Before", L"After"),
+          "compare: refused when the images are smaller than said");
+    DeleteFileW(path.c_str());
 }
 
 void table_checks() {
@@ -347,13 +376,248 @@ void pass_checks(bool hardware) {
     check(!pass.failed(), "pass: not failed");
 }
 
+// The game's normals (engine/dxbc_patch.h add_slot_output's normal, vertex_normal_rows): a pixel shader with LMU's
+// tangent frame inputs (TEXCOORD2-4, the normal in their z) gets render target 2 written with the normal; a vertex
+// shader that hands it on that way is recognised, one that doesn't isn't.
+ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* target) {
+    ComPtr<ID3DBlob> code, errors;
+    if (FAILED(D3DCompile(source, std::strlen(source), "test", nullptr, nullptr, entry, target, 0, 0, &code, &errors))) {
+        std::printf("compile %s: %s\n", entry, errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
+        return nullptr;
+    }
+    return code;
+}
+
+constexpr char kFrameShaders[] = R"(
+struct V { float4 pos : SV_Position; float4 t2 : TEXCOORD2; float4 t3 : TEXCOORD3; float4 t4 : TEXCOORD4; };
+cbuffer Frame : register(b0) { float4 tangent; float4 binormal; float4 normal; };
+V vs_rows(uint id : SV_VertexID, float3 n : NORMAL0) {
+    V o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    float3 N = normalize(normal.xyz + n * 0.0001), T = tangent.xyz, B = binormal.xyz;
+    o.t2 = float4(T.x, B.x, N.x, 0);
+    o.t3 = float4(T.y, B.y, N.y, 0);
+    o.t4 = float4(T.z, B.z, N.z, 0);
+    return o;
+}
+V vs_other(uint id : SV_VertexID, float3 n : NORMAL0) {
+    V o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    o.t2 = float4(normalize(normal.xyz + n * 0.0001), 0);
+    o.t3 = tangent;
+    o.t4 = binormal;
+    return o;
+}
+cbuffer Light : register(b1) { float4 toLight; };
+Texture2D aoSpecularMap : register(t0);
+SamplerState aoSampler : register(s0);
+float4 ps_lit(V i) : SV_Target0 {
+    float3 N = float3(i.t2.z, i.t3.z, i.t4.z);  // as LMU's: the normal from the frame's z column
+    float ao = aoSpecularMap.Sample(aoSampler, i.t2.xy).y;  // as LMU's: the baked occlusion in .y
+    return float4(saturate(dot(N, toLight.xyz)) * ao, i.t2.x, i.t3.y, 1);
+}
+)";
+
+void normal_checks(bool hardware) {
+    const ComPtr<ID3DBlob> rows = compile(kFrameShaders, "vs_rows", "vs_5_0"), other = compile(kFrameShaders, "vs_other", "vs_5_0");
+    const ComPtr<ID3DBlob> lit = compile(kFrameShaders, "ps_lit", "ps_5_0");
+    if (!rows || !other || !lit) {
+        check(false, "normals: the test's shaders compile");
+        return;
+    }
+    const auto* rb = static_cast<const uint8_t*>(rows->GetBufferPointer());
+    const auto* ob = static_cast<const uint8_t*>(other->GetBufferPointer());
+    check(simqvfr::dxbc::vertex_normal_rows(rb, rows->GetBufferSize()),
+          "normals: a vertex shader handing on the normal in TEXCOORD2-4's z is recognised");
+    check(!simqvfr::dxbc::vertex_normal_rows(ob, other->GetBufferSize()), "normals: one handing on another layout isn't");
+    simqvfr::dxbc::SlotOutputOptions options;
+    options.normalReg = 2;
+    options.aoResource = 0;  // aoSpecularMap at t0
+    const simqvfr::dxbc::SlotOutput twin =
+        simqvfr::dxbc::add_slot_output(static_cast<const uint8_t*>(lit->GetBufferPointer()), lit->GetBufferSize(), options);
+    check(!twin.bytecode.empty() && twin.normal, "normals: the pixel shader's slot twin writes the normal too");
+    check(twin.ao, "normals: and its baked occlusion (the .y of aoSpecularMap's sample) in the w");
+
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    if (FAILED(D3D11CreateDevice(nullptr, hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr,
+                                 0, D3D11_SDK_VERSION, &device, nullptr, &context))) {
+        check(false, "normals: a D3D11 device");
+        return;
+    }
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> ps;
+    if (FAILED(device->CreateVertexShader(rb, rows->GetBufferSize(), nullptr, &vs)) ||
+        FAILED(device->CreatePixelShader(twin.bytecode.data(), twin.bytecode.size(), nullptr, &ps))) {
+        check(false, "normals: the twin is a valid shader");
+        return;
+    }
+    // Targets: colour, the slot (from t127: 7), the normal.
+    constexpr UINT kSize = 8;
+    const auto target = [&](DXGI_FORMAT f, ComPtr<ID3D11Texture2D>& t, ComPtr<ID3D11RenderTargetView>& v) {
+        const D3D11_TEXTURE2D_DESC d{kSize, kSize, 1, 1, f, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET};
+        return SUCCEEDED(device->CreateTexture2D(&d, nullptr, &t)) && SUCCEEDED(device->CreateRenderTargetView(t.Get(), nullptr, &v));
+    };
+    ComPtr<ID3D11Texture2D> colourTex, slotTex, normalTex;
+    ComPtr<ID3D11RenderTargetView> colour, slot, normal;
+    const uint32_t slotWord = 7;
+    D3D11_BUFFER_DESC wd{4, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, 0};
+    const D3D11_SUBRESOURCE_DATA winit{&slotWord, 4, 0};
+    ComPtr<ID3D11Buffer> word;
+    ComPtr<ID3D11ShaderResourceView> wordView;
+    D3D11_SHADER_RESOURCE_VIEW_DESC wv{};
+    wv.Format = DXGI_FORMAT_R32_UINT;
+    wv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    wv.Buffer.NumElements = 1;
+    const float frame[12] = {1, 0, 0, 0, 0, 0, 1, 0, 0.6f, 0.8f, 0, 0};  // tangent x, binormal z, normal (0.6, 0.8, 0)
+    D3D11_BUFFER_DESC cd{sizeof(frame), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_SUBRESOURCE_DATA cinit{frame, 0, 0};
+    ComPtr<ID3D11Buffer> cb;
+    if (!target(DXGI_FORMAT_R8G8B8A8_UNORM, colourTex, colour) || !target(DXGI_FORMAT_R16_UINT, slotTex, slot) ||
+        !target(DXGI_FORMAT_R16G16B16A16_UNORM, normalTex, normal) || FAILED(device->CreateBuffer(&wd, &winit, &word)) ||
+        FAILED(device->CreateShaderResourceView(word.Get(), &wv, &wordView)) ||
+        FAILED(device->CreateBuffer(&cd, &cinit, &cb))) {
+        check(false, "normals: the targets");
+        return;
+    }
+    // The baked occlusion: a 1x1 texture whose .y is 0.25 (its x 0.9: the wrong component would show).
+    const uint32_t aoTexel = 0xff0040e6u;  // RGBA8: r 0.9, g 0.25, b 0, a 1
+    const D3D11_TEXTURE2D_DESC ad{1, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                                  D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    const D3D11_SUBRESOURCE_DATA ainit{&aoTexel, 4, 0};
+    ComPtr<ID3D11Texture2D> aoTex;
+    ComPtr<ID3D11ShaderResourceView> aoView;
+    ComPtr<ID3D11SamplerState> aoSampler;
+    D3D11_SAMPLER_DESC sdsc{};
+    sdsc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sdsc.AddressU = sdsc.AddressV = sdsc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    if (FAILED(device->CreateTexture2D(&ad, &ainit, &aoTex)) ||
+        FAILED(device->CreateShaderResourceView(aoTex.Get(), nullptr, &aoView)) ||
+        FAILED(device->CreateSamplerState(&sdsc, &aoSampler))) {
+        check(false, "normals: the occlusion texture");
+        return;
+    }
+    context->PSSetShaderResources(0, 1, aoView.GetAddressOf());
+    context->PSSetSamplers(0, 1, aoSampler.GetAddressOf());
+    // The vertex shader's NORMAL input: a layout with a zero vertex buffer.
+    const D3D11_INPUT_ELEMENT_DESC el{"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    ComPtr<ID3D11InputLayout> layout;
+    const float zeros[9] = {};
+    D3D11_BUFFER_DESC vd{sizeof(zeros), D3D11_USAGE_DEFAULT, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+    const D3D11_SUBRESOURCE_DATA vinit{zeros, 0, 0};
+    ComPtr<ID3D11Buffer> vb;
+    if (FAILED(device->CreateInputLayout(&el, 1, rb, rows->GetBufferSize(), &layout)) ||
+        FAILED(device->CreateBuffer(&vd, &vinit, &vb))) {
+        check(false, "normals: the input layout");
+        return;
+    }
+    const UINT stride = 12, offset = 0;
+    context->IASetVertexBuffers(0, 1, vb.GetAddressOf(), &stride, &offset);
+    context->IASetInputLayout(layout.Get());
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(vs.Get(), nullptr, 0);
+    context->VSSetConstantBuffers(0, 1, cb.GetAddressOf());
+    context->PSSetShader(ps.Get(), nullptr, 0);
+    context->PSSetShaderResources(127, 1, wordView.GetAddressOf());
+    ID3D11RenderTargetView* rtvs[3] = {colour.Get(), slot.Get(), normal.Get()};
+    context->OMSetRenderTargets(3, rtvs, nullptr);
+    const D3D11_VIEWPORT vp{0, 0, kSize, kSize, 0, 1};
+    context->RSSetViewports(1, &vp);
+    context->Draw(3, 0);
+    D3D11_TEXTURE2D_DESC sd{kSize, kSize, 1, 1, DXGI_FORMAT_R16G16B16A16_UNORM, {1, 0}, D3D11_USAGE_STAGING, 0,
+                            D3D11_CPU_ACCESS_READ};
+    ComPtr<ID3D11Texture2D> staging;
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(device->CreateTexture2D(&sd, nullptr, &staging))) {
+        check(false, "normals: read back");
+        return;
+    }
+    context->CopyResource(staging.Get(), normalTex.Get());
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        check(false, "normals: read back");
+        return;
+    }
+    uint16_t texel[4];
+    std::memcpy(texel, static_cast<const uint8_t*>(m.pData) + 4 * 8 + m.RowPitch * 4, 8);
+    context->Unmap(staging.Get(), 0);
+    const float nx = texel[0] / 65535.0f * 2 - 1, ny = texel[1] / 65535.0f * 2 - 1, nz = texel[2] / 65535.0f * 2 - 1;
+    const float aoRead = texel[3] / 65535.0f;
+    char text[160];
+    std::snprintf(text, sizeof(text), "normals: render target 2 holds the vertex shader's normal (%.3f %.3f %.3f of 0.6 0.8 0)",
+                  nx, ny, nz);
+    check(std::fabs(nx - 0.6f) < 0.01f && std::fabs(ny - 0.8f) < 0.01f && std::fabs(nz) < 0.01f, text);
+    std::snprintf(text, sizeof(text), "normals: its w holds the baked occlusion (%.3f of 0.251)", aoRead);
+    check(std::fabs(aoRead - 64.0f / 255.0f) < 0.01f, text);
+}
+
+// --scan <folder>: LMU's shaders saved from a capture (PS_*.dxbc, VS_*.dxbc; local only, never in the repository):
+// how many pixel shaders' slot twins write the normal (and are valid shaders on WARP), how many vertex shaders hand it
+// on in the layout it reads.
+int scan(const char* folder) {
+    ComPtr<ID3D11Device> device;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,
+                                 nullptr)))
+        return 1;
+    int ps = 0, twins = 0, normals = 0, aos = 0, invalid = 0, vs = 0, rows = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+        const std::string name = entry.path().filename().string();
+        std::ifstream f(entry.path(), std::ios::binary);
+        const std::vector<uint8_t> code((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (name.rfind("PS_", 0) == 0) {
+            ++ps;
+            simqvfr::dxbc::SlotOutputOptions options;
+            options.normalReg = 2;
+            ComPtr<ID3D11ShaderReflection> reflection;
+            if (SUCCEEDED(D3DReflect(code.data(), code.size(), IID_PPV_ARGS(&reflection))))
+                for (const char* aoName : {"aoSpecularMap", "aoSpecMask"}) {
+                    D3D11_SHADER_INPUT_BIND_DESC bind{};
+                    if (SUCCEEDED(reflection->GetResourceBindingDescByName(aoName, &bind)) && bind.Type == D3D_SIT_TEXTURE) {
+                        options.aoResource = bind.BindPoint;
+                        break;
+                    }
+                }
+            const simqvfr::dxbc::SlotOutput t = simqvfr::dxbc::add_slot_output(code.data(), code.size(), options);
+            if (t.bytecode.empty()) {
+                std::printf("  %s: no twin (%s)\n", name.c_str(), t.error.c_str());
+                continue;
+            }
+            ++twins;
+            normals += t.normal ? 1 : 0;
+            aos += t.ao ? 1 : 0;
+            if (options.aoResource != ~0u && !t.ao)
+                std::printf("  %s: has an occlusion texture (t%u) but no copy of it%s\n", name.c_str(), options.aoResource,
+                            t.normal ? "" : " (no normal either)");
+            ComPtr<ID3D11PixelShader> shader;
+            if (FAILED(device->CreatePixelShader(t.bytecode.data(), t.bytecode.size(), nullptr, &shader))) {
+                ++invalid;
+                std::printf("  %s: the twin ISN'T a valid shader\n", name.c_str());
+            }
+        } else if (name.rfind("VS_", 0) == 0) {
+            ++vs;
+            const bool r = simqvfr::dxbc::vertex_normal_rows(code.data(), code.size());
+            rows += r ? 1 : 0;
+            std::printf("  %s: %s\n", name.c_str(), r ? "normal rows" : "another layout");
+        }
+    }
+    std::printf("scan: %d pixel shaders, %d twins (%d write the normal, %d with the baked occlusion, %d invalid); %d "
+                "vertex shaders, %d hand on the normal in TEXCOORD2-4's z\n",
+                ps, twins, normals, aos, invalid, vs, rows);
+    return invalid ? 1 : 0;
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
+    if (argc > 2 && std::strcmp(argv[1], "--scan") == 0)
+        return scan(argv[2]);
     const bool hardware = argc > 1 && std::strcmp(argv[1], "--hardware") == 0;
     settings_checks();
+    compare_checks();
     table_checks();
     math_checks();
+    normal_checks(hardware);
     pass_checks(hardware);
     return test_result();
 }

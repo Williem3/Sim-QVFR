@@ -47,6 +47,8 @@ struct MvrProbeStats {
     std::map<std::string, uint64_t> pixelRefused;
     // Their slot twins (lmu_car_vectors): made, of a mip bias twin too, not created; why refused.
     uint64_t slotTwinned = 0, slotBiasTwinned = 0, slotFailed = 0;
+    uint64_t slotNormals = 0;  // night car lighting: slot twins that write the game's normal too
+    uint64_t slotAos = 0;      // and its baked ambient occlusion
     std::map<std::string, uint64_t> slotRefused;
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0, instancedMs = 0;
     std::map<std::string, uint64_t> refused;           // why add_second_view didn't convert a shader, and how often
@@ -69,6 +71,13 @@ inline constexpr GUID kVsViewMatricesGuid = {0x9b1e4c27, 0x3d58, 0x4a06, {0xa7, 
 // Night car lighting (car_light.h): where a game vertex shader reads its floodlights (GlobalCBFloats_OmniLights'
 // omniPosRad and omniRGBDelta), as four UINTs: the constant buffer slot, the two arrays' byte offsets, their length.
 inline constexpr GUID kVsOmniLightsGuid = {0x8f2d6b41, 0x5c07, 0x4e93, {0xa1, 0x6e, 0x3b, 0xd8, 0x92, 0x0f, 0x47, 0xc5}};
+// Night car lighting with the game's normals: a game vertex shader that hands its pixel shader the surface normal in
+// the .z of TEXCOORD2-4 (engine/dxbc_patch.h vertex_normal_rows; a UINT 1), and a game pixel shader whose slot twin
+// writes that normal to render target 2 (a UINT 1).
+inline constexpr GUID kVsGameNormalGuid = {0x46c2e8b7, 0x91d3, 0x4a5f, {0x8b, 0x2e, 0x07, 0xf4, 0x6d, 0x19, 0xa3, 0x5c}};
+inline constexpr GUID kPsSlotNormalGuid = {0xb53a07d1, 0x6e2c, 0x4f84, {0x9a, 0x41, 0xd8, 0x0c, 0x5e, 0x73, 0x2b, 0x96}};
+// And whose slot twin writes its baked ambient occlusion (aoSpecularMap / aoSpecMask's .y) to that target's w (a UINT 1).
+inline constexpr GUID kPsSlotAoGuid = {0x2e9c5f13, 0xa47b, 0x4d06, {0x83, 0x5a, 0x1f, 0x6e, 0xc9, 0x02, 0xb7, 0x48}};
 // And a game pixel shader that shades a car body's lacquer (its reflection names lacquerThickness or clearCoatStrength):
 // a UINT 1.
 inline constexpr GUID kPsPaintGuid = {0x1d73a9e5, 0x42bc, 0x4f18, {0x96, 0x0d, 0xe4, 0x2a, 0x7b, 0x51, 0xc8, 0x3e}};

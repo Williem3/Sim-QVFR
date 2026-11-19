@@ -81,6 +81,7 @@ struct TwinEntry {
     // and their length.
     int omniSlot = -1;
     UINT omniPos = 0, omniColour = 0, omniCount = 0;
+    bool gameNormal = false;  // it hands on the normal in TEXCOORD2-4's z (kVsGameNormalGuid)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -95,7 +96,9 @@ struct PsTwinEntry {
     ID3D11PixelShader* slot = nullptr;  // its slot twin, and the slot twin of its mip bias twin (car slots)
     ID3D11PixelShader* slotBias = nullptr;
     uint32_t epoch = 0;
-    bool paint = false;  // night car lighting: a car body's lacquer shader (kPsPaintGuid)
+    bool paint = false;       // night car lighting: a car body's lacquer shader (kPsPaintGuid)
+    bool slotNormal = false;  // its slot twin writes the game's normal to target 2 (kPsSlotNormalGuid)
+    bool slotAo = false;      // and its baked ambient occlusion in that target's w (kPsSlotAoGuid)
 };
 struct PsTwinSet {
     PsTwinEntry entry[2];
@@ -255,6 +258,14 @@ struct State {
     simqvfr::CarLighting carLightSettings{};
     int vsOmniSlot = -1;
     UINT vsOmniPos = 0, vsOmniColour = 0, vsOmniCount = 0;
+    bool vsGameNormal = false;  // the bound vertex shader hands on the normal the slot twins write (kVsGameNormalGuid)
+    // The game's normals beside the slots (render target 2, RGBA16 UNORM: xyz * 0.5 + 0.5, w the baked occlusion), the
+    // scene target's size and
+    // samples; made with the slot target while night car lighting is installed. False: none (the depth's directions).
+    bool normalsOn = false;
+    ComPtr<ID3D11Texture2D> normalTex;
+    ComPtr<ID3D11RenderTargetView> normalRtv;
+    ComPtr<ID3D11ShaderResourceView> normalSrv;
     ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
     ComPtr<ID3D11Buffer> omniHeld;
     UINT omniBytes = 0;

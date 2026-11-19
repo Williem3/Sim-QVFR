@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "../../log.h"
+#include "../../probe/d3d11_capture.h"
 
 namespace lmu {
 
@@ -43,7 +44,7 @@ int CarLightTable::light_index(const CarLight& l) {
 }
 
 void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t* buffer, size_t bufferBytes,
-                         const OmniLayout& layout, uint64_t bufferGeneration, bool paint) {
+                         const OmniLayout& layout, uint64_t bufferGeneration, bool paint, bool normal, bool ao) {
     if (slot >= slotLights_.size() || !buffer)
         return;
     const size_t need = (std::max)(layout.posOffset, layout.colourOffset) + size_t{16} * layout.count;
@@ -54,9 +55,13 @@ void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t*
         slotFrame_[slot] = frame_;
         s.count = 0;
         s.generation = ~0ull;
-        slotPaint_[slot] = 0;
+        slotPaint_[slot] = (normal ? 2 : 0) | (normal && ao ? 4 : 0);  // the game's: while every draw of the part has it
     }
     slotPaint_[slot] |= paint ? 1 : 0;
+    if (!normal)
+        slotPaint_[slot] &= static_cast<uint8_t>(~6u);
+    if (!ao)
+        slotPaint_[slot] &= static_cast<uint8_t>(~4u);
     firstSlot_ = (std::min)(firstSlot_, slot);
     lastSlot_ = (std::max)(lastSlot_, slot);
     if (s.generation == bufferGeneration)  // drawn again with the buffer as it was: nothing new
@@ -123,6 +128,62 @@ void CarLightTable::packed(unsigned slot, uint32_t (&out)[4]) const {
     out[2] = slotPaint_[slot];
 }
 
+// ---- The comparison image ----
+
+bool car_light_side_by_side(const std::wstring& path, const std::vector<uint8_t>& before, const std::vector<uint8_t>& after,
+                            unsigned w, unsigned h, const wchar_t* beforeLabel, const wchar_t* afterLabel) {
+    if (!w || !h || before.size() < size_t{w} * h * 4 || after.size() < size_t{w} * h * 4)
+        return false;
+    const unsigned gap = (std::max)(8u, w / 120), bar = (std::max)(40u, h / 16);
+    const unsigned W = 2 * w + gap, H = h + bar;
+    // A top-down DIB the labels are drawn into with GDI (ClearType off: the PNG goes anywhere).
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = static_cast<LONG>(W);
+    bi.bmiHeader.biHeight = -static_cast<LONG>(H);
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP dib = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (!dib || !bits) {
+        if (dib)
+            DeleteObject(dib);
+        if (dc)
+            DeleteDC(dc);
+        return false;
+    }
+    auto* px = static_cast<uint32_t*>(bits);
+    std::fill(px, px + size_t{W} * H, 0xff141416u);
+    for (unsigned y = 0; y < h; ++y) {
+        std::memcpy(px + size_t{y + bar} * W, before.data() + size_t{y} * w * 4, size_t{w} * 4);
+        std::memcpy(px + size_t{y + bar} * W + w + gap, after.data() + size_t{y} * w * 4, size_t{w} * 4);
+    }
+    HGDIOBJ old = SelectObject(dc, dib);
+    HFONT font = CreateFontW(-static_cast<int>(bar * 6 / 10), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    const int ty = static_cast<int>(bar / 5);
+    TextOutW(dc, static_cast<int>(bar / 3), ty, beforeLabel, static_cast<int>(wcslen(beforeLabel)));
+    TextOutW(dc, static_cast<int>(w + gap + bar / 3), ty, afterLabel, static_cast<int>(wcslen(afterLabel)));
+    GdiFlush();
+    if (oldFont)
+        SelectObject(dc, oldFont);
+    if (font)
+        DeleteObject(font);
+    SelectObject(dc, old);
+    std::vector<uint8_t> image(size_t{W} * H * 4);
+    std::memcpy(image.data(), px, image.size());
+    for (size_t i = 3; i < image.size(); i += 4)
+        image[i] = 0xff;  // GDI's text leaves alpha 0
+    DeleteObject(dib);
+    DeleteDC(dc);
+    return simqvfr::write_png_bgra(path, image, W, H);
+}
+
 // ---- The math the shader does (tests) ----
 
 void car_light_unproject(const float (&inv)[16], float x, float y, float depth, float (&out)[3]) {
@@ -184,6 +245,13 @@ float load_depth(int2 p) { return depthTex.Load(int3(p, 0)); }
 uint load_slot(int2 p) { return slotTex.Load(int3(p, 0)); }
 #endif
 Buffer<uint4> slotInfo : register(t2);
+#if MS
+Texture2DMS<float4> normalTex : register(t3);
+float4 load_normal(int2 p) { return normalTex.Load(p, 0); }
+#else
+Texture2D<float4> normalTex : register(t3);
+float4 load_normal(int2 p) { return normalTex.Load(int3(p, 0)); }
+#endif
 
 void vs_main(uint id : SV_VertexID, out float4 pos : SV_Position) {
     float2 uv = float2((id << 1) & 2, id & 2);
@@ -309,9 +377,25 @@ Out ps_main(float4 pos : SV_Position) {
     float3 N = dot(c, c) > 1e-14 ? normalize(c) : V;
     if (dot(N, V) < 0)
         N = -N;
-    // The pixel's size on the surface's distance (one pixel right, at its depth), then the smoothed direction.
-    float pixelMetres = length(view_pos(pos.xy + float2(1, 0), d, r, origin, size) - P);
-    N = smooth_normal(p, P, N, V, s, r, origin, size, pixelMetres, extra.w);
+    uint4 info = slotInfo[s - 1];
+    float baked = 1;  // the game's own baked occlusion where its shader has one (the normals' w)
+    if ((info.z & 2) != 0) {
+        // The game's own normal (the vertex shader's, interpolated: smooth, its creases kept), world to view.
+        float4 game = load_normal(p);
+        float3 world = game.xyz * 2 - 1;
+        if ((info.z & 4) != 0)
+            baked = saturate(game.w);
+        float3 Nv = mul(float4(world, 0), viewM).xyz;
+        if (dot(Nv, Nv) > 1e-6) {
+            N = normalize(Nv);
+            if (dot(N, V) < 0)
+                N = -N;
+        }
+    } else {
+        // The pixel's size on the surface's distance (one pixel right, at its depth), then the smoothed direction.
+        float pixelMetres = length(view_pos(pos.xy + float2(1, 0), d, r, origin, size) - P);
+        N = smooth_normal(p, P, N, V, s, r, origin, size, pixelMetres, extra.w);
+    }
 
     // Ambient occlusion: points of a hemisphere on the surface, occluded where the scene's depth there is nearer.
     float noise = frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
@@ -335,10 +419,11 @@ Out ps_main(float4 pos : SV_Position) {
         float range = saturate(extra.x / max(abs(lp - lq), 1e-3));
         occluded += (length(S) - lq > 0.02) ? range : 0;
     }
-    float ao = 1 - occluded / 8;
+    // The screen's occlusion (between parts and objects: under the car, the wheels in their arches) times the model's
+    // own baked one (panel gaps, vents, the inside of the arches: what the screen can't see).
+    float ao = (1 - occluded / 8) * baked;
 
     // The floodlights the part's draws were handed: a GGX highlight each, as lacquer reflects a lamp.
-    uint4 info = slotInfo[s - 1];
     float rough = shade.w, a = rough * rough, a2 = a * a, kq = a * 0.5;
     float NdotV = saturate(dot(N, V)) + 1e-4;
     float3 spec = 0;
@@ -624,7 +709,8 @@ CarLightPass::~CarLightPass() { delete impl_; }
 
 bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* depth,
                        ID3D11ShaderResourceView* slots, bool slotsMs, const CarLightTable& table,
-                       const CarLightView& view, const CarLightSettings& settings, int eye) {
+                       const CarLightView& view, const CarLightSettings& settings, int eye,
+                       ID3D11ShaderResourceView* normals) {
     (void)eye;
     Impl& m = *impl_;
     if (failed_ || !context || !scene || !depth || !slots || !view.eyeW || !view.eyeH)
@@ -729,8 +815,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         sceneTex->GetDesc(&sd);
     // Every target the pass uses: nothing of ours left bound on a target the game then reads (the caller restores the
     // game's own).
-    ID3D11ShaderResourceView* none[3] = {};
-    context->PSSetShaderResources(0, 3, none);
+    ID3D11ShaderResourceView* none[4] = {};
+    context->PSSetShaderResources(0, 4, none);
     context->OMSetRenderTargets(1, &rtv, nullptr);
     const D3D11_VIEWPORT vpPort{0, 0, static_cast<float>(sd.Width), static_cast<float>(sd.Height), 0, 1};
     const LONG right = static_cast<LONG>((std::min)(sd.Width, view.eyeW + view.focusW));
@@ -751,10 +837,10 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     context->PSSetShader(m.ps[slotsMs ? 1 : 0].Get(), nullptr, 0);
     ID3D11Buffer* cbs[2] = {m.passCb.Get(), m.lightCb.Get()};
     context->PSSetConstantBuffers(0, 2, cbs);
-    ID3D11ShaderResourceView* views[3] = {depthView, slots, m.slotView.Get()};
-    context->PSSetShaderResources(0, 3, views);
+    ID3D11ShaderResourceView* views[4] = {depthView, slots, m.slotView.Get(), normals};
+    context->PSSetShaderResources(0, 4, views);
     context->Draw(3, 0);
-    context->PSSetShaderResources(0, 3, none);
+    context->PSSetShaderResources(0, 4, none);
     if (timed) {
         context->End(timer.end.Get());
         context->End(timer.disjoint.Get());

@@ -118,17 +118,38 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
 // instruction ld o<reg>.x, l(0, 0, 0, 0), t<srvSlot>.xxxx (an output written once and never again: SM4/5 keep it). The
 // output signature gains SV_Target<reg> (uint, x) after its last element. Refused when the shader already has that
 // output or declares that resource, or isn't a pixel shader.
+//
+// With `normalReg` (LMU's night car lighting, games/lmu/car_light.h): the surface normal the vertex shader handed on also
+// goes to render target `normalReg` (float4: xyz * 0.5 + 0.5, w 1), taken from the .z of the inputs whose semantics are
+// TEXCOORD<normalFirst>, +1, +2 (LMU's tangent frame rows: tangent, binormal, normal as columns; vertex_normal_rows
+// says which vertex shaders write it that way). When the shader lacks those inputs (or doesn't declare their z), the
+// slot alone is added and `normal` stays false.
+//
+// With the normal, `aoResource` (a texture register; ~0u none): the shader's own baked ambient occlusion goes to the
+// normal's w, component `aoComponent` of the first sample of that texture, copied right after it (w is 1 before, so
+// a path that doesn't sample it keeps 1).
 struct SlotOutputOptions {
     uint32_t srvSlot = 127;
     uint32_t reg = 1;
+    uint32_t normalReg = ~0u;  // ~0u: no normal output
+    uint32_t normalFirst = 2;
+    uint32_t aoResource = ~0u;
+    uint32_t aoComponent = 1;
 };
 
 struct SlotOutput {
     std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
     std::string error;
+    bool normal = false;  // the normal output was added
+    bool ao = false;      // and the baked ambient occlusion in its w
 };
 
 SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options = {});
+
+// A vertex shader that writes a normal's world-space x, y, z into the .z of its outputs TEXCOORD<first>, +1, +2 (one
+// register's x, y, z each: `mov o5.z, r3.x`, `mov o6.z, r3.y`, `mov o7.z, r3.z`), the layout add_slot_output's
+// normal reads. False: another layout, or not a vertex shader.
+bool vertex_normal_rows(const uint8_t* data, size_t size, uint32_t first = 2);
 
 // How many vectors (16 bytes) of the constant buffer in `slot` the shader declares; 0: none, or not a shader. What lies
 // past that in a bound range is not the shader's (a pooled buffer's leftovers).

@@ -74,7 +74,7 @@ enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kR
 enum : uint32_t { kResourceDimensionBuffer = 1, kReturnTypeUint = 4, kNameTarget = 64 };
 // System value names (declarations' name tokens and the signatures' system values share them).
 enum : uint32_t { kNamePosition = 1, kNameRenderTargetArrayIndex = 4, kNameViewportArrayIndex = 5, kNameInstanceId = 8 };
-enum : uint32_t { kComponentUint32 = 1 };
+enum : uint32_t { kComponentUint32 = 1, kComponentFloat32 = 3 };
 
 uint32_t opcode_of(uint32_t token) { return token & 0x7ff; }
 // The instruction's length at t with `left` tokens remaining (0: unreadable). A customdata block keeps its length in
@@ -1062,14 +1062,35 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
         return r;
     }
     uint32_t targetName = kNameTarget;
+    bool normalTaken = false;
     for (const Element& el : outputs) {
         if (el.reg == options.reg || (el.name == "SV_Target" && el.index == options.reg)) {
             r.error = "the slot's render target is written already";
             return r;
         }
+        if (options.normalReg != ~0u &&
+            (el.reg == options.normalReg || (el.name == "SV_Target" && el.index == options.normalReg)))
+            normalTaken = true;
         if (el.name == "SV_Target")
             targetName = el.systemValue;  // as the compiler records it
     }
+    // The normal's inputs: TEXCOORD<first..first+2> with z in the input signature.
+    uint32_t normalInputs[3] = {~0u, ~0u, ~0u};
+    bool wantNormal = options.normalReg != ~0u && !normalTaken;
+    if (wantNormal) {
+        std::vector<Element> inputs;
+        const Chunk* isgn = nullptr;
+        for (const Chunk& c : chunks)
+            if (c.fourcc == fourcc("ISGN"))
+                isgn = &c;
+        if (isgn && read_signature(isgn->data, inputs))
+            for (const Element& el : inputs)
+                if (el.name == "TEXCOORD" && el.index >= options.normalFirst && el.index < options.normalFirst + 3 &&
+                    (el.mask & 0x4))
+                    normalInputs[el.index - options.normalFirst] = el.reg;
+        wantNormal = normalInputs[0] != ~0u && normalInputs[1] != ~0u && normalInputs[2] != ~0u;
+    }
+    bool normalDeclared[3] = {};
     const auto* tokens = reinterpret_cast<const uint32_t*>(program->data.data());
     const uint32_t version = tokens[0], length = tokens[1];
     if ((version >> 16) != 0) {
@@ -1105,12 +1126,47 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
             lastOutputDcl = i + n;
         } else if (op == kOpDclTemps) {
             tempsAt = i;
+        } else if (wantNormal && (op == kOpDclInputPs || op == kOpDclInputPsSgv || op == kOpDclInputPsSiv) && n >= 3) {
+            // The normal's inputs declared with their z (the shader reads them): the z is interpolated for us too.
+            const uint32_t token = tokens[i + 1];
+            const uint32_t mask = ((token >> 2) & 3) == 0 ? (token >> 4) & 0xf : 0;
+            for (int k = 0; k < 3; ++k)
+                if (((token >> 12) & 0xff) == kInput && tokens[i + 2] == normalInputs[k] && (mask & 0x4))
+                    normalDeclared[k] = true;
         }
         i += n;
     }
     if (!firstInstruction) {
         r.error = "no instructions";
         return r;
+    }
+    wantNormal = wantNormal && normalDeclared[0] && normalDeclared[1] && normalDeclared[2];
+    // The baked ambient occlusion: the first sample of `aoResource` into a temp whose mask has the component, copied to
+    // the normal's w right after it.
+    size_t aoAfter = 0;
+    uint32_t aoTemp = 0;
+    if (wantNormal && options.aoResource != ~0u && options.aoComponent < 4) {
+        for (size_t i = firstInstruction; i < length && !aoAfter;) {
+            const uint32_t n = length_of(tokens + i, length - i);
+            if (!n || i + n > length)
+                break;
+            const uint32_t op = opcode_of(tokens[i]);
+            if (op >= kOpSample && op <= kOpSampleB) {
+                const size_t first = operands_at(tokens + i, n);
+                Operand dst0, coord, res;
+                const size_t l0 = first ? read_operand(tokens + i + first, n - first, dst0) : 0;
+                const size_t l1 = l0 ? read_operand(tokens + i + first + l0, n - first - l0, coord) : 0;
+                const size_t l2 = l1 ? read_operand(tokens + i + first + l0 + l1, n - first - l0 - l1, res) : 0;
+                const uint32_t dtok = first ? tokens[i + first] : 0;
+                if (l2 && res.type == kResource && res.index0Immediate && res.index0 == options.aoResource &&
+                    dst0.type == kTemp && dst0.index0Immediate && ((dtok >> 2) & 3) == 0 &&
+                    (((dtok >> 4) & 0xf) & (1u << options.aoComponent))) {
+                    aoAfter = i + n;
+                    aoTemp = dst0.index0;
+                }
+            }
+            i += n;
+        }
     }
     const std::vector<uint32_t> resourceDcl = {instruction(kOpDclResource, 4) | (kResourceDimensionBuffer << 11),
                                                operand(0, 0, 0, kResource, 1), options.srvSlot,
@@ -1122,16 +1178,43 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
                                         operand(2, 0, 0x1, kOutput, 1), options.reg,
                                         operand(2, 0, 0, kImm32, 0), 0u, 0u, 0u, 0u,
                                         operand(2, 1, swizzle(0, 0, 0, 0), kResource, 1), options.srvSlot};
+    std::vector<uint32_t> normalDcl, normalCode;
+    if (wantNormal) {
+        normalDcl = {instruction(kOpDclOutput, 3), operand(2, 0, 0xf, kOutput, 1), options.normalReg};
+        constexpr uint32_t kHalf = 0x3f000000u, kOne = 0x3f800000u;
+        // mad o<n>.<c>, v<row c>.z, l(0.5), l(0.5) for c = x, y, z; mov o<n>.w, l(1)
+        for (uint32_t k = 0; k < 3; ++k) {
+            normalCode.push_back(instruction(kOpMad, 15));
+            dst(normalCode, kOutput, options.normalReg, 1u << k);
+            normalCode.push_back(operand(2, 2, 2, kInput, 1));  // select-1: .z
+            normalCode.push_back(normalInputs[k]);
+            normalCode.insert(normalCode.end(), {operand(2, 0, 0, kImm32, 0), kHalf, kHalf, kHalf, kHalf});
+            normalCode.insert(normalCode.end(), {operand(2, 0, 0, kImm32, 0), kHalf, kHalf, kHalf, kHalf});
+        }
+        normalCode.push_back(instruction(kOpMov, 8));
+        dst(normalCode, kOutput, options.normalReg, 0x8);
+        normalCode.insert(normalCode.end(), {operand(2, 0, 0, kImm32, 0), kOne, kOne, kOne, kOne});
+    }
     const size_t resourceAt = lastResourceDcl ? lastResourceDcl : globalFlagsEnd;
     const size_t outputAt = lastOutputDcl ? lastOutputDcl : tempsAt ? tempsAt : firstInstruction;
     std::vector<uint32_t> out(tokens, tokens + 2);
     for (size_t i = 2; i < length;) {
         if (i == resourceAt)
             out.insert(out.end(), resourceDcl.begin(), resourceDcl.end());
-        if (i == outputAt)
+        if (i == outputAt) {
             out.insert(out.end(), outputDcl.begin(), outputDcl.end());
-        if (i == firstInstruction)
+            out.insert(out.end(), normalDcl.begin(), normalDcl.end());
+        }
+        if (i == firstInstruction) {
             out.insert(out.end(), load.begin(), load.end());
+            out.insert(out.end(), normalCode.begin(), normalCode.end());
+        }
+        if (aoAfter && i == aoAfter) {  // mov o<n>.w, r<ao>.<component>
+            const uint32_t c = options.aoComponent;
+            out.push_back(instruction(kOpMov, 5));
+            dst(out, kOutput, options.normalReg, 0x8);
+            src_temp(out, aoTemp, swizzle(static_cast<int>(c), static_cast<int>(c), static_cast<int>(c), static_cast<int>(c)));
+        }
         const uint32_t n = length_of(tokens + i, length - i);
         out.insert(out.end(), tokens + i, tokens + i + n);
         i += n;
@@ -1143,11 +1226,78 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
         ++at;
     outputs.insert(outputs.begin() + static_cast<std::ptrdiff_t>(at),
                    Element{"SV_Target", options.reg, targetName, kComponentUint32, options.reg, 0x1, 0xe});
+    if (wantNormal) {
+        size_t nat = 0;
+        while (nat < outputs.size() && outputs[nat].reg < options.normalReg)
+            ++nat;
+        outputs.insert(outputs.begin() + static_cast<std::ptrdiff_t>(nat),
+                       Element{"SV_Target", options.normalReg, targetName, kComponentFloat32, options.normalReg, 0xf, 0x0});
+        r.normal = true;
+        r.ao = aoAfter != 0;
+    }
     program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
                          reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
     signature->data = write_signature(outputs);
     r.bytecode = write_chunks(chunks);
     return r;
+}
+
+bool vertex_normal_rows(const uint8_t* data, size_t size, uint32_t first) {
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks))
+        return false;
+    const Chunk* program = nullptr;
+    const Chunk* signature = nullptr;
+    for (const Chunk& c : chunks) {
+        if (c.fourcc == fourcc("SHDR") || c.fourcc == fourcc("SHEX"))
+            program = &c;
+        else if (c.fourcc == fourcc("OSGN"))
+            signature = &c;
+    }
+    std::vector<Element> outputs;
+    if (!program || !signature || program->data.size() < 8 || !read_signature(signature->data, outputs))
+        return false;
+    uint32_t rows[3] = {~0u, ~0u, ~0u};
+    for (const Element& el : outputs)
+        if (el.name == "TEXCOORD" && el.index >= first && el.index < first + 3)
+            rows[el.index - first] = el.reg;
+    if (rows[0] == ~0u || rows[1] == ~0u || rows[2] == ~0u)
+        return false;
+    const size_t words = program->data.size() / 4;
+    std::vector<uint32_t> t(words);
+    std::memcpy(t.data(), program->data.data(), words * 4);
+    if ((t[0] >> 16) != 1 || t[1] > words)  // a vertex shader
+        return false;
+    // Per row: the temp register whose component k (x, y, z for the rows) a `mov o<row>.z, r<T>.<k>` copies.
+    int temp[3] = {-1, -1, -1};
+    bool clash = false;
+    for (size_t i = 2; i < t[1];) {
+        const uint32_t n = length_of(&t[i], t[1] - i);
+        if (!n || i + n > t[1])
+            return false;
+        if (opcode_of(t[i]) == kOpMov && !(t[i] >> 31) && n >= 5) {
+            Operand d, s;
+            const size_t dl = read_operand(&t[i + 1], n - 1, d);
+            const size_t sl = dl ? read_operand(&t[i + 1 + dl], n - 1 - dl, s) : 0;
+            const uint32_t dtok = t[i + 1], stok = dl ? t[i + 1 + dl] : 0;
+            if (dl && sl && d.type == kOutput && d.index0Immediate && ((dtok >> 2) & 3) == 0) {
+                const uint32_t mask = (dtok >> 4) & 0xf;
+                for (int k = 0; k < 3; ++k) {
+                    if (d.index0 != rows[k] || !(mask & 0x4))
+                        continue;
+                    // The z of this row: from one temp's component k (the swizzle's z slot picks k, or select-1 k).
+                    const uint32_t mode = (stok >> 2) & 3;
+                    const uint32_t comp = mode == 1 ? (stok >> (4 + 2 * 2)) & 3 : mode == 2 ? (stok >> 4) & 3 : 9;
+                    if (s.type == kTemp && s.index0Immediate && comp == static_cast<uint32_t>(k))
+                        temp[k] = temp[k] < 0 || temp[k] == static_cast<int>(s.index0) ? static_cast<int>(s.index0) : -2;
+                    else
+                        clash = true;  // the row's z from anything else
+                }
+            }
+        }
+        i += n;
+    }
+    return !clash && temp[0] >= 0 && temp[0] == temp[1] && temp[1] == temp[2];
 }
 
 bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]) {

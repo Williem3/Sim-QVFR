@@ -108,6 +108,7 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
         g.vsOmniPos = e ? e->omniPos : 0;
         g.vsOmniColour = e ? e->omniColour : 0;
         g.vsOmniCount = e ? e->omniCount : 0;
+        g.vsGameNormal = e && e->gameNormal;
         keep_game_entry(vs, e);
     }
     if (!ours(context)) {

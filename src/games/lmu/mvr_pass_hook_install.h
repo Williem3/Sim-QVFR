@@ -286,6 +286,7 @@ void read_bindings() {
         g.vsOmniPos = e ? e->omniPos : 0;
         g.vsOmniColour = e ? e->omniColour : 0;
         g.vsOmniCount = e ? e->omniCount : 0;
+        g.vsGameNormal = e && e->gameNormal;
         keep_game_entry(vs, e);
     }
     if (cb_track()) {  // car tracking: the vertex shader's constant buffers and the input assembler's buffers as bound

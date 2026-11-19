@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "../../quad/car_lighting.h"
@@ -57,15 +58,16 @@ public:
         lastSlot_ = 0;
     }
     // A car part's draw (slot `slot`, its world matrix's translation `origin`) with the omni buffer `buffer` (its bytes
-    // as the game wrote them, layout `layout`); `paint`: its pixel shader is a car body's (lacquer). `bufferGeneration`
+    // as the game wrote them, layout `layout`); `paint`: its pixel shader is a car body's (lacquer); `normal`: the game's
+    // normal for its pixels is in the normals' target (else the pass takes the depth's directions). `bufferGeneration`
     // changes with each write of the buffer: a part drawn again with the same buffer adds nothing new.
     void draw(unsigned slot, const float (&origin)[3], const uint8_t* buffer, size_t bufferBytes, const OmniLayout& layout,
-              uint64_t bufferGeneration, bool paint);
+              uint64_t bufferGeneration, bool paint, bool normal = false, bool ao = false);
     // The slots written this frame: [first, last] (first > last: none).
     unsigned first_slot() const { return firstSlot_; }
     unsigned last_slot() const { return lastSlot_; }
-    // Slot `slot`'s lights packed 4 to a uint (8 bits each, kNone: none), and its flags (bit 0: paint), for the GPU's
-    // per-slot buffer (uint4: lights 0-3, 4-7, flags, 0).
+    // Slot `slot`'s lights packed 4 to a uint (8 bits each, kNone: none), and its flags (bit 0: paint, bit 1: the game's
+    // normal, bit 2: its baked occlusion), for the GPU's per-slot buffer (uint4: lights 0-3, 4-7, flags, 0).
     void packed(unsigned slot, uint32_t (&out)[4]) const;
     const std::vector<CarLight>& lights() const { return lights_; }
     size_t slot_count() const { return slotLights_.size(); }
@@ -99,6 +101,11 @@ struct CarLightView {
     float view[16] = {}, viewProj[16] = {}; // the eye's camera as its draws used it (row vectors, reversed depth)
 };
 
+// The comparison image (dev builds' Ctrl+Alt+L, qvfr_frame.cpp): `before` and `after` (BGRA, w x h each) side by side
+// with a gap, a dark bar above with `beforeLabel` over the left and `afterLabel` over the right, as a PNG at `path`.
+bool car_light_side_by_side(const std::wstring& path, const std::vector<uint8_t>& before, const std::vector<uint8_t>& after,
+                            unsigned w, unsigned h, const wchar_t* beforeLabel, const wchar_t* afterLabel);
+
 // Pure math the shader does, for tests (the same formulas as kShader's).
 // The view-space position of a pixel: `ndc` x, y in [-1, 1] (y up), `depth` as stored, `inverseProjection` row-major.
 void car_light_unproject(const float (&inverseProjection)[16], float ndcX, float ndcY, float depth, float (&out)[3]);
@@ -115,11 +122,12 @@ public:
 
     // Relights `scene` (the eye pass's resolved scene, single-sample: an RGBA16F render target) where `slots` (the car
     // slots' target, R16_UINT, multisample or not) holds a car part, with `depth` (the pass's depth texture as it drew
-    // it, R32, multisample alike). `table`'s lights and slots. The caller keeps the game's state (it is changed) and
+    // it, R32, multisample alike) and `normals` (the game's world normals, xyz * 0.5 + 0.5, multisample alike; null: the
+    // depth's directions everywhere). `table`'s lights and slots. The caller keeps the game's state (it is changed) and
     // the hooks out of the way. False: not drawn (not made, inputs missing, no car part this frame).
     bool run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* depth, ID3D11ShaderResourceView* slots,
              bool slotsMs, const CarLightTable& table, const CarLightView& view, const CarLightSettings& settings,
-             int eye);
+             int eye, ID3D11ShaderResourceView* normals = nullptr);
     // The lights' collection at the draws (the caller's measure, ms), counted into the CPU figure.
     void add_collect_ms(double ms);
     // Once a frame (after both eyes): the GPU timestamps of frames before read back where ready (never waits); every

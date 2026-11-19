@@ -58,6 +58,10 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
                 e.omniColour = omni[2];
                 e.omniCount = omni[3];
             }
+            UINT normal = 0;
+            size = sizeof(normal);
+            e.gameNormal = g.carLight && SUCCEEDED(vs->GetPrivateData(kVsGameNormalGuid, &size, &normal)) &&
+                           size == sizeof(normal) && normal;
         }
     }
     return e;
@@ -128,6 +132,13 @@ const PsTwinEntry& ps_entry(ID3D11PixelShader* ps) {
     if (g.carLight) {  // night car lighting: a car body's lacquer
         UINT paint = 0, size = sizeof(paint);
         set.entry[k].paint = SUCCEEDED(ps->GetPrivateData(kPsPaintGuid, &size, &paint)) && size == sizeof(paint) && paint;
+        UINT normal = 0;
+        size = sizeof(normal);
+        set.entry[k].slotNormal =
+            SUCCEEDED(ps->GetPrivateData(kPsSlotNormalGuid, &size, &normal)) && size == sizeof(normal) && normal;
+        UINT ao = 0;
+        size = sizeof(ao);
+        set.entry[k].slotAo = SUCCEEDED(ps->GetPrivateData(kPsSlotAoGuid, &size, &ao)) && size == sizeof(ao) && ao;
     }
     return set.entry[k];
 }

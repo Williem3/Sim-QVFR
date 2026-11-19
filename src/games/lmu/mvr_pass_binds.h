@@ -510,7 +510,7 @@ void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Re
                  simqvfr::d3d11_state::kDepth | simqvfr::d3d11_state::kRSState | simqvfr::d3d11_state::kViewports |
                  simqvfr::d3d11_state::kScissors;
     spec.psCb = {0, 2};
-    spec.psSrv = {0, 3};
+    spec.psSrv = {0, 4};
     bool stereoOff = false;
     if (g.stereo && !g.instanced) {
         if (g.twoViews(g.context, false) == 0)
@@ -525,7 +525,7 @@ void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Re
         // g.replaying too): the hooks see the game's shader and targets bound again.
         const simqvfr::d3d11_state::Guard<> keep(context, spec);
         if (g.carLightPass.run(context, scene, depthTexture.Get(), g.slotSrv.Get(), g.slotSamples > 1, g.carLights, v,
-                               g.carLightSettings, eye))
+                               g.carLightSettings, eye, g.normalsOn ? g.normalSrv.Get() : nullptr))
             ++g.carLightRuns;
     }
     g.replaying = was;

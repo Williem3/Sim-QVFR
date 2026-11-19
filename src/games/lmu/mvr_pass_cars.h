@@ -167,6 +167,9 @@ D3D11_BLEND_DESC blend_twin_desc(const D3D11_BLEND_DESC& game, bool write) {
     t.IndependentBlendEnable = TRUE;
     t.RenderTarget[1] = {FALSE, D3D11_BLEND_ONE, D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE, D3D11_BLEND_ZERO,
                          D3D11_BLEND_OP_ADD, static_cast<UINT8>(write ? D3D11_COLOR_WRITE_ENABLE_RED : 0)};
+    // Night car lighting's normals (target 2, bound only with it): written where the slot is.
+    t.RenderTarget[2] = {FALSE, D3D11_BLEND_ONE, D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE, D3D11_BLEND_ZERO,
+                         D3D11_BLEND_OP_ADD, static_cast<UINT8>(write ? D3D11_COLOR_WRITE_ENABLE_ALL : 0)};
     return t;
 }
 
@@ -371,6 +374,31 @@ bool ensure_slot_target() {
     g.slotSamples = samples;
     g.slotQuality = quality;
     simqvfr::logf("lmu mvr: car slots: slot target %ux%u x%u (R16_UINT, %.0f MB)", w, h, samples, w * 2.0 * h * samples / 1048576.0);
+    // Night car lighting: the game's normals beside it, at the same size and samples (render targets bound together
+    // share both).
+    g.normalTex.Reset();
+    g.normalRtv.Reset();
+    g.normalSrv.Reset();
+    g.normalsOn = false;
+    if (g.carLight) {
+        UINT normalLevels = 1;
+        const D3D11_TEXTURE2D_DESC nt = {w, h, 1, 1, DXGI_FORMAT_R16G16B16A16_UNORM, {samples, quality}, D3D11_USAGE_DEFAULT,
+                                         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+        g.normalsOn = (samples == 1 || (SUCCEEDED(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R16G16B16A16_UNORM, samples,
+                                                                                      &normalLevels)) &&
+                                        quality < normalLevels)) &&
+                      SUCCEEDED(device->CreateTexture2D(&nt, nullptr, &g.normalTex)) &&
+                      SUCCEEDED(device->CreateRenderTargetView(g.normalTex.Get(), nullptr, &g.normalRtv)) &&
+                      SUCCEEDED(device->CreateShaderResourceView(g.normalTex.Get(), nullptr, &g.normalSrv));
+        if (!g.normalsOn) {
+            g.normalTex.Reset();
+            g.normalRtv.Reset();
+            g.normalSrv.Reset();
+        }
+        simqvfr::logf("lmu car light: the game's normals and occlusion %s (%ux%u x%u RGBA16, %.0f MB)",
+                      g.normalsOn ? "target made" : "target COULDN'T be made: the depth's directions everywhere", w, h,
+                      samples, w * 8.0 * h * samples / 1048576.0);
+    }
     return true;
 }
 
@@ -408,12 +436,14 @@ void slot_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilVi
                                           static_cast<LONG>(fh)}};
             const FLOAT zero[4] = {};
             g.context1->ClearView(g.slotRtv.Get(), zero, rects, g.drawFocus && fw && fh ? 2 : 1);
+            if (g.normalsOn)
+                g.context1->ClearView(g.normalRtv.Get(), zero, rects, g.drawFocus && fw && fh ? 2 : 1);
             g.slotsCleared = true;
             ++g.stats.slotPasses;
         }
         if (g.slotsCleared) {
-            ID3D11RenderTargetView* two[2] = {rtvs[0], g.slotRtv.Get()};
-            realOMSetRenderTargets(g.context, 2, two, dsv);
+            ID3D11RenderTargetView* three[3] = {rtvs[0], g.slotRtv.Get(), g.normalRtv.Get()};
+            realOMSetRenderTargets(g.context, g.normalsOn ? 3 : 2, three, dsv);
             g.slotsBound = true;
             ++g.stats.slotBinds;
         }
@@ -432,9 +462,9 @@ void slot_unbind() {
     if (!g.slotsBound)
         return;
     Timed timed(g.time.slotState);
-    ID3D11RenderTargetView* rtvs[2] = {};
+    ID3D11RenderTargetView* rtvs[3] = {};
     ID3D11DepthStencilView* dsv = nullptr;
-    g.context->OMGetRenderTargets(2, rtvs, &dsv);
+    g.context->OMGetRenderTargets(3, rtvs, &dsv);
     realOMSetRenderTargets(g.context, 1, rtvs, dsv);
     for (ID3D11RenderTargetView* r : rtvs)
         if (r)
@@ -526,8 +556,12 @@ void car_light_record(unsigned slot) {
     if (cb == g.omniRes && g.omniValid) {
         const float origin[3] = {g.matrix[12], g.matrix[13], g.matrix[14]};
         const OmniLayout layout{g.vsOmniPos, g.vsOmniColour, g.vsOmniCount};
-        const bool paint = g.gamePs && ps_entry(g.gamePs).paint;
-        g.carLights.draw(slot, origin, g.omniShadow.data(), g.omniShadow.size(), layout, g.omniWrites, paint);
+        const PsTwinEntry* pe = g.gamePs ? &ps_entry(g.gamePs) : nullptr;
+        const bool paint = pe && pe->paint;
+        // The game's normal is in target 2 where the vertex shader hands it on and the pixel shader's twin writes it.
+        const bool normal = g.normalsOn && g.vsGameNormal && pe && pe->slotNormal;
+        const bool ao = normal && pe->slotAo;  // the w: its baked occlusion (else 1, written with the normal)
+        g.carLights.draw(slot, origin, g.omniShadow.data(), g.omniShadow.size(), layout, g.omniWrites, paint, normal, ao);
         ++g.carLightRecords;
     } else {
         ++g.carLightMisses;
