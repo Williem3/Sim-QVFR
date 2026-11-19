@@ -62,6 +62,8 @@ public:
             shaderProbe_ = true;  // the scene draws need the shaders' twins
         // The focus replays' full-screen shaders that turn their vertex into screen pixels (the light list's tiles) get
         // a twin placing the vertex at the box: [experiment] scs_focus_position=0 for the replays as before (A/B).
+        if (simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"scs_mirror_diag", 0, ini) != 0)
+            corner_mirror_diag(true);  // which shaders read the pairs the mirrors rewrite (dev builds)
         if (focusPercent_ > 0 && GetPrivateProfileIntW(L"experiment", L"scs_focus_position", 1, ini) != 0) {
             lmu::mvr_probe_position_twins(true);
             simqvfr::log_line("scs focus: full-screen passes that use screen pixels are replayed at the box's place on the eye's screen");

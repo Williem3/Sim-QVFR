@@ -78,6 +78,8 @@ inline constexpr GUID kCb0StaticRowsGuid = {0x5e2a7b14, 0xc39d, 0x4f61, {0x8e, 0
 // The SCS games' focus replays (mvr_probe_position_twins): a full-screen pass's vertex shader that turns its vertex into
 // screen pixels carries its dxbc::add_position_remap twin (an interface) and the twin's rectangle and size rows (two ints).
 inline constexpr GUID kFocusPositionTwinGuid = {0x8b3e51c7, 0x2d64, 0x4a19, {0x9f, 0x0e, 0x73, 0xc2, 0x58, 0xa1, 0x4d, 0x36}};
+inline constexpr GUID kShaderIdGuid = {0x2b9e64d1, 0x8f30, 0x4c57, {0xb2, 0x1a, 0x6e, 0x95, 0x03, 0xd8, 0x47, 0xc2}};
+inline constexpr GUID kCbRows4Guid = {0x7a15c3e8, 0x46b2, 0x4e9d, {0x81, 0x6c, 0x2f, 0xa0, 0x5b, 0x93, 0xd4, 0x17}};
 inline constexpr GUID kFocusPositionRowsGuid = {0x1f6a9c38, 0x7e05, 0x4b72, {0xa4, 0xd9, 0x0c, 0x83, 0x6e, 0x27, 0xb5, 0x91}};
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
 // Every input layout the probe sees made, twinned or not: its kind (a UINT). Unmarked: not seen (made before the
@@ -98,6 +100,9 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false, bool nameSh
 void mvr_probe_device(ID3D11Device* device);
 // The SCS games: full-screen shaders get their position twins (kFocusPositionTwinGuid) from now on.
 void mvr_probe_position_twins(bool on);
+// The SCS mirror diagnostic (dev builds): every shader tagged with its id (kShaderIdGuid, DXBC checksum words 0-1)
+// and the rows of constant buffer slots 0-3 it reads by a fixed index (kCbRows4Guid: 4 x 64 uint64).
+void mvr_probe_cb_rows(bool on);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();
 MvrProbeStats mvr_probe_stats();

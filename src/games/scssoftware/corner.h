@@ -59,6 +59,8 @@ void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpu
                      const std::vector<uint64_t>& dumpPs = {});  // these pixel shaders' constant ranges saved (diagnostics)
 // Dev test of the UI panels' focus redraw (redraw_focus): every draw onto the headset's image takes it, twin or not.
 void corner_set_force_ui_redraw(bool on);
+// Dev builds' mirror diagnostic ([experiment] scs_mirror_diag=1, corner_mirror_diag.cpp): before the game's shaders.
+void corner_mirror_diag(bool on);
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame
 // just drawn had its eyes in it; `info` itself otherwise. The copies live until the next call.

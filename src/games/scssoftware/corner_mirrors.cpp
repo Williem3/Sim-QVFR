@@ -96,6 +96,8 @@ void refresh(Mirror& m) {
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
+    ++m.serial;
+    mirror_diag_refresh(m);
     ++g.mirrorRefreshes;
 }
 

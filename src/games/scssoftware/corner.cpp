@@ -49,6 +49,7 @@ void take_frame_end() {
     mark(kMarkFrameEnd, 0);
     g.frameDraw = 0;
     ++g.stats.frames;
+    mirror_diag_frame_end();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
@@ -334,6 +335,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     g.instancedDraw = false;
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
+    mirror_diag_draw();
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
@@ -876,6 +878,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 }
 
 void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
+
+void corner_mirror_diag(bool on) { mirror_diag_enable(on); }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
                      bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {

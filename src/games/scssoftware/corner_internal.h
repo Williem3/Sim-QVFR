@@ -58,6 +58,7 @@ struct Mirror {
     uint64_t usedFrame = 0;  // the last frame a bind used it (evict_mirrors)
     int id = -1;             // its slot in State::mirrorIds (every mirror has one: learn mirrors nothing without)
     uint32_t seenGen = 0;    // State::mirrorGen[id] as of the copy
+    uint32_t serial = 0;     // its refreshes so far (the mirror diagnostic's key)
 };
 
 struct Range {
@@ -430,6 +431,11 @@ void evict_mirrors(bool orphans = false);
 void release_orphans();
 void swap_bound(bool on);
 void mirrors_for_target();  // our copies bound or not for the bound target (corner_mirrors.cpp)
+// corner_mirror_diag.cpp (dev builds, [experiment] scs_mirror_diag=1)
+void mirror_diag_enable(bool on);
+void mirror_diag_refresh(const Mirror& m);
+void mirror_diag_draw();
+void mirror_diag_frame_end();
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.

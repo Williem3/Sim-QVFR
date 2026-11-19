@@ -90,6 +90,22 @@ int64_t lastLogQpc = 0;
 int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
 std::atomic<bool> positionTwins{false};  // the SCS games' focus replays: full-screen shaders' position twins
+std::atomic<bool> cbRows{false};  // the SCS mirror diagnostic: shader ids and slots 0-3's fixed rows
+
+// The SCS mirror diagnostic's tags (mvr_probe_cb_rows).
+void tag_cb_rows(ID3D11DeviceChild* shader, const void* code, SIZE_T size) {
+    if (!cbRows.load(std::memory_order_relaxed) || !shader || !code || size < 20)
+        return;
+    uint32_t id[2];
+    std::memcpy(id, static_cast<const uint8_t*>(code) + 4, sizeof(id));
+    const uint64_t value = static_cast<uint64_t>(id[0]) << 32 | id[1];
+    shader->SetPrivateData(kShaderIdGuid, sizeof(value), &value);
+    static thread_local uint64_t rows[4][64];
+    for (uint32_t slot = 0; slot < 4; ++slot)
+        if (!dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(code), size, slot, rows[slot]))
+            return;
+    shader->SetPrivateData(kCbRows4Guid, sizeof(rows), rows);
+}
 
 // The game creates each of its ~135 vertex shaders many times (3,810 creations in a race, 2026-11-08): one conversion
 // and one NVAPI shader per distinct bytecode, by its checksum (null: refused or not created).
@@ -372,6 +388,8 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
             }
         }
     }
+    if (SUCCEEDED(hr) && !inProbe && shader)
+        tag_cb_rows(*shader, code, size);
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
         shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
@@ -446,6 +464,7 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         if (dxbc_checksum(code, size, checksum))
             (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);
     }
+    tag_cb_rows(*shader, code, size);
     if (code && size >= 20) {  // its id, for the logs and the SCS replay switches (scs_replay_skip_ps)
         uint32_t id[2];
         std::memcpy(id, static_cast<const uint8_t*>(code) + 4, sizeof(id));
@@ -637,6 +656,7 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 }  // namespace
 
 void mvr_probe_position_twins(bool on) { positionTwins.store(on, std::memory_order_relaxed); }
+void mvr_probe_cb_rows(bool on) { cbRows.store(on, std::memory_order_relaxed); }
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;
