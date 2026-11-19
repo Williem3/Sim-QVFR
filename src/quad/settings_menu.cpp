@@ -273,10 +273,9 @@ bool color_section(const SettingsMenu& menu) { return menu.launch.qvfr && menu.l
 }  // namespace
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
-    std::vector<MenuPage> pages = {MenuPage::Picture};
-    if (color_section(menu))
+    std::vector<MenuPage> pages = {MenuPage::Picture, MenuPage::Foveation};
+    if (color_section(menu))  // after Foveation, at the user's ask (2026-11-18)
         pages.push_back(MenuPage::Color);
-    pages.push_back(MenuPage::Foveation);
     if (view_section(menu))
         pages.push_back(MenuPage::View);
     pages.push_back(MenuPage::Headset);

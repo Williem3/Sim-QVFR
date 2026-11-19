@@ -759,10 +759,10 @@ Card frame_generation_card() {
 // The cards this game and these settings show, in reading order.
 std::vector<Card> picture_cards() {
     std::vector<Card> cards = {resolution_card(), foveation_card(), preview_card()};
+    if (game_has(&games::GameFeatures::sharpening))  // every game whose compositor runs; after Foveation, as in the headset
+        cards.push_back(color_card());
     if (game_has(&games::GameFeatures::fovCrop) || game_has(&games::GameFeatures::helmet))
         cards.push_back(view_card());
-    if (game_has(&games::GameFeatures::sharpening))  // every game whose compositor runs
-        cards.push_back(color_card());
     if (rendering_shown())
         cards.push_back(rendering_card());
     // Each feature's card holds its switch; what its switch turns on follows straight under it.

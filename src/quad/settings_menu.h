@@ -217,11 +217,11 @@ struct SettingsMenu {
 };
 
 // The menu's pages, as tabs, their sections the launcher's cards by the launcher's names: Picture (Resolution, the
-// game's upscaler: DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), Colour (QVFR, a game with
-// it: colour correction), Foveation, View (View & helmet; a game without either, no page), Headset (Headset menu,
+// game's upscaler: DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), Foveation, Colour (QVFR, a
+// game with it: colour correction), View (View & helmet; a game without either, no page), Headset (Headset menu,
 // Performance overlay, Clock) and Game (CPU). The user's layout (2026-11-16); before it ten pages of their own names,
-// some of one line, the page shown only by its title. Colour: its own page at the user's ask (2026-11-18).
-enum class MenuPage { Picture, Color, Foveation, View, Headset, Game };
+// some of one line, the page shown only by its title. Colour: its own page after Foveation at the user's ask (2026-11-18).
+enum class MenuPage { Picture, Foveation, Color, View, Headset, Game };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 // The pages' names for the tab strip under the title, in order (menu_pages'); the current one is menu.page.

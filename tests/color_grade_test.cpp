@@ -164,8 +164,9 @@ int SIM_QVFR_TEST_MAIN() {
         check(!shown, "menu: no Color page for a game without the compositor's features");
         m.launch.sharpening = true;
         const std::vector<MenuPage> pages = menu_pages(m);
-        check(pages.size() > 1 && pages[1] == MenuPage::Color, "menu: the Color page after Picture");
-        m.page = 1;
+        check(pages.size() > 2 && pages[1] == MenuPage::Foveation && pages[2] == MenuPage::Color,
+              "menu: the Color page after Foveation");
+        m.page = 2;
         std::vector<MenuItem> items = menu_page_items(m);
         check(items.size() == 3 && items[1] == MenuItem::HeadColor && items[2] == MenuItem::ColorOn,
               "menu: off, only the switch");
