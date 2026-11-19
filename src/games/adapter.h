@@ -61,6 +61,12 @@ public:
     // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
     // as mode=off, and puts nothing of its own into the game or the headset.
     virtual bool has_qvfr() const { return true; }
+    // xrEnumerateViewConfigurationViews (stereo): the size each eye's view was offered to the game, after the layer's
+    // own change to it (LMU: its eye targets' size, on any game build).
+    virtual void views_offered(uint32_t width, uint32_t height) {
+        (void)width;
+        (void)height;
+    }
     // True: a game without the layer's views4 QVFR (has_qvfr false) that runs QVFR on a path of its own below the layer
     // (the SCS games' D3D11 corner), decided from `ini` at load, before the adapter's instance_created. The layer then
     // still runs as mode=off, but its reports say QVFR and the CPU settings apply.

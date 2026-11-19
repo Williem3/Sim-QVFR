@@ -96,6 +96,8 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
         quad.reportedW = views[0].recommendedImageRectWidth;
         quad.reportedH = views[0].recommendedImageRectHeight;
     }
+    if (stereo)
+        game->views_offered(views[0].recommendedImageRectWidth, views[0].recommendedImageRectHeight);
     if (XR_SUCCEEDED(r) && views && countOutput)
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i)
             logf("xrEnumerateViewConfigurationViews type=%d view=%u recommended=%ux%u max=%ux%u samples=%u", type, i,

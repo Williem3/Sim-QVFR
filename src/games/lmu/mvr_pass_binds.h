@@ -262,12 +262,44 @@ bool viewports_ours() {
            std::memcmp(g.vps, sizeCut.vps, g.vpCount * sizeof(D3D11_VIEWPORT)) != 0;
 }
 
+// The game's exe (YEBIS is linked into it): its reads, as against another DLL's (NGX's, a tool's).
+bool from_game_exe(const void* at) {
+    static const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    static const uintptr_t size = [] {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        return static_cast<uintptr_t>(
+            reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const char*>(dos) + dos->e_lfanew)
+                ->OptionalHeader.SizeOfImage);
+    }();
+    return reinterpret_cast<uintptr_t>(at) - base < size;
+}
+
 using RSGetViewportsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT*, D3D11_VIEWPORT*);
 void rs_get_viewports(RSGetViewportsFn real, const void* caller, ID3D11DeviceContext* context, UINT* n,
                       D3D11_VIEWPORT* vps) {
     if (!n || !ours(context) || (from_this_image(caller) && !g.readsAsGameForTests) || !viewports_ours()) {
         real(context, n, vps);
         return;
+    }
+    // Another DLL than the game's exe reading the viewports while ours are bound (the log: which, and how often).
+    if (!g.readsAsGameForTests && !from_game_exe(caller)) {
+        ++g.stats.otherViewportReads;
+        if (!g.otherReadLogged) {
+            g.otherReadLogged = true;
+            HMODULE module = nullptr;
+            wchar_t name[MAX_PATH] = L"?";
+            if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   static_cast<LPCWSTR>(caller), &module))
+                GetModuleFileNameW(module, name, MAX_PATH);
+            simqvfr::logf("lmu mvr: pass %d: %ls read the viewports while ours were bound: %s (the first; counted from "
+                          "now on, lmu_viewport_reads=%d)",
+                          g.pass, name, g.viewportReads == 2 ? "given the bound ones" : "given the game's own",
+                          g.viewportReads);
+        }
+        if (g.viewportReads == 2) {  // only the game's exe is answered with its own
+            real(context, n, vps);
+            return;
+        }
     }
     const UINT count = sizeCut.vpCount;
     if (vps) {
@@ -285,6 +317,25 @@ void rs_get_viewports(RSGetViewportsFn real, const void* caller, ID3D11DeviceCon
                       "%.0f,%.0f %.0fx%.0f (the first; counted from now on)",
                       g.pass, why == 0 ? "the live resolution's cut" : "the focus view's beside the eye's", v.TopLeftX,
                       v.TopLeftY, v.Width, v.Height);
+    }
+}
+
+// Compute writes bound (mvr_fsr_watch, a build whose FSR setting can't be read): FSR's sharpening writes the eye's
+// image from a compute shader, so its view of the image bound here says FSR is on. Passed on first, untouched.
+void cs_set_uavs(ID3D11DeviceContext* context, UINT start, UINT n, ID3D11UnorderedAccessView* const* uavs,
+                 const UINT* counts) {
+    call_real<kHookCSUav>(context, start, n, uavs, counts);
+    if (!g.fsrWatch || g.fsrUavSeen || !uavs || !ours(context) || (!g.fsrEye[0] && !g.fsrEye[1]))
+        return;
+    for (UINT i = 0; i < n && i < D3D11_1_UAV_SLOT_COUNT; ++i) {
+        if (!uavs[i])
+            continue;
+        ComPtr<ID3D11Resource> r;
+        uavs[i]->GetResource(&r);
+        if (r && (r.Get() == g.fsrEye[0] || r.Get() == g.fsrEye[1])) {
+            g.fsrUavSeen = true;
+            return;
+        }
     }
 }
 

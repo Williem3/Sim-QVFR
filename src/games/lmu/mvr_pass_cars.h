@@ -45,7 +45,7 @@ inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, U
         return;
     }
     SampledTimed whole(g.time.carHooks, carSampleHook);
-    if (g.carTrack) {
+    if (cb_track()) {
         if (timeHooks)
             ++g.time.carCalls;
         for (UINT i = 0; i < n && start + i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
@@ -84,9 +84,15 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
     SampledTimed whole(g.time.carHooks, carSampleHook);
     if (timeHooks)
         ++g.time.carCalls;
-    if (resource == g.worldRes && g.worldMapped && g.carActive && context == g.context) {
+    if (resource == g.worldRes && g.worldMapped && (g.carActive || g.viewTrack) && context == g.context) {
         SampledTimed timed(g.time.carReads, carSampleRead);
-        std::memcpy(g.matrix, static_cast<const uint8_t*>(g.worldMapped) + g.worldCbOffset, sizeof(g.matrix));
+        const auto* data = static_cast<const uint8_t*>(g.worldMapped);
+        std::memcpy(g.matrix, data + g.worldCbOffset, sizeof(g.matrix));
+        if (g.viewTrack && g.viewCbOffset != ~0u) {  // the draw's camera too (offsets checked against the buffer's size)
+            std::memcpy(g.viewPair, data + g.viewCbOffset, 64);
+            std::memcpy(g.viewPair + 16, data + g.viewProjCbOffset, 64);
+            g.viewPairRead = true;
+        }
         g.worldMapped = nullptr;
         g.carMatrix = true;
         ++g.stats.carMatrixReads;
@@ -409,8 +415,39 @@ bool vb_dynamic(ID3D11Buffer* vb) {
 // A scene draw in an eye pass whose vertex shader reads a worldMatrix: its key and the matrix last written into the
 // per-draw buffer go to the car parts' record. The per-draw buffer is learned from such a draw (the buffer at the
 // shader's worldMatrix slot); the draw that teaches it has no matrix yet.
+// View tracking: the pair last written into the per-draw buffer, kept for this eye pass when not one it has already (an
+// eye pass draws its own camera and the mirrors' and side targets': view_pair.h tells them apart later).
+void keep_view_pair() {
+    if (!g.viewTrack || !g.viewPairRead || g.pass < 0 || g.pass > 1 || g.vsViewOffset != g.viewCbOffset ||
+        g.vsViewProjOffset != g.viewProjCbOffset)
+        return;
+    State::PassPairs& p = g.passPairs[g.pass];
+    if (p.frame != g.carFrame) {
+        p.frame = g.carFrame;
+        p.count = p.next = 0;
+        p.last = -1;
+    }
+    const uint32_t world = car_matrix_identity(g.matrix) ? 1u : 0u;  // a static world draw
+    // Most draws repeat the draw before's camera: that one first, the rest only when it changed.
+    if (p.last >= 0 && std::memcmp(p.pair[p.last], g.viewPair, sizeof(g.viewPair)) == 0) {
+        p.worldDraws[p.last] += world;
+        return;
+    }
+    for (int i = 0; i < p.count; ++i)
+        if (std::memcmp(p.pair[i], g.viewPair, sizeof(g.viewPair)) == 0) {
+            p.last = i;
+            p.worldDraws[i] += world;
+            return;
+        }
+    const int at = p.count < State::kViewPairs ? p.count++ : p.next;
+    p.next = (at + 1) % State::kViewPairs;
+    std::memcpy(p.pair[at], g.viewPair, sizeof(g.viewPair));
+    p.worldDraws[at] = world;
+    p.last = at;
+}
+
 int car_draw(UINT count, UINT start, INT base) {
-    if (!g.carTrack || g.vsWorldSlot < 0 || !g.depthBound)
+    if (!cb_track() || g.vsWorldSlot < 0 || !g.depthBound)
         return -1;
     ID3D11Buffer* cb = g.vsCb[g.vsWorldSlot];
     if (!cb)
@@ -426,6 +463,12 @@ int car_draw(UINT count, UINT start, INT base) {
         g.worldCb = cb;
         g.worldRes = cb;
         g.worldCbOffset = g.vsWorldOffset;
+        // The view matrices beside it, where this draw's shader reads them and the buffer holds them whole.
+        const bool views = g.vsViewOffset != ~0u && g.vsViewProjOffset != ~0u && d.ByteWidth >= g.vsViewOffset + 64 &&
+                           d.ByteWidth >= g.vsViewProjOffset + 64;
+        g.viewCbOffset = views ? g.vsViewOffset : ~0u;
+        g.viewProjCbOffset = views ? g.vsViewProjOffset : ~0u;
+        g.viewPairRead = false;
         g.worldMapped = nullptr;
         g.carMatrix = false;
         ++g.stats.carBufferLearned;
@@ -439,6 +482,9 @@ int car_draw(UINT count, UINT start, INT base) {
         ++g.stats.carOtherOffset;
         return -1;
     }
+    keep_view_pair();
+    if (!g.carTrack || !g.carActive)  // view tracking alone (or the cars' A/B side without them): no car table
+        return -1;
     // A dynamic vertex buffer is a ring the game refills each frame (lmu-ai_frame11731.rdc: a 1.4 MB one, mapped 246
     // times in the frame, ~100 car-side draws): its draws' base vertex and offset move with the ring, so they're keyed by
     // the buffer, the index buffer and the index range alone (unique within a frame there; the index buffer's ranges

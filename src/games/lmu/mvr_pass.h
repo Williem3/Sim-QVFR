@@ -73,6 +73,8 @@ inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12
                           kExecuteCommandList = 58, kHSSetShader = 60, kDSSetShader = 64;
 // The game's reads of its viewports (YEBIS's start reads the bound one to size its region): given the game's own.
 inline constexpr unsigned kRSGetViewports = 95;
+// FSR seen at the d3d11 level (mvr_fsr_watch): its compute pass's writes into the eye's image.
+inline constexpr unsigned kCSSetUnorderedAccessViews = 68;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
 // DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
 // PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
@@ -85,7 +87,8 @@ inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        
                                        kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
                                        kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
                                        kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
-                                       kOMSetDepthStencilState, kExecuteCommandList, kRSGetViewports};
+                                       kOMSetDepthStencilState, kExecuteCommandList, kRSGetViewports,
+                                       kCSSetUnorderedAccessViews};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -174,6 +177,25 @@ void mvr_test_reads_as_game(bool on);
 // the focus final is then taken from. `eye0`, `eye1`: the eyes' images (compared only; the bind of one after the
 // composite is where FSR has written it), null while unknown.
 void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1);
+// Whether FSR is on, seen at the d3d11 level, for a game build whose FSR setting can't be read: FSR's sharpening pass
+// writes the eye's image from a compute shader (an unordered access view of it; the final blit draws it instead). On
+// before mvr_pass_install: CSSetUnorderedAccessViews is hooked. mvr_fsr_written: an eye's image (mvr_fsr's) bound for
+// compute writes since the last call (it starts again).
+void mvr_fsr_watch(bool on);
+bool mvr_fsr_written();
+// The size of the scene target the last tracked pass began on (the game's main targets); false before the first.
+bool mvr_scene_size(unsigned& width, unsigned& height);
+// DLSS's camera on any game build (view_pair.h): the per-draw buffer's viewMatrix and viewProjMatrix read as car
+// tracking reads its worldMatrix (its hooks, without its table when the cars are off). Before mvr_pass_install.
+void mvr_view_track(bool on);
+// The game's reads of its viewports (mvr_pass_binds.h rs_get_viewports), for an A/B ([experiment] lmu_viewport_reads):
+// 1 every caller but Sim-QVFR given the game's own viewports while ours are bound (as since 1.2.1), 2 only the game's
+// exe (YEBIS's own read), other DLLs the bound ones, 0 RSGetViewports not hooked. Before mvr_pass_install.
+void mvr_viewport_reads(int mode);
+// This frame's distinct (view, viewProj) pairs eye pass `pass` (0-1) has drawn so far, each 32 floats (view, then
+// viewProj), up to `max`, and per pair its draws with an identity worldMatrix (the static world's; may be null); how
+// many.
+int mvr_view_pairs(int pass, float (*pairs)[32], unsigned* worldDraws, int max);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
@@ -249,6 +271,7 @@ struct MvrPassStats {
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
     uint64_t gameViewportReads = 0;          // the game's RSGetViewports answered with its own while ours were bound
+    uint64_t otherViewportReads = 0;         // the same calls from another DLL than the game's exe (NGX's, a tool's)
     uint64_t extraResolves = 0;              // multisample resolves after a pass's post began (passed on, not a new post)
     uint64_t resolveFunctions = 0;           // of those, ResolveSubresource's
     uint64_t focusCopies = 0, focusComposites = 0, focusFailures = 0;  // the focus post's steps (mvr_focus_replay)

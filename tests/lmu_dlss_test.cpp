@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "engine/dlss_math.h"
+#include "games/lmu/view_pair.h"
 #include "quad/offaxis_focus.h"
 #include "test_util.h"
 
@@ -309,6 +310,52 @@ int SIM_QVFR_TEST_MAIN() {
           "depth: 85% or more agreeing is a fit, with standing too a fit with little motion");
     check(!std::strcmp(gate_depth_verdict(0.70, 0.62), ": WORSE than none") && !std::strcmp(gate_depth_verdict(0.5, 0.6), ": partly"),
           "depth: fewer than standing is worse, else below 85% partly");
+
+    // Any game build (view_pair.h): the pass's camera from a draw's viewMatrix and viewProjMatrix, as LMU uploads them
+    // (floats, reversed depth, far from the world's origin), and the eye's own told from a mirror's.
+    {
+        const M4 camView = view_of(1834.25, 31.5, -2207.75, 0.7);
+        const M4 eyeP = projection_of(fov, 0.075, 1e7);
+        const M4 vp = mul(camView, reversed_depth(eyeP));  // what the GPU applies: depth 1 near, 0 far
+        float v[16], vpf[16], eyeF[16];
+        for (int i = 0; i < 16; ++i) {
+            v[i] = static_cast<float>(camView[i]);
+            vpf[i] = static_cast<float>(vp[i]);
+            eyeF[i] = static_cast<float>(eyeP[i]);
+        }
+        float got[16];
+        check(lmu::projection_of_pair(v, vpf, got) && projection(from_floats(got)),
+              "view pair: inverse(view) x viewProj is a projection of the slots' shape");
+        check(close_to(got[0], eyeP[0], 1e-5 * eyeP[0]) && close_to(got[5], eyeP[5], 1e-5 * eyeP[5]) &&
+                  close_to(got[8], eyeP[8], 1e-4) && close_to(got[9], eyeP[9], 1e-4),
+              "view pair: its x and y terms are the eye's");
+        check(close_to(got[10], eyeP[10], 1e-4) && close_to(got[14], eyeP[14], 2e-4 * std::fabs(eyeP[14]) + 1e-5),
+              "view pair: its depth terms are the ordinary convention's (the module reverses them again)");
+        check(lmu::same_eye(got, eyeF), "view pair: the eye's own camera is the eye's");
+        {  // DLSS's jitter a frame apart: up to a pixel each way at a 1199-wide eye (2 / 1199 in NDC)
+            float jittered[16];
+            std::memcpy(jittered, got, sizeof(jittered));
+            jittered[8] += 2.0f / 1199;
+            jittered[9] -= 2.0f / 963;
+            check(lmu::same_eye(jittered, eyeF), "view pair: the eye's camera a jitter phase on is still the eye's");
+        }
+        const Tangents narrow{-0.3, 0.3, -0.2, 0.2};  // a mirror's camera, drawn in the same pass
+        const M4 mirror = mul(camView, reversed_depth(projection_of(narrow, 0.075, 1e7)));
+        float mf[16], mirrorP[16];
+        for (int i = 0; i < 16; ++i)
+            mf[i] = static_cast<float>(mirror[i]);
+        check(lmu::projection_of_pair(v, mf, mirrorP) && !lmu::same_eye(mirrorP, eyeF), "view pair: a mirror's isn't the eye's");
+        float bent[16];
+        std::memcpy(bent, v, sizeof(bent));
+        bent[0] *= 1.1f;  // not rigid
+        check(!lmu::projection_of_pair(bent, vpf, mirrorP), "view pair: a view that isn't rigid refused");
+        float skew[16];
+        std::memcpy(skew, vpf, sizeof(skew));
+        const M4 sheared = mul(camView, mul(M4{1, 0.2, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, reversed_depth(eyeP)));
+        for (int i = 0; i < 16; ++i)
+            skew[i] = static_cast<float>(sheared[i]);
+        check(!lmu::projection_of_pair(v, skew, mirrorP), "view pair: a product not of the shape refused");
+    }
 
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;

@@ -88,6 +88,9 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
 // density or size made both focus views' again: a 80-330 ms freeze per press, more with a key held. Settled, a run of
 // steps costs one. Until then the view shows as drawn (no DLAA for that moment; super resolution: stretched).
 constexpr unsigned long long kResizeSettleMs = 500;
+// One eye's passes in a row without the game's matrices before DLSS is off for the session (two seconds at 90 Hz;
+// the other eye's passes don't reset it): one without them is left as drawn.
+constexpr unsigned kMatricesMissingLimit = 180;
 
 struct State {
     DlssRun cfg;
@@ -149,6 +152,7 @@ struct State {
     unsigned long long objectViews = 0;  // views whose vectors took moving objects' motion (DlssPass::objectSlots)
     unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
+    unsigned matricesMissing[2] = {};   // per eye, its passes in a row given none (kMatricesMissingLimit: off)
     // The player's latest change (dlss_live; under the mutex), taken at the next frame end.
     bool livePending = false;
     DlssLive live;
@@ -1055,9 +1059,14 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     }
     M4 view, projection;
     if (!pass_matrices(pass.eye, view, projection)) {
-        give_up("the game's view and projection for the pass aren't a rigid view and a projection (its log lines say more)");
+        // A pass without them is left as drawn; only a run of them is the game's way (a game that never gives them).
+        ++d.failures;
+        if (++d.matricesMissing[pass.eye & 1] >= kMatricesMissingLimit)
+            give_up("the game's view and projection for the pass aren't a rigid view and a projection (its log lines say "
+                    "more)");
         return;
     }
+    d.matricesMissing[pass.eye & 1] = 0;
     Jitter eyeJitter, focusJitter;
     XrPosef pose{};
     bool poseValid = false;

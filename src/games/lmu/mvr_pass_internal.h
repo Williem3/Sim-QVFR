@@ -75,6 +75,7 @@ struct TwinEntry {
     VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
     int worldSlot = -1;          // where it reads its worldMatrix (car tracking; mvr_probe.h kVsWorldMatrixGuid)
     UINT worldOffset = 0;
+    UINT viewOffset = ~0u, viewProjOffset = ~0u;  // its viewMatrix and viewProjMatrix there (kVsViewMatricesGuid)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -239,6 +240,24 @@ struct State {
     std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
     float matrix[16] = {};
+    // View tracking (mvr_view_track; DLSS's camera on any build, view_pair.h): car tracking's buffer reads without its
+    // table. The bound shader's viewMatrix and viewProjMatrix places, the learned buffer's (from the draw that taught
+    // it), the pair last written into it, and each eye pass's distinct pairs as drawn (the eye's own among the mirrors').
+    bool viewTrack = false, viewPairRead = false;
+    UINT vsViewOffset = ~0u, vsViewProjOffset = ~0u;
+    UINT viewCbOffset = ~0u, viewProjCbOffset = ~0u;
+    float viewPair[32] = {};  // view, then viewProj (row-major, as the buffer holds them)
+    // Room for the shadow cascades' and cube maps' cameras that pass 0 draws before its scene (the eye's own comes
+    // after them: when full, the oldest goes).
+    static constexpr int kViewPairs = 16;
+    struct PassPairs {
+        float pair[kViewPairs][32] = {};
+        // Per pair, its draws with an identity worldMatrix (the static world's: its camera is the world's; the cockpit
+        // and the sky may be drawn with the same FOV from another space).
+        uint32_t worldDraws[kViewPairs] = {};
+        int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
+        uint64_t frame = 0;                  // carFrame they were drawn in
+    } passPairs[2];
     CarMotion cars;
     uint64_t carFrame = 0;
     CarMotionStats carLogged;     // the counts at the last log line
@@ -323,6 +342,10 @@ struct State {
     unsigned obsCopyCount = 0;
     bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
     bool readsAsGameForTests = false;  // mvr_test_reads_as_game: this image's RSGetViewports taken as the game's
+    // mvr_viewport_reads ([experiment] lmu_viewport_reads): 1 any caller but this image given the game's own viewports,
+    // 2 only the game's exe (YEBIS's), 0 the hook not installed. Reads by other images seen (another DLL: NGX's, a tool's).
+    int viewportReads = 1;
+    bool otherReadLogged = false;
     bool gameReadLogged[2] = {};       // the game's viewport read given its own: under the cut, beside the focus view
     bool extraResolveLogged = false;   // a second multisample resolve in a pass (logged once)
     // observe_post_draw this pass: not where it drew focus views after a frame with both (the recovery reads the shape
@@ -330,6 +353,8 @@ struct State {
     bool observeShape = true, lastFrameFinals = false;
     int shapeMissing[2] = {}, shapeMissingLast[2] = {};  // mvr_shape_missing: each eye pass's first step not seen
     ID3D11Resource* fsrEye[2] = {};
+    // mvr_fsr_watch: CSSetUnorderedAccessViews hooked, and whether an eye's image was bound there since it was last read.
+    bool fsrWatch = false, fsrUavSeen = false;
     ComPtr<ID3D11Resource> eyeFinal[2];
     bool finalThisFrame[2] = {};
     unsigned finalW[2] = {}, finalH[2] = {};
@@ -421,6 +446,9 @@ struct State {
 };
 extern State g;
 
+// The per-draw buffer read (car tracking, or view tracking alone).
+inline bool cb_track() { return g.carTrack || g.viewTrack; }
+
 inline bool ours(ID3D11DeviceContext* context) {
     if (g.inList && context == g.context)
         ++g.stats.callsInLists;
@@ -479,6 +507,9 @@ struct Tracker {
     bool sceneLogged = false;
     bool smallLogged = false;  // a too-small candidate for the scene's target has been said
     MvrTrackStats stats;
+    // The size of the scene target the last tracked pass began on: the game's main targets (mvr_scene_size), set before
+    // its driveBegin.
+    unsigned sceneSizeW = 0, sceneSizeH = 0;
     TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
     uint64_t loggedFrames = 0;
     int detailsLogged = 0;

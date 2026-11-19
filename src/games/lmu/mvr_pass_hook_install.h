@@ -123,6 +123,8 @@ void* detour_for(int h, int n) {
             return LeanDetours<kHookDepth, &om_set_depth_stencil_state, void, ID3D11DepthStencilState*, UINT>::get(n);
         case kHookExecute: return Detours<kHookExecute, &execute_command_list, ID3D11CommandList*, BOOL>::get(n);
         case kHookVPGet: return ViewportReadDetours::get(n);
+        case kHookCSUav:
+            return Detours<kHookCSUav, &cs_set_uavs, UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*>::get(n);
         default: return nullptr;
     }
 }
@@ -132,17 +134,21 @@ void* detour_for(int h, int n) {
 // from single-pass stereo (it happens mid-pass, where d3d11's other modes can't be looked for): without either MVR's
 // hooks are as before.
 bool wanted(int h) {
+    if (h == kHookCSUav)  // FSR seen at the d3d11 level: only on a build whose FSR setting can't be read
+        return g.fsrWatch;
+    if (h == kHookVPGet)  // the game's viewport reads (lmu_viewport_reads=0: not hooked, an A/B)
+        return g.viewportReads != 0;
     if (h == kHookPS)
         return g.biasHooks || g.slotsOn;
     if (h == kHookVSCB)  // always: the remap at b13 kept over the game's binds of it
         return true;
     if (is_car_hook(h))
-        return g.carTrack;
+        return cb_track();
     if (is_slot_hook(h))
         return g.slotsOn;
     if (is_undoubled_draw(h))
         return g.instanced || g.canInstance;
-    if (h == kHookDrawIndexed && g.carTrack)  // car tracking's draws (LMU's scene draws are all DrawIndexed)
+    if (h == kHookDrawIndexed && cb_track())  // car (or view) tracking's draws (LMU's scene draws are all DrawIndexed)
         return true;
     if (is_draw(h))
         return g.focusReplay || g.instanced || g.canInstance;
@@ -274,9 +280,11 @@ void read_bindings() {
         g.vsRole = e ? e->role : VsRole::none;
         g.vsWorldSlot = e ? e->worldSlot : -1;
         g.vsWorldOffset = e ? e->worldOffset : 0;
+        g.vsViewOffset = e ? e->viewOffset : ~0u;
+        g.vsViewProjOffset = e ? e->viewProjOffset : ~0u;
         keep_game_entry(vs, e);
     }
-    if (g.carTrack) {  // car tracking: the vertex shader's constant buffers and the input assembler's buffers as bound
+    if (cb_track()) {  // car tracking: the vertex shader's constant buffers and the input assembler's buffers as bound
         ID3D11Buffer* cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
         g.context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, cbs);
         for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i) {

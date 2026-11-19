@@ -5,6 +5,8 @@
 // periphery's size inside their targets) is the eye passes' viewports and scissors cut at the d3d11 level (mvr_size_cut).
 #pragma once
 
+#include <cstdint>
+
 #include "../../quad/focus_mask.h"
 #include "../adapter.h"
 
@@ -76,10 +78,31 @@ struct QvfrFrameRun {
     // What the lens mask saves ([experiment] lmu_mask_ab=N, a measurement; with views4_test_hidden_mask=2 the mask is the
     // focus box's cut corners): N frames with the game's mask draw, N without, in turn; GPU per pass by mvr_pass's modes.
     int maskAb = 0;
+    // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
+    // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
+    bool buildFree = false;
+    // [experiment] lmu_viewport_reads (mvr_pass.h mvr_viewport_reads): 1 (default) every caller but Sim-QVFR given the
+    // game's own viewports while ours are bound, 2 only the game's exe, 0 not hooked. An A/B.
+    int viewportReads = 1;
 };
 
-// Starts QVFR on this build (its hash checked) when the run has multi-view's room (run.trackerDrives); false and a log
-// line otherwise. The focus views are drawn beside the eyes by their eye passes and composed with them by the layer.
+// The game's exe is a build abi.h's addresses are from (game.h kBuilds; hashed once). Any other build runs QVFR from
+// what OpenXR and Direct3D show, with nothing read in the game (DLSS's camera: dlss_inputs.cpp, view_pair.h).
+bool qvfr_frame_known_build();
+// This run takes the game's facts from OpenXR and Direct3D (an unknown build, or lmu_build_free=1); set by
+// qvfr_frame_start.
+bool qvfr_frame_build_free();
+// Eye `eye`'s projection from the FOV the game was last handed (focus_math.h projection_from_tangents: its x and y
+// terms only). False before the first.
+bool qvfr_frame_eye_projection(int eye, float (&out)[16]);
+// The stereo views' size the layer offered the game (xrEnumerateViewConfigurationViews, after the layer's own change):
+// the eye targets' size on any build.
+void qvfr_frame_offered(std::uint32_t width, std::uint32_t height);
+// The FOV the game was handed at xrLocateViews, after everything the layer does to it (the crop, DLSS's jitter): its
+// eye projections on any build.
+void qvfr_frame_game_views(const XrView* views, uint32_t count);
+
+// Starts QVFR when the run has multi-view's room (run.trackerDrives), on any build; false and a log line otherwise. The focus views are drawn beside the eyes by their eye passes and composed with them by the layer.
 bool qvfr_frame_start(const QvfrFrameRun& run);
 // Every xrEndFrame: counts the passes, multi-view's health and recovery, the frame's eye extent and the overlay's badge.
 void qvfr_frame_frame_end();

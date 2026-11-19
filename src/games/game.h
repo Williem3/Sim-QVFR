@@ -82,6 +82,9 @@ struct GameInfo {
     struct Defaults {
         int periphery = 0, density = 0, focusWidth = 0, focusHeight = 0;
     } defaults = {};
+    // QVFR runs on builds other than `builds` too (a game update, a beta branch), from what OpenXR and Direct3D show.
+    // The launcher then warns instead of saying Sim-QVFR stays off.
+    bool anyBuild = false;
 };
 
 // The game's id as the ini and the launcher's maps hold it (ids are ASCII: widened char by char).

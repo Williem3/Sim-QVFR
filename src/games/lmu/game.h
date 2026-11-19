@@ -33,6 +33,10 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     nullptr,  // crash reports: BugSplat's, not looked at yet
     kAntiCheat,
     L"start_protected_game.exe",
+    {},
+    // QVFR on any build (qvfr_frame.h qvfr_frame_known_build): a game update or the studio's beta and alpha branches
+    // run it, and Sim-QVFR's DLSS, from what OpenXR and Direct3D show.
+    true,
 };
 
 }  // namespace lmu

@@ -29,13 +29,13 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
             note_post_seen(context);
     }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
-    if (g.carTrack && g.carActive && ours(context)) {
+    if (((g.carTrack && g.carActive) || g.viewTrack) && ours(context)) {
         int slot = -1;
         {
             SampledTimed timed(g.time.carDraws, carSampleDraw);
             slot = car_draw(count, start, base);
         }
-        if (g.slotsBound)
+        if (g.slotsBound && g.carTrack && g.carActive)
             bind_slot_view(slot);
     }
     if (census_here(context))  // the state as the game set it, before the draw

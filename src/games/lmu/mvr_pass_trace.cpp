@@ -16,6 +16,7 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "abi.h"
+#include "qvfr_frame.h"
 #include "yebis_shaders.h"
 
 namespace lmu::mvr_detail {
@@ -73,8 +74,10 @@ std::string pt_game_settings() {
     }
     // The renderer's own state (a read of the game's memory, this diagnostic's alone): the post-processing bits and the
     // flags a static reading of its post-processing function names. Their offsets are from that reading, not verified.
+    // Only on a build abi.h's addresses are from (another build's renderer is elsewhere).
     const std::uintptr_t base = simqvfr::module_base();
-    if (const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)) {
+    if (const auto* renderer = qvfr_frame_known_build() ? *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)
+                                                        : nullptr) {
         std::uint32_t post = 0, msaa = 0;
         std::memcpy(&post, renderer + 0x7770c, sizeof(post));
         std::memcpy(&msaa, renderer + 0x1a1c, sizeof(msaa));

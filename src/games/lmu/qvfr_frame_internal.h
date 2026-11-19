@@ -34,7 +34,7 @@ extern unsigned long long frames;
 extern simqvfr::Views4Frame latestRecord;
 extern bool haveRecord;
 ID3D11Texture2D* game_eye_image(int e);
-float* slot_matrix(int eye, int kind);
+bool slot_matrix(int eye, int kind, float (&out)[16]);  // eye `eye`'s projection, on any build (qvfr_frame.cpp)
 DXGI_FORMAT typeless_of(DXGI_FORMAT f);
 void real_recommended(std::uint32_t (&out)[2]);
 
