@@ -49,30 +49,54 @@ bool renderer_matrices(int eye, float (&view)[16], float (&projection)[16], bool
     return true;
 }
 
-// The pass's view and projection from what its draws uploaded (view_pair.h): of this frame's pairs in the pass, the one
-// whose projection is the eye's. Any build. `why` (when false): none drawn yet, or none of them the eye's.
+int choiceSaid = 0;  // passes with more than one pair of the eye's FOV said (the first few)
+
+// The pass's view and projection from what its draws uploaded (view_pair.h): of this frame's pairs in the pass with the
+// eye's FOV, the one most of the static world's draws (identity worldMatrix) used: the world's camera, not another
+// space's drawn with the same FOV (the cockpit, the sky). Any build. `why` (when false): none drawn yet, or none of
+// them the eye's.
 bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const char** why = nullptr) {
     float pairs[16][32];
-    const int n = mvr_view_pairs(eye, pairs, 16);
+    unsigned world[16] = {};
+    const int n = mvr_view_pairs(eye, pairs, world, 16);
     float expected[16];
     if (!n || !qvfr_frame_eye_projection(eye, expected)) {
         if (why)
             *why = n ? "no FOV located yet" : "no pair drawn in the pass yet";
         return false;
     }
+    int best = -1, matching = 0;
+    float bestP[16];
     for (int i = 0; i < n; ++i) {
         float v[16], vp[16], p[16];
         std::memcpy(v, pairs[i], sizeof(v));
         std::memcpy(vp, pairs[i] + 16, sizeof(vp));
-        if (projection_of_pair(v, vp, p) && same_eye(p, expected)) {
-            std::memcpy(view, v, sizeof(view));
-            std::memcpy(projection, p, sizeof(projection));
-            return true;
+        if (!projection_of_pair(v, vp, p) || !same_eye(p, expected))
+            continue;
+        ++matching;
+        if (best < 0 || world[i] > world[best]) {
+            best = i;
+            std::memcpy(bestP, p, sizeof(bestP));
         }
     }
-    if (why)
-        *why = "none of the pass's pairs is the eye's";
-    return false;
+    if (best < 0) {
+        if (why)
+            *why = "none of the pass's pairs is the eye's";
+        return false;
+    }
+    if (matching > 1 && choiceSaid < 3) {  // which spaces share the eye's FOV (the log)
+        ++choiceSaid;
+        char text[768];
+        int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d: %d cameras with the eye's FOV, "
+                                "the one with the most static-world draws taken (#%d);", eye, matching, best);
+        for (int i = 0; i < n && len > 0 && len < static_cast<int>(sizeof(text)) - 80; ++i)
+            len += std::snprintf(text + len, sizeof(text) - len, " #%d %u world draws, translation %.2f %.2f %.2f;", i,
+                                 world[i], pairs[i][12], pairs[i][13], pairs[i][14]);
+        simqvfr::log_line(text);
+    }
+    std::memcpy(view, pairs[best], sizeof(view));
+    std::memcpy(projection, bestP, sizeof(projection));
+    return true;
 }
 
 // The last pass camera found per eye, and the frame (of mvr_view_pairs's count) it was found in: a pass without its own
@@ -88,7 +112,7 @@ void say_miss(int eye, const char* why) {
         return;
     ++missSaid;
     float pairs[16][32], expected[16] = {};
-    const int n = mvr_view_pairs(eye, pairs, 16);
+    const int n = mvr_view_pairs(eye, pairs, nullptr, 16);
     const bool haveEye = qvfr_frame_eye_projection(eye, expected);
     char text[1024];
     int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d without its own (%s); the eye's m0 "
@@ -120,12 +144,7 @@ void log_once(const float (&view)[16], const float (&projection)[16], bool rigid
 
 // A known build: the drawn camera against the renderer's, every pass (the log: the first three that differ, a count
 // every 5400 passes). Nothing changes with it.
-void compare(int eye, const float (&view)[16], const float (&projection)[16]) {
-    float v[16], p[16];
-    if (!drawn_matrices(eye, v, p)) {
-        ++noPair;
-        return;
-    }
+void compare(int eye, const float (&v)[16], const float (&p)[16], const float (&view)[16], const float (&projection)[16]) {
     ++compared;
     float worstView = 0, worstProj = 0;
     for (int i = 0; i < 16; ++i) {
@@ -141,8 +160,10 @@ void compare(int eye, const float (&view)[16], const float (&projection)[16]) {
         if (differSaid < 3) {
             ++differSaid;
             simqvfr::logf("lmu dlss: build-free camera: pass %d's drawn camera differs from the renderer's (view %.2g, "
-                          "projection %.2g relative; m10 %.6f/%.6f m14 %.6f/%.6f drawn/renderer)",
-                          eye, worstView, worstProj, p[10], projection[10], p[14], projection[14]);
+                          "projection %.2g relative; translation %.2f %.2f %.2f / %.2f %.2f %.2f, m10 %.6f/%.6f m14 "
+                          "%.6f/%.6f drawn/renderer)",
+                          eye, worstView, worstProj, v[12], v[13], v[14], view[12], view[13], view[14], p[10],
+                          projection[10], p[14], projection[14]);
         }
     }
     if ((compared + noPair) % 5400 == 0)
@@ -186,6 +207,10 @@ bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
                           drawnPasses, heldPasses, missedPasses);
         const bool rigid = dlss::rigid(dlss::from_floats(view)), shaped = dlss::projection(dlss::from_floats(projection));
         log_once(view, projection, rigid, shaped, "drawn (the per-draw buffer's)");
+        float rv[16], rp[16];
+        bool fromSlot = false;
+        if (rigid && shaped && qvfr_frame_known_build() && renderer_matrices(eye, rv, rp, fromSlot))
+            compare(eye, view, projection, rv, rp);  // lmu_build_free=1 on a known build: against the game's
         return rigid && shaped;
     }
     bool fromSlot = false;
@@ -193,8 +218,13 @@ bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
         return false;
     const bool rigid = dlss::rigid(dlss::from_floats(view)), shaped = dlss::projection(dlss::from_floats(projection));
     log_once(view, projection, rigid, shaped, fromSlot ? "renderer's (projection from the eye's slot)" : "renderer's");
-    if (rigid && shaped)
-        compare(eye, view, projection);
+    float dv[16], dp[16];
+    if (rigid && shaped) {
+        if (drawn_matrices(eye, dv, dp))
+            compare(eye, dv, dp, view, projection);
+        else
+            ++noPair;
+    }
     return rigid && shaped;
 }
 

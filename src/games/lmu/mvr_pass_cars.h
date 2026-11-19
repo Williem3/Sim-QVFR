@@ -427,17 +427,22 @@ void keep_view_pair() {
         p.count = p.next = 0;
         p.last = -1;
     }
+    const uint32_t world = car_matrix_identity(g.matrix) ? 1u : 0u;  // a static world draw
     // Most draws repeat the draw before's camera: that one first, the rest only when it changed.
-    if (p.last >= 0 && std::memcmp(p.pair[p.last], g.viewPair, sizeof(g.viewPair)) == 0)
+    if (p.last >= 0 && std::memcmp(p.pair[p.last], g.viewPair, sizeof(g.viewPair)) == 0) {
+        p.worldDraws[p.last] += world;
         return;
+    }
     for (int i = 0; i < p.count; ++i)
         if (std::memcmp(p.pair[i], g.viewPair, sizeof(g.viewPair)) == 0) {
             p.last = i;
+            p.worldDraws[i] += world;
             return;
         }
     const int at = p.count < State::kViewPairs ? p.count++ : p.next;
     p.next = (at + 1) % State::kViewPairs;
     std::memcpy(p.pair[at], g.viewPair, sizeof(g.viewPair));
+    p.worldDraws[at] = world;
     p.last = at;
 }
 

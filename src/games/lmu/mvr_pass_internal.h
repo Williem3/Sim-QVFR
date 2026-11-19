@@ -252,6 +252,9 @@ struct State {
     static constexpr int kViewPairs = 16;
     struct PassPairs {
         float pair[kViewPairs][32] = {};
+        // Per pair, its draws with an identity worldMatrix (the static world's: its camera is the world's; the cockpit
+        // and the sky may be drawn with the same FOV from another space).
+        uint32_t worldDraws[kViewPairs] = {};
         int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
         uint64_t frame = 0;                  // carFrame they were drawn in
     } passPairs[2];
