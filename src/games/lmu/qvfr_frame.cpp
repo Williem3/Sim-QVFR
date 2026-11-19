@@ -1320,6 +1320,25 @@ void qvfr_frame_frame_end() {
                               frames, sceneW[0], sceneH[0], sceneW[1], sceneH[1], mainWH[0], mainWH[1], gameScale,
                               c.viewports, c.scissors, c.left);
             }
+            {  // where the gaze is and where the focus boxes drawn this frame sit (whether the box follows the gaze)
+                float gaze[2][2];
+                bool valid[2];
+                {
+                    std::lock_guard guard(liveMutex);
+                    std::memcpy(gaze, gazeTan, sizeof(gaze));
+                    valid[0] = gazeValid[0];
+                    valid[1] = gazeValid[1];
+                }
+                const auto centre = [](const FocusBox& b, int axis) {
+                    return 0.5 * (b.focusTan[axis * 2] + b.focusTan[axis * 2 + 1]);
+                };
+                simqvfr::logf("lmu qvfr: frame %llu: gaze tangents %.3f %.3f%s | %.3f %.3f%s; the focus boxes drawn at "
+                              "%.3f %.3f | %.3f %.3f (%s)",
+                              frames, gaze[0][0], gaze[0][1], valid[0] ? "" : " (not valid)", gaze[1][0], gaze[1][1],
+                              valid[1] ? "" : " (not valid)", centre(frozenBox[0], 0), centre(frozenBox[0], 1),
+                              centre(frozenBox[1], 0), centre(frozenBox[1], 1),
+                              buildFree ? "build-free" : "the game's facts");
+            }
             std::uint32_t rec[2];
             real_recommended(rec);
             if (mainWH[0] && (mainWH[0] != rec[0] || mainWH[1] != rec[1]))  // render scale not 1: scene and eye target apart
