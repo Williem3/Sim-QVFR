@@ -339,9 +339,8 @@ struct State {
         // Per pair, its draws with an identity worldMatrix (the static world's: its camera is the world's; the cockpit
         // and the sky may be drawn with the same FOV from another space).
         uint32_t worldDraws[kViewPairs] = {};
-        // Per pair, the car part draws night car lighting recorded with it: the cars' own camera, the space their
-        // floodlights, headlights and normals are in (replay drew the cars camera-relative, the renderer's camera is
-        // the world's: lights placed with it missed every car).
+        // Per pair, the car part draws night car lighting recorded with it: the cars' own camera, the relight's fallback
+        // when the world's camera isn't found (mvr_pass_binds.h car_light_camera).
         uint32_t carDraws[kViewPairs] = {};
         int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
         uint64_t frame = 0;                  // carFrame they were drawn in
