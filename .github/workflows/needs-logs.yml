@@ -34,6 +34,9 @@ jobs:
             const texts = [issue.body || '', ...comments.filter(c => c.user.type !== 'Bot').map(c => c.body || '')];
             const hasZip = texts.some(t => zip.test(t));
             const labelled = issue.labels.some(l => (l.name || l) === label);
+            // Translation fixes (translation.yml) are about text, not a session: no zip to ask for.
+            if (issue.labels.some(l => (l.name || l) === 'translation'))
+              return;
 
             if (hasZip) {
               if (labelled)

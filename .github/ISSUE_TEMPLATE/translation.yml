@@ -1,0 +1,68 @@
+# Translation fixes: a wrong, clumsy or missing line in a lang\<code>.ini file. The files are machine drafts that players
+# correct; English is the key, so the English line is all it takes to find the entry. Not one of the launcher's Report
+# an issue kinds, and needs-logs.yml leaves the "translation" label alone (no logs zip needed).
+name: Translation fix
+description: A wrong, awkward or missing translation in the launcher, the headset menu or the overlay.
+title: "[Translation] "
+labels: ["translation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping. Every language except English started as a machine draft, so fixes from people who
+        speak it are what make it good. One issue can hold several lines in the same language.
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - "Čeština (cs)"
+        - "Deutsch (de)"
+        - "Español (es)"
+        - "Français (fr)"
+        - "Italiano (it)"
+        - "Polski (pl)"
+        - "Português do Brasil (pt-BR)"
+        - "Русский (ru)"
+        - "Türkçe (tr)"
+        - "A language Sim-QVFR doesn't have yet"
+    validations:
+      required: true
+  - type: input
+    id: new_language
+    attributes:
+      label: Which new language?
+      description: Only if you picked "A language Sim-QVFR doesn't have yet".
+      placeholder: e.g. Nederlands (nl)
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you see it?
+      multiple: true
+      options:
+        - "The launcher"
+        - "The headset menu"
+        - "The overlay"
+        - "Somewhere else"
+    validations:
+      required: true
+  - type: textarea
+    id: lines
+    attributes:
+      label: The lines to fix
+      description: |
+        For each line: the English text, what Sim-QVFR shows now, and what it should say. To see the English, set
+        the launcher to English on the About pane (Language), or open the language's file in the `lang` folder next
+        to `sim-qvfr-launcher.exe`: each translation sits under its English line. Keep every `{placeholder}` as it
+        is; its place in the sentence may move.
+      placeholder: |
+        English:  Launch {game}
+        Now:      ...
+        Should be: ...
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: A screenshot if the text is cut off or doesn't fit, or a note on wording (formal or informal, a term players use).

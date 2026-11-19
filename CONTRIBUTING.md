@@ -259,6 +259,10 @@ python tools/lang_extract.py --check   # exit 1 when out of step or a translatio
 A line not translated yet shows in English; a translation whose placeholders differ from the English
 is ignored (`lang_test` fails on any such line in a shipped file).
 
+Every language but English started as a machine draft; players send fixes through the **Translation fix** issue
+form (`.github/ISSUE_TEMPLATE/translation.yml`, label `translation`, no logs zip asked for). To apply one, find the
+English line in `lang/<code>.ini`, change the translation under it, then run `--check`.
+
 ## Run without the launcher (registered layer)
 
 For development you can register the layer instead, so that ACE loads it when started from Steam.
