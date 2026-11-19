@@ -69,6 +69,10 @@ struct QvfrFrameRun {
     // motion, N without (mvr_pass.h mvr_car_active), in turn; each side's CPU per pass logged, GPU per mvr_pass's modes.
     bool carForced = false;
     int carAb = 0;
+    // Night car lighting ([quad] car_light on at launch; car_light.h): the car tracking and slots go in for it on any GPU
+    // the tracker drives (DLSS or not); its settings are live from then on (quad/car_lighting.h). Off at launch: none of
+    // it, at no cost; turned on later, the next launch.
+    bool carLight = false;
     // The recovery's test ([experiment] lmu_mvr_lose_at=N): from scene frame N the focus post is off for 1800 scene
     // frames (no focus finals, as with a pipeline it doesn't handle), then on again. 0: never.
     int loseAt = 0;

@@ -461,6 +461,80 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
 // The pass's post-processing begins on `scene` (the resolve's target; with MSAA off the scene's own target, at YEBIS's
 // copy, before it reads it), which was drawn into `drawn` (the multisample target, or the same): DLAA on the eye and its
 // focus view, gate D's kept region, the focus post's window.
+// Night car lighting: the eye's camera as its draws used it (view_pair.h): of the pass's pairs with the eye's FOV, the
+// one most static-world draws used (as DLSS's camera, dlss_inputs.cpp). False: none.
+bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
+    float pairs[16][32];
+    unsigned world[16] = {};
+    const int n = mvr_view_pairs(eye, pairs, world, 16);
+    float expected[16];
+    const bool haveEye = qvfr_frame_eye_projection(eye, expected);
+    int best = -1;
+    for (int i = 0; i < n; ++i) {
+        float v[16], vp[16], p[16];
+        std::memcpy(v, pairs[i], sizeof(v));
+        std::memcpy(vp, pairs[i] + 16, sizeof(vp));
+        if (!projection_of_pair(v, vp, p) || (haveEye && !same_eye(p, expected)))
+            continue;
+        if (best < 0 || world[i] > world[best])
+            best = i;
+    }
+    if (best < 0)
+        return false;
+    std::memcpy(view, pairs[best], sizeof(view));
+    std::memcpy(viewProj, pairs[best] + 16, sizeof(viewProj));
+    return true;
+}
+
+void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn, int eye) {
+    CarLightView v;
+    if (!car_light_camera(eye, v.view, v.viewProj)) {
+        ++g.carLightMisses;
+        return;
+    }
+    ID3D11DepthStencilView* dsv = scene_depth(drawn);
+    if (!dsv)
+        return;
+    ComPtr<ID3D11Resource> depthTexture;
+    dsv->GetResource(&depthTexture);
+    v.eyeW = g.view.eyeW;
+    v.eyeH = g.view.eyeH;
+    if (g.drawFocus && g.passTwinBinds > 0) {
+        v.focusW = g.view.focusRenderW ? g.view.focusRenderW : g.view.focusW;
+        v.focusH = g.view.focusRenderH ? g.view.focusRenderH : g.view.focusH;
+        std::memcpy(v.remap, g.view.remap, sizeof(v.remap));
+    }
+    simqvfr::d3d11_state::Spec spec;
+    spec.parts = simqvfr::d3d11_state::kInputLayout | simqvfr::d3d11_state::kVS | simqvfr::d3d11_state::kPS |
+                 simqvfr::d3d11_state::kGsHsDs | simqvfr::d3d11_state::kOMTargets | simqvfr::d3d11_state::kBlend |
+                 simqvfr::d3d11_state::kDepth | simqvfr::d3d11_state::kRSState | simqvfr::d3d11_state::kViewports |
+                 simqvfr::d3d11_state::kScissors;
+    spec.psCb = {0, 2};
+    spec.psSrv = {0, 3};
+    bool stereoOff = false;
+    if (g.stereo && !g.instanced) {
+        if (g.twoViews(g.context, false) == 0)
+            stereoOff = true;
+        else
+            stereo_off_failed("before the night car lighting");
+    }
+    const bool was = g.replaying;
+    g.replaying = true;
+    {
+        // Put back through the context as the game's calls would be (as DLSS's own guard does, its draws inside
+        // g.replaying too): the hooks see the game's shader and targets bound again.
+        const simqvfr::d3d11_state::Guard<> keep(context, spec);
+        if (g.carLightPass.run(context, scene, depthTexture.Get(), g.slotSrv.Get(), g.slotSamples > 1, g.carLights, v,
+                               g.carLightSettings, eye))
+            ++g.carLightRuns;
+    }
+    g.replaying = was;
+    if (stereoOff && g.twoViews(g.context, true) != 0) {
+        g.stereo = false;
+        update();
+    }
+}
+
 void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn) {
     Timed postTimed(g.time.post, true);
     ID3D11Resource* const dst = scene;
@@ -505,6 +579,9 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
                 save_slot_image(eye, dst);  // both eyes of the frame
         }
     }
+    // Night car lighting (car_light.h): the cars relit in the resolved scene before DLSS and the post read it.
+    if (slotsDrawn && g.carLightOn && g.pass != g.eyeOff)
+        car_light_run(context, dst, drawn, eye);
     // A focus view drawn smaller (DLSS super resolution) goes through the module even if DLSS went off since the pass
     // was set up: it stretches what DLSS can't upscale.
     const bool smaller = (g.view.focusRenderW && g.view.focusRenderW < g.view.focusW) ||

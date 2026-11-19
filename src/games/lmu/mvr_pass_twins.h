@@ -49,6 +49,15 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
                 e.viewOffset = views[0];
                 e.viewProjOffset = views[1];
             }
+            UINT omni[4] = {};
+            size = sizeof(omni);
+            if (g.carLight && SUCCEEDED(vs->GetPrivateData(kVsOmniLightsGuid, &size, omni)) && size == sizeof(omni) &&
+                omni[0] < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
+                e.omniSlot = static_cast<int>(omni[0]);
+                e.omniPos = omni[1];
+                e.omniColour = omni[2];
+                e.omniCount = omni[3];
+            }
         }
     }
     return e;
@@ -116,6 +125,10 @@ const PsTwinEntry& ps_entry(ID3D11PixelShader* ps) {
     set.entry[k] = {ps, g.biasHooks ? twin_under(kMvrMipBiasTwinGuid) : nullptr,
                     g.slotsOn ? twin_under(kMvrSlotTwinGuid) : nullptr,
                     g.slotsOn && g.biasHooks ? twin_under(kMvrSlotBiasTwinGuid) : nullptr, g.psEpoch};
+    if (g.carLight) {  // night car lighting: a car body's lacquer
+        UINT paint = 0, size = sizeof(paint);
+        set.entry[k].paint = SUCCEEDED(ps->GetPrivateData(kPsPaintGuid, &size, &paint)) && size == sizeof(paint) && paint;
+    }
     return set.entry[k];
 }
 

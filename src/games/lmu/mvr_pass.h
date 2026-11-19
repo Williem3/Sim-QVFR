@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../../quad/focus_mask.h"
+#include "../../quad/car_lighting.h"
 #include "car_motion.h"
 #include "focus_math.h"
 
@@ -239,6 +240,15 @@ void mvr_car_slot_images(bool on);
 // The cars' motion this frame or not (an A/B of its cost, QvfrFrameRun::carAb; between frames): off, no tracking work,
 // no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
 void mvr_car_active(bool on);
+// Night car lighting ([quad] car_light; car_light.h): before the install, with the car slots (they say which pixels
+// are cars'): the floodlights LMU hands each car part's draw are read as it writes them, and after each eye pass's
+// scene the cars are relit (a lacquer highlight per floodlight, ambient occlusion, the game's flat light scaled) before
+// DLSS and the post read it.
+void mvr_car_light(bool on);
+// Between frames: the player's settings (live); off pauses the pass and the light reads (the hooks stay in).
+void mvr_car_light_frame(const simqvfr::CarLighting& settings);
+// Its cost per frame, averaged over 90 frames (any thread): GPU and CPU ms. False: not installed, or no average yet.
+bool mvr_car_light_costs(double& gpuMs, double& cpuMs);
 // One eye off ([quad] eye_off; qvfr_frame.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
 // view's upscale: it draws none). Between frames.
 void mvr_eye_off(int eye);

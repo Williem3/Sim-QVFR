@@ -104,6 +104,10 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
         g.vsWorldOffset = e ? e->worldOffset : 0;
         g.vsViewOffset = e ? e->viewOffset : ~0u;  // view tracking: its view matrices there
         g.vsViewProjOffset = e ? e->viewProjOffset : ~0u;
+        g.vsOmniSlot = e ? e->omniSlot : -1;  // night car lighting: where it reads its floodlights
+        g.vsOmniPos = e ? e->omniPos : 0;
+        g.vsOmniColour = e ? e->omniColour : 0;
+        g.vsOmniCount = e ? e->omniCount : 0;
         keep_game_entry(vs, e);
     }
     if (!ours(context)) {

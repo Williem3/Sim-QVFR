@@ -66,6 +66,12 @@ inline constexpr GUID kVsWorldMatrixGuid = {0x3e9b7a14, 0x6c25, 0x4f81, {0x8d, 0
 // With it, where the shader reads `viewMatrix` and `viewProjMatrix` in that same buffer, as two UINT byte offsets: the
 // pass's camera for DLSS on any game build (view_pair.h). None when it reads them elsewhere or not at all.
 inline constexpr GUID kVsViewMatricesGuid = {0x9b1e4c27, 0x3d58, 0x4a06, {0xa7, 0x92, 0x5c, 0xe1, 0x08, 0x3f, 0xb6, 0x4d}};
+// Night car lighting (car_light.h): where a game vertex shader reads its floodlights (GlobalCBFloats_OmniLights'
+// omniPosRad and omniRGBDelta), as four UINTs: the constant buffer slot, the two arrays' byte offsets, their length.
+inline constexpr GUID kVsOmniLightsGuid = {0x8f2d6b41, 0x5c07, 0x4e93, {0xa1, 0x6e, 0x3b, 0xd8, 0x92, 0x0f, 0x47, 0xc5}};
+// And a game pixel shader that shades a car body's lacquer (its reflection names lacquerThickness or clearCoatStrength):
+// a UINT 1.
+inline constexpr GUID kPsPaintGuid = {0x1d73a9e5, 0x42bc, 0x4f18, {0x96, 0x0d, 0xe4, 0x2a, 0x7b, 0x51, 0xc8, 0x3e}};
 // Other cars' motion vectors, stage 3 (lmu_car_vectors; engine/dxbc_patch.h add_slot_output): a game pixel shader's twin
 // that also writes the draw's car part slot to render target 1, and the same made of its mip bias twin (ID3D11PixelShader
 // each; texture sharpening with the slots).

@@ -9,6 +9,7 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
+#include "car_lighting.h"
 #include "color_grade.h"
 #include "focus_offset.h"
 #include "focus_quad_distance.h"
@@ -69,15 +70,18 @@ enum class MenuItem {
     ClockWidth,
     // The Colour page (quad/color_grade.h; a game with it, MenuLaunch::sharpening): the switch, then its four values.
     ColorOn, ColorExposure, ColorBrightness, ColorContrast, ColorSaturation,
+    // The Colour page's Night cars section (quad/car_lighting.h; a game with it, MenuLaunch::carLighting): the switch,
+    // then the game's light kept, ambient occlusion, the highlights and the gloss.
+    CarLightOn, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
-    HeadVision, HeadCpu, HeadColor
+    HeadVision, HeadCpu, HeadColor, HeadCarLight
 };
-// A section header (HeadResolution .. HeadColor): drawn as a heading, skipped by Up and Down.
+// A section header (HeadResolution .. HeadCarLight): drawn as a heading, skipped by Up and Down.
 inline bool menu_item_is_header(MenuItem item) {
     return static_cast<int>(item) >= static_cast<int>(MenuItem::HeadResolution) &&
-           static_cast<int>(item) <= static_cast<int>(MenuItem::HeadColor);
+           static_cast<int>(item) <= static_cast<int>(MenuItem::HeadCarLight);
 }
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -118,6 +122,7 @@ struct MenuValues {
     int objectDetail = kObjectDetail.def;  // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     ColorGrade color;         // [quad] color_correction and its values (QVFR, a game with sharpening; the Colour page)
+    CarLighting carLight;     // [quad] car_light and its values (QVFR, a game with it; the Colour page's Night cars)
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
@@ -154,6 +159,9 @@ struct MenuLaunch {
     bool sharpening = false;
     // One eye off on the Picture page (GameFeatures::eyeOff), as objectDetail.
     bool eyeOff = false;
+    // Night car lighting on the Colour page (GameFeatures::carLighting, QVFR), and whether it was on at launch (its
+    // hooks in: its values live; off at launch, turning it on applies at the next launch, the page says so).
+    bool carLighting = false, carLightReady = false;
     // The game masks its focus views (GameFeatures::focusMask): the pixels saved leave out what the mask skips.
     bool focusMask = false;
     // focus_layer=2 in this run: the focus quads' distance on the settings page (focus_quad_distance.h).
@@ -249,7 +257,7 @@ MenuValues read_menu_values(const wchar_t* ini);
 // Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
 // sharpening and colour correction only with `sharpening`, a game that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
-                       bool focusQuads = false, bool sharpening = false, bool eyeOff = false);
+                       bool focusQuads = false, bool sharpening = false, bool eyeOff = false, bool carLighting = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus

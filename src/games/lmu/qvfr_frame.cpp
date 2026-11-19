@@ -633,12 +633,15 @@ bool install_mvr(ID3D11Device* device) {
                        cfg.trackerDrives);
     // Other cars' motion: the player's where DLSS can run (as texture sharpening's), the diagnostics' as they say; their
     // hooks only when on (the tracking before the slots: they need it).
-    const bool cars = cfg.carTrack && (cfg.carForced || (simqvfr::ngx::built_in() &&
-                                                         simqvfr::nvapi::two_views_gpu() != nullptr && cfg.trackerDrives));
+    // Night car lighting: on any GPU the tracker drives (its slots need no DLSS).
+    const bool cars = cfg.carTrack && (cfg.carForced || (cfg.carLight && cfg.trackerDrives) ||
+                                       (simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
+                                        cfg.trackerDrives));
     mvr_car_track(cars);
-    mvr_car_slots(cars ? cfg.carSlots : 0);
+    mvr_car_slots(cars ? cfg.carSlots : 0);  // (at least 1 with the lighting: its slots)
     mvr_car_slot_images(cars && cfg.carForced);  // a freeze each: never the player's
-    carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
+    mvr_car_light(cars && cfg.carLight);
+    carsOn = cars && (cfg.carSlots >= 2 || cfg.carLight);  // the A/B measures what players get (DLSS taking the motion)
     // FSR seen at the d3d11 level: build-free runs take it from there, a known build compares it with the game's setting.
     mvr_fsr_watch(cfg.trackerDrives);
     // DLSS's camera from the per-draw buffer (view_pair.h): where it is the source (build-free), and where the cars'
@@ -703,6 +706,15 @@ void mvr_before_pass(int p) {
                     mvr_frame_mode(backendSide);
                 }
             }
+            if (cfg.carLight) {  // night car lighting: its live settings (between frames)
+                const simqvfr::CarLighting light = simqvfr::car_lighting();
+                mvr_car_light_frame(light);
+                if (light.on != carLightLogged || !carLightSaid) {
+                    carLightSaid = true;
+                    carLightLogged = light.on;
+                    simqvfr::logf("lmu qvfr: night car lighting %s", simqvfr::car_lighting_log(light).c_str());
+                }
+            }
             if (car_ab_on()) {  // the other cars' motion this frame or not (between frames)
                 if (!carAbLogged) {
                     carAbLogged = true;
@@ -714,7 +726,9 @@ void mvr_before_pass(int p) {
                 mvr_car_active(carSide == 0);
                 mvr_frame_mode(carSide);
             } else if (carsOn) {  // DLSS or the cars' motion turned off while the game runs: no tracking for nothing
-                const bool pause = !carsWanted.load(std::memory_order_relaxed);
+                // (night car lighting on keeps them: it reads the slots)
+                const bool pause = !carsWanted.load(std::memory_order_relaxed) &&
+                                   !(cfg.carLight && simqvfr::car_lighting().on);
                 if (pause != carsPaused) {
                     carsPaused = pause;
                     mvr_car_active(!pause);

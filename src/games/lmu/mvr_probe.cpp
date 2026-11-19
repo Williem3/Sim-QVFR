@@ -23,6 +23,7 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../../engine/object_vtable.h"
 #include "../../log.h"
+#include "../../quad/car_lighting.h"
 #include "MinHook.h"
 #include "yebis_shaders.h"
 
@@ -121,8 +122,56 @@ std::atomic<uint64_t> pixelGeneration{0};
 struct WorldPlace {
     UINT slot = ~0u, offset = 0;
     UINT view = ~0u, viewProj = ~0u;
+    UINT omni[4] = {~0u, 0, 0, 0};  // night car lighting: the floodlights' slot, offsets and length (kVsOmniLightsGuid)
 };
 std::unordered_map<uint64_t, WorldPlace> worldSlots;
+std::unordered_map<uint64_t, bool> paintShaders;  // night car lighting: a car body's lacquer shader, by bytecode
+
+// Night car lighting (car_light.h): where the shader reads its floodlights, GlobalCBFloats_OmniLights' omniPosRad and
+// omniRGBDelta (float4 arrays of the same length in one buffer). False: it reads none.
+bool omni_lights_place(const void* code, size_t size, UINT (&out)[4]) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    UINT slot[2] = {}, offset[2] = {}, count[2] = {};
+    const char* names[2] = {"omniPosRad", "omniRGBDelta"};
+    for (int i = 0; i < 2; ++i) {
+        ID3D11ShaderReflectionVariable* v = r->GetVariableByName(names[i]);
+        D3D11_SHADER_VARIABLE_DESC vd{};
+        if (!v || FAILED(v->GetDesc(&vd)) || vd.Size < 16)
+            return false;
+        ID3D11ShaderReflectionConstantBuffer* cb = v->GetBuffer();
+        D3D11_SHADER_BUFFER_DESC bd{};
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (!cb || FAILED(cb->GetDesc(&bd)) || FAILED(r->GetResourceBindingDescByName(bd.Name, &bind)))
+            return false;
+        slot[i] = bind.BindPoint;
+        offset[i] = vd.StartOffset;
+        count[i] = vd.Size / 16;
+    }
+    if (slot[0] != slot[1] || count[0] != count[1] || slot[0] >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+        return false;
+    out[0] = slot[0];
+    out[1] = offset[0];
+    out[2] = offset[1];
+    out[3] = count[0];
+    return true;
+}
+
+// A car body's lacquer: its reflection names the lacquer's thickness or the clear coat's strength (LMU's car body
+// shaders, cbMaterialExt and their own constants).
+bool paint_shader(const void* code, size_t size) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    for (const char* name : {"lacquerThickness", "clearCoatStrength"}) {
+        ID3D11ShaderReflectionVariable* v = r->GetVariableByName(name);
+        D3D11_SHADER_VARIABLE_DESC vd{};
+        if (v && SUCCEEDED(v->GetDesc(&vd)))
+            return true;
+    }
+    return false;
+}
 
 // The constant buffer slot and byte offset of the shader's `worldMatrix` (its reflection: LMU's shaders keep their
 // names, GlobalCBFloats_Draw_0 at offset 0). False: it has none.
@@ -396,6 +445,9 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                     at.view = view;
                     at.viewProj = viewProj;
                 }
+                UINT omni[4];
+                if (omni_lights_place(code, size, omni))
+                    std::memcpy(at.omni, omni, sizeof(omni));
             }
             std::lock_guard guard(twinMutex);
             worldSlots[id] = at;
@@ -407,6 +459,8 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                 const UINT views[2] = {at.view, at.viewProj};
                 (*shader)->SetPrivateData(kVsViewMatricesGuid, sizeof(views), views);
             }
+            if (at.omni[0] != ~0u)
+                (*shader)->SetPrivateData(kVsOmniLightsGuid, sizeof(at.omni), at.omni);
         }
     }
     // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
@@ -512,6 +566,27 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         uint64_t rows[64];  // the rows of cb0 it reads by a fixed index (the SCS focus rules write only those as matrices)
         if (dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(code), size, 0, rows))
             (*shader)->SetPrivateData(kCb0StaticRowsGuid, sizeof(rows), rows);
+    }
+    // Night car lighting (car_light.h): a car body's lacquer shader marked (once per distinct bytecode).
+    if (attach && makeSlotTwins && !inProbe && role == YebisRole::none && code && size) {
+        const uint64_t id = id_of(static_cast<const uint8_t*>(code), size);
+        bool paint = false, seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = paintShaders.find(id); it != paintShaders.end()) {
+                paint = it->second;
+                seen = true;
+            }
+        }
+        if (!seen) {
+            paint = paint_shader(code, size);
+            std::lock_guard guard(twinMutex);
+            paintShaders[id] = paint;
+        }
+        if (paint) {
+            const UINT one = 1;
+            (*shader)->SetPrivateData(kPsPaintGuid, sizeof(one), &one);
+        }
     }
     // Every pixel shader too (the SCS games' GPU hang: an Aftermath dump names the hung shader by its bytecode's hash).
     if (dump && code)
@@ -712,7 +787,9 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
         // game build comes from the same buffer (view_pair.h), and DLSS can be turned on live (one reflection per distinct
         // bytecode, ~70 in a session).
         markWorldMatrix = attach;
-        makeSlotTwins = attach && ini && (slots > 0 || playerCars);
+        // Night car lighting on at launch needs the slots too (car_light.h): they say which pixels are cars'.
+        const bool carLight = ini && simqvfr::read_car_lighting(ini).on;
+        makeSlotTwins = attach && ini && (slots > 0 || playerCars || carLight);
         (void)track;
     }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;

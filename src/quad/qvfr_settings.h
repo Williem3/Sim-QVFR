@@ -50,6 +50,16 @@ inline constexpr IniInt kColorExposure{L"quad", L"color_exposure", 0, -30, 30, 1
 inline constexpr IniInt kColorBrightness{L"quad", L"color_brightness", 0, -50, 50, 2};
 inline constexpr IniInt kColorContrast{L"quad", L"color_contrast", 0, -50, 50, 2};
 inline constexpr IniInt kColorSaturation{L"quad", L"color_saturation", 0, -100, 100, 5};
+// Night car lighting (quad/car_lighting.h; a game with GameFeatures::carLighting, LMU): the switch (its hooks at
+// launch: turned on later, the next launch), then the game's light kept on the cars, ambient occlusion's strength, the
+// floodlights' highlights and the lacquer's gloss, in percent. Live once on at launch.
+inline constexpr IniInt kCarLight{L"quad", L"car_light", 0, 0, 1, 1};
+inline constexpr IniInt kCarLightFill{L"quad", L"car_light_fill", 80, 30, 100, 5};
+inline constexpr IniInt kCarLightOcclusion{L"quad", L"car_light_occlusion", 70, 0, 100, 5};
+inline constexpr IniInt kCarLightHighlights{L"quad", L"car_light_highlights", 100, 0, 200, 10};
+inline constexpr IniInt kCarLightGloss{L"quad", L"car_light_gloss", 70, 0, 100, 5};
+// The width the cars' surface directions are smoothed over, cm (0: pixel to pixel, the triangles' facets show).
+inline constexpr IniInt kCarLightSmooth{L"quad", L"car_light_smooth", 15, 0, 50, 1};
 // The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};

@@ -142,6 +142,7 @@ extern bool maskAbLogged;
 bool car_ab_on();
 extern std::atomic<bool> carsWanted;
 extern bool carsPaused;
+extern bool carLightLogged, carLightSaid;
 int ab_side();
 bool ab_run();
 

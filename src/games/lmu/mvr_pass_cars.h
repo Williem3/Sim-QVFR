@@ -72,6 +72,16 @@ inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Reso
         ++g.time.carCalls;
     if (resource == g.worldRes && resource && context == g.context && SUCCEEDED(hr) && mapped)
         g.worldMapped = mapped->pData;
+    // Night car lighting: the floodlights' buffer, rewritten whole before each draw (WRITE_DISCARD), is written into
+    // our copy, which goes to the driver's memory at the Unmap: the lights read from ordinary memory, not the driver's
+    // write-combined memory (slow to read).
+    if (resource == g.omniRes && resource && SUCCEEDED(hr) && mapped && mapped->pData && type == D3D11_MAP_WRITE_DISCARD &&
+        sub == 0 && g.omniShadow.size() >= g.omniBytes && g.omniBytes) {
+        g.omniReal = mapped->pData;
+        mapped->pData = g.omniShadow.data();
+    } else if (resource == g.omniRes && resource) {
+        g.omniValid = false;  // written another way: our copy no longer what the draws read
+    }
     return hr;
 }
 
@@ -96,6 +106,12 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
         g.worldMapped = nullptr;
         g.carMatrix = true;
         ++g.stats.carMatrixReads;
+    }
+    if (resource == g.omniRes && g.omniReal && resource) {  // night car lighting: our copy to the driver's memory
+        std::memcpy(g.omniReal, g.omniShadow.data(), g.omniBytes);
+        g.omniReal = nullptr;
+        ++g.omniWrites;
+        g.omniValid = true;
     }
     real(context, resource, sub);
 }
@@ -483,6 +499,43 @@ void keep_view_pair() {
     p.last = at;
 }
 
+// Night car lighting (car_light.h): the floodlights this car part's draw was handed, kept for its slot; the
+// floodlights' buffer learned from the first such draw (its next write is the first read).
+uint32_t carLightSampleCounter = 0;
+void car_light_record(unsigned slot) {
+    if (g.vsOmniSlot < 0 || !g.vsOmniCount)
+        return;
+    const bool timed = (++carLightSampleCounter & 15) == 0;
+    const uint64_t t0 = timed ? __rdtsc() : 0;
+    ID3D11Buffer* cb = g.vsCb[g.vsOmniSlot];
+    if (cb && cb != g.omniRes) {
+        D3D11_BUFFER_DESC d{};
+        cb->GetDesc(&d);
+        const UINT need = (std::max)(g.vsOmniPos, g.vsOmniColour) + 16 * g.vsOmniCount;
+        if (d.Usage == D3D11_USAGE_DYNAMIC && d.ByteWidth >= need && d.ByteWidth <= 65536) {
+            g.omniHeld = cb;
+            g.omniRes = cb;
+            g.omniBytes = d.ByteWidth;
+            g.omniShadow.assign(d.ByteWidth, 0);
+            g.omniValid = false;
+            g.omniReal = nullptr;
+            simqvfr::logf("lmu car light: the floodlights' buffer learned (%u bytes, %u lights at %u and %u)", d.ByteWidth,
+                          g.vsOmniCount, g.vsOmniPos, g.vsOmniColour);
+        }
+    }
+    if (cb == g.omniRes && g.omniValid) {
+        const float origin[3] = {g.matrix[12], g.matrix[13], g.matrix[14]};
+        const OmniLayout layout{g.vsOmniPos, g.vsOmniColour, g.vsOmniCount};
+        const bool paint = g.gamePs && ps_entry(g.gamePs).paint;
+        g.carLights.draw(slot, origin, g.omniShadow.data(), g.omniShadow.size(), layout, g.omniWrites, paint);
+        ++g.carLightRecords;
+    } else {
+        ++g.carLightMisses;
+    }
+    if (timed)
+        g.carLightTicks += (__rdtsc() - t0) * 16;
+}
+
 int car_draw(UINT count, UINT start, INT base) {
     if (!cb_track() || g.vsWorldSlot < 0 || !g.depthBound)
         return -1;
@@ -538,5 +591,7 @@ int car_draw(UINT count, UINT start, INT base) {
     }
     bool moved = false;
     const int slot = g.cars.draw(key, g.matrix, moved);
+    if (moved && g.carLightOn)
+        car_light_record(static_cast<unsigned>(slot));
     return moved ? slot : -1;  // the slot to bind (car slots): a part with a frame before
 }

@@ -4,6 +4,46 @@
 // optimization). No includes of its own: mvr_pass.cpp's.
 #pragma once
 
+// Night car lighting's costs, for the overlay (any thread): GPU and CPU ms per frame, NaN before the first average.
+std::atomic<float> carLightGpu{std::numeric_limits<float>::quiet_NaN()}, carLightCpu{std::numeric_limits<float>::quiet_NaN()};
+
+// Night car lighting's frame end: the collection's time-stamp ticks in ms (the counter's rate taken from QPC frame to
+// frame), the pass's GPU timings read back, its averages for the overlay, a log line every 900 frames.
+void car_light_frame_end() {
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    const uint64_t tsc = __rdtsc();
+    if (g.tscMark && now.QuadPart > g.qpcMark.QuadPart && tsc > g.tscMark) {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        const double ms = 1000.0 * static_cast<double>(now.QuadPart - g.qpcMark.QuadPart) / static_cast<double>(f.QuadPart);
+        if (ms > 1) {
+            const double rate = static_cast<double>(tsc - g.tscMark) / ms;
+            g.tscPerMs = g.tscPerMs > 0 ? g.tscPerMs * 0.95 + rate * 0.05 : rate;
+        }
+    }
+    g.tscMark = tsc;
+    g.qpcMark = now;
+    if (g.tscPerMs > 0)
+        g.carLightPass.add_collect_ms(static_cast<double>(g.carLightTicks) / g.tscPerMs);
+    g.carLightTicks = 0;
+    const unsigned long long before = g.carLightPass.windows();
+    g.carLightPass.frame_end(g.context);
+    const unsigned long long windows = g.carLightPass.windows();
+    if (windows == before)
+        return;
+    carLightGpu.store(static_cast<float>(g.carLightPass.gpu_ms()), std::memory_order_relaxed);
+    carLightCpu.store(static_cast<float>(g.carLightPass.cpu_ms()), std::memory_order_relaxed);
+    if (windows % 10 == 1)  // the first average, then every 900 frames
+        simqvfr::logf("lmu car light: %s; %.3f ms GPU and %.3f ms CPU per frame (the last 90 frames); %llu passes relit, "
+                      "%zu floodlights this frame, %llu car part draws given lights, %llu without (no light buffer read "
+                      "yet or no camera)%s",
+                      g.carLightOn ? simqvfr::car_lighting_log(g.carLightSettings).c_str() : "paused",
+                      g.carLightPass.gpu_ms(), g.carLightPass.cpu_ms(), static_cast<unsigned long long>(g.carLightRuns),
+                      g.carLights.lights().size(), static_cast<unsigned long long>(g.carLightRecords),
+                      static_cast<unsigned long long>(g.carLightMisses), g.carLightPass.failed() ? "; THE PASS FAILED" : "");
+}
+
 void mvr_frame_end(unsigned long long frame) {
     if (!g.context)
         return;
@@ -86,6 +126,8 @@ void mvr_frame_end(unsigned long long frame) {
         if (!g.keepFocus)
             compare_sample(frame);
     }
+    if (g.carLight)
+        car_light_frame_end();
     if (frame >= g.lastStatsFrame + 900) {
         const double frames = static_cast<double>(frame - g.lastStatsFrame);
         g.lastStatsFrame = frame;
@@ -361,6 +403,25 @@ void mvr_time_hooks(bool on) {
 MvrPassStats mvr_pass_stats() { return g.stats; }
 
 CarMotionStats mvr_car_stats() { return g.cars.stats(); }
+
+void mvr_car_light(bool on) {
+    if (!g.context)  // before the install only (with the car slots: they say which pixels are cars')
+        g.carLight = on;
+}
+
+void mvr_car_light_frame(const simqvfr::CarLighting& settings) {
+    g.carLightSettings = settings;
+    g.carLightOn = g.carLight && settings.on && g.slotsOn && g.carActive;
+}
+
+bool mvr_car_light_costs(double& gpuMs, double& cpuMs) {
+    const float gpu = carLightGpu.load(std::memory_order_relaxed), cpu = carLightCpu.load(std::memory_order_relaxed);
+    if (!g.carLight || std::isnan(gpu) || std::isnan(cpu))
+        return false;
+    gpuMs = gpu;
+    cpuMs = cpu;
+    return true;
+}
 
 bool mvr_broken() { return g.context && g.broken; }
 

@@ -94,6 +94,9 @@ struct OsdInput {
     OsdMultiView multiView = OsdMultiView::None;
     bool dlss = false;  // DLSS evaluated views since the card was last drawn (said beside the multi-view badge)
     std::wstring upscaler = L"DLSS";  // what evaluated them: "DLSS", "FSR4", "FSR3.1" (engine/dlss_views.h)
+    // Night car lighting's cost per frame (games/adapter.h qvfr_car_light_costs), -1 unknown: shown in frame
+    // generation's cell while frame generation is off (a game with it has no Cheeky: LMU).
+    double carLightGpuMs = -1, carLightCpuMs = -1;
 };
 
 // What the card takes from Cheeky's runtime snapshot (CheekyRuntime_Snapshot's JSON): whether frame

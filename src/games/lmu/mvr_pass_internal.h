@@ -39,6 +39,7 @@
 
 #include "../../engine/d3d11_state.h"
 #include "../../quad/focus_mask.h"
+#include "car_light.h"
 #include "car_motion.h"
 #include "focus_post.h"
 #include "mvr_pass.h"
@@ -76,6 +77,10 @@ struct TwinEntry {
     int worldSlot = -1;          // where it reads its worldMatrix (car tracking; mvr_probe.h kVsWorldMatrixGuid)
     UINT worldOffset = 0;
     UINT viewOffset = ~0u, viewProjOffset = ~0u;  // its viewMatrix and viewProjMatrix there (kVsViewMatricesGuid)
+    // Night car lighting: where it reads its floodlights (kVsOmniLightsGuid): slot (-1 none), the two arrays' offsets
+    // and their length.
+    int omniSlot = -1;
+    UINT omniPos = 0, omniColour = 0, omniCount = 0;
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -90,6 +95,7 @@ struct PsTwinEntry {
     ID3D11PixelShader* slot = nullptr;  // its slot twin, and the slot twin of its mip bias twin (car slots)
     ID3D11PixelShader* slotBias = nullptr;
     uint32_t epoch = 0;
+    bool paint = false;  // night car lighting: a car body's lacquer shader (kPsPaintGuid)
 };
 struct PsTwinSet {
     PsTwinEntry entry[2];
@@ -240,6 +246,30 @@ struct State {
     std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
     float matrix[16] = {};
+    // Night car lighting (mvr_car_light; car_light.h): installed (on at launch), on this frame (the live switch), its
+    // settings this frame. The bound vertex shader's floodlights' place; the floodlights' buffer (learned from a car
+    // part's draw), our copy the game writes into while it's mapped (handed out at its Map: the driver's memory is
+    // write-combined, slow to read), the driver's memory then, the writes so far; the frame's lights per car slot, the
+    // pass, the collection's ticks (1 in 16 timed).
+    bool carLight = false, carLightOn = false;
+    simqvfr::CarLighting carLightSettings{};
+    int vsOmniSlot = -1;
+    UINT vsOmniPos = 0, vsOmniColour = 0, vsOmniCount = 0;
+    ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
+    ComPtr<ID3D11Buffer> omniHeld;
+    UINT omniBytes = 0;
+    std::vector<uint8_t> omniShadow;
+    void* omniReal = nullptr;
+    uint64_t omniWrites = 0;
+    bool omniValid = false;  // our copy holds the buffer's content (a write since it was learned)
+    CarLightTable carLights{kCarSlots};
+    CarLightPass carLightPass;
+    uint64_t carLightTicks = 0;
+    uint32_t carLightSample = 0;
+    uint64_t carLightRuns = 0, carLightRecords = 0, carLightMisses = 0;
+    double tscPerMs = 0;  // the time-stamp counter's rate (calibrated against QPC at frame ends)
+    uint64_t tscMark = 0;
+    LARGE_INTEGER qpcMark{};
     // View tracking (mvr_view_track; DLSS's camera on any build, view_pair.h): car tracking's buffer reads without its
     // table. The bound shader's viewMatrix and viewProjMatrix places, the learned buffer's (from the draw that taught
     // it), the pair last written into it, and each eye pass's distinct pairs as drawn (the eye's own among the mirrors').
