@@ -342,6 +342,10 @@ struct State {
     unsigned obsCopyCount = 0;
     bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
     bool readsAsGameForTests = false;  // mvr_test_reads_as_game: this image's RSGetViewports taken as the game's
+    // mvr_viewport_reads ([experiment] lmu_viewport_reads): 1 any caller but this image given the game's own viewports,
+    // 2 only the game's exe (YEBIS's), 0 the hook not installed. Reads by other images seen (another DLL: NGX's, a tool's).
+    int viewportReads = 1;
+    bool otherReadLogged = false;
     bool gameReadLogged[2] = {};       // the game's viewport read given its own: under the cut, beside the focus view
     bool extraResolveLogged = false;   // a second multisample resolve in a pass (logged once)
     // observe_post_draw this pass: not where it drew focus views after a frame with both (the recovery reads the shape

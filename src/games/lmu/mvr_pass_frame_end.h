@@ -258,6 +258,14 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.maskAbDropped),
                           static_cast<unsigned long long>(s.panelReplays),
                           static_cast<unsigned long long>(s.uiMipFrames));
+        // The viewport reads while ours were bound: the game's exe's, another DLL's, and how they were answered.
+        simqvfr::logf("lmu mvr: viewport reads while ours were bound: %llu answered with the game's own; %llu by another "
+                      "DLL than the game's exe (lmu_viewport_reads=%d: %s)",
+                      static_cast<unsigned long long>(s.gameViewportReads),
+                      static_cast<unsigned long long>(s.otherViewportReads), g.viewportReads,
+                      g.viewportReads == 0   ? "not hooked"
+                      : g.viewportReads == 2 ? "only the game's exe given its own"
+                                             : "every caller but Sim-QVFR given the game's own");
         if (g.focusReplay) {
             const MvrProbeStats probe = mvr_probe_stats();
             simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites (%llu by their bindings), %llu final blits; "

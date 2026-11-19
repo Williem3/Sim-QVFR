@@ -427,6 +427,11 @@ bool mvr_fsr_written() {
     return seen;
 }
 
+void mvr_viewport_reads(int mode) {
+    if (!g.context)  // before the install only: its hooks are chosen there
+        g.viewportReads = mode == 0 || mode == 2 ? mode : 1;
+}
+
 void mvr_view_track(bool on) {
     if (!g.context)  // before the install only: its hooks are chosen there
         g.viewTrack = on;

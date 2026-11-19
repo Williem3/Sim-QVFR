@@ -188,6 +188,10 @@ bool mvr_scene_size(unsigned& width, unsigned& height);
 // DLSS's camera on any game build (view_pair.h): the per-draw buffer's viewMatrix and viewProjMatrix read as car
 // tracking reads its worldMatrix (its hooks, without its table when the cars are off). Before mvr_pass_install.
 void mvr_view_track(bool on);
+// The game's reads of its viewports (mvr_pass_binds.h rs_get_viewports), for an A/B ([experiment] lmu_viewport_reads):
+// 1 every caller but Sim-QVFR given the game's own viewports while ours are bound (as since 1.2.1), 2 only the game's
+// exe (YEBIS's own read), other DLLs the bound ones, 0 RSGetViewports not hooked. Before mvr_pass_install.
+void mvr_viewport_reads(int mode);
 // This frame's distinct (view, viewProj) pairs eye pass `pass` (0-1) has drawn so far, each 32 floats (view, then
 // viewProj), up to `max`, and per pair its draws with an identity worldMatrix (the static world's; may be null); how
 // many.
@@ -267,6 +271,7 @@ struct MvrPassStats {
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
     uint64_t gameViewportReads = 0;          // the game's RSGetViewports answered with its own while ours were bound
+    uint64_t otherViewportReads = 0;         // the same calls from another DLL than the game's exe (NGX's, a tool's)
     uint64_t extraResolves = 0;              // multisample resolves after a pass's post began (passed on, not a new post)
     uint64_t resolveFunctions = 0;           // of those, ResolveSubresource's
     uint64_t focusCopies = 0, focusComposites = 0, focusFailures = 0;  // the focus post's steps (mvr_focus_replay)

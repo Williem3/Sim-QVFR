@@ -643,6 +643,7 @@ bool install_mvr(ID3D11Device* device) {
     // DLSS's camera from the per-draw buffer (view_pair.h): where it is the source (build-free), and where the cars'
     // hooks are in anyway (a known build's comparison with the renderer's, at no cost).
     mvr_view_track(cfg.trackerDrives && (buildFree || cars));
+    mvr_viewport_reads(cfg.viewportReads);  // the game's viewport reads answered with its own (lmu_viewport_reads)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;

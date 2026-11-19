@@ -136,6 +136,8 @@ void* detour_for(int h, int n) {
 bool wanted(int h) {
     if (h == kHookCSUav)  // FSR seen at the d3d11 level: only on a build whose FSR setting can't be read
         return g.fsrWatch;
+    if (h == kHookVPGet)  // the game's viewport reads (lmu_viewport_reads=0: not hooked, an A/B)
+        return g.viewportReads != 0;
     if (h == kHookPS)
         return g.biasHooks || g.slotsOn;
     if (h == kHookVSCB)  // always: the remap at b13 kept over the game's binds of it

@@ -81,6 +81,9 @@ struct QvfrFrameRun {
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
     // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
     bool buildFree = false;
+    // [experiment] lmu_viewport_reads (mvr_pass.h mvr_viewport_reads): 1 (default) every caller but Sim-QVFR given the
+    // game's own viewports while ours are bound, 2 only the game's exe, 0 not hooked. An A/B.
+    int viewportReads = 1;
 };
 
 // The game's exe is a build abi.h's addresses are from (game.h kBuilds; hashed once). Any other build runs QVFR from

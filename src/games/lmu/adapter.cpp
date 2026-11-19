@@ -130,6 +130,9 @@ public:
         // Any game build (qvfr_frame.h qvfr_frame_known_build): lmu_build_free=1 takes the game's facts from OpenXR and
         // Direct3D on a known build too, as on any other.
         run.buildFree = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_build_free", 0, s.ini) != 0;
+        // lmu_viewport_reads=0/1/2 (an A/B; mvr_pass.h mvr_viewport_reads): who is given the game's own viewports.
+        run.viewportReads = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_viewport_reads", 1, s.ini))
+                                  : 1;
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
         // Each pass's camera for DLSS (dlss_inputs.cpp): the game's renderer's on a known build, what the pass's draws
