@@ -156,20 +156,24 @@ bool spots_place(const void* code, size_t size, UINT (&out)[5]) {
     // The array at its buffer's start (the readers index it from 0, 64 bytes each): anything before it, none taken.
     if (sd.StartOffset != 0)
         return false;
-    // The count's and the indices' buffer, and the worldMatrix in it (every member is listed, used or not).
+    // The count's and the indices' buffer: its slot (the record checks the buffer bound there is the per-draw one the
+    // matrix is read from; a pixel shader's reflection lists only the members it declares, worldMatrix not among them:
+    // a check by name refused every headlight, 2026-11-19).
     out[4] = ~0u;
-    ID3D11ShaderReflectionConstantBuffer* drawCb = count->GetBuffer();
-    D3D11_SHADER_BUFFER_DESC dbd{};
-    D3D11_SHADER_VARIABLE_DESC wd{};
-    if (drawCb && index->GetBuffer() == drawCb && SUCCEEDED(drawCb->GetDesc(&dbd))) {
-        ID3D11ShaderReflectionVariable* world = drawCb->GetVariableByName("worldMatrix");
-        if (world && SUCCEEDED(world->GetDesc(&wd)))
-            out[4] = wd.StartOffset;
-    }
-    // The buffer's slot: every binding looked at (a sampler may share a name; constant buffers here don't, but alike).
     D3D11_SHADER_DESC desc{};
     if (FAILED(r->GetDesc(&desc)))
         return false;
+    ID3D11ShaderReflectionConstantBuffer* drawCb = count->GetBuffer();
+    D3D11_SHADER_BUFFER_DESC dbd{};
+    if (drawCb && index->GetBuffer() == drawCb && SUCCEEDED(drawCb->GetDesc(&dbd)) && dbd.Name) {
+        for (UINT i = 0; i < desc.BoundResources; ++i) {
+            D3D11_SHADER_INPUT_BIND_DESC bind{};
+            if (SUCCEEDED(r->GetResourceBindingDesc(i, &bind)) && bind.Type == D3D_SIT_CBUFFER && bind.Name &&
+                std::strcmp(bind.Name, dbd.Name) == 0)
+                out[4] = bind.BindPoint;
+        }
+    }
+    // The buffer's slot: every binding looked at (a sampler may share a name; constant buffers here don't, but alike).
     for (UINT i = 0; i < desc.BoundResources; ++i) {
         D3D11_SHADER_INPUT_BIND_DESC bind{};
         if (SUCCEEDED(r->GetResourceBindingDesc(i, &bind)) && bind.Type == D3D_SIT_CBUFFER && bind.Name &&

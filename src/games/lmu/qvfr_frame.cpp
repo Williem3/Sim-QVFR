@@ -1117,6 +1117,17 @@ void ab_frame_begin(simqvfr::CarLighting& light) {
             }
         }
         abKeyHeld = down;
+        // Ctrl+Alt+K: the debug view (car_light.h car_light_set_debug_view).
+        static bool debugKeyHeld = false;
+        const bool debugDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                               (GetAsyncKeyState('K') & 0x8000);
+        if (debugDown && !debugKeyHeld) {
+            car_light_set_debug_view(!car_light_debug_view());
+            simqvfr::logf("lmu car light: Ctrl+Alt+K: the debug view %s (red: lacquer, green: floodlights, blue: the "
+                          "game's normal, white: headlights; the rest dimmed)",
+                          car_light_debug_view() ? "on" : "off");
+        }
+        debugKeyHeld = debugDown;
         if (!carAb.active()) {
             mvr_car_light_block(0);
             return;

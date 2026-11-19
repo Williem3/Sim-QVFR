@@ -571,6 +571,7 @@ void keep_view_pair() {
     p.next = (at + 1) % State::kViewPairs;
     std::memcpy(p.pair[at], g.viewPair, sizeof(g.viewPair));
     p.worldDraws[at] = world;
+    p.carDraws[at] = 0;
     p.last = at;
 }
 
@@ -580,6 +581,12 @@ uint32_t carLightSampleCounter = 0;
 void car_light_record(unsigned slot) {
     if (g.vsOmniSlot < 0 || !g.vsOmniCount)
         return;
+    if (g.pass >= 0 && g.pass < 2) {  // the camera this car part was drawn with (keep_view_pair, this draw's)
+        State::PassPairs& pp = g.passPairs[g.pass];
+        if (pp.frame == g.carFrame && pp.last >= 0 && pp.last < pp.count &&
+            std::memcmp(pp.pair[pp.last], g.viewPair, sizeof(g.viewPair)) == 0)
+            ++pp.carDraws[pp.last];
+    }
     const bool timed = (++carLightSampleCounter & 15) == 0;
     const uint64_t t0 = timed ? __rdtsc() : 0;
     ID3D11Buffer* cb = g.vsCb[g.vsOmniSlot];
@@ -659,6 +666,12 @@ void car_light_record(unsigned slot) {
                     }
                 }
                 g.spotBoundOk = b && b == g.spotRes;
+                ID3D11Buffer* drawCb = nullptr;
+                if (pe->spotDrawSlot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+                    g.context->PSGetConstantBuffers(pe->spotDrawSlot, 1, &drawCb);
+                g.spotDrawOk = drawCb && drawCb == g.worldCb;
+                if (drawCb)
+                    drawCb->Release();
                 g.spotFrameChecked = true;
                 g.spotFrameMatched = g.spotFrameMatched || g.spotBoundOk;
                 if (b)
@@ -668,7 +681,12 @@ void car_light_record(unsigned slot) {
             // its shader's count sits in the buffer the matrix is read from (its worldMatrix at the same offset).
             const UINT lo = pe->spotCountOffset < pe->spotIndexOffset ? pe->spotCountOffset : pe->spotIndexOffset;
             const UINT hi = (std::max)(pe->spotCountOffset + 4, pe->spotIndexOffset + 40);
-            const bool sameBuffer = pe->spotWorldOffset == g.worldCbOffset;
+            const bool sameBuffer = g.spotDrawOk;
+            ++g.spotWhy.seen;
+            g.spotWhy.notBound += g.spotBoundOk ? 0 : 1;
+            g.spotWhy.otherLayout += sameBuffer ? 0 : 1;
+            g.spotWhy.notValid += g.spotValid ? 0 : 1;
+            g.spotWhy.notRead += g.drawSpotsRead ? 0 : 1;
             if (sameBuffer && hi <= g.worldBytes && (lo < g.spotLo || hi > g.spotHi)) {  // from the next write
                 g.spotLo = (std::min)(g.spotLo, lo);
                 g.spotHi = (std::max)(g.spotHi, hi);
@@ -677,6 +695,8 @@ void car_light_record(unsigned slot) {
                 uint32_t count = 0, packed[10] = {};
                 std::memcpy(&count, g.drawSpotBytes.data() + (pe->spotCountOffset - g.spotLo), 4);
                 std::memcpy(packed, g.drawSpotBytes.data() + (pe->spotIndexOffset - g.spotLo), 40);
+                ++g.spotWhy.given;
+                g.spotWhy.listed += count <= 20 ? count : 0;
                 g.carLights.add_spots(slot, count, packed, g.spotCapacity, origin, g.spotShadow.data(),
                                       g.spotShadow.size());
             }

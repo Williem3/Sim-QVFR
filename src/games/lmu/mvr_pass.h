@@ -209,6 +209,9 @@ void mvr_viewport_reads(int mode);
 // viewProj), up to `max`, and per pair its draws with an identity worldMatrix (the static world's; may be null); how
 // many.
 int mvr_view_pairs(int pass, float (*pairs)[32], unsigned* worldDraws, int max);
+// Night car lighting's camera: the pair this frame's pass drew the most recorded car parts with (the cars' own space:
+// their lights' and normals'). False: none recorded with a pair yet.
+bool mvr_car_view_pair(int pass, float (&view)[16], float (&viewProj)[16]);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips

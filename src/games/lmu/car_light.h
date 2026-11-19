@@ -74,6 +74,12 @@ public:
     // than kSpotsPerSlot keeps the strongest at it (colour x attenuation x range falloff), not LMU's first.
     void add_spots(unsigned slot, uint32_t count, const uint32_t* packed, unsigned capacity, const float (&origin)[3],
                    const uint8_t* spotBuffer, size_t spotBytes);
+    // Spotlights add_spots left out as out of reach or unreadable, and kept, since the last call (diagnostics).
+    void take_spot_counts(unsigned long long& outOfReach, unsigned long long& kept) {
+        outOfReach = spotOutOfReach_;
+        kept = spotKept_;
+        spotOutOfReach_ = spotKept_ = 0;
+    }
     static constexpr unsigned kSpotsPerSlot = 6;
     // The frame's spotlights (LMU's indices) the slots packed so far use: packed() adds a slot's kept ones.
     const std::vector<uint16_t>& spots() const { return spots_; }
@@ -82,6 +88,8 @@ public:
     // frame's first call (the first eye's pass) and kept for the frame: the second eye's draws add parts and could
     // reorder near ties, and each eye would shadow the ground from different lights.
     void top_lights(int (&out)[4]) const;
+    // Slot `slot` was drawn this frame.
+    bool slot_drawn(unsigned slot) const { return slot < slotFrame_.size() && slotFrame_[slot] == frame_; }
     // The slots written this frame: [first, last] (first > last: none).
     unsigned first_slot() const { return firstSlot_; }
     unsigned last_slot() const { return lastSlot_; }
@@ -111,6 +119,7 @@ private:
     std::vector<uint32_t> slotFrame_;
     mutable std::vector<uint32_t> slotFrozen_;  // the frame a pass packed the slot (its lists kept from then on)
     mutable uint32_t topFrame_ = 0;              // top_lights' choice's frame
+    unsigned long long spotOutOfReach_ = 0, spotKept_ = 0;
     mutable int top_[4] = {-1, -1, -1, -1};
     uint32_t frame_ = 1;
     // The last buffer parsed (most draws repeat the draw before's lights: run 1 had ~1,000 car part draws a frame, and
@@ -225,6 +234,11 @@ private:
     Sum all_;
 };
 
+// Dev builds' debug view (qvfr_frame.cpp, Ctrl+Alt+K): each car part painted by what the relight sees (red: lacquer,
+// green: its floodlights, blue: the game's normal, white: headlights) with its highlights on top, the rest dimmed.
+void car_light_set_debug_view(bool on);
+bool car_light_debug_view();
+
 // The D3D11 pass. Made on the render thread at its first run.
 class CarLightPass {
 public:
@@ -257,6 +271,14 @@ public:
     void set_block(unsigned serial);
     bool block(unsigned serial, CarLightBlock& out) const;
     unsigned long long windows() const { return windows_; }
+    // Why the runs went as they did (since the last take_reasons): relit; night vision's colour alone, and why (no car
+    // part in the table, no camera, no depth view, depth and slots' samples differ, a singular camera); and the last
+    // upload's slots: drawn, with floodlights, paint, the game's normal, spotlights.
+    struct Reasons {
+        unsigned long long relit = 0, alone = 0, noCar = 0, noCamera = 0, noDepth = 0, samples = 0, singular = 0;
+        unsigned slots = 0, lit = 0, paint = 0, normal = 0, spotted = 0;
+    };
+    Reasons take_reasons();
     bool failed() const { return failed_; }
 
 private:

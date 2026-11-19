@@ -151,7 +151,7 @@ const PsTwinEntry& ps_entry(ID3D11PixelShader* ps) {
             set.entry[k].spotCapacity = spots[1];
             set.entry[k].spotCountOffset = spots[2];
             set.entry[k].spotIndexOffset = spots[3];
-            set.entry[k].spotWorldOffset = spots[4];
+            set.entry[k].spotDrawSlot = spots[4];
         }
     }
     return set.entry[k];

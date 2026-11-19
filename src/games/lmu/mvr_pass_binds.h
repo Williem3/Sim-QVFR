@@ -461,9 +461,19 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
 // The pass's post-processing begins on `scene` (the resolve's target; with MSAA off the scene's own target, at YEBIS's
 // copy, before it reads it), which was drawn into `drawn` (the multisample target, or the same): DLAA on the eye and its
 // focus view, gate D's kept region, the focus post's window.
-// Night car lighting: the eye's camera (dlss_inputs.h lmu_pass_camera: the renderer's while it's the eye's on a known
-// build, else the drawn pairs' as DLSS takes them, else the eye's last). False: none.
-bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) { return lmu_pass_camera(eye, view, viewProj); }
+// Night car lighting: the eye's camera in the cars' own space: the pair the pass drew the most recorded car parts with
+// (their floodlights, headlights and normals are in its world; replay drew them camera-relative, and the renderer's
+// world camera placed every light off its car: 2026-11-19, no highlights at all); none recorded: dlss_inputs.h
+// lmu_pass_camera. False: none.
+bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
+    if (mvr_car_view_pair(eye, view, viewProj)) {
+        float p[16], expected[16];
+        // The eye's FOV (a mirror's camera, with more car parts drawn, wouldn't be the eye's).
+        if (projection_of_pair(view, viewProj, p) && (!qvfr_frame_eye_projection(eye, expected) || same_eye(p, expected)))
+            return true;
+    }
+    return lmu_pass_camera(eye, view, viewProj);
+}
 
 void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn, int eye) {
     CarLightView v;

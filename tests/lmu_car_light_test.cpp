@@ -974,6 +974,30 @@ void pass_checks(bool hardware) {
                               focus, n[1], eye, n[0]);
                 check(n[0] >= 20 && n[1] >= 60 && eye > 0.12 && focus > 0.12 && std::fabs(focus - eye) < 0.1 * eye,
                       text);
+                // The wall the same car part as the bonnet (slot 1 both): no reflection of itself (a panel reflecting
+                // its own neighbouring surface was a shifted copy of itself, in one eye).
+                std::vector<uint16_t> same = rSlots;
+                for (size_t i = 0; i < same.size(); ++i)
+                    same[i] = 1;
+                context->UpdateSubresource(aSlots.Get(), 0, nullptr, same.data(), kAW * 2, 0);
+                context->UpdateSubresource(aScene.Get(), 0, nullptr, rPx.data(), kAW * 8, 0);
+                pass.run(context.Get(), aScene.Get(), aDepth.Get(), aSlotView.Get(), false, car, fv, f, 0);
+                context->CopyResource(aStaging.Get(), aScene.Get());
+                if (SUCCEEDED(context->Map(aStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                    double most = 0;
+                    for (UINT y = 0; y < kAH; ++y)
+                        for (UINT x = 0; x < kAW; ++x) {
+                            const size_t i = size_t{y} * kAW + x;
+                            if (!rSlots[i] || rZ[i] < 4 || rZ[i] > 7 || std::fabs(rX[i]) > 1)
+                                continue;
+                            most = (std::max)(most, static_cast<double>(half_to_float(reinterpret_cast<const uint16_t*>(
+                                static_cast<const uint8_t*>(m.pData) + size_t{y} * m.RowPitch)[x * 4])));
+                        }
+                    context->Unmap(aStaging.Get(), 0);
+                    std::snprintf(text, sizeof(text),
+                                  "reflections: a car part doesn't reflect itself (brightest %.3f, unreflected 0.100)", most);
+                    check(most < 0.102, text);
+                }
             }
         }
     }

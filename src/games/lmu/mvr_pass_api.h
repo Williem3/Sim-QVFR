@@ -454,6 +454,23 @@ void mvr_view_track(bool on) {
         g.viewTrack = on;
 }
 
+bool mvr_car_view_pair(int pass, float (&view)[16], float (&viewProj)[16]) {
+    if (pass < 0 || pass > 1)
+        return false;
+    const State::PassPairs& p = g.passPairs[pass];
+    if (p.frame != g.carFrame)
+        return false;
+    int best = -1;
+    for (int i = 0; i < p.count; ++i)
+        if (p.carDraws[i] && (best < 0 || p.carDraws[i] > p.carDraws[best]))
+            best = i;
+    if (best < 0)
+        return false;
+    std::memcpy(view, p.pair[best], sizeof(view));
+    std::memcpy(viewProj, p.pair[best] + 16, sizeof(viewProj));
+    return true;
+}
+
 int mvr_view_pairs(int pass, float (*pairs)[32], unsigned* worldDraws, int max) {
     if (pass < 0 || pass > 1 || !pairs)
         return 0;

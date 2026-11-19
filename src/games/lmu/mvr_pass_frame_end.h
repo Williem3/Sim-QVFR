@@ -34,6 +34,22 @@ void car_light_frame_end() {
         return;
     carLightGpu.store(static_cast<float>(g.carLightPass.gpu_ms()), std::memory_order_relaxed);
     carLightCpu.store(static_cast<float>(g.carLightPass.cpu_ms()), std::memory_order_relaxed);
+    if (windows % 10 == 1) {  // the first average, then every 900 frames
+        const CarLightPass::Reasons r = g.carLightPass.take_reasons();
+        simqvfr::logf("lmu car light: runs: %llu relit, %llu night vision's colour alone (no car part %llu, no camera "
+                      "%llu, no depth view %llu, depth and slots' samples differ %llu, camera singular %llu); the last "
+                      "upload: %u slots drawn, %u with floodlights, %u paint, %u the game's normal, %u spotlights",
+                      r.relit, r.alone, r.noCar, r.noCamera, r.noDepth, r.samples, r.singular, r.slots, r.lit, r.paint,
+                      r.normal, r.spotted);
+        unsigned long long outOfReach = 0, kept = 0;
+        g.carLights.take_spot_counts(outOfReach, kept);
+        const auto& sw = g.spotWhy;
+        simqvfr::logf("lmu car light: headlights: %llu spotlight-reading part draws (buffer not ours %llu, count elsewhere "
+                      "%llu, buffer not written %llu, per-draw bytes not read %llu), %llu read with %llu spotlights listed; "
+                      "%llu kept, %llu out of reach",
+                      sw.seen, sw.notBound, sw.otherLayout, sw.notValid, sw.notRead, sw.given, sw.listed, kept, outOfReach);
+        g.spotWhy = {};
+    }
     if (windows % 10 == 1)  // the first average, then every 900 frames
         simqvfr::logf("lmu car light: %s; %.3f ms GPU and %.3f ms CPU per frame (the last 90 frames); %llu passes relit, "
                       "%zu floodlights this frame, %llu car part draws given lights, %llu without (no light buffer read "

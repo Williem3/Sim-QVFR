@@ -104,7 +104,7 @@ struct PsTwinEntry {
     // draw's count's and indices' offsets.
     int spotSlot = -1;
     UINT spotCapacity = 0, spotCountOffset = 0, spotIndexOffset = 0;
-    UINT spotWorldOffset = ~0u;  // the worldMatrix's offset in the buffer holding the count (~0u: not in it)
+    UINT spotDrawSlot = ~0u;  // the slot of the buffer holding the draw's count and indices (~0u: unknown)
 };
 struct PsTwinSet {
     PsTwinEntry entry[2];
@@ -301,9 +301,13 @@ struct State {
     unsigned spotOtherFrames = 0;             // frames in a row no check found ours bound (30: learned again)
     ID3D11PixelShader* spotCheckedPs = nullptr;  // the pixel shader the bound buffer was last checked for (compared only)
     bool spotBoundOk = false;                 // that check found ours bound
+    bool spotDrawOk = false;                  // and the draw's count's buffer is the per-draw one the matrix is read from
     bool spotFrameChecked = false, spotFrameMatched = false;  // this frame: a check made, one found ours
     unsigned long long spotLearnFrame = 0;    // the frame a buffer was last tried for learning (once a frame)
     bool spotRefusalSaid = false;
+    struct SpotWhy {  // the headlights' reads since the last log line (diagnostics)
+        unsigned long long seen = 0, notBound = 0, otherLayout = 0, notValid = 0, notRead = 0, given = 0, listed = 0;
+    } spotWhy;
     unsigned spotRelearned = 0;               // times learned again (the log: the first few)
     ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
     ComPtr<ID3D11Buffer> omniHeld;
@@ -335,6 +339,10 @@ struct State {
         // Per pair, its draws with an identity worldMatrix (the static world's: its camera is the world's; the cockpit
         // and the sky may be drawn with the same FOV from another space).
         uint32_t worldDraws[kViewPairs] = {};
+        // Per pair, the car part draws night car lighting recorded with it: the cars' own camera, the space their
+        // floodlights, headlights and normals are in (replay drew the cars camera-relative, the renderer's camera is
+        // the world's: lights placed with it missed every car).
+        uint32_t carDraws[kViewPairs] = {};
         int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
         uint64_t frame = 0;                  // carFrame they were drawn in
     } passPairs[2];

@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -177,8 +178,11 @@ void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* pac
         if (known)
             continue;
         const float w = spot_weight(spotBuffer, spotBytes, index, origin);
-        if (w <= 0)
+        if (w <= 0) {
+            ++spotOutOfReach_;
             continue;  // out of its reach, or unreadable
+        }
+        ++spotKept_;
         if (s->spotCount < kSpotsPerSlot) {
             s->spot[s->spotCount] = static_cast<uint16_t>(index);
             s->spotWeight[s->spotCount++] = w;
@@ -697,6 +701,11 @@ Out other_pixel(float4 pos, int2 p, int r, float2 origin, float2 size, float d) 
     if (mode2.y > 0 && d > 0)
         m = ground_shade(pos, p, r, origin, size, d);
     Out o;
+    if (mode.w > 0) {  // dev builds' debug view: the rest dimmed, its ground shading kept
+        o.add = float4(0, 0, 0, 0);
+        o.mul = float4((0.25 * m).xxx, 1);
+        return o;
+    }
     if (mode2.z > 0) {
         o.add = float4(night_vision(sceneTex.Load(int3(p, 0)).rgb * m), 0);
         o.mul = float4(0, 0, 0, 1);
@@ -903,7 +912,12 @@ Out ps_main(float4 pos : SV_Position) {
     // distance marched. Nothing where the ray leaves the screen (the game's own reflection, its cube map, stays).
     float3 refl = 0;
     if (mode.z > 0 && (info.z & 1) != 0) {
-        float3 R = reflect(-V, Nh);
+        // The ray off the smooth normal, the detail's only a little (the orange peel's ripples tipped grazing rays into
+        // the panel they left: the panel's own vents and edges reflected beside themselves, in one eye: 2026-11-19).
+        float3 Nr = normalize(lerp(N, Nh, 0.3));
+        if (dot(Nr, V) < 0)
+            Nr = N;
+        float3 R = reflect(-V, Nr);
         float fres = 0.04 + 0.96 * pow(1 - saturate(dot(Nh, V)), 5);
         float weight = fres * saturate(1 - rough * 1.6);
         if (weight > 0.002) {
@@ -933,7 +947,8 @@ Out ps_main(float4 pos : SV_Position) {
                 float behind = found > 0 ? length(O + R * t) - lq : -1;
                 // In front of a surface by up to a step's length (the steps grow: a fixed thickness let the far ones
                 // jump past a wall), not one far behind it.
-                if (behind > 0 && behind < 0.3 + 1.5 * (t - prev)) {
+                // Not the car part the ray left (its own panel a step on: a doubled image of itself).
+                if (behind > 0 && behind < 0.05 + 0.75 * (t - prev) && sq != s) {
                     float lo = prev, hi = t;
                     [unroll] for (int b = 0; b < 4; ++b) {
                         float mid = 0.5 * (lo + hi);
@@ -961,6 +976,17 @@ Out ps_main(float4 pos : SV_Position) {
     float3 added = (spec * shade.z + refl) * fade;
     float scaled = lerp(1, shade.x * lerp(1, ao, shade.y) * shadow, fade);
     Out o;
+    if (mode.w > 0) {  // dev builds' debug view: what the relight sees per car part, its highlights on top
+        uint lights = 0;
+        [unroll] for (int li = 0; li < 8; ++li)
+            lights += (((li < 4 ? info.x : info.y) >> (8 * (li & 3))) & 0xff) != 0xff ? 1 : 0;
+        uint spotsHere = (info.w & 0xff) != 0xff ? 1 : 0;
+        // Red: lacquer (bright) or not (dim); green: its floodlights (of 8); blue: the game's normal; white: headlights.
+        float3 c = float3((info.z & 1) ? 0.6 : 0.12, lights / 8.0 * 0.6, (info.z & 2) ? 0.5 : 0.0) + spotsHere * 0.3;
+        o.add = float4(c * (0.3 + 0.7 * fade) + added, 0);
+        o.mul = float4(0, 0, 0, 1);
+        return o;
+    }
     if (mode2.z > 0) {  // night vision's colour over the relit car: the result made here from the scene's copy
         o.add = float4(night_vision(sceneTex.Load(int3(p, 0)).rgb * scaled + added), 0);
         o.mul = float4(0, 0, 0, 1);
@@ -973,6 +999,7 @@ Out ps_main(float4 pos : SV_Position) {
 )";
 
 constexpr unsigned kSlotsMax = 4096;
+std::atomic<bool> debugView{false};
 constexpr unsigned kTimerSlots = 8;
 
 bool invert4(const double (&m)[16], double (&out)[16]) {
@@ -1071,6 +1098,7 @@ struct CarLightPass::Impl {
     ComPtr<ID3D11ShaderResourceView> slotView;
     std::vector<uint32_t> slotWords;
     unsigned uploadedFirst = 1, uploadedLast = 0;  // the slots the last upload wrote (emptied when not drawn again)
+    CarLightPass::Reasons why;
     bool copyFailSaid = false;
     // The scene's render target view and the depth's resource view, kept for the resources they're of.
     ID3D11Resource* rtvFor = nullptr;
@@ -1283,7 +1311,14 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     if (relight) {
         mul4(vi, vp, p);
         relight = invert4(p, pi);
+        m.why.singular += relight ? 0 : 1;
+    } else {
+        m.why.noCar += anyCar ? 0 : 1;
+        m.why.noCamera += view.camera ? 0 : 1;
+        m.why.noDepth += depthView ? 0 : 1;
+        m.why.samples += depthView && depthMs != slotsMs ? 1 : 0;
     }
+    ++(relight ? m.why.relit : m.why.alone);
     if (!relight && !settings.nightVision)
         return false;
     if (!relight)
@@ -1297,10 +1332,19 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         const unsigned lo = m.uploadedFirst <= m.uploadedLast ? (std::min)(first, m.uploadedFirst) : first;
         const unsigned hi = m.uploadedFirst <= m.uploadedLast ? (std::max)(last, m.uploadedLast) : last;
         m.slotWords.resize(size_t{4} * (hi - lo + 1));
+        m.why.slots = m.why.lit = m.why.paint = m.why.normal = m.why.spotted = 0;
         for (unsigned slot = lo; slot <= hi; ++slot) {
             uint32_t w[4];
             table.packed(slot, w);
             std::memcpy(&m.slotWords[size_t{4} * (slot - lo)], w, sizeof(w));
+            if (slot >= first && slot <= last && (w[0] != 0xffffffffu || (w[2] & 0xff) || w[3] != 0xffffffffu ||
+                                                  table.slot_drawn(slot))) {
+                ++m.why.slots;
+                m.why.lit += (w[0] & 0xff) != 0xff ? 1 : 0;
+                m.why.paint += (w[2] & 1) ? 1 : 0;
+                m.why.normal += (w[2] & 2) ? 1 : 0;
+                m.why.spotted += (w[3] & 0xff) != 0xff ? 1 : 0;
+            }
         }
         const D3D11_BOX box{16 * lo, 0, 0, 16 * (hi + 1), 1, 1};
         context->UpdateSubresource(m.slotBuffer.Get(), 0, &box, m.slotWords.data(), 0, 0);
@@ -1415,6 +1459,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         rest[16] = s.shadows ? 1.0f : 0.0f;
         rest[17] = s.detail ? 1.0f : 0.0f;
         rest[18] = s.reflections && copied ? 1.0f : 0.0f;
+        rest[19] = car_light_debug_view() ? 1.0f : 0.0f;
         // The headlights: the frame's spotlights the car parts were handed, from the spotlights' buffer as written.
         unsigned spots = 0;
         if (s.headlights && spotBuffer) {
@@ -1502,6 +1547,16 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         b->cpuSum += cpu;
     }
     return true;
+}
+
+void car_light_set_debug_view(bool on) { debugView.store(on, std::memory_order_relaxed); }
+bool car_light_debug_view() { return debugView.load(std::memory_order_relaxed); }
+
+CarLightPass::Reasons CarLightPass::take_reasons() {
+    Reasons r = impl_->why;
+    impl_->why.relit = impl_->why.alone = impl_->why.noCar = impl_->why.noCamera = impl_->why.noDepth =
+        impl_->why.samples = impl_->why.singular = 0;
+    return r;
 }
 
 void CarLightPass::add_collect_ms(double ms) {
