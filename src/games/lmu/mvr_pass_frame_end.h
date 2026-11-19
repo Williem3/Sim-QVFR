@@ -199,6 +199,18 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.slotNoTwin), static_cast<unsigned long long>(s.blendTwins),
                           static_cast<unsigned long long>(s.motionUploads), static_cast<unsigned long long>(s.motionSlots),
                           static_cast<unsigned long long>(s.slotImages));
+        if (g.glass.mode) {
+            const double passes = s.glassPasses ? static_cast<double>(s.glassPasses) : 1.0;
+            simqvfr::logf("lmu mvr: depth before the transparents: %llu eye passes with a copy (%.2f copies each, the "
+                          "first after %.0f of the pass's %.0f draws on average); %.1f blended draws writing the scene's "
+                          "depth per pass, %.2f unblended ones after its last copy (their depth not in DLSS's); %llu "
+                          "copies refused, %llu past %d a pass",
+                          static_cast<unsigned long long>(s.glassPasses), static_cast<double>(s.glassCopies) / passes,
+                          static_cast<double>(s.glassFirstAt) / passes, static_cast<double>(s.glassPassDraws) / passes,
+                          static_cast<double>(s.glassBlendedWriters) / passes,
+                          static_cast<double>(s.glassOpaqueAfter) / passes, static_cast<unsigned long long>(s.glassRefused),
+                          static_cast<unsigned long long>(s.glassCapped), kGlassCopies);
+        }
         if (tr.on) {
             const MvrTrackStats& ts = tr.stats;
             const uint64_t compared = ts.passesCompared ? ts.passesCompared : 1;

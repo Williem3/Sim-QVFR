@@ -625,6 +625,7 @@ void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsign
 bool install_mvr(ID3D11Device* device) {
     mvr_focus_replay(cfg.focusReplay);  // before the install: the draws hooked for it only
     mvr_ui_mips(cfg.uiMips);
+    mvr_glass_depth(cfg.glassDepth);  // before the install: its state hooks only when on
     // Texture sharpening's pixel shader hook only when it's on at launch (no cost otherwise; its three settings are live
     // from then on) and where DLSS can run: a build with NGX, an NVIDIA GPU that draws two views, the passes the
     // tracker drives (DLSS's only way in).

@@ -125,16 +125,17 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="m" x="416" y="399">Draw* YEBIS copy → <tspan fill="var(--dlss)">DLSS (MSAA off)</tspan></text>
 <text class="m" x="416" y="418">Draw* VR UI → canvas with mips</text>
 <text class="m" x="416" y="437">PSSetShader → <tspan fill="var(--dlss)">twin, mip bias by view</tspan></text>
-<text class="s" x="416" y="462">The module’s own draws pass these detours</text>
-<text class="s" x="416" y="478">untouched; multi-view is off while it runs,</text>
-<text class="s" x="416" y="494">the context’s state put back call by call.</text>
+<text class="m" x="416" y="456">Draw* glass → <tspan fill="var(--dlss)">depth copied first</tspan></text>
+<text class="s" x="416" y="476">The module’s own draws pass these detours</text>
+<text class="s" x="416" y="491">untouched; multi-view is off while it runs,</text>
+<text class="s" x="416" y="506">the context’s state put back call by call.</text>
 
 <!-- Sim-QVFR: engine DLSS module -->
 <rect x="400" y="532" width="320" height="228" rx="12" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
 <text class="t" x="416" y="558">Engine DLSS module</text>
 <text class="ms" x="416" y="576">src/engine/dlss_views.cpp · any game</text>
 <circle cx="424" cy="598" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="602" text-anchor="middle" fill="var(--group-bg)">1</text>
-<text class="s" x="440" y="602">Depth: sample 0 → R32F, per view</text>
+<text class="s" x="440" y="602">Depth (behind glass): sample 0 → R32F</text>
 <circle cx="424" cy="620" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="624" text-anchor="middle" fill="var(--group-bg)">2</text>
 <text class="s" x="440" y="624">Vectors: depth reprojected through last</text>
 <text class="s" x="440" y="640">frame’s view × projection; in the car’s</text>

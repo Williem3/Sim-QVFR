@@ -20,7 +20,9 @@ cbuffer C : register(b0) {
     row_major float4x4 B;    // the world -> the frame before's clip (without its jitter)
     float4 objects;          // x: how many object slots (0: none)
 };
-#ifdef MS
+// DEPTH_MS: the depth multisample (its first sample read); MS: the object slots too. MS alone: the depth is our copy
+// (dlss_depth_copy_list, single-sample) while the scene and its slots are multisample.
+#ifdef DEPTH_MS
 Texture2DMS<float> depthIn : register(t0);
 #else
 Texture2D<float> depthIn : register(t0);
@@ -55,7 +57,7 @@ struct Out {
 };
 Out ps(float4 pos : SV_Position) {
     int2 p = int2(pos.xy) + int2(origin.xy);
-#ifdef MS
+#ifdef DEPTH_MS
     float d = depthIn.Load(p, 0);
 #else
     float d = depthIn.Load(int3(p, 0));
@@ -222,6 +224,72 @@ cbuffer C : register(b0) {
 Texture2D<float4> src : register(t0);
 SamplerState linearClamp : register(s0);
 float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearClamp, pos.xy / js.zw, 0); }
+)";
+
+// The scene's depth as it stands mid-pass (dlss_depth_copy_list), before transparents that write depth (a car's glass):
+// its first sample per pixel into our single-sample copy (macro MS: the depth is multisample).
+inline constexpr char kDepthCopyShader[] = R"(
+#ifdef MS
+Texture2DMS<float> depthIn : register(t0);
+#else
+Texture2D<float> depthIn : register(t0);
+#endif
+float ps(float4 pos : SV_Position) : SV_Target {
+#ifdef MS
+    return depthIn.Load(int2(pos.xy), 0);
+#else
+    return depthIn.Load(int3(pos.xy, 0));
+#endif
+}
+)";
+
+// The copy kept only where the transparents drawn after it are near (DlssRun::depthCopyNear): where the depth at the
+// pass's end lies at or beyond the distance (its depth value at most extra.w, reversed depth), that depth is written
+// over the copy; nearer, the copy stays (discard). The depth test only lets a transparent nearer, so the end's depth is
+// never farther than the copy's.
+inline constexpr char kDepthKeepFarShader[] = R"(
+cbuffer C : register(b0) {
+    row_major float4x4 R;
+    row_major float4x4 R2;
+    float4 js;
+    float4 origin;
+    float4 extra;  // w: the depth value at the distance
+};
+#ifdef MS
+Texture2DMS<float> depthIn : register(t0);
+#else
+Texture2D<float> depthIn : register(t0);
+#endif
+float ps(float4 pos : SV_Position) : SV_Target {
+#ifdef MS
+    float d = depthIn.Load(int2(pos.xy), 0);
+#else
+    float d = depthIn.Load(int3(pos.xy, 0));
+#endif
+    if (d > extra.w)
+        discard;
+    return d;
+}
+)";
+
+// The measurement (DlssRun::depthMeasure): every 8th texel each way, the copy's depth (before the transparents) and
+// the scene's at the pass's end (after them), read back and compared on the CPU.
+inline constexpr char kDepthMeasureShader[] = R"(
+Texture2D<float> before : register(t0);
+#ifdef MS
+Texture2DMS<float> after : register(t1);
+#else
+Texture2D<float> after : register(t1);
+#endif
+float2 ps(float4 pos : SV_Position) : SV_Target {
+    int2 p = int2(pos.xy) * 8 + 4;
+#ifdef MS
+    float a = after.Load(p, 0);
+#else
+    float a = after.Load(int3(p, 0));
+#endif
+    return float2(before.Load(int3(p, 0)), a);
+}
 )";
 
 }  // namespace simqvfr

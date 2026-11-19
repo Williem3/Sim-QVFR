@@ -154,6 +154,8 @@ namespace {
 
 #include "mvr_pass_focus_mask.h"
 
+#include "mvr_pass_glass.h"
+
 #include "mvr_pass_hooks_entry.h"
 
 #include "mvr_pass_hook_install.h"

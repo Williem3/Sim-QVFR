@@ -127,6 +127,20 @@ Out ps(float4 pos : SV_Position) {
     float4 b = mul(float4(ndc, 0.01, 1), clipToWorld);
     float3 p0 = a.xyz / a.w;
     float3 dir = normalize(b.xyz / b.w - p0);
+    // The glass (frame.y > 0, drawn after the scene, as a car's glass is): the window inside the frame, at the frame's
+    // plane 0.4 m ahead, its depth written (LMU's glass: blended, depth written); nothing elsewhere.
+    if (frame.y > 0) {
+        float3 g0 = mul(float4(p0, 1), worldToCamera).xyz, gd = mul(float4(dir, 0), worldToCamera).xyz;
+        float tg = gd.z > 1e-4 ? (0.4 - g0.z) / gd.z : -1;
+        float3 gh = g0 + gd * tg;
+        if (!(tg > 0 && abs(gh.x) <= 0.3 && gh.y >= -0.12 && gh.y <= 0.17))
+            discard;
+        float4 gc = mul(float4(p0 + dir * tg, 1), worldToClip);
+        Out glass;
+        glass.depth = saturate(gc.z / gc.w);
+        glass.colour = float4(0.5, 0.5, 0.5, 1);
+        return glass;
+    }
     float level = dir.y < 0 ? 0 : 4;
     float t = (level - p0.y) / (abs(dir.y) > 1e-6 ? dir.y : 1e-6);
     t = t > 0 ? t : 1e4;
@@ -223,7 +237,8 @@ bool make_scene(Scene& s) {
 // (and its factor) if given.
 bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const float (&view)[16], bool frame, float x, float y,
                      float w, float h, ID3D11RenderTargetView* colour, ID3D11RenderTargetView* msColour,
-                     ID3D11DepthStencilView* dsv, ID3D11BlendState* blend = nullptr, const float* blendFactor = nullptr) {
+                     ID3D11DepthStencilView* dsv, ID3D11BlendState* blend = nullptr, const float* blendFactor = nullptr,
+                     bool glass = false) {
     simqvfr::dlss::M4 inverse;
     if (!simqvfr::dlss::invert(rendered, inverse))
         return false;
@@ -235,6 +250,7 @@ bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const fl
     }
     c.area[0] = x, c.area[1] = y, c.area[2] = w, c.area[3] = h;
     c.frame[0] = frame ? 1.0f : 0.0f;
+    c.frame[1] = glass ? 1.0f : 0.0f;  // the window's glass alone, into the depth (and the multisample colour) only
     context->UpdateSubresource(s.constants.Get(), 0, nullptr, &c, 0, 0);
     ID3D11ShaderResourceView* none[1] = {};
     context->PSSetShaderResources(0, 1, none);
@@ -250,8 +266,10 @@ bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const fl
     context->OMSetDepthStencilState(s.always.Get(), 0);
     if (blend)
         context->OMSetBlendState(blend, blendFactor, 0xffffffff);
-    context->OMSetRenderTargets(1, &colour, nullptr);
-    context->Draw(3, 0);
+    if (!glass) {
+        context->OMSetRenderTargets(1, &colour, nullptr);
+        context->Draw(3, 0);
+    }
     context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     if (msColour) {
         context->OMSetRenderTargets(1, &msColour, dsv);
@@ -296,6 +314,57 @@ double shifted_difference(const std::vector<float>& a, const std::vector<float>&
         ++n;
     }
     return n ? s / n : 0;
+}
+
+// The depth's copy before the glass (dlss_depth_copy_list) timed on the GPU at the game's sizes (LMU, 2026-11: the
+// scene's targets 5190x4168 with MSAA off, 4036x3376 with 8x MSAA; the views cover about this much of them). Printed,
+// not checked. The module must have started (it has, inside a part).
+void time_depth_copies() {
+    struct Size {
+        unsigned w, h, samples;
+    } const sizes[] = {{5190, 4168, 1}, {4036, 3376, 8}, {2990, 2401, 1}};
+    for (const Size& z : sizes) {
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = z.w, td.Height = z.h, td.MipLevels = td.ArraySize = 1, td.SampleDesc.Count = z.samples;
+        td.Format = DXGI_FORMAT_R32_TYPELESS, td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> t;
+        ComPtr<ID3D11DepthStencilView> v;
+        D3D11_DEPTH_STENCIL_VIEW_DESC dd{};
+        dd.Format = DXGI_FORMAT_D32_FLOAT;
+        dd.ViewDimension = z.samples > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
+        if (FAILED(device->CreateTexture2D(&td, nullptr, &t)) || FAILED(device->CreateDepthStencilView(t.Get(), &dd, &v)))
+            continue;
+        context->ClearDepthStencilView(v.Get(), D3D11_CLEAR_DEPTH, 0.25f, 0);
+        ID3D11CommandList* list = simqvfr::dlss_depth_copy_list(v.Get(), z.w, z.h);
+        if (!list) {
+            std::printf("     the depth's copy at %ux%u x%u: no list\n", z.w, z.h, z.samples);
+            continue;
+        }
+        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        ComPtr<ID3D11Query> disjoint, begin, end;
+        device->CreateQuery(&qd, &disjoint);
+        qd.Query = D3D11_QUERY_TIMESTAMP;
+        device->CreateQuery(&qd, &begin);
+        device->CreateQuery(&qd, &end);
+        constexpr int kRuns = 20;
+        context->ExecuteCommandList(list, TRUE);  // warm
+        context->Begin(disjoint.Get());
+        context->End(begin.Get());
+        for (int i = 0; i < kRuns; ++i)
+            context->ExecuteCommandList(list, TRUE);
+        context->End(end.Get());
+        context->End(disjoint.Get());
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+        UINT64 a = 0, b = 0;
+        while (context->GetData(disjoint.Get(), &dj, sizeof(dj), 0) == S_FALSE)
+            Sleep(1);
+        context->GetData(begin.Get(), &a, sizeof(a), 0);
+        context->GetData(end.Get(), &b, sizeof(b), 0);
+        const double ms = !dj.Disjoint && dj.Frequency ? 1000.0 * static_cast<double>(b - a) / dj.Frequency / kRuns : -1;
+        std::printf("     the depth's copy before the glass at %ux%u x%u (all of it): %.3f ms on the GPU\n", z.w, z.h,
+                    z.samples, ms);
+    }
 }
 
 }  // namespace
@@ -542,6 +611,14 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     ComPtr<ID3D11ShaderResourceView> objectSlots, objectMotion[2];
     std::vector<float> objectVectors[3];
     unsigned objectVectorsW[3] = {}, objectVectorsH[3] = {};
+    // The car's glass (parts 11-13, without jitter, the car's box on, the window frame in it): 11 the window open (the
+    // world seen through it: the reference), 12 glass writing depth in the window after the scene, the depth copied
+    // before it for DLSS (dlss_depth_copy_list, as LMU's side does at the glass's first draw), 13 the same glass without
+    // the copy (DLSS reads the glass's depth: the control), 14 the copy taken only nearer than 0.3 m (the glass at 0.4 m
+    // isn't: as the control). The eye's vectors at frame 200.
+    std::vector<float> glassVectors[4];
+    unsigned glassVectorsW[4] = {}, glassVectorsH[4] = {};
+    bool glassListMade = true;
     {
         std::vector<uint16_t> ones(static_cast<size_t>(W) * H, 1);
         D3D11_TEXTURE2D_DESC od{};
@@ -562,20 +639,24 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         }
         check(objectSlots && objectMotion[0] && objectMotion[1], "the moving objects' slot texture and motions are made");
     }
-    for (int part = 0; part < 11; ++part) {
-        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5, liveTest = part == 6,
-                   refusals = part == 7, objectsPart = part >= 8, objects = part >= 9;
+    for (int part = 0; part < 15; ++part) {
+        const bool glassPart = part >= 11, glass = part >= 12, glassCopy = part == 12 || part == 14;
+        const bool control = part == 1, frame = part == 3 || glassPart, single = part == 4, sr = part == 5,
+                   liveTest = part == 6, refusals = part == 7, objectsPart = part >= 8 && part <= 10,
+                   objects = part == 9 || part == 10;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
         moving.eyePreset = refusals ? 6 : -1;  // as the focus views' (NGX's default), F in the refusals part
-        moving.car = part == 2 || part == 3;  // part 2: the box alone (nothing in it), part 3: with the frame in it
+        moving.car = part == 2 || part == 3 || glassPart;  // part 2: the box alone (nothing in it), 3: the frame in it
         const double box[6] = {0.8, 0.8, 0.6, 0.6, 1.0, 1.0};  // the frame inside, the floor and the posts outside
         for (int i = 0; i < 6; ++i)
             moving.carBox[i] = box[i];
         moving.viewInverse = control;
         moving.focusScale = sr ? 50 : 100;
-        moving.jitter = moving.jitter && !objectsPart;  // the object parts: the same frames in each
+        moving.jitter = moving.jitter && !objectsPart && !glassPart;  // the object and glass parts: the same frames
+        moving.depthMeasure = glassPart;
+        moving.depthCopyNear = part == 14 ? 0.3 : 3.0;
         simqvfr::ngx::refuse_for_tests(refusals ? sceneEyeW : 0, 6);
         simqvfr::dlss_start(moving);
         // The super resolution part drives as the others (its gate at the 60th and 300th frames), then stands still for
@@ -687,6 +768,22 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                                 static_cast<float>(sceneEyeH), resolvedRtv.Get(), partColour, partDsv);
                 draw_scene_view(scene, focusClip, view, frame, static_cast<float>(sceneEyeW), 0, static_cast<float>(rw),
                                 static_cast<float>(rh), resolvedRtv.Get(), partColour, partDsv);
+                if (glass) {  // the glass after the opaque scene, its depth copied first (part 12), as LMU's side does
+                    if (glassCopy) {
+                        ID3D11CommandList* list =
+                            simqvfr::dlss_depth_copy_list(partDsv, sceneEyeW + rw, (std::max)(sceneEyeH, rh));
+                        if (list)
+                            context->ExecuteCommandList(list, TRUE);
+                        else if (f > 2)  // (the module starts at the first pass)
+                            glassListMade = false;
+                        pass.depthCopied = list != nullptr;
+                    }
+                    draw_scene_view(scene, eyeClip, view, frame, 0, 0, static_cast<float>(sceneEyeW),
+                                    static_cast<float>(sceneEyeH), nullptr, partColour, partDsv, nullptr, nullptr, true);
+                    draw_scene_view(scene, focusClip, view, frame, static_cast<float>(sceneEyeW), 0,
+                                    static_cast<float>(rw), static_cast<float>(rh), nullptr, partColour, partDsv, nullptr,
+                                    nullptr, true);
+                }
                 // The game's state at its resolve (MSAA off: at YEBIS's copy, the scene an input of it), then the module.
                 if (single) {
                     ID3D11RenderTargetView* const copyTarget = otherRtv.Get();  // some other target bound, as the copy's
@@ -720,6 +817,11 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                     }
                 }
                 simqvfr::dlss_after_resolve(context.Get(), resolved.Get(), partDsv, pass);
+                if (glassPart && eye == 0 && f == 200)
+                    simqvfr::dlss_vectors_for_checks(context.Get(), 0, glassVectors[part - 11], glassVectorsW[part - 11],
+                                                     glassVectorsH[part - 11]);
+                if (part == 12 && eye == 1 && f + 1 == partFrames)
+                    time_depth_copies();
                 if (objectsPart && eye == 0 && f == 200)  // the eye's vectors as DLSS got them
                     simqvfr::dlss_vectors_for_checks(context.Get(), 0, objectVectors[part - 8], objectVectorsW[part - 8],
                                                      objectVectorsH[part - 8]);
@@ -819,10 +921,10 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         }
         return v;
     };
-    size_t starts[13];
+    size_t starts[16];
     std::fill(std::begin(starts), std::end(starts), std::string::npos);
     starts[0] = all.find("lmu dlss: DLAA on");
-    for (int i = 1; i < 12 && starts[i - 1] != std::string::npos; ++i)
+    for (int i = 1; i < 16 && starts[i - 1] != std::string::npos; ++i)
         starts[i] = all.find("lmu dlss: DLAA on", starts[i - 1] + 1);
     const auto part_verdicts = [&](int i) {
         return starts[i] == std::string::npos ? Verdicts{} : verdicts(starts[i], starts[i + 1]);
@@ -1013,6 +1115,44 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
               "live: FSR switched to DLSS: NGX started, the views' DLSS features made, every view still evaluated");
     }
 
+    // The car's glass (parts 11-13): where the window is, the vectors with the copy are the open window's; without it,
+    // the glass's (a point 0.4 m ahead, in the car's box: the head's motion alone, where the world drives past).
+    {
+        const auto glass_difference = [&](int a, int b, double& most) {
+            most = 0;
+            if (glassVectors[a].empty() || glassVectors[a].size() != glassVectors[b].size())
+                return -1.0;
+            double sum = 0;
+            for (size_t i = 0; i + 1 < glassVectors[a].size(); i += 2) {
+                const double e = std::hypot(glassVectors[a][i] - glassVectors[b][i], glassVectors[a][i + 1] - glassVectors[b][i + 1]);
+                sum += e;
+                most = (std::max)(most, e);
+            }
+            return sum / (glassVectors[a].size() / 2);
+        };
+        double copyMost = 0, plainMost = 0, farMost = 0;
+        const double copyDiff = glass_difference(1, 0, copyMost), plainDiff = glass_difference(2, 0, plainMost);
+        const double farDiff = glass_difference(3, 2, farMost);
+        std::printf("     the car's glass, the eye's %ux%u vectors at frame 200 against the open window's: with the depth "
+                    "copied before the glass %.4f px on average (at most %.3f), without it %.2f px (at most %.1f)\n",
+                    glassVectorsW[0], glassVectorsH[0], copyDiff, copyMost, plainDiff, plainMost);
+        check(glassListMade, "the car's glass: the depth's copy list is made once the module has started");
+        check(copyDiff >= 0 && copyMost < 0.02, "the car's glass: with the depth copied before it, the vectors are the "
+                                                "world's behind it (to a fiftieth of a pixel everywhere)");
+        check(plainDiff > 0.5 && plainMost > 5, "the car's glass: without the copy, the vectors through it are wrong (the "
+                                                "control)");
+        std::printf("     the copy taken only nearer than 0.3 m (the glass at 0.4 m): %.4f px from the control's on average "
+                    "(at most %.3f)\n",
+                    farDiff, farMost);
+        check(farDiff >= 0 && farMost < 0.02, "the car's glass: farther than the copy's distance, the glass's depth is "
+                                              "left as drawn");
+        const size_t measured = starts[13] == std::string::npos ? std::string::npos
+                                                                : all.find("depth before the transparents, eye", starts[13]);
+        const std::string measure = measured == std::string::npos ? "" : all.substr(measured, all.find('\n', measured) - measured);
+        std::printf("     %s\n", measure.c_str());
+        check(measure.find("drawn nearer, at 0.4") != std::string::npos,
+              "the car's glass: the measurement finds the glass drawn nearer at its 0.4 m");
+    }
     // The refusals part.
     const std::string refusedPart = starts[8] == std::string::npos ? "" : all.substr(starts[8]);
     std::printf("     refusals: evaluations %llu at frame 35, %llu at frame 55; the eyes' jitter %s before, %s after (their "

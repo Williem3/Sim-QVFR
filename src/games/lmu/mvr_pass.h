@@ -110,6 +110,16 @@ int mvr_mask_dropped();
 // lmu_mask_ab (a measurement): the lens mask's draws and the focus mask dropped while `drop` (the A/B's side without
 // them). Between passes.
 void mvr_mask_ab_drop(bool drop);
+// DLSS's depth before the transparents that write depth ([experiment] lmu_dlss_glass_depth; mvr_pass_glass.h): the car's
+// glass is drawn blended and writing depth, so the depth at the pass's end holds the glass where the world is seen
+// through it, and DLSS's vectors there were a point half a metre away's. 1: at the first blended draw writing the
+// scene's depth after opaque depth in an eye pass (with DLSS on), the depth copied as it stands (dlss_depth_copy_list)
+// and read by DLSS; the car slots' target left as the surface behind the glass too. 0: as before (no copy). Before
+// mvr_pass_install (its blend and depth state hooks are chosen there).
+void mvr_glass_depth(int mode);
+// This frame's side of an A/B (lmu_dlss_glass_ab): DLSS reads the copy (true), or only the measurement does. Between
+// frames.
+void mvr_glass_read(bool read);
 // The focus mask (quad/focus_mask.h; [quad] focus_mask, live): in eye passes 0-1 that draw their focus view, right before
 // the first draw that tests the scene's depth (after the game cleared it), the focus view's texels outside `area`'s
 // shape by more than `marginTexels` get the nearest depth (the far one's opposite by the bound depth test: LMU's reversed
@@ -320,6 +330,12 @@ struct MvrPassStats {
     // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
     uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;
     uint64_t motionUploads = 0, motionSlots = 0, slotImages = 0;
+    // DLSS's depth before the transparents (mvr_glass_depth): eye passes with a copy, copies, blended draws writing the
+    // scene's depth, copies refused (the module not ready) or past kGlassCopies, the pass's draws before its first copy
+    // (summed), unblended depth-writing draws after a pass's last copy (their depth isn't in what DLSS reads), and the
+    // passes' draws (summed).
+    uint64_t glassPasses = 0, glassCopies = 0, glassBlendedWriters = 0, glassRefused = 0, glassCapped = 0;
+    uint64_t glassFirstAt = 0, glassOpaqueAfter = 0, glassPassDraws = 0;
     // The game's command lists executed on the immediate context (LMU's sun shadows: worker-recorded, replayed in pass
     // 0's Pre Render): inside a pass, with the two views on as they began, outside the passes; the hooked calls d3d11
     // made while executing them (a runtime that replays a list through the context's own functions).

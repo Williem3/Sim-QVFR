@@ -16,6 +16,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
             return;
         if (g.mask.on && g.drawFocus)
             focus_mask_before_draw(context);
+        if (g.glass.mode && g.glass.sceneBound && g.depthWrites && ours(context) && g.pass < 2 && !g.afterResolve)
+            glass_before_draw(context);  // DLSS's depth before the transparents (mvr_pass_glass.h)
         Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);
@@ -76,6 +78,8 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
             return;
         if (g.mask.on && g.drawFocus)
             focus_mask_before_draw(context);
+        if (g.glass.mode && g.glass.sceneBound && g.depthWrites && ours(context) && g.pass < 2 && !g.afterResolve)
+            glass_before_draw(context);  // DLSS's depth before the transparents (mvr_pass_glass.h)
         Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);
