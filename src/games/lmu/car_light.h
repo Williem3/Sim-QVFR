@@ -238,6 +238,10 @@ private:
 // green: its floodlights, blue: the game's normal, white: headlights) with its highlights on top, the rest dimmed.
 void car_light_set_debug_view(bool on);
 bool car_light_debug_view();
+// The lacquer reflections kept only where the other eye sees the reflected point too (on unless set off: dev builds'
+// Ctrl+Alt+J, qvfr_frame.cpp). Off: each eye's own, as found in its own image.
+void car_light_set_both_eyes(bool on);
+bool car_light_both_eyes();
 
 // The D3D11 pass. Made on the render thread at its first run.
 class CarLightPass {

@@ -366,6 +366,10 @@ cbuffer CarLightPass : register(b0) {
     float4 mode;                 // x: the floodlights' shadows, y: the paint's detail, z: the lacquer's reflections (1 on)
     float4 mode2;                // x: the headlights' count (0: off), y: the ground's shadows, z: night vision (1 on)
     float4 ground;               // the ground's floodlights: the frame's strongest (indices, -1 none)
+    row_major float4x4 otherClip;     // this eye's view space -> the other eye's clip (its eye region)
+    row_major float4x4 otherInvProj;  // the other eye's clip -> its view space
+    float4 otherEye;             // the other eye's place in this eye's view space; w: 1 with its depth (0: none)
+    float4 otherSize;            // its depth's width and height
 };
 cbuffer CarLightSpots : register(b2) {
     float4 spotData[128];  // the headlights: per spotlight its position and range, direction and outer cone, attenuation
@@ -395,6 +399,7 @@ Texture2D<float4> detailTex : register(t4);
 float3 load_detail(int2 p) { return detailTex.Load(int3(p, 0)).xyz; }
 #endif
 Texture2D<float4> sceneTex : register(t5);  // the scene as the pass began (the reflections read it)
+Texture2D<float> otherDepth : register(t6); // the other eye's depth (its eye region), as its last pass left it
 #if MS
 Texture2DMS<float4> normalTex : register(t3);
 float4 load_normal(int2 p) { return normalTex.Load(p, 0); }
@@ -505,6 +510,34 @@ int lookup_world(float3 S, out float lq, out uint slot, out int2 pixel, out floa
     lq = length(view_pos(floor(q) + 0.5, ds, 0, float2(0, 0), region.xy));
     slot = load_slot(pixel);
     return 1;
+}
+
+// How much of a reflection's hit `H` (view space) the other eye sees too: 1 where it does, 0 where a surface nearer
+// to that eye hides it or it lies off that eye's screen (faded toward its edge, as at this eye's own). Screen-space
+// reflections show what each eye's own image holds: the ground beside a car, hidden from the left eye by the player's
+// door and in view of the right, was mirrored in that car's paint in the right eye alone (race, 2026-11-19). Kept only
+// where both eyes could show it, the two agree. Nothing drawn there in the other eye's depth (the sky, a texel not
+// drawn): no telling, kept. No other eye's depth: 1.
+float other_sees(float3 H) {
+    if (otherEye.w <= 0)
+        return 1;
+    float4 c = mul(float4(H, 1), otherClip);
+    if (c.w <= 1e-4)
+        return 0;
+    float2 ndc = c.xy / c.w;
+    float edge = 1 - max(abs(ndc.x), abs(ndc.y));
+    if (edge <= 0)
+        return 0;
+    float seen = saturate(edge * 5);
+    int2 q = min(int2((ndc * float2(0.5, -0.5) + 0.5) * otherSize.xy), int2(otherSize.xy) - 1);
+    float d = otherDepth.Load(int3(q, 0));
+    if (!drawn_depth(d))
+        return seen;
+    float2 centre = (float2(q) + 0.5) / otherSize.xy * float2(2, -2) + float2(-1, 1);
+    float4 v = mul(float4(centre, d, 1), otherInvProj);
+    float lo = length(v.xyz / v.w), lh = length(H - otherEye.xyz);
+    float tol = 0.1 + 0.05 * lh;  // its depth is a pass old for the left eye, and coarser than the focus view's
+    return seen * saturate(2 - (lh - lo) / tol);
 }
 
 int sample_world(float3 S, out float lq, out uint slot) {
@@ -961,7 +994,8 @@ Out ps_main(float4 pos : SV_Position) {
                     if (lookup_world(O + R * hi, lq, sq, qi, edge) > 0) {
                         float edgeFade = saturate(edge * 5);
                         float3 seen = sceneTex.Load(int3(qi, 0)).rgb;
-                        refl = min(seen, 4) * weight * edgeFade * saturate(1 - (hi / 17.0) * (hi / 17.0));
+                        refl = min(seen, 4) * weight * edgeFade * saturate(1 - (hi / 17.0) * (hi / 17.0)) *
+                               other_sees(O + R * hi);
                     }
                     break;
                 }
@@ -996,10 +1030,14 @@ Out ps_main(float4 pos : SV_Position) {
     o.mul = float4(scaled.xxx, 1);
     return o;
 }
+
+// The eye's depth as it is (its eye region), kept for the other eye's pass (other_sees).
+float ps_depth(float4 pos : SV_Position) : SV_Target { return load_depth(int2(pos.xy)); }
 )";
 
 constexpr unsigned kSlotsMax = 4096;
 std::atomic<bool> debugView{false};
+std::atomic<bool> bothEyes{true};
 constexpr unsigned kTimerSlots = 8;
 
 bool invert4(const double (&m)[16], double (&out)[16]) {
@@ -1112,6 +1150,25 @@ struct CarLightPass::Impl {
     ComPtr<ID3D11ShaderResourceView> sceneCopyView;
     bool depthViewMs = false;
     bool made = false, failed = false;
+    // The reflections' check against the other eye (the shader's other_sees): per eye its depth (the eye region, as
+    // its last relit pass left it), that pass's projection and its inverse, its view, and which relit run it was; and
+    // the eyes' places to each other (eyeTo[e]: eye e's view space to the other's), fixed to the head: taken when the
+    // right eye's pass follows the left's of the same frame. The left eye's pass reads the right's of the frame
+    // before through it: as far as the head carries both, the same picture (the cockpit, the cars beside).
+    struct EyeSeen {
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11RenderTargetView> target;
+        ComPtr<ID3D11ShaderResourceView> view;
+        unsigned w = 0, h = 0;
+        double camera[16] = {}, proj[16] = {}, invProj[16] = {};
+        unsigned long long run = 0;  // the relit run that wrote it (0: none)
+    } eyeSeen[2];
+    ComPtr<ID3D11PixelShader> depthPs[2];  // single-sample depth, multisample
+    double eyeTo[2][16] = {};
+    bool haveEyeTo = false, eyeToSaid = false;
+    int eyeToSaidCount = 0;
+    double eyeToSaidApart = 0;
+    unsigned long long relitRuns = 0;
     // GPU timing: a ring of query sets, each one run's; read back frames later without waiting.
     struct Timer {
         ComPtr<ID3D11Query> disjoint, begin, end;
@@ -1155,6 +1212,11 @@ struct CarLightPass::Impl {
         if (!compile("ps_main", "ps_5_0", multi, code) ||
             FAILED(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &ps[1])))
             return false;
+        // The other eye's check is an extra: without its shaders the reflections stay as each eye finds them.
+        for (int k = 0; k < 2; ++k)
+            if (!compile("ps_depth", "ps_5_0", k ? multi : single, code) ||
+                FAILED(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &depthPs[k])))
+                depthPs[k].Reset();
         // The scene = our add + the scene x our scale (dual-source blending); its alpha kept.
         D3D11_BLEND_DESC bd{};
         bd.RenderTarget[0] = {TRUE, D3D11_BLEND_ONE, D3D11_BLEND_SRC1_COLOR, D3D11_BLEND_OP_ADD, D3D11_BLEND_ZERO,
@@ -1172,7 +1234,7 @@ struct CarLightPass::Impl {
         D3D11_BUFFER_DESC cb{};
         cb.Usage = D3D11_USAGE_DEFAULT;
         cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        cb.ByteWidth = 4 * 16 * 3 + 16 * 7;
+        cb.ByteWidth = 4 * 16 * 3 + 16 * 7 + 4 * 16 * 2 + 16 * 2;
         if (FAILED(device->CreateBuffer(&cb, nullptr, &passCb)))
             return false;
         cb.ByteWidth = 16 * CarLightTable::kMaxLights * 2;
@@ -1272,7 +1334,6 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
                        const CarLightView& view, const CarLightSettings& settings, int eye,
                        ID3D11ShaderResourceView* normals, ID3D11ShaderResourceView* detail,
                        const uint8_t* spotBuffer, size_t spotBytes) {
-    (void)eye;
     Impl& m = *impl_;
     if (failed_ || !context || !scene || !slots || !view.eyeW || !view.eyeH)
         return false;
@@ -1324,6 +1385,37 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     if (!relight)
         for (int i = 0; i < 16; ++i)
             p[i] = pi[i] = (i % 5 == 0) ? 1.0 : 0.0;
+    // The reflections' check against the other eye: its depth from the relit run right before this one (the left
+    // eye's of this frame for the right eye; the right eye's of the frame before for the left), at this eye's size.
+    bool keepSeen = false, otherSeen = false;
+    m.relitRuns += relight ? 1 : 0;  // every relit run counted: one without the check leaves the next without
+    if (relight && settings.reflections && (eye == 0 || eye == 1) && m.depthPs[slotsMs ? 1 : 0] &&
+        car_light_both_eyes()) {
+        keepSeen = true;
+        const Impl::EyeSeen& other = m.eyeSeen[1 - eye];
+        const bool fresh = other.view && other.run + 1 == m.relitRuns && other.w == view.eyeW && other.h == view.eyeH;
+        if (fresh && eye == 1) {  // both of one frame: where the eyes are to each other
+            double back[16];
+            mul4(vi, other.camera, m.eyeTo[1]);
+            // Eyes are centimetres apart: anything else isn't two eyes of one frame (a camera held from before).
+            const double* t = m.eyeTo[1] + 12;
+            m.haveEyeTo = t[0] * t[0] + t[1] * t[1] + t[2] * t[2] < 0.2 * 0.2 && invert4(m.eyeTo[1], back);
+            if (m.haveEyeTo)
+                std::memcpy(m.eyeTo[0], back, sizeof(back));
+            // Said at first, then whenever it moves by over a centimetre (up to 6 times): two eyes 0 cm apart would be
+            // one camera for both (2026-11-19 run: "0.0 cm" said once, at the start).
+            const double apart = std::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+            if (m.haveEyeTo && m.eyeToSaidCount < 6 && (!m.eyeToSaid || std::fabs(apart - m.eyeToSaidApart) > 0.01)) {
+                m.eyeToSaid = true;
+                ++m.eyeToSaidCount;
+                m.eyeToSaidApart = apart;
+                simqvfr::logf("lmu car light: lacquer reflections kept where both eyes see the reflected point (the eyes "
+                              "%.1f cm apart, each eye's depth %ux%u)",
+                              100 * std::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]), view.eyeW, view.eyeH);
+            }
+        }
+        otherSeen = fresh && m.haveEyeTo;
+    }
 
     // The slots this pass drew: their lights and flags; the ones the last upload wrote and this frame didn't draw
     // emptied (a slot id the twins still write, no draw recorded, would read its old lists).
@@ -1366,8 +1458,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         sceneTex->GetDesc(&sd);
     // Every target the pass uses: nothing of ours left bound on a target the game then reads (the caller restores the
     // game's own).
-    ID3D11ShaderResourceView* none[6] = {};
-    context->PSSetShaderResources(0, 6, none);
+    ID3D11ShaderResourceView* none[7] = {};
+    context->PSSetShaderResources(0, 7, none);
     const LONG right = static_cast<LONG>((std::min)(sd.Width, view.eyeW + view.focusW));
     const LONG bottom = static_cast<LONG>((std::min)(sd.Height, (std::max)(view.eyeH, view.focusH)));
     // The reflections and night vision read the scene as it stood: the eye's and focus view's regions copied first.
@@ -1435,7 +1527,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         context->UpdateSubresource(m.lightCb.Get(), 0, nullptr, lights, 0, 0);
     }
     {
-        float cb[4 * 16 * 3 / 4 + 28] = {};
+        float cb[4 * 16 * 3 / 4 + 28 + 40] = {};
         for (int i = 0; i < 16; ++i) {
             cb[i] = static_cast<float>(pi[i]);
             cb[16 + i] = static_cast<float>(p[i]);
@@ -1506,6 +1598,21 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
             table.top_lights(top);
         for (int k = 0; k < 4; ++k)
             rest[24 + k] = static_cast<float>(top[k]);
+        if (otherSeen) {  // the reflections' check against the other eye (other_sees)
+            const Impl::EyeSeen& other = m.eyeSeen[1 - eye];
+            double clip[16];
+            mul4(m.eyeTo[eye], other.proj, clip);
+            for (int i = 0; i < 16; ++i) {
+                rest[28 + i] = static_cast<float>(clip[i]);
+                rest[44 + i] = static_cast<float>(other.invProj[i]);
+            }
+            // The other eye's place here: its view space's origin through its way to this eye's.
+            for (int i = 0; i < 3; ++i)
+                rest[60 + i] = static_cast<float>(m.eyeTo[1 - eye][12 + i]);
+            rest[63] = 1.0f;
+            rest[64] = static_cast<float>(other.w);
+            rest[65] = static_cast<float>(other.h);
+        }
         context->UpdateSubresource(m.passCb.Get(), 0, nullptr, cb, 0, 0);
     }
 
@@ -1527,10 +1634,48 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     context->PSSetShader(m.ps[slotsMs ? 1 : 0].Get(), nullptr, 0);
     ID3D11Buffer* cbs[3] = {m.passCb.Get(), m.lightCb.Get(), m.spotCb.Get()};
     context->PSSetConstantBuffers(0, 3, cbs);
-    ID3D11ShaderResourceView* views[6] = {depthView, slots, m.slotView.Get(), normals, detail, sceneView};
-    context->PSSetShaderResources(0, 6, views);
+    ID3D11ShaderResourceView* views[7] = {depthView, slots, m.slotView.Get(), normals, detail, sceneView,
+                                          otherSeen ? m.eyeSeen[1 - eye].view.Get() : nullptr};
+    context->PSSetShaderResources(0, 7, views);
     context->Draw(3, 0);
-    context->PSSetShaderResources(0, 6, none);
+    context->PSSetShaderResources(0, 7, none);
+    if (keepSeen) {  // this eye's depth and camera, for the other eye's next pass
+        Impl::EyeSeen& own = m.eyeSeen[eye];
+        if (!own.texture || own.w != view.eyeW || own.h != view.eyeH) {
+            own = Impl::EyeSeen{};
+            const D3D11_TEXTURE2D_DESC td = {view.eyeW, view.eyeH, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+                                             D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+            if (SUCCEEDED(m.device->CreateTexture2D(&td, nullptr, &own.texture)) &&
+                SUCCEEDED(m.device->CreateRenderTargetView(own.texture.Get(), nullptr, &own.target)) &&
+                SUCCEEDED(m.device->CreateShaderResourceView(own.texture.Get(), nullptr, &own.view))) {
+                own.w = view.eyeW;
+                own.h = view.eyeH;
+            } else {
+                own = Impl::EyeSeen{};
+            }
+        }
+        if (own.view) {
+            ID3D11RenderTargetView* target = own.target.Get();
+            context->OMSetRenderTargets(1, &target, nullptr);
+            const D3D11_VIEWPORT eyePort{0, 0, static_cast<float>(own.w), static_cast<float>(own.h), 0, 1};
+            const D3D11_RECT eyeRect{0, 0, static_cast<LONG>(own.w), static_cast<LONG>(own.h)};
+            context->RSSetViewports(1, &eyePort);
+            context->RSSetScissorRects(1, &eyeRect);
+            context->OMSetBlendState(nullptr, factor, 0xffffffffu);
+            context->PSSetShader(m.depthPs[slotsMs ? 1 : 0].Get(), nullptr, 0);
+            context->PSSetShaderResources(0, 1, &depthView);
+            context->Draw(3, 0);
+            context->PSSetShaderResources(0, 1, none);
+            ID3D11RenderTargetView* noTarget = nullptr;
+            context->OMSetRenderTargets(1, &noTarget, nullptr);
+            for (int i = 0; i < 16; ++i) {
+                own.camera[i] = v[i];
+                own.proj[i] = p[i];
+                own.invProj[i] = pi[i];
+            }
+            own.run = m.relitRuns;
+        }
+    }
     if (timed) {
         context->End(timer.end.Get());
         context->End(timer.disjoint.Get());
@@ -1550,6 +1695,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
 }
 
 void car_light_set_debug_view(bool on) { debugView.store(on, std::memory_order_relaxed); }
+void car_light_set_both_eyes(bool on) { bothEyes.store(on, std::memory_order_relaxed); }
+bool car_light_both_eyes() { return bothEyes.load(std::memory_order_relaxed); }
 bool car_light_debug_view() { return debugView.load(std::memory_order_relaxed); }
 
 CarLightPass::Reasons CarLightPass::take_reasons() {

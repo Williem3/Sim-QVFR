@@ -21,7 +21,9 @@
 #include <fstream>
 
 #include "engine/dxbc_patch.h"
+#include "engine/dlss_math.h"
 #include "games/lmu/car_light.h"
+#include "games/lmu/view_pair.h"
 #include "quad/car_lighting.h"
 #include "test_util.h"
 
@@ -278,6 +280,42 @@ void math_checks() {
     lmu::car_light_unproject(inv, 0.5f, -0.25f, kNear / 5.0f, out);
     check(std::fabs(out[2] - 5) < 1e-4f && std::fabs(out[0] - 2.5f) < 1e-4f && std::fabs(out[1] + 1.25f) < 1e-4f,
           "math: a pixel's depth unprojects to its point (5 m, x = ndc x z)");
+    {
+        // The camera lmu_pass_camera hands the pass (view_pair.h view_proj_of_pair): from a view and the eye slot's
+        // projection (ordinary depth) the viewProj the draws upload (reversed depth), so the depth target unprojects
+        // to where the surface is. The ordinary product (the regression of 2026-11-19) puts it at the near plane.
+        namespace dlss = simqvfr::dlss;
+        const float view[16] = {0.6f, 0, 0.8f, 0, 0, 1, 0, 0, -0.8f, 0, 0.6f, 0, -187.4f, -31.8f, -83.2f, 1};
+        const dlss::M4 drawn = dlss::mul(dlss::from_floats(view), dlss::from_floats(p));  // as a draw uploads it
+        float drawnVp[16], ordinary[16], vp[16];
+        for (int i = 0; i < 16; ++i)
+            drawnVp[i] = static_cast<float>(drawn[i]);
+        const bool shaped = lmu::projection_of_pair(view, drawnVp, ordinary);
+        check(shaped && std::fabs(ordinary[10] - 1) < 1e-4f && std::fabs(ordinary[14] + kNear) < 1e-4f,
+              "camera: the drawn pair's projection in the eye slot's convention (ordinary depth)");
+        lmu::view_proj_of_pair(view, ordinary, vp);
+        float worst = 0;
+        for (int i = 0; i < 16; ++i)
+            worst = (std::max)(worst, std::fabs(vp[i] - drawnVp[i]));
+        check(worst < 1e-3f, "camera: view_proj_of_pair gives the viewProj the draws uploaded back");
+        // As CarLightPass::run takes it: projection = inverse(view) x viewProj, inverted; a surface 5 m away.
+        const auto depth_to_z = [&](const dlss::M4& viewProj) {
+            dlss::M4 vi, pi;
+            float inv16[16], at[3] = {};
+            if (!dlss::invert(dlss::from_floats(view), vi) || !dlss::invert(dlss::mul(vi, viewProj), pi))
+                return -1.0f;
+            for (int i = 0; i < 16; ++i)
+                inv16[i] = static_cast<float>(pi[i]);
+            lmu::car_light_unproject(inv16, 0.5f, -0.25f, kNear / 5.0f, at);
+            return at[2];
+        };
+        const float right = depth_to_z(dlss::from_floats(vp));
+        const float wrong = depth_to_z(dlss::mul(dlss::from_floats(view), dlss::from_floats(ordinary)));
+        char text[160];
+        std::snprintf(text, sizeof(text), "camera: the depth target unprojects to its 5 m with it (%.3f m; the ordinary "
+                      "product: %.3f m)", right, wrong);
+        check(std::fabs(right - 5) < 1e-2f && wrong < 0.2f, text);
+    }
     const float n[3] = {0, 0, -1}, eye[3] = {0, 0, -1};
     const float mirror[3] = {0, 0, -1};
     const float off[3] = {0.8f, 0, -0.6f};
@@ -533,6 +571,68 @@ void pass_checks(bool hardware) {
                       off.first, on.first, on.second);
         check(std::fabs(off.first - 0.1f) < 2e-3f && on.first > off.first + 0.05f && on.second <= 0.1f + 1.5f + 0.01f,
               text);
+
+        // Both eyes: a reflection is kept only where the other eye sees the reflected point too (the ground beside a
+        // car, hidden from one eye by the player's door, was mirrored in the paint in the other eye alone: race,
+        // 2026-11-19). The right eye 6.4 cm to the right (the room is the same along x: the same depth serves both).
+        // The other eye's depth is the one its own pass ran on, right before.
+        {
+            lmu::CarLightView right = view;
+            right.view[12] = -0.064f;
+            std::memcpy(right.viewProj, view.viewProj, sizeof(right.viewProj));
+            for (int c = 0; c < 4; ++c)  // (view x projection)'s last row: the translation through the projection
+                right.viewProj[12 + c] += right.view[12] * view.viewProj[c];
+            std::vector<float> hidden = roomDepth;  // the wall's rows behind something 0.5 m from the eye (not a car)
+            for (size_t i = 0; i < hidden.size(); ++i)
+                if (!roomSlots[i])
+                    hidden[i] = kNear / 0.5f;
+            const auto floor_of = [&](int eye, const std::vector<float>& eyeDepth) {
+                context->UpdateSubresource(depth.Get(), 0, nullptr, eyeDepth.data(), kW * 4, 0);
+                context->UpdateSubresource(scene.Get(), 0, nullptr, roomPx.data(), kW * 8, 0);
+                simqvfr::CarLighting f;
+                f.on = true;
+                f.fill = 100;
+                f.occlusion = 0;
+                f.highlights = 0;
+                f.gloss = 100;
+                f.shadows = false;
+                f.reflections = true;
+                pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, none, eye ? right : view, f, eye);
+                const std::vector<float> img = read();
+                float sum = 0;
+                int n = 0;
+                for (UINT y = 0; y < kH; ++y) {
+                    const float ndcY = 1 - (y + 0.5f) / kH * 2;
+                    if (ndcY >= 0 || -1 / ndcY >= 8 || -1 / ndcY < 2)
+                        continue;
+                    for (UINT x = 8; x + 8 < kW; ++x) {
+                        sum += img[size_t{y} * kW + x];
+                        ++n;
+                    }
+                }
+                return n ? sum / n : 0.0f;
+            };
+            floor_of(0, roomDepth);
+            const float bothRight = floor_of(1, roomDepth);  // the left eye sees the wall too
+            const float bothLeft = floor_of(0, roomDepth);   // and the left against the right's of the pass before
+            floor_of(0, hidden);
+            const float aloneRight = floor_of(1, roomDepth);  // the left eye's view of the wall is covered
+            floor_of(1, hidden);
+            const float aloneLeft = floor_of(0, roomDepth);  // the right eye's is
+            lmu::car_light_set_both_eyes(false);
+            floor_of(0, hidden);
+            const float unchecked = floor_of(1, roomDepth);
+            lmu::car_light_set_both_eyes(true);
+            std::snprintf(text, sizeof(text),
+                          "reflections: kept where both eyes see the wall (right %.3f, left %.3f; one eye alone %.3f), "
+                          "gone where the other eye's view of it is covered (right %.3f, left %.3f; unreflected 0.100), "
+                          "as each eye finds them with the check off (%.3f)",
+                          bothRight, bothLeft, on.first, aloneRight, aloneLeft, unchecked);
+            check(std::fabs(bothRight - on.first) < 0.02f && std::fabs(bothLeft - on.first) < 0.02f &&
+                      std::fabs(aloneRight - 0.1f) < 5e-3f && std::fabs(aloneLeft - 0.1f) < 5e-3f &&
+                      std::fabs(unchecked - on.first) < 0.02f,
+                  text);
+        }
         context->UpdateSubresource(slots.Get(), 0, nullptr, slotPx.data(), kW * 2, 0);
         context->UpdateSubresource(depth.Get(), 0, nullptr, nearPx.data(), kW * 4, 0);
     }

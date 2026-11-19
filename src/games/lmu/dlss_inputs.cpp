@@ -247,12 +247,6 @@ bool camHave[2] = {};
 int camOtherEyeSaid = 0, camMixedSaid = 0;
 bool camFrameRenderer = false;  // eye 0 took the renderer's this frame
 
-void view_proj(const float (&view)[16], const float (&projection)[16], float (&out)[16]) {
-    const dlss::M4 m = dlss::mul(dlss::from_floats(view), dlss::from_floats(projection));
-    for (int i = 0; i < 16; ++i)
-        out[i] = static_cast<float>(m[i]);
-}
-
 // The renderer's view and projection while its view params are this eye's (a known build). False: not (another eye's
 // or view's params, or none).
 bool renderer_camera(int eye, float (&view)[16], float (&projection)[16]) {
@@ -309,7 +303,7 @@ bool lmu_pass_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
     if (!found)
         found = drawn_matrices(eye, view, projection, nullptr, true);
     if (found) {
-        view_proj(view, projection, viewProj);
+        view_proj_of_pair(view, projection, viewProj);  // as the draws upload it: reversed depth (view_pair.h)
         std::memcpy(camLastView[e], view, sizeof(view));
         std::memcpy(camLastViewProj[e], viewProj, sizeof(viewProj));
         camFoundAt[e] = now;

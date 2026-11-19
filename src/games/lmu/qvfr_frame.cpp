@@ -1128,6 +1128,17 @@ void ab_frame_begin(simqvfr::CarLighting& light) {
                           car_light_debug_view() ? "on" : "off");
         }
         debugKeyHeld = debugDown;
+        // Ctrl+Alt+J: the reflections' check against the other eye (car_light.h car_light_set_both_eyes).
+        static bool bothKeyHeld = false;
+        const bool bothDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                              (GetAsyncKeyState('J') & 0x8000);
+        if (bothDown && !bothKeyHeld) {
+            car_light_set_both_eyes(!car_light_both_eyes());
+            simqvfr::logf("lmu car light: Ctrl+Alt+J: lacquer reflections %s",
+                          car_light_both_eyes() ? "only where both eyes see the reflected point"
+                                                : "as each eye finds them (no check against the other eye)");
+        }
+        bothKeyHeld = bothDown;
         if (!carAb.active()) {
             mvr_car_light_block(0);
             return;
