@@ -17,8 +17,8 @@ public:
     static constexpr int kPoints = 9;
     bool initialize(ID3D11Device* device);
     bool ready() const { return ready_; }
-    // Queues a read of `depth` (a depth texture made typeless and shader-readable: R24G8, R32G8X24 or R32; single
-    // sampled) at `points` (x, y texels). False: not queued (the texture can't be read so: logged once).
+    // Queues a read of `depth` (a depth texture made typeless and shader-readable: R24G8, R32G8X24, R32 or R16; one
+    // layer; multisampled: its sample 0) at `points` (x, y texels). False: not queued (the texture can't be read so: logged once).
     bool request(ID3D11Texture2D* depth, const int (&points)[kPoints][2]);
     // The newest finished read: the raw depth values (0-1) and the number of frames since it was queued. False: none new.
     bool latest(float (&values)[kPoints], int& age);
@@ -29,7 +29,7 @@ private:
     ID3D11ShaderResourceView* view_of(ID3D11Texture2D* depth);
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> immediate_, deferred_;
-    Com<ID3D11ComputeShader> cs_;
+    Com<ID3D11ComputeShader> cs_, csMs_;
     Com<ID3D11Buffer> constants_, output_;
     Com<ID3D11UnorderedAccessView> outputView_;
     static constexpr int kRing = 3;
@@ -38,6 +38,7 @@ private:
     std::uint64_t requests_ = 0, read_ = 0;
     ID3D11Texture2D* viewTexture_ = nullptr;  // the texture `view_` reads (compared only)
     Com<ID3D11ShaderResourceView> view_;
+    bool viewMs_ = false;  // `view_` is of a multisample texture
     bool refusedLogged_ = false;
     bool ready_ = false;
 };

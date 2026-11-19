@@ -237,4 +237,9 @@ void dlss_use_lmu_inputs() {
     simqvfr::dlss_set_matrices(&pass_matrices);
 }
 
+bool lmu_pass_projection(int eye, float (&projection)[16]) {
+    float view[16];
+    return pass_matrices(eye, view, projection);
+}
+
 }  // namespace lmu

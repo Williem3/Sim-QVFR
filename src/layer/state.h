@@ -233,7 +233,7 @@ struct Experiment {
     // [quad] gaze_deadzone: the focus box holds still while the gaze stays this many degrees of where it
     // aims, so tracker noise does not turn the focus cameras every frame (MSAA shimmer in the box).
     std::atomic<double> gazeDeadzone = 1.5;
-    // The focus boxes converge where the eyes look (quad/focus_converge.h): at the game's fixation distance
+    // The focus boxes converge where the eyes look (quad/focus_converge.h), in every QVFR path: at the game's fixation distance
     // (GameAdapter::qvfr_fixation_m; [experiment] views4_converge, default 1), else at [quad] converge_m metres
     // (0: none, the boxes parallel as before).
     bool views4Converge = true;

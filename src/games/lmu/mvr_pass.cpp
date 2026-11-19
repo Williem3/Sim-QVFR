@@ -31,6 +31,7 @@
 #include "../../probe/d3d11_capture.h"
 #include "../../engine/dlss_views.h"
 #include "car_motion.h"
+#include "fixation.h"
 #include "focus_post.h"
 #include "glare_math.h"
 #include "mvr_probe.h"

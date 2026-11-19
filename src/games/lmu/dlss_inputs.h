@@ -7,5 +7,8 @@ namespace lmu {
 
 // The engine's matrices callback set to LMU's (simqvfr::dlss_set_matrices), before simqvfr::dlss_start.
 void dlss_use_lmu_inputs();
+// The eye pass's projection as DLSS takes it (the renderer's on a known build, the pass's draws' on any other; the
+// ordinary depth convention, depth terms included), for the focus boxes' convergence (fixation.h). During the pass.
+bool lmu_pass_projection(int eye, float (&projection)[16]);
 
 }  // namespace lmu

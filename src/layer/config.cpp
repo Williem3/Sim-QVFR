@@ -377,7 +377,7 @@ void load_experiment() {
         GetPrivateProfileStringW(L"quad", L"converge_m", L"0", text, 32, ini.c_str());
         experiment.convergeM = std::clamp(_wtof(text), 0.0, 1000.0);
     }
-    if (experiment.views4)
+    if (experiment.views4 || experiment.replayCompose || game->wants_gaze())
         logf("experiment: the focus boxes converge %s%s", experiment.views4Converge ? "at the game's fixation distance" : "",
              experiment.convergeM > 0
                  ? (std::string(experiment.views4Converge ? ", else at " : "at ") + std::to_string(experiment.convergeM) +
