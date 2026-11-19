@@ -1062,7 +1062,7 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
         return r;
     }
     uint32_t targetName = kNameTarget;
-    bool normalTaken = false;
+    bool normalTaken = false, detailTaken = false;
     for (const Element& el : outputs) {
         if (el.reg == options.reg || (el.name == "SV_Target" && el.index == options.reg)) {
             r.error = "the slot's render target is written already";
@@ -1071,6 +1071,9 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
         if (options.normalReg != ~0u &&
             (el.reg == options.normalReg || (el.name == "SV_Target" && el.index == options.normalReg)))
             normalTaken = true;
+        if (options.detailReg != ~0u &&
+            (el.reg == options.detailReg || (el.name == "SV_Target" && el.index == options.detailReg)))
+            detailTaken = true;
         if (el.name == "SV_Target")
             targetName = el.systemValue;  // as the compiler records it
     }
@@ -1144,7 +1147,7 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
     // The baked ambient occlusion: the first sample of `aoResource` into a temp whose mask has the component, copied to
     // the normal's w right after it.
     size_t aoAfter = 0;
-    uint32_t aoTemp = 0;
+    uint32_t aoTemp = 0, aoComp = 0;
     if (wantNormal && options.aoResource != ~0u && options.aoComponent < 4) {
         for (size_t i = firstInstruction; i < length && !aoAfter;) {
             const uint32_t n = length_of(tokens + i, length - i);
@@ -1158,16 +1161,52 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
                 const size_t l1 = l0 ? read_operand(tokens + i + first + l0, n - first - l0, coord) : 0;
                 const size_t l2 = l1 ? read_operand(tokens + i + first + l0 + l1, n - first - l0 - l1, res) : 0;
                 const uint32_t dtok = first ? tokens[i + first] : 0;
+                const uint32_t rtok = l2 ? tokens[i + first + l0 + l1] : 0;
                 if (l2 && res.type == kResource && res.index0Immediate && res.index0 == options.aoResource &&
-                    dst0.type == kTemp && dst0.index0Immediate && ((dtok >> 2) & 3) == 0 &&
-                    (((dtok >> 4) & 0xf) & (1u << options.aoComponent))) {
-                    aoAfter = i + n;
-                    aoTemp = dst0.index0;
+                    dst0.type == kTemp && dst0.index0Immediate && ((dtok >> 2) & 3) == 0) {
+                    // The destination component the texture's component lands in (the resource operand's swizzle
+                    // picks the texel's component for each: `sample r0.x, ..., t0.yxzw` puts its .y in r0.x).
+                    const uint32_t mask = (dtok >> 4) & 0xf;
+                    const bool swizzled = ((rtok >> 2) & 3) == 1;
+                    for (uint32_t c = 0; c < 4 && !aoAfter; ++c)
+                        if ((mask & (1u << c)) &&
+                            (swizzled ? ((rtok >> (4 + 2 * c)) & 3) : c) == options.aoComponent) {
+                            aoAfter = i + n;
+                            aoTemp = dst0.index0;
+                            aoComp = c;
+                        }
                 }
             }
             i += n;
         }
     }
+    // The bent normal: the coordinate operand of the first sample of `detailResource` (copied as it is: its register,
+    // swizzle and any modifier), written right before that sample (its result may go to the coordinate's register).
+    size_t detailAt = 0;
+    std::vector<uint32_t> detailCoord;
+    if (wantNormal && !detailTaken && options.detailReg != ~0u && options.detailResource != ~0u) {
+        for (size_t i = firstInstruction; i < length && !detailAt;) {
+            const uint32_t n = length_of(tokens + i, length - i);
+            if (!n || i + n > length)
+                break;
+            const uint32_t op = opcode_of(tokens[i]);
+            if (op >= kOpSample && op <= kOpSampleB) {
+                const size_t first = operands_at(tokens + i, n);
+                Operand dst0, coord, res;
+                const size_t l0 = first ? read_operand(tokens + i + first, n - first, dst0) : 0;
+                const size_t l1 = l0 ? read_operand(tokens + i + first + l0, n - first - l0, coord) : 0;
+                const size_t l2 = l1 ? read_operand(tokens + i + first + l0 + l1, n - first - l0 - l1, res) : 0;
+                const uint32_t ctok = l1 ? tokens[i + first + l0] : 0;
+                if (l2 && res.type == kResource && res.index0Immediate && res.index0 == options.detailResource &&
+                    (coord.type == kTemp || coord.type == kInput) && (ctok & 3) == 2 && ((ctok >> 2) & 3) == 1) {
+                    detailAt = i;
+                    detailCoord.assign(tokens + i + first + l0, tokens + i + first + l0 + l1);
+                }
+            }
+            i += n;
+        }
+    }
+    const bool wantDetail = !detailCoord.empty();
     const std::vector<uint32_t> resourceDcl = {instruction(kOpDclResource, 4) | (kResourceDimensionBuffer << 11),
                                                operand(0, 0, 0, kResource, 1), options.srvSlot,
                                                kReturnTypeUint | (kReturnTypeUint << 4) | (kReturnTypeUint << 8) |
@@ -1194,6 +1233,25 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
         normalCode.push_back(instruction(kOpMov, 8));
         dst(normalCode, kOutput, options.normalReg, 0x8);
         normalCode.insert(normalCode.end(), {operand(2, 0, 0, kImm32, 0), kOne, kOne, kOne, kOne});
+        if (wantDetail) {  // the bent normal's target (a float target: as it is): the vertex shader's normal until the sample
+            normalDcl.insert(normalDcl.end(), {instruction(kOpDclOutput, 3), operand(2, 0, 0xf, kOutput, 1), options.detailReg});
+            for (uint32_t k = 0; k < 3; ++k) {
+                normalCode.push_back(instruction(kOpMov, 5));
+                dst(normalCode, kOutput, options.detailReg, 1u << k);
+                normalCode.push_back(operand(2, 2, 2, kInput, 1));
+                normalCode.push_back(normalInputs[k]);
+            }
+            normalCode.push_back(instruction(kOpMov, 8));
+            dst(normalCode, kOutput, options.detailReg, 0x8);
+            normalCode.insert(normalCode.end(), {operand(2, 0, 0, kImm32, 0), kOne, kOne, kOne, kOne});
+        }
+    }
+    std::vector<uint32_t> detailCode;
+    if (wantDetail) {  // mov o<detail>.xyz, <the sample's coordinate>: as it is (a cube map's needn't be unit length; a
+                       // UNORM target's x 0.5 + 0.5 clamped one past 1 and bent its direction: review, 2026-11-19)
+        detailCode.push_back(instruction(kOpMov, static_cast<uint32_t>(1 + 2 + detailCoord.size())));
+        dst(detailCode, kOutput, options.detailReg, 0x7);
+        detailCode.insert(detailCode.end(), detailCoord.begin(), detailCoord.end());
     }
     const size_t resourceAt = lastResourceDcl ? lastResourceDcl : globalFlagsEnd;
     const size_t outputAt = lastOutputDcl ? lastOutputDcl : tempsAt ? tempsAt : firstInstruction;
@@ -1209,8 +1267,10 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
             out.insert(out.end(), load.begin(), load.end());
             out.insert(out.end(), normalCode.begin(), normalCode.end());
         }
+        if (detailAt && i == detailAt)
+            out.insert(out.end(), detailCode.begin(), detailCode.end());
         if (aoAfter && i == aoAfter) {  // mov o<n>.w, r<ao>.<component>
-            const uint32_t c = options.aoComponent;
+            const uint32_t c = aoComp;
             out.push_back(instruction(kOpMov, 5));
             dst(out, kOutput, options.normalReg, 0x8);
             src_temp(out, aoTemp, swizzle(static_cast<int>(c), static_cast<int>(c), static_cast<int>(c), static_cast<int>(c)));
@@ -1234,6 +1294,14 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
                        Element{"SV_Target", options.normalReg, targetName, kComponentFloat32, options.normalReg, 0xf, 0x0});
         r.normal = true;
         r.ao = aoAfter != 0;
+        if (wantDetail) {
+            size_t dat = 0;
+            while (dat < outputs.size() && outputs[dat].reg < options.detailReg)
+                ++dat;
+            outputs.insert(outputs.begin() + static_cast<std::ptrdiff_t>(dat),
+                           Element{"SV_Target", options.detailReg, targetName, kComponentFloat32, options.detailReg, 0xf, 0x0});
+            r.detail = true;
+        }
     }
     program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
                          reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);

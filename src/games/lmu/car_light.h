@@ -54,6 +54,7 @@ public:
     void begin_frame() {
         ++frame_;
         lights_.clear();
+        spots_.clear();
         firstSlot_ = ~0u;
         lastSlot_ = 0;
     }
@@ -62,12 +63,27 @@ public:
     // normal for its pixels is in the normals' target (else the pass takes the depth's directions). `bufferGeneration`
     // changes with each write of the buffer: a part drawn again with the same buffer adds nothing new.
     void draw(unsigned slot, const float (&origin)[3], const uint8_t* buffer, size_t bufferBytes, const OmniLayout& layout,
-              uint64_t bufferGeneration, bool paint, bool normal = false, bool ao = false);
+              uint64_t bufferGeneration, bool paint, bool normal = false, bool ao = false, bool detail = false);
+    // A car part's draw's spotlights (the headlights; `count` of the indices packed two 16-bit to a uint in `packed`,
+    // each below `capacity`): kept for the frame, each once, up to kMaxSpots; and for slot `slot` (drawn this frame:
+    // draw() first), up to kSpotsPerSlot of them, so its pixels weigh only the headlights LMU handed that part (the
+    // frame's every one per pixel cost 0.35 ms GPU in the A/B of 2026-11-19).
+    // `origin`, `spotBuffer`: the part's place and LMU's spotlights (64 bytes each, world space): a part handed more
+    // than kSpotsPerSlot keeps the strongest at it (colour x attenuation x range falloff), not LMU's first.
+    void add_spots(unsigned slot, uint32_t count, const uint32_t* packed, unsigned capacity, const float (&origin)[3],
+                   const uint8_t* spotBuffer, size_t spotBytes);
+    static constexpr unsigned kSpotsPerSlot = 6;
+    const std::vector<uint16_t>& spots() const { return spots_; }
+    static constexpr unsigned kMaxSpots = 32;
+    // The frame's floodlights the most car parts were handed (the ground's shadows'), up to 4 (-1: none).
+    void top_lights(int (&out)[4]) const;
     // The slots written this frame: [first, last] (first > last: none).
     unsigned first_slot() const { return firstSlot_; }
     unsigned last_slot() const { return lastSlot_; }
     // Slot `slot`'s lights packed 4 to a uint (8 bits each, kNone: none), and its flags (bit 0: paint, bit 1: the game's
-    // normal, bit 2: its baked occlusion), for the GPU's per-slot buffer (uint4: lights 0-3, 4-7, flags, 0).
+    // normal, bit 2: its baked occlusion, bit 3: its bent normal), for the GPU's per-slot buffer (uint4: lights 0-3,
+    // 4-7, flags in bits 0-7 and spotlights 4-5 in bits 8-15 and 16-23, spotlights 0-3; the spotlights as indices into
+    // spots(), kNone: none).
     void packed(unsigned slot, uint32_t (&out)[4]) const;
     const std::vector<CarLight>& lights() const { return lights_; }
     size_t slot_count() const { return slotLights_.size(); }
@@ -78,6 +94,9 @@ private:
         float distance[kPerSlot];
         uint8_t count = 0;
         uint64_t generation = ~0ull;
+        uint8_t spot[kSpotsPerSlot];
+        float spotWeight[kSpotsPerSlot];
+        uint8_t spotCount = 0;
     };
     int light_index(const CarLight& l);  // its index in the frame's table (added if new), -1: full
     std::vector<CarLight> lights_;
@@ -87,6 +106,7 @@ private:
     uint32_t frame_ = 1;
     // The last buffer parsed (most draws repeat the draw before's lights: run 1 had ~1,000 car part draws a frame, and
     // each matched its 20 entries against the frame's table): its bytes, and per entry the light's index (-1 unusable).
+    std::vector<uint16_t> spots_;
     std::vector<uint8_t> lastBuffer_;
     int lastIndex_[32] = {};
     uint32_t lastFrame_ = 0;
@@ -112,6 +132,89 @@ void car_light_unproject(const float (&inverseProjection)[16], float ndcX, float
 // GGX highlight of one light at a point (all view space; n normalised): the radiance it adds.
 float car_light_highlight(const float (&n)[3], const float (&toEye)[3], const float (&toLight)[3], float roughness);
 
+// One block of frames' costs (the automatic A/B's): sums over the frames the pass ran in while the block was set.
+struct CarLightBlock {
+    unsigned serial = 0;  // the block's number (0: none)
+    double gpuSum = 0;    // ms, over the timed runs
+    unsigned gpuRuns = 0;
+    unsigned runs = 0;    // runs drawn
+    double cpuSum = 0;    // ms, set-up and draw plus the lights' collection
+    unsigned frames = 0;
+    // Per frame (both eyes): the timed runs' average times the runs per frame.
+    double gpu_ms() const { return frames && gpuRuns ? gpuSum / gpuRuns * runs / frames : 0; }
+    double cpu_ms() const { return frames ? cpuSum / frames : 0; }
+};
+
+// The automatic A/B (dev builds, Ctrl+Alt+N): blocks of kFrames frames in turn, the menu's settings ("all") and one
+// variant: one switch that's on turned off, or every switch off (the relight's base). A, V1, A, V2, ... A, Vn, round
+// after round, for up to kMaxFrames. Each variant block is paired with the A blocks either side of it (the scene
+// changes slowly next to a block's length), so a switch's cost is the average of A - V over its pairs while driving.
+// No D3D here: the caller sets the pass's block (frame()'s return) and hands back each ended block's sums (add()).
+class CarLightAb {
+public:
+    static constexpr unsigned kFrames = 90;        // ~1 s a block at 90 Hz: long enough to see what changes
+    static constexpr unsigned kMaxFrames = 27000;  // ~5 minutes at 90 Hz, then it stops by itself
+    static constexpr int kMaxVariants = 7;
+
+    // Starts (the variants from `light`'s switches now); false: nothing to vary (the relight or every switch off).
+    bool start(const CarLightSettings& light);
+    // Stops; report() keeps its figures.
+    void stop() { active_ = false; }
+    bool active() const { return active_; }
+    // Once a frame before the passes: this frame's settings from the menu's (`light`, changed in a variant block).
+    // Returns the frame's block serial for the pass; `ended`: a block serial the caller reads back and add()s now (0:
+    // none; it ended a block's length ago, its GPU times read back since). Stops by itself after kMaxFrames.
+    unsigned frame(CarLightSettings& light, unsigned& ended);
+    // An ended block's sums (from the pass: CarLightPass::block).
+    void add(const CarLightBlock& b);
+    // A frame the A/B doesn't own (the comparison hotkey's), after this frame's frame(): the block it falls in (the
+    // current one) isn't counted.
+    void taint() {
+        if (active_)
+            tainted_[serial_ % kSeen] = true;
+    }
+    // One line a variant ("lacquer reflections: 0.412 ms GPU (+-0.030), 0.010 ms CPU (+-0.004), 18 pairs"), after
+    // the menu settings' own cost.
+    std::vector<std::string> report() const;
+    unsigned rounds() const { return variants_ ? (serial_ - 1) / (2 * static_cast<unsigned>(variants_)) : 0; }
+    unsigned frames() const { return frames_; }
+    int variants() const { return variants_; }
+    // The block now: -1 the menu's settings, else the variant.
+    int kind() const { return kinds_[serial_ % kSeen]; }
+    const char* variant_name(int v) const { return v >= 0 && v < variants_ ? names_[v] : "your settings"; }
+
+private:
+    struct Seen {
+        unsigned serial = 0;
+        int kind = -2;  // -1 A, >= 0 the variant
+        double gpu = 0, cpu = 0;
+        bool ok = false;  // counted: the pass ran and was timed, nothing tainted it
+    };
+    struct Sum {
+        unsigned n = 0;
+        double gpu = 0, gpu2 = 0, cpu = 0, cpu2 = 0;
+        void add(double g, double c) {
+            ++n;
+            gpu += g;
+            gpu2 += g * g;
+            cpu += c;
+            cpu2 += c * c;
+        }
+    };
+    static constexpr unsigned kSeen = 8;
+    void apply(int variant, CarLightSettings& light) const;
+    bool active_ = false;
+    int variants_ = 0;
+    int switches_[kMaxVariants] = {};  // per variant: the switch turned off (0-5), or 6 every one
+    const char* names_[kMaxVariants] = {};
+    unsigned serial_ = 0, inBlock_ = 0, frames_ = 0;
+    bool tainted_[kSeen] = {};
+    int kinds_[kSeen] = {};
+    Seen seen_[kSeen];
+    Sum pairs_[kMaxVariants];
+    Sum all_;
+};
+
 // The D3D11 pass. Made on the render thread at its first run.
 class CarLightPass {
 public:
@@ -123,11 +226,13 @@ public:
     // Relights `scene` (the eye pass's resolved scene, single-sample: an RGBA16F render target) where `slots` (the car
     // slots' target, R16_UINT, multisample or not) holds a car part, with `depth` (the pass's depth texture as it drew
     // it, R32, multisample alike) and `normals` (the game's world normals, xyz * 0.5 + 0.5, multisample alike; null: the
-    // depth's directions everywhere). `table`'s lights and slots. The caller keeps the game's state (it is changed) and
+    // depth's directions everywhere), `detail` (the normals the game's normal maps bent, alike; null: none). `table`'s
+    // lights and slots. The caller keeps the game's state (it is changed) and
     // the hooks out of the way. False: not drawn (not made, inputs missing, no car part this frame).
     bool run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* depth, ID3D11ShaderResourceView* slots,
              bool slotsMs, const CarLightTable& table, const CarLightView& view, const CarLightSettings& settings,
-             int eye, ID3D11ShaderResourceView* normals = nullptr);
+             int eye, ID3D11ShaderResourceView* normals = nullptr, ID3D11ShaderResourceView* detail = nullptr,
+             const uint8_t* spotBuffer = nullptr, size_t spotBytes = 0);
     // The lights' collection at the draws (the caller's measure, ms), counted into the CPU figure.
     void add_collect_ms(double ms);
     // Once a frame (after both eyes): the GPU timestamps of frames before read back where ready (never waits); every
@@ -137,6 +242,10 @@ public:
     // collection at the draws). `windows`: how many such averages so far.
     double gpu_ms() const { return gpuMs_; }
     double cpu_ms() const { return cpuMs_; }
+    // The automatic A/B's blocks: the runs and frames from now on count to block `serial` (0: none); its GPU times
+    // count to it when they're read back, frames later. block(): a block of the last 32 (false: not one of them).
+    void set_block(unsigned serial);
+    bool block(unsigned serial, CarLightBlock& out) const;
     unsigned long long windows() const { return windows_; }
     bool failed() const { return failed_; }
 

@@ -32,6 +32,8 @@ struct ID3D11Texture2D;
 
 namespace lmu {
 
+struct CarLightBlock;  // car_light.h
+
 struct MvrPassView {
     int eye = 0;
     float remap[4] = {1, 0, 1, 0};    // a, b, c, d: the focus view's clip x = a x + b w, y = c y + d w (focus_math.h)
@@ -249,6 +251,10 @@ void mvr_car_light(bool on);
 void mvr_car_light_frame(const simqvfr::CarLighting& settings);
 // Its cost per frame, averaged over 90 frames (any thread): GPU and CPU ms. False: not installed, or no average yet.
 bool mvr_car_light_costs(double& gpuMs, double& cpuMs);
+// The automatic A/B's blocks (dev builds): the relight's costs from now on count to block `serial` (0: none); a past
+// block's sums (false: not one of the last 32, or no pass).
+void mvr_car_light_block(unsigned serial);
+bool mvr_car_light_block_cost(unsigned serial, CarLightBlock& out);
 // One eye off ([quad] eye_off; qvfr_frame.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
 // view's upscale: it draws none). Between frames.
 void mvr_eye_off(int eye);

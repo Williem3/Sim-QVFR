@@ -49,6 +49,7 @@ struct MvrProbeStats {
     uint64_t slotTwinned = 0, slotBiasTwinned = 0, slotFailed = 0;
     uint64_t slotNormals = 0;  // night car lighting: slot twins that write the game's normal too
     uint64_t slotAos = 0;      // and its baked ambient occlusion
+    uint64_t slotDetails = 0;  // and the normal its normal maps bent
     std::map<std::string, uint64_t> slotRefused;
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0, instancedMs = 0;
     std::map<std::string, uint64_t> refused;           // why add_second_view didn't convert a shader, and how often
@@ -78,6 +79,13 @@ inline constexpr GUID kVsGameNormalGuid = {0x46c2e8b7, 0x91d3, 0x4a5f, {0x8b, 0x
 inline constexpr GUID kPsSlotNormalGuid = {0xb53a07d1, 0x6e2c, 0x4f84, {0x9a, 0x41, 0xd8, 0x0c, 0x5e, 0x73, 0x2b, 0x96}};
 // And whose slot twin writes its baked ambient occlusion (aoSpecularMap / aoSpecMask's .y) to that target's w (a UINT 1).
 inline constexpr GUID kPsSlotAoGuid = {0x2e9c5f13, 0xa47b, 0x4d06, {0x83, 0x5a, 0x1f, 0x6e, 0xc9, 0x02, 0xb7, 0x48}};
+// And whose slot twin writes the normal its normal maps bent (irradDiffuse's lookup) to render target 3 (a UINT 1).
+// Night car lighting's headlights: where a game pixel shader reads its spotlights (GlobalCBFloats_SpotlightGlobal's
+// spotLightGlobals, 64 bytes each) and, in the per-draw buffer (GlobalCBFloats_Draw_0, the vertex shaders' worldMatrix
+// one), the draw's count of them (f_spotCount) and their indices (f_packedSpotLightIndex_0.., two 16-bit to a uint):
+// four UINTs: the spotlights' slot, their count in the array, the count's offset, the indices' offset.
+inline constexpr GUID kPsSpotsGuid = {0x95b1e4a2, 0x37cd, 0x4f60, {0x8e, 0x12, 0x5b, 0xd9, 0x61, 0x0a, 0xc4, 0x73}};
+inline constexpr GUID kPsSlotDetailGuid = {0x7a05d3c8, 0x2f61, 0x4b9e, {0xa4, 0x18, 0x6c, 0x93, 0xe0, 0x5d, 0x27, 0xb1}};
 // And a game pixel shader that shades a car body's lacquer (its reflection names lacquerThickness or clearCoatStrength):
 // a UINT 1.
 inline constexpr GUID kPsPaintGuid = {0x1d73a9e5, 0x42bc, 0x4f18, {0x96, 0x0d, 0xe4, 0x2a, 0x7b, 0x51, 0xc8, 0x3e}};

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "../../log.h"
@@ -44,7 +45,8 @@ int CarLightTable::light_index(const CarLight& l) {
 }
 
 void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t* buffer, size_t bufferBytes,
-                         const OmniLayout& layout, uint64_t bufferGeneration, bool paint, bool normal, bool ao) {
+                         const OmniLayout& layout, uint64_t bufferGeneration, bool paint, bool normal, bool ao,
+                         bool detail) {
     if (slot >= slotLights_.size() || !buffer)
         return;
     const size_t need = (std::max)(layout.posOffset, layout.colourOffset) + size_t{16} * layout.count;
@@ -54,14 +56,18 @@ void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t*
     if (slotFrame_[slot] != frame_) {  // its first draw this frame: a list of its own again
         slotFrame_[slot] = frame_;
         s.count = 0;
+        s.spotCount = 0;
         s.generation = ~0ull;
-        slotPaint_[slot] = (normal ? 2 : 0) | (normal && ao ? 4 : 0);  // the game's: while every draw of the part has it
+        // The game's: while every draw of the part has it.
+        slotPaint_[slot] = static_cast<uint8_t>((normal ? 2 : 0) | (normal && ao ? 4 : 0) | (normal && detail ? 8 : 0));
     }
     slotPaint_[slot] |= paint ? 1 : 0;
     if (!normal)
-        slotPaint_[slot] &= static_cast<uint8_t>(~6u);
+        slotPaint_[slot] &= static_cast<uint8_t>(~14u);
     if (!ao)
         slotPaint_[slot] &= static_cast<uint8_t>(~4u);
+    if (!detail)
+        slotPaint_[slot] &= static_cast<uint8_t>(~8u);
     firstSlot_ = (std::min)(firstSlot_, slot);
     lastSlot_ = (std::max)(lastSlot_, slot);
     if (s.generation == bufferGeneration)  // drawn again with the buffer as it was: nothing new
@@ -114,6 +120,92 @@ void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t*
     }
 }
 
+namespace {
+// A spotlight's strength at a point (64 bytes as LMU writes them: position and range, direction and outer cone's cosine,
+// attenuation and inner cone's cosine, colour and falloff): its colour's brightness over its attenuation, times its
+// range falloff; 0 beyond its range or unreadable.
+float spot_weight(const uint8_t* spotBuffer, size_t spotBytes, unsigned index, const float (&at)[3]) {
+    if (!spotBuffer || size_t{index} * 64 + 64 > spotBytes)
+        return 0;
+    float d[16];
+    std::memcpy(d, spotBuffer + size_t{index} * 64, 64);
+    for (float v : d)
+        if (!std::isfinite(v))
+            return 0;
+    const float dx = at[0] - d[0], dy = at[1] - d[1], dz = at[2] - d[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (d[3] <= 0 || dist >= d[3] + 3.0f)  // a car's half length of margin, as the floodlights'
+        return 0;
+    const float atten = (std::max)(d[8] + d[9] * dist + d[10] * dist * dist, 1e-3f);
+    const float bright = 0.3f * d[12] + 0.59f * d[13] + 0.11f * d[14];
+    return (std::max)(bright, 0.0f) / atten * (std::max)(1 - dist / (d[3] + 3.0f), 0.0f);
+}
+}  // namespace
+
+void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* packed, unsigned capacity,
+                              const float (&origin)[3], const uint8_t* spotBuffer, size_t spotBytes) {
+    if (!packed || count > 20)
+        return;
+    SlotLights* s = slot < slotLights_.size() && slotFrame_[slot] == frame_ ? &slotLights_[slot] : nullptr;
+    for (uint32_t k = 0; k < count; ++k) {
+        const uint32_t index = (packed[k / 2] >> (16 * (k & 1))) & 0xffff;
+        if (index >= capacity)
+            continue;
+        auto at = std::find(spots_.begin(), spots_.end(), static_cast<uint16_t>(index));
+        if (at == spots_.end()) {
+            if (spots_.size() >= kMaxSpots)
+                continue;
+            spots_.push_back(static_cast<uint16_t>(index));
+            at = spots_.end() - 1;
+        }
+        const uint8_t local = static_cast<uint8_t>(at - spots_.begin());
+        if (!s)
+            continue;
+        bool known = false;
+        for (uint8_t j = 0; j < s->spotCount; ++j)
+            known = known || s->spot[j] == local;
+        if (known)
+            continue;
+        const float w = spot_weight(spotBuffer, spotBytes, index, origin);
+        if (s->spotCount < kSpotsPerSlot) {
+            s->spot[s->spotCount] = local;
+            s->spotWeight[s->spotCount++] = w;
+        } else {  // full: in place of the weakest, when stronger
+            uint8_t weakest = 0;
+            for (uint8_t j = 1; j < kSpotsPerSlot; ++j)
+                if (s->spotWeight[j] < s->spotWeight[weakest])
+                    weakest = j;
+            if (w > s->spotWeight[weakest]) {
+                s->spot[weakest] = local;
+                s->spotWeight[weakest] = w;
+            }
+        }
+    }
+}
+
+void CarLightTable::top_lights(int (&out)[4]) const {
+    for (int& o : out)
+        o = -1;
+    std::vector<unsigned> refs(lights_.size(), 0);
+    for (size_t slot = 0; slot < slotLights_.size(); ++slot) {
+        if (slotFrame_[slot] != frame_)
+            continue;
+        for (uint8_t k = 0; k < slotLights_[slot].count; ++k)
+            if (slotLights_[slot].index[k] < refs.size())
+                ++refs[slotLights_[slot].index[k]];
+    }
+    for (int n = 0; n < 4; ++n) {
+        int best = -1;
+        for (size_t i = 0; i < refs.size(); ++i)
+            if (refs[i] && (best < 0 || refs[i] > refs[static_cast<size_t>(best)]))
+                best = static_cast<int>(i);
+        if (best < 0)
+            break;
+        out[n] = best;
+        refs[static_cast<size_t>(best)] = 0;
+    }
+}
+
 void CarLightTable::packed(unsigned slot, uint32_t (&out)[4]) const {
     out[0] = out[1] = 0xffffffffu;
     out[2] = out[3] = 0;
@@ -125,7 +217,14 @@ void CarLightTable::packed(unsigned slot, uint32_t (&out)[4]) const {
         const unsigned shift = 8 * (k % 4);
         word = (word & ~(0xffu << shift)) | (static_cast<uint32_t>(s.index[k]) << shift);
     }
-    out[2] = slotPaint_[slot];
+    // The spotlights: 0-3 in the last word, 4-5 above the flags.
+    out[3] = 0xffffffffu;
+    out[2] = slotPaint_[slot] | 0xffff00u;
+    for (uint8_t k = 0; k < s.spotCount; ++k) {
+        uint32_t& word = k < 4 ? out[3] : out[2];
+        const unsigned shift = k < 4 ? 8 * k : 8 * (k - 3);
+        word = (word & ~(0xffu << shift)) | (static_cast<uint32_t>(s.spot[k]) << shift);
+    }
 }
 
 // ---- The comparison image ----
@@ -228,6 +327,13 @@ cbuffer CarLightPass : register(b0) {
     float4 remap;                // the focus view's ndc = (a x + b, c y + d) of the eye's
     float4 shade;                // fill, occlusion, highlights, roughness
     float4 extra;                // occlusion radius (m), near fade start, end (m), smoothing width (m; 0 none)
+    float4 mode;                 // x: the floodlights' shadows, y: the paint's detail, z: the lacquer's reflections (1 on)
+    float4 mode2;                // x: the headlights' count (0: off), y: the ground's shadows, z: night vision (1 on)
+    float4 ground;               // the ground's floodlights: the frame's strongest (indices, -1 none)
+};
+cbuffer CarLightSpots : register(b2) {
+    float4 spotData[128];  // the headlights: per spotlight its position and range, direction and outer cone, attenuation
+                           // and inner cone, colour and cone falloff (LMU's spotLightGlobals, world space)
 };
 cbuffer CarLightLights : register(b1) {
     float4 lightPos[128];  // world xyz, radius
@@ -245,6 +351,14 @@ float load_depth(int2 p) { return depthTex.Load(int3(p, 0)); }
 uint load_slot(int2 p) { return slotTex.Load(int3(p, 0)); }
 #endif
 Buffer<uint4> slotInfo : register(t2);
+#if MS
+Texture2DMS<float4> detailTex : register(t4);
+float3 load_detail(int2 p) { return detailTex.Load(p, 0).xyz; }
+#else
+Texture2D<float4> detailTex : register(t4);
+float3 load_detail(int2 p) { return detailTex.Load(int3(p, 0)).xyz; }
+#endif
+Texture2D<float4> sceneTex : register(t5);  // the scene as the pass began (the reflections read it)
 #if MS
 Texture2DMS<float4> normalTex : register(t3);
 float4 load_normal(int2 p) { return normalTex.Load(p, 0); }
@@ -277,12 +391,84 @@ float3 view_pos(float2 pixel, float depth, int r, float2 origin, float2 size) {
     return v.xyz / v.w;
 }
 
+// pixel_of, and whether the point is in front of the camera (w > 0): a reflected ray may turn back past it.
+bool pixel_ahead(float3 v, int r, float2 origin, float2 size, out float2 q) {
+    float4 c = mul(float4(v, 1), proj);
+    float2 ndc = c.xy / max(abs(c.w), 1e-6);
+    if (r == 1)
+        ndc = float2(remap.x * ndc.x + remap.y, remap.z * ndc.y + remap.w);
+    q = origin + (ndc * float2(0.5, -0.5) + 0.5) * size;
+    return c.w > 1e-4;
+}
+
 float2 pixel_of(float3 v, int r, float2 origin, float2 size) {
     float4 c = mul(float4(v, 1), proj);
     float2 ndc = c.xy / c.w;
     if (r == 1)
         ndc = float2(remap.x * ndc.x + remap.y, remap.z * ndc.y + remap.w);
     return origin + (ndc * float2(0.5, -0.5) + 0.5) * size;
+}
+
+// A point (view space) looked up where it was drawn: in the focus view when it falls inside it (sharper), else in the
+// eye's own region, whichever view the pixel asking is in. Both views then see the same occluders: the focus view
+// alone lost every car past its edge, and its searches stopped there (run 4, 2026-11-19: shadows cast away from a
+// light ended short or went missing in the focus area, not around it). `lq`: the drawn surface's distance from the
+// camera there, `slot` its car slot. 1: found; 0: nothing drawn there (the sky); -1: off both views (a search toward
+// a light stops there: it only leaves further, and carrying on doubled the floodlight shadows' cost, run 5).
+// Two values in [0, 1) fixed to the world point `P` (view space, `lp` its distance): the AO kernel's turn and the
+// shadow searches' offsets. In cells about a periphery pixel across at that distance (rounded to a power of two, so
+// neighbours share them), the same in both eyes and in the focus view as around it: from the screen's pixels the two
+// eyes dithered the same spot differently (review, 2026-11-19).
+float2 world_noise(float3 P, float lp) {
+    float3 W = mul((float3x3)viewM, P - viewM[3].xyz);  // view to world (viewM is rigid: its rotation's transpose)
+    float cell = exp2(round(log2(max(lp * 0.0008, 1e-4))));
+    int3 c = int3(floor(W / cell));
+    uint h = (uint)c.x * 73856093u ^ (uint)c.y * 19349663u ^ (uint)c.z * 83492791u;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    h = (h ^ (h >> 16)) * 0x45d9f3bu;
+    h ^= h >> 16;
+    return float2(h & 0xffff, h >> 16) / 65536.0;
+}
+
+int lookup_world(float3 S, out float lq, out uint slot, out int2 pixel, out float edge) {
+    lq = 0;
+    slot = 0;
+    pixel = int2(0, 0);
+    edge = 0;
+    float4 c = mul(float4(S, 1), proj);
+    if (c.w <= 1e-4)
+        return -1;
+    float2 ndc = c.xy / c.w;
+    edge = 1 - max(abs(ndc.x), abs(ndc.y));  // to the eye's own screen edge (ndc units): the focus view's isn't one
+    if (region.z > 0) {
+        float2 f = float2(remap.x * ndc.x + remap.y, remap.z * ndc.y + remap.w);
+        if (all(abs(f) < 1)) {
+            float2 q = float2(region.x, 0) + (f * float2(0.5, -0.5) + 0.5) * region.zw;
+            float ds = load_depth(int2(q));
+            if (ds > 0) {
+                pixel = int2(q);
+                lq = length(view_pos(floor(q) + 0.5, ds, 1, float2(region.x, 0), region.zw));
+                slot = load_slot(pixel);
+                return 1;
+            }
+        }
+    }
+    if (any(abs(ndc) >= 1))
+        return -1;
+    float2 q = (ndc * float2(0.5, -0.5) + 0.5) * region.xy;
+    pixel = int2(q);
+    float ds = load_depth(pixel);
+    if (ds <= 0)
+        return 0;
+    lq = length(view_pos(floor(q) + 0.5, ds, 0, float2(0, 0), region.xy));
+    slot = load_slot(pixel);
+    return 1;
+}
+
+int sample_world(float3 S, out float lq, out uint slot) {
+    int2 pixel;
+    float edge;
+    return lookup_world(S, lq, slot, pixel, edge);
 }
 
 float3 neighbour(int2 q, int r, float2 origin, float2 size, float3 none) {
@@ -347,11 +533,145 @@ static const float3 kKernel[8] = {
     float3(0.140, -0.520, 0.260), float3(0.610, 0.330, 0.520), float3(-0.580, 0.470, 0.180),
     float3(0.050, -0.240, 0.880), float3(0.420, -0.610, 0.640)};
 
+)" R"(
 struct Out {
     float4 add : SV_Target0;
     float4 mul : SV_Target1;
 };
 
+// Night vision's colour: as light fades the eye loses colour and sees a little bluer (rods take over from cones); the
+// lit stays as it was. Luminance as the scene holds it (LMU's night: lit paint ~0.1-0.3, the track ~0.05, the sky
+// ~0.001).
+float3 night_vision(float3 c) {
+    float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float k = (1 - smoothstep(0.004, 0.08, lum)) * 0.7;
+    return lerp(c, lum * float3(0.80, 0.95, 1.25), k);
+}
+
+// The ground around the cars (the track, the walls: any pixel not a car's, within ~1.5 m of one on the screen): the
+// cars' occlusion (points of the hemisphere above it hidden by a car) and the floodlights' shadows (the frame's
+// strongest floodlights, the depth searched toward each up to 4 m for a car in the way); the share of the light a
+// hidden floodlight gave taken out, a third of the game's light (headlights, sky) kept. 1: nothing to darken.
+float3 ground_neighbour(int2 q, int r, float2 origin, float2 size, float3 none) {
+    int2 c = clamp(q, int2(origin), int2(origin + size) - 1);
+    return load_slot(c) != 0 ? none : neighbour(q, r, origin, size, none);
+}
+
+float ground_shade(float4 pos, int2 p, int r, float2 origin, float2 size, float d) {
+    float3 P = view_pos(pos.xy, d, r, origin, size);
+    float lp = length(P);
+    if (lp < extra.z)
+        return 1;
+    // The ground's own direction: its neighbours alone, not a car's beside it (at the line where a car stands on the
+    // track the car's pixel is the nearest in depth, and the ground's direction tilted toward the eye with it).
+    float3 Pr = ground_neighbour(p + int2(1, 0), r, origin, size, P), Pl = ground_neighbour(p - int2(1, 0), r, origin, size, P);
+    float3 Pd = ground_neighbour(p + int2(0, 1), r, origin, size, P), Pu = ground_neighbour(p - int2(0, 1), r, origin, size, P);
+    // A neighbour that isn't the ground's (a car's: `none`, P itself) gives way to the other side.
+    float3 dx = length(Pr - P) < 1e-6 ? P - Pl : length(Pl - P) < 1e-6 ? Pr - P
+              : abs(length(Pr) - lp) < abs(lp - length(Pl)) ? Pr - P : P - Pl;
+    float3 dy = length(Pd - P) < 1e-6 ? P - Pu : length(Pu - P) < 1e-6 ? Pd - P
+              : abs(length(Pd) - lp) < abs(lp - length(Pu)) ? Pd - P : P - Pu;
+    float3 V = -P / max(lp, 1e-4);
+    float3 c = cross(dy, dx);
+    float3 N = dot(c, c) > 1e-14 ? normalize(c) : V;
+    if (dot(N, V) < 0)
+        N = -N;
+    float3 t = normalize(abs(N.y) < 0.99 ? cross(N, float3(0, 1, 0)) : cross(N, float3(1, 0, 0)));
+    float3 b = cross(N, t);
+    // Near a car: points on the ground around it, 1.5 m and 0.7 m out, any of them where a car was drawn. In metres,
+    // so the focus view and the periphery agree (in pixels it was capped at 300: fewer metres at the focus density).
+    bool near = false;
+    float lq;
+    uint sl;
+    [unroll] for (int k = 0; k < 8; ++k) {
+        float2 ring = kRing[k] * ((k & 1) ? 0.7 : 1.5);
+        near = near || (sample_world(P + (t * ring.x + b * ring.y) + N * 0.3, lq, sl) > 0 && sl != 0);
+    }
+    if (!near)
+        return 1;
+    float2 wn = world_noise(P, lp);
+    float noise = wn.x, noise2 = wn.y;
+    float angle = noise * 6.2831853;
+    float3 t2 = t * cos(angle) + b * sin(angle), b2 = b * cos(angle) - t * sin(angle);
+    float occluded = 0;
+    [unroll] for (int k2 = 0; k2 < 8; ++k2) {
+        float3 kk = kKernel[k2];
+        float3 S = P + (t2 * kk.x + b2 * kk.y + N * kk.z) * 1.0;
+        if (sample_world(S, lq, sl) <= 0 || sl == 0)
+            continue;  // only the cars' occlusion: the game's ground is as it drew it
+        float range = saturate(1.0 / max(abs(lp - lq), 1e-3));
+        occluded += (length(S) - lq > 0.02) ? range : 0;
+    }
+    float ao = 1 - occluded / 8;
+    float lit = 0, litSeen = 0;
+    [unroll] for (int g = 0; g < 4; ++g) {
+        int idx = (int)ground[g];
+        if (idx < 0)
+            continue;
+        float3 lv = mul(float4(lightPos[idx].xyz, 1), viewM).xyz;
+        float3 toL = lv - P;
+        float dist = length(toL), radius = lightPos[idx].w;
+        if (dist >= radius || dist <= 1e-3)
+            continue;
+        float3 L = toL / dist;
+        float diffuse = dot(lightCol[idx].rgb, float3(0.3, 0.59, 0.11)) * (1 - dist / radius) * saturate(dot(N, L));
+        if (diffuse <= 0)
+            continue;
+        // Soft: two rays toward either side of the light (a floodlight's panel, ~7 degrees across, turned per pixel),
+        // each hidden by a car fading out with the distance to it (full within 1.5 m, gone at 4 m, where the search
+        // ends). One ray stopping at 4 m drew hard, blotchy patches cut off at their far end (run 4, 2026-11-19).
+        float3 lt = normalize(abs(L.y) < 0.99 ? cross(L, float3(0, 1, 0)) : cross(L, float3(1, 0, 0)));
+        float3 lb = cross(L, lt);
+        float turn = noise2 * 6.2831853;
+        float3 spread = (lt * cos(turn) + lb * sin(turn)) * 0.12;
+        float seen = 0;
+        float span = min(dist, 4.0);
+        [unroll] for (int ray = 0; ray < 2; ++ray) {
+            float3 Lr = normalize(L + (ray == 0 ? spread : -spread));
+            float vis = 1;
+            [loop] for (int k3 = 1; k3 <= 8; ++k3) {
+                float h = span * (k3 - 0.5 + noise) / 8;
+                float3 S = P + N * 0.03 + Lr * h;
+                int found = sample_world(S, lq, sl);
+                if (found < 0)
+                    break;
+                if (found == 0)
+                    continue;
+                float behind = length(S) - lq;
+                if (behind > 0.03 && behind < 1.0 && sl != 0) {  // a car between it and the light
+                    vis = smoothstep(1.5, 4.0, h);
+                    break;
+                }
+            }
+            seen += 0.5 * vis;
+        }
+        lit += diffuse;
+        litSeen += diffuse * seen;
+    }
+    float shadow = lit > 1e-4 ? (litSeen + 0.5 * lit) / (1.5 * lit) : 1;
+    return lerp(1, ao, shade.y) * shadow;
+}
+
+)" R"(
+// A pixel that isn't a car's: the ground's shadows near the cars, night vision's colour (from the scene's copy).
+Out other_pixel(float4 pos, int2 p, int r, float2 origin, float2 size, float d) {
+    float m = 1;
+    if (mode2.y > 0 && d > 0)
+        m = ground_shade(pos, p, r, origin, size, d);
+    Out o;
+    if (mode2.z > 0) {
+        o.add = float4(night_vision(sceneTex.Load(int3(p, 0)).rgb * m), 0);
+        o.mul = float4(0, 0, 0, 1);
+        return o;
+    }
+    if (m >= 0.999)
+        discard;
+    o.add = float4(0, 0, 0, 0);
+    o.mul = float4(m.xxx, 1);
+    return o;
+}
+
+)" R"(
 Out ps_main(float4 pos : SV_Position) {
     int2 p = int2(pos.xy);
     float2 origin, size;
@@ -359,9 +679,9 @@ Out ps_main(float4 pos : SV_Position) {
     if (r < 0)
         discard;
     uint s = load_slot(p);
-    if (s == 0)
-        discard;
     float d = load_depth(p);
+    if (s == 0)
+        return other_pixel(pos, p, r, origin, size, d);
     if (d <= 0)
         discard;
     float3 P = view_pos(pos.xy, d, r, origin, size);
@@ -398,7 +718,7 @@ Out ps_main(float4 pos : SV_Position) {
     }
 
     // Ambient occlusion: points of a hemisphere on the surface, occluded where the scene's depth there is nearer.
-    float noise = frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
+    float noise = world_noise(P, lp).x;
     float angle = noise * 6.2831853;
     float3 t = normalize(abs(N.y) < 0.99 ? cross(N, float3(0, 1, 0)) : cross(N, float3(1, 0, 0)));
     float3 b = cross(N, t);
@@ -408,14 +728,10 @@ Out ps_main(float4 pos : SV_Position) {
     [unroll] for (int k = 0; k < 8; ++k) {
         float3 kk = kKernel[k];
         float3 S = P + (t2 * kk.x + b2 * kk.y + N * kk.z) * extra.x;
-        float2 q = pixel_of(S, r, origin, size);
-        if (any(q < origin) || any(q >= origin + size))
+        float lq;
+        uint sq;
+        if (sample_world(S, lq, sq) <= 0)
             continue;
-        float ds = load_depth(int2(q));
-        if (ds <= 0)
-            continue;
-        float3 Q = view_pos(floor(q) + 0.5, ds, r, origin, size);
-        float lq = length(Q);
         float range = saturate(extra.x / max(abs(lp - lq), 1e-3));
         occluded += (length(S) - lq > 0.02) ? range : 0;
     }
@@ -423,10 +739,28 @@ Out ps_main(float4 pos : SV_Position) {
     // own baked one (panel gaps, vents, the inside of the arches: what the screen can't see).
     float ao = (1 - occluded / 8) * baked;
 
-    // The floodlights the part's draws were handed: a GGX highlight each, as lacquer reflects a lamp.
+    // The highlights' normal: with the paint's detail, the one the game's normal maps bent (orange peel, the carbon's
+    // weave; its ambient cube map's lookup); the shading and the shadows keep the smooth one (the maps' detail would
+    // only make them noisy).
+    float3 Nh = N;
+    if (mode.y > 0 && (info.z & 8) != 0) {
+        float3 bent = mul(float4(load_detail(p), 0), viewM).xyz;  // as the game looked up with it (any length)
+        if (dot(bent, bent) > 1e-6) {
+            Nh = normalize(bent);
+            if (dot(Nh, V) < 0)
+                Nh = -Nh;
+        }
+    }
+
+    // The floodlights the part's draws were handed: a GGX highlight each, as lacquer reflects a lamp. With the shadows,
+    // each light's visibility from the depth: points toward it, up to 1.2 m, any of them behind a nearer surface (a wing,
+    // the bodywork, another car) hides it. Hidden, its highlight goes, and its share of the game's floodlight light
+    // (the diffuse it gave: N.L, its falloff) is taken out of the pixel; the rest of the game's light (headlights, sky)
+    // taken as a quarter of it stays.
     float rough = shade.w, a = rough * rough, a2 = a * a, kq = a * 0.5;
-    float NdotV = saturate(dot(N, V)) + 1e-4;
+    float NdotV = saturate(dot(Nh, V)) + 1e-4;
     float3 spec = 0;
+    float lit = 0, litSeen = 0;
     [unroll] for (int i = 0; i < 8; ++i) {
         uint idx = ((i < 4 ? info.x : info.y) >> (8 * (i & 3))) & 0xff;
         if (idx == 0xff)
@@ -438,15 +772,74 @@ Out ps_main(float4 pos : SV_Position) {
             continue;
         float att = 1 - dist / radius;
         float3 L = toL / dist;
-        float NdotL = saturate(dot(N, L));
+        float diffuse = dot(lightCol[idx].rgb, float3(0.3, 0.59, 0.11)) * att * saturate(dot(N, L));
+        float seen = 1;
+        if (mode.x > 0 && diffuse > 0) {
+            float reach = min(dist, 1.2);
+            [loop] for (int k = 1; k <= 10; ++k) {
+                float3 S = P + N * 0.02 + L * (reach * (k - 0.5 + noise) / 10);
+                float lq;
+                uint sq;
+                int found = sample_world(S, lq, sq);
+                if (found < 0)
+                    break;
+                if (found == 0)
+                    continue;
+                float behind = length(S) - lq;
+                if (behind > 0.03 && behind < 0.6) {  // a surface in front of the point, not one far behind it
+                    seen = 0;
+                    break;
+                }
+            }
+        }
+        lit += diffuse;
+        litSeen += diffuse * seen;
+        float NdotL = saturate(dot(Nh, L));
         float3 H = normalize(L + V);
-        float NdotH = saturate(dot(N, H)), VdotH = saturate(dot(V, H));
+        float NdotH = saturate(dot(Nh, H)), VdotH = saturate(dot(V, H));
         float dd = NdotH * NdotH * (a2 - 1) + 1;
         float D = a2 / (3.14159265 * dd * dd);
         float G = (NdotL / (NdotL * (1 - kq) + kq)) * (NdotV / (NdotV * (1 - kq) + kq));
         float F = 0.04 + 0.96 * pow(1 - VdotH, 5);
-        spec += lightCol[idx].rgb * att * min(D * G * F / (4 * NdotV), kHighlightPeak);
+        spec += seen * lightCol[idx].rgb * att * min(D * G * F / (4 * NdotV), kHighlightPeak);
     }
+    // The headlights (other cars' and the player's): LMU's spotlights the frame's car parts were handed, their light
+    // as LMU's shaders weigh it (the cone, its falloff, the attenuation, the range, the surface facing it), a
+    // highlight each as the floodlights'. No shadows: a headlight's own car rarely stands between it and the paint lit.
+    // The part's own (up to six: LMU's per-draw list), in view space already.
+    [loop] for (int j = 0; j < 6 && mode2.x > 0; ++j) {
+        uint si = (j < 4 ? info.w >> (8 * j) : info.z >> (8 * (j - 3))) & 0xff;
+        if (si == 0xff)
+            break;
+        if (si >= (uint)mode2.x)
+            continue;
+        float4 sPos = spotData[si * 4], sDir = spotData[si * 4 + 1], sAtt = spotData[si * 4 + 2], sCol = spotData[si * 4 + 3];
+        if (sPos.w <= 0)
+            continue;
+        float3 sd = sDir.xyz;
+        float3 fromL = P - sPos.xyz;
+        float dist = length(fromL);
+        if (dist >= sPos.w || dist < 1e-3)
+            continue;
+        float3 dirn = fromL / dist;
+        float cs = dot(sd, dirn);
+        if (cs < sDir.w)
+            continue;
+        float cone = cs < sAtt.w ? pow(saturate((cs - sDir.w) / max(sAtt.w - sDir.w, 1e-4)), max(sCol.w, 0.01)) : 1;
+        float atten = max(sAtt.x + sAtt.y * dist + sAtt.z * dist * dist, 1e-3);
+        float face = saturate((dot(-sd, N) + 0.05) * 4);
+        float val = saturate(cone / atten) * (1 - dist / sPos.w) * face * face * (3 - 2 * face);
+        float3 Ls = -dirn;
+        float NdotLs = saturate(dot(Nh, Ls));
+        float3 Hs = normalize(Ls + V);
+        float NdotHs = saturate(dot(Nh, Hs)), VdotHs = saturate(dot(V, Hs));
+        float dds = NdotHs * NdotHs * (a2 - 1) + 1;
+        float Ds = a2 / (3.14159265 * dds * dds);
+        float Gs = (NdotLs / (NdotLs * (1 - kq) + kq)) * (NdotV / (NdotV * (1 - kq) + kq));
+        float Fs = 0.04 + 0.96 * pow(1 - VdotHs, 5);
+        spec += sCol.rgb * val * min(Ds * Gs * Fs / (4 * NdotV), kHighlightPeak);
+    }
+    float shadow = lit > 1e-4 ? (litSeen + 0.25 * lit) / (1.25 * lit) : 1;
     if ((info.z & 1) == 0)
         spec *= 0.15;  // not a body's lacquer (tyres, carbon, the cockpit): a faint sheen at most
     // A glint, not a blowout: a nearby floodlight on glossy lacquer (gloss 100) reached tens of times the paint's own
@@ -454,11 +847,74 @@ Out ps_main(float4 pos : SV_Position) {
     float peak = max(spec.r, max(spec.g, spec.b));
     spec *= peak > kHighlightMost ? kHighlightMost / peak : 1;
 
+    // The lacquer's reflection of what the eye sees (screen space): the view ray bounced off the paint (its bent normal:
+    // the orange peel ripples it) marched through the depth, 16 steps growing to ~17 m, then 4 halvings onto the
+    // surface it meets; that point's colour as the scene stood before this pass, weighted by the lacquer's Fresnel
+    // (faint face on, strong at grazing angles), less for a rougher paint, faded at the screen's edges and with the
+    // distance marched. Nothing where the ray leaves the screen (the game's own reflection, its cube map, stays).
+    float3 refl = 0;
+    if (mode.z > 0 && (info.z & 1) != 0) {
+        float3 R = reflect(-V, Nh);
+        float fres = 0.04 + 0.96 * pow(1 - saturate(dot(Nh, V)), 5);
+        float weight = fres * saturate(1 - rough * 1.6);
+        if (weight > 0.002) {
+            // Marched through both views (lookup_world: the focus view where the point falls in it, else the eye's),
+            // faded at the eye's own screen edge: in the focus view alone each eye's ray stopped at its own box's edge
+            // (the boxes sit differently per eye), so the two eyes reflected different things (replay, 2026-11-19).
+            float3 O = P + N * 0.03;
+            float prev = 0;
+            float lq;
+            uint sq;
+            int2 qi;
+            float edge;
+            [loop] for (int k = 1; k <= 16; ++k) {
+                float t = 0.08 * pow(1.4, k);
+                float2 own;
+                if (pixel_ahead(O + R * t, r, origin, size, own) && length(own - pos.xy) < 2.5) {
+                    prev = t;  // still on the pixel's own surface: no hit there (grazing rays)
+                    continue;
+                }
+                int found = lookup_world(O + R * t, lq, sq, qi, edge);
+                if (found < 0)
+                    break;
+                float behind = found > 0 ? length(O + R * t) - lq : -1;
+                // In front of a surface by up to a step's length (the steps grow: a fixed thickness let the far ones
+                // jump past a wall), not one far behind it.
+                if (behind > 0 && behind < 0.3 + 1.5 * (t - prev)) {
+                    float lo = prev, hi = t;
+                    [unroll] for (int b = 0; b < 4; ++b) {
+                        float mid = 0.5 * (lo + hi);
+                        int fm = lookup_world(O + R * mid, lq, sq, qi, edge);
+                        if (fm > 0 && length(O + R * mid) - lq > 0)
+                            hi = mid;
+                        else
+                            lo = mid;
+                    }
+                    if (lookup_world(O + R * hi, lq, sq, qi, edge) > 0) {
+                        float edgeFade = saturate(edge * 5);
+                        float3 seen = sceneTex.Load(int3(qi, 0)).rgb;
+                        refl = min(seen, 4) * weight * edgeFade * saturate(1 - (hi / 17.0) * (hi / 17.0));
+                    }
+                    break;
+                }
+                prev = t;
+            }
+        }
+        float rpeak = max(refl.r, max(refl.g, refl.b));
+        refl *= rpeak > kHighlightMost ? kHighlightMost / rpeak : 1;  // a reflected lamp: bright, not a blowout
+    }
+
     float fade = saturate((lp - extra.y) / max(extra.z - extra.y, 1e-3));  // the player's own cockpit left alone
+    float3 added = (spec * shade.z + refl) * fade;
+    float scaled = lerp(1, shade.x * lerp(1, ao, shade.y) * shadow, fade);
     Out o;
-    o.add = float4(spec * shade.z * fade, 0);
-    float m = shade.x * lerp(1, ao, shade.y);
-    o.mul = float4(lerp(1, m, fade).xxx, 1);
+    if (mode2.z > 0) {  // night vision's colour over the relit car: the result made here from the scene's copy
+        o.add = float4(night_vision(sceneTex.Load(int3(p, 0)).rgb * scaled + added), 0);
+        o.mul = float4(0, 0, 0, 1);
+        return o;
+    }
+    o.add = float4(added, 0);
+    o.mul = float4(scaled.xxx, 1);
     return o;
 }
 )";
@@ -558,7 +1014,7 @@ struct CarLightPass::Impl {
     ComPtr<ID3D11BlendState> blend;
     ComPtr<ID3D11RasterizerState> raster;
     ComPtr<ID3D11DepthStencilState> depthOff;
-    ComPtr<ID3D11Buffer> passCb, lightCb, slotBuffer;
+    ComPtr<ID3D11Buffer> passCb, lightCb, spotCb, slotBuffer;
     ComPtr<ID3D11ShaderResourceView> slotView;
     std::vector<uint32_t> slotWords;
     // The scene's render target view and the depth's resource view, kept for the resources they're of.
@@ -568,13 +1024,24 @@ struct CarLightPass::Impl {
     ID3D11Resource* depthFor = nullptr;
     ComPtr<ID3D11Resource> depthHeld;
     ComPtr<ID3D11ShaderResourceView> depthView;
+    // The reflections' copy of the scene (the scene's format and size; made again when they change).
+    ComPtr<ID3D11Texture2D> sceneCopy;
+    ComPtr<ID3D11ShaderResourceView> sceneCopyView;
     bool depthViewMs = false;
     bool made = false, failed = false;
     // GPU timing: a ring of query sets, each one run's; read back frames later without waiting.
     struct Timer {
         ComPtr<ID3D11Query> disjoint, begin, end;
         bool pending = false;
+        unsigned block = 0;  // the A/B block it was issued in
     };
+    static constexpr unsigned kBlocks = 32;
+    CarLightBlock blocks[kBlocks];
+    unsigned block = 0;  // the A/B block now (0: none)
+    CarLightBlock* block_of(unsigned serial) {
+        CarLightBlock& b = blocks[serial % kBlocks];
+        return serial && b.serial == serial ? &b : nullptr;
+    }
     Timer timers[kTimerSlots];
     unsigned nextTimer = 0;
     double gpuSum = 0, cpuSum = 0, collectSum = 0;
@@ -622,11 +1089,14 @@ struct CarLightPass::Impl {
         D3D11_BUFFER_DESC cb{};
         cb.Usage = D3D11_USAGE_DEFAULT;
         cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        cb.ByteWidth = 4 * 16 * 3 + 16 * 4;
+        cb.ByteWidth = 4 * 16 * 3 + 16 * 7;
         if (FAILED(device->CreateBuffer(&cb, nullptr, &passCb)))
             return false;
         cb.ByteWidth = 16 * CarLightTable::kMaxLights * 2;
         if (FAILED(device->CreateBuffer(&cb, nullptr, &lightCb)))
+            return false;
+        cb.ByteWidth = 64 * CarLightTable::kMaxSpots;
+        if (FAILED(device->CreateBuffer(&cb, nullptr, &spotCb)))
             return false;
         D3D11_BUFFER_DESC sb{};
         sb.Usage = D3D11_USAGE_DEFAULT;
@@ -710,7 +1180,8 @@ CarLightPass::~CarLightPass() { delete impl_; }
 bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* depth,
                        ID3D11ShaderResourceView* slots, bool slotsMs, const CarLightTable& table,
                        const CarLightView& view, const CarLightSettings& settings, int eye,
-                       ID3D11ShaderResourceView* normals) {
+                       ID3D11ShaderResourceView* normals, ID3D11ShaderResourceView* detail,
+                       const uint8_t* spotBuffer, size_t spotBytes) {
     (void)eye;
     Impl& m = *impl_;
     if (failed_ || !context || !scene || !depth || !slots || !view.eyeW || !view.eyeH)
@@ -729,8 +1200,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         simqvfr::log_line("lmu car light: the pass is made (relights the cars after each eye pass's scene)");
         QueryPerformanceCounter(&t0);  // its making (the shaders' compile, once) isn't a frame's cost
     }
-    if (table.first_slot() > table.last_slot())
-        return false;  // no car part drawn
+    if (table.first_slot() > table.last_slot() && !settings.nightVision)
+        return false;  // no car part drawn (night vision's colour still wanted on the rest)
     bool depthMs = false;
     ID3D11RenderTargetView* rtv = m.scene_rtv(scene);
     ID3D11ShaderResourceView* depthView = m.depth_srv(depth, depthMs);
@@ -778,7 +1249,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         context->UpdateSubresource(m.lightCb.Get(), 0, nullptr, lights, 0, 0);
     }
     {
-        float cb[4 * 16 * 3 / 4 + 16] = {};
+        float cb[4 * 16 * 3 / 4 + 28] = {};
         for (int i = 0; i < 16; ++i) {
             cb[i] = static_cast<float>(pi[i]);
             cb[16 + i] = static_cast<float>(p[i]);
@@ -799,12 +1270,60 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         rest[13] = 1.0f;   // the player's cockpit: nothing within 1 m, fully from 2 m
         rest[14] = 2.0f;
         rest[15] = s.smooth / 100.0f;  // the smoothing width, cm to m
+        rest[16] = s.shadows ? 1.0f : 0.0f;
+        rest[17] = s.detail ? 1.0f : 0.0f;
+        rest[18] = s.reflections ? 1.0f : 0.0f;
+        // The headlights: the frame's spotlights the car parts were handed, from the spotlights' buffer as written.
+        unsigned spots = 0;
+        if (s.headlights && spotBuffer) {
+            float spotData[CarLightTable::kMaxSpots * 16] = {};
+            for (uint16_t index : table.spots()) {
+                if (spots >= CarLightTable::kMaxSpots)
+                    break;
+                float* d = spotData + spots * 16;
+                if (size_t{index} * 64 + 64 > spotBytes) {  // past the buffer: kept in place, range 0 (unused)
+                    ++spots;
+                    continue;
+                }
+                std::memcpy(d, spotBuffer + size_t{index} * 64, 64);
+                bool usable = true;
+                for (int k = 0; k < 16; ++k)
+                    usable = usable && std::isfinite(d[k]);
+                // World to view (row vectors): the position as a point, the direction as a direction.
+                const float* vm = view.view;
+                const float px = d[0], py = d[1], pz = d[2], dx = d[4], dy = d[5], dz = d[6];
+                for (int j = 0; j < 3; ++j) {
+                    d[j] = px * vm[j] + py * vm[4 + j] + pz * vm[8 + j] + vm[12 + j];
+                    d[4 + j] = dx * vm[j] + dy * vm[4 + j] + dz * vm[8 + j];
+                }
+                const float len = std::sqrt(d[4] * d[4] + d[5] * d[5] + d[6] * d[6]);
+                usable = usable && len > 1e-4f;
+                if (usable) {
+                    d[4] /= len;
+                    d[5] /= len;
+                    d[6] /= len;
+                }
+                // Kept in place either way (the slots' indices point at spots()' order); an unusable one has range 0.
+                if (!usable)
+                    d[3] = 0;
+                ++spots;
+            }
+            context->UpdateSubresource(m.spotCb.Get(), 0, nullptr, spotData, 0, 0);
+        }
+        rest[20] = static_cast<float>(spots);
+        rest[21] = s.ground ? 1.0f : 0.0f;
+        rest[22] = s.nightVision ? 1.0f : 0.0f;
+        int top[4];
+        table.top_lights(top);
+        for (int k = 0; k < 4; ++k)
+            rest[24 + k] = static_cast<float>(top[k]);
         context->UpdateSubresource(m.passCb.Get(), 0, nullptr, cb, 0, 0);
     }
 
     Impl::Timer& timer = m.timers[m.nextTimer];
     const bool timed = !timer.pending;
     if (timed) {
+        timer.block = m.block;
         context->Begin(timer.disjoint.Get());
         context->End(timer.begin.Get());
     }
@@ -815,12 +1334,45 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         sceneTex->GetDesc(&sd);
     // Every target the pass uses: nothing of ours left bound on a target the game then reads (the caller restores the
     // game's own).
-    ID3D11ShaderResourceView* none[4] = {};
-    context->PSSetShaderResources(0, 4, none);
-    context->OMSetRenderTargets(1, &rtv, nullptr);
-    const D3D11_VIEWPORT vpPort{0, 0, static_cast<float>(sd.Width), static_cast<float>(sd.Height), 0, 1};
+    ID3D11ShaderResourceView* none[6] = {};
+    context->PSSetShaderResources(0, 6, none);
     const LONG right = static_cast<LONG>((std::min)(sd.Width, view.eyeW + view.focusW));
     const LONG bottom = static_cast<LONG>((std::min)(sd.Height, (std::max)(view.eyeH, view.focusH)));
+    // The reflections read the scene as it stood: the eye's and focus view's regions copied first.
+    ID3D11ShaderResourceView* sceneView = nullptr;
+    if ((settings.reflections || settings.nightVision) && sceneTex && right > 0 && bottom > 0) {
+        D3D11_TEXTURE2D_DESC cd{};
+        if (m.sceneCopy)
+            m.sceneCopy->GetDesc(&cd);
+        if (!m.sceneCopy || cd.Width != sd.Width || cd.Height != sd.Height || cd.Format != sd.Format) {
+            m.sceneCopy.Reset();
+            m.sceneCopyView.Reset();
+            D3D11_TEXTURE2D_DESC c = sd;
+            c.MipLevels = 1;
+            c.ArraySize = 1;
+            c.SampleDesc = {1, 0};
+            c.Usage = D3D11_USAGE_DEFAULT;
+            c.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            c.CPUAccessFlags = 0;
+            c.MiscFlags = 0;
+            D3D11_SHADER_RESOURCE_VIEW_DESC copyView{};
+            copyView.Format = rtv_format(sd.Format);
+            copyView.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            copyView.Texture2D.MipLevels = 1;
+            if (FAILED(m.device->CreateTexture2D(&c, nullptr, &m.sceneCopy)) ||
+                FAILED(m.device->CreateShaderResourceView(m.sceneCopy.Get(), &copyView, &m.sceneCopyView))) {
+                m.sceneCopy.Reset();
+                m.sceneCopyView.Reset();
+            }
+        }
+        if (m.sceneCopy) {
+            const D3D11_BOX box{0, 0, 0, static_cast<UINT>(right), static_cast<UINT>(bottom), 1};
+            context->CopySubresourceRegion(m.sceneCopy.Get(), 0, 0, 0, 0, scene, 0, &box);
+            sceneView = m.sceneCopyView.Get();
+        }
+    }
+    context->OMSetRenderTargets(1, &rtv, nullptr);
+    const D3D11_VIEWPORT vpPort{0, 0, static_cast<float>(sd.Width), static_cast<float>(sd.Height), 0, 1};
     const D3D11_RECT scissor{0, 0, right, bottom};
     context->RSSetViewports(1, &vpPort);
     context->RSSetScissorRects(1, &scissor);
@@ -835,12 +1387,12 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     context->HSSetShader(nullptr, nullptr, 0);
     context->DSSetShader(nullptr, nullptr, 0);
     context->PSSetShader(m.ps[slotsMs ? 1 : 0].Get(), nullptr, 0);
-    ID3D11Buffer* cbs[2] = {m.passCb.Get(), m.lightCb.Get()};
-    context->PSSetConstantBuffers(0, 2, cbs);
-    ID3D11ShaderResourceView* views[4] = {depthView, slots, m.slotView.Get(), normals};
-    context->PSSetShaderResources(0, 4, views);
+    ID3D11Buffer* cbs[3] = {m.passCb.Get(), m.lightCb.Get(), m.spotCb.Get()};
+    context->PSSetConstantBuffers(0, 3, cbs);
+    ID3D11ShaderResourceView* views[6] = {depthView, slots, m.slotView.Get(), normals, detail, sceneView};
+    context->PSSetShaderResources(0, 6, views);
     context->Draw(3, 0);
-    context->PSSetShaderResources(0, 4, none);
+    context->PSSetShaderResources(0, 6, none);
     if (timed) {
         context->End(timer.end.Get());
         context->End(timer.disjoint.Get());
@@ -850,11 +1402,160 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     ++m.runs;
     LARGE_INTEGER t1{};
     QueryPerformanceCounter(&t1);
-    m.cpuSum += static_cast<double>(t1.QuadPart - t0.QuadPart) / m.qpcPerMs;
+    const double cpu = static_cast<double>(t1.QuadPart - t0.QuadPart) / m.qpcPerMs;
+    m.cpuSum += cpu;
+    if (CarLightBlock* b = m.block_of(m.block)) {
+        ++b->runs;
+        b->cpuSum += cpu;
+    }
     return true;
 }
 
-void CarLightPass::add_collect_ms(double ms) { impl_->collectSum += ms; }
+void CarLightPass::add_collect_ms(double ms) {
+    impl_->collectSum += ms;
+    if (CarLightBlock* b = impl_->block_of(impl_->block))
+        b->cpuSum += ms;
+}
+
+namespace {
+bool& car_light_switch(CarLightSettings& c, int s) {
+    switch (s) {
+    case 0: return c.shadows;
+    case 1: return c.detail;
+    case 2: return c.reflections;
+    case 3: return c.headlights;
+    case 4: return c.ground;
+    default: return c.nightVision;
+    }
+}
+const char* const kCarLightSwitchNames[7] = {"floodlight shadows",   "paint detail",          "lacquer reflections",
+                                             "headlight highlights", "shadows on the ground", "night vision color",
+                                             "every switch (the base relight)"};
+}  // namespace
+
+bool CarLightAb::start(const CarLightSettings& light) {
+    *this = CarLightAb{};
+    if (!light.on)
+        return false;
+    CarLightSettings c = light;
+    int on = 0;
+    for (int s = 0; s < 6; ++s)
+        if (car_light_switch(c, s)) {
+            switches_[variants_] = s;
+            names_[variants_++] = kCarLightSwitchNames[s];
+            ++on;
+        }
+    if (on > 1) {
+        switches_[variants_] = 6;
+        names_[variants_++] = kCarLightSwitchNames[6];
+    }
+    if (!variants_)
+        return false;
+    active_ = true;
+    serial_ = 1;
+    kinds_[serial_ % kSeen] = -1;
+    tainted_[serial_ % kSeen] = false;
+    return true;
+}
+
+void CarLightAb::apply(int variant, CarLightSettings& light) const {
+    if (variant < 0)
+        return;
+    if (switches_[variant] == 6) {
+        for (int s = 0; s < 6; ++s)
+            car_light_switch(light, s) = false;
+    } else {
+        car_light_switch(light, switches_[variant]) = false;
+    }
+}
+
+unsigned CarLightAb::frame(CarLightSettings& light, unsigned& ended) {
+    ended = 0;
+    if (!active_)
+        return 0;
+    if (inBlock_ == kFrames) {  // the next block
+        inBlock_ = 0;
+        ++serial_;
+        const unsigned inRound = (serial_ - 1) % (2 * static_cast<unsigned>(variants_));
+        kinds_[serial_ % kSeen] = inRound % 2 ? static_cast<int>(inRound / 2) : -1;
+        tainted_[serial_ % kSeen] = false;
+        if (serial_ > 2)
+            ended = serial_ - 2;  // ended a block's length ago: its GPU times are back
+    }
+    ++inBlock_;
+    if (++frames_ >= kMaxFrames)
+        active_ = false;
+    apply(kinds_[serial_ % kSeen], light);
+    return serial_;
+}
+
+void CarLightAb::add(const CarLightBlock& b) {
+    if (!b.serial)
+        return;
+    Seen& s = seen_[b.serial % kSeen];
+    s.serial = b.serial;
+    s.kind = kinds_[b.serial % kSeen];
+    s.gpu = b.gpu_ms();
+    s.cpu = b.cpu_ms();
+    // Counted when the pass ran on every frame (both eyes) and was timed: with the cars out of view a block says
+    // nothing either way.
+    s.ok = !tainted_[b.serial % kSeen] && b.frames && b.gpuRuns && b.runs >= b.frames;
+    if (s.kind == -1 && s.ok)
+        all_.add(s.gpu, s.cpu);
+    // An A block closes the pair before it: A (serial - 2), V (serial - 1), A (this one).
+    if (s.kind != -1 || b.serial < 3)
+        return;
+    const Seen& v = seen_[(b.serial - 1) % kSeen];
+    const Seen& a = seen_[(b.serial - 2) % kSeen];
+    if (v.serial != b.serial - 1 || a.serial != b.serial - 2 || v.kind < 0 || a.kind != -1 || !v.ok || !a.ok || !s.ok)
+        return;
+    pairs_[v.kind].add((a.gpu + s.gpu) / 2 - v.gpu, (a.cpu + s.cpu) / 2 - v.cpu);
+}
+
+std::vector<std::string> CarLightAb::report() const {
+    std::vector<std::string> lines;
+    const auto err = [](double sum, double sum2, unsigned n) {
+        if (n < 2)
+            return 0.0;
+        const double mean = sum / n, var = (std::max)(0.0, (sum2 - n * mean * mean) / (n - 1));
+        return std::sqrt(var / n);
+    };
+    char text[256];
+    if (all_.n) {
+        std::snprintf(text, sizeof(text), "your settings: %.3f ms GPU, %.3f ms CPU per frame (%u blocks)",
+                      all_.gpu / all_.n, all_.cpu / all_.n, all_.n);
+        lines.emplace_back(text);
+    }
+    for (int v = 0; v < variants_; ++v) {
+        const Sum& p = pairs_[v];
+        if (!p.n)
+            std::snprintf(text, sizeof(text), "%s: no pairs yet (cars out of view?)", names_[v]);
+        else
+            std::snprintf(text, sizeof(text), "%s: %.3f ms GPU (+-%.3f), %.3f ms CPU (+-%.3f), %u pairs", names_[v],
+                          p.gpu / p.n, err(p.gpu, p.gpu2, p.n), p.cpu / p.n, err(p.cpu, p.cpu2, p.n), p.n);
+        lines.emplace_back(text);
+    }
+    return lines;
+}
+
+void CarLightPass::set_block(unsigned serial) {
+    Impl& m = *impl_;
+    if (serial == m.block)
+        return;
+    m.block = serial;
+    if (serial) {
+        m.blocks[serial % Impl::kBlocks] = CarLightBlock{};
+        m.blocks[serial % Impl::kBlocks].serial = serial;
+    }
+}
+
+bool CarLightPass::block(unsigned serial, CarLightBlock& out) const {
+    const CarLightBlock& b = impl_->blocks[serial % Impl::kBlocks];
+    if (!serial || b.serial != serial)
+        return false;
+    out = b;
+    return true;
+}
 
 void CarLightPass::frame_end(ID3D11DeviceContext* context) {
     Impl& m = *impl_;
@@ -872,10 +1573,17 @@ void CarLightPass::frame_end(ID3D11DeviceContext* context) {
         t.pending = false;
         if (dj.Disjoint || !dj.Frequency || e < b)
             continue;
-        m.gpuSum += static_cast<double>(e - b) * 1000.0 / static_cast<double>(dj.Frequency);
+        const double gpu = static_cast<double>(e - b) * 1000.0 / static_cast<double>(dj.Frequency);
+        m.gpuSum += gpu;
         ++m.gpuRuns;
+        if (CarLightBlock* blk = m.block_of(t.block)) {
+            blk->gpuSum += gpu;
+            ++blk->gpuRuns;
+        }
     }
     ++m.frames;
+    if (CarLightBlock* blk = m.block_of(m.block))
+        ++blk->frames;
     if (m.frames >= 90) {  // the averages per frame over the last 90 frames (both eyes' runs in each)
         cpuMs_ = (m.cpuSum + m.collectSum) / m.frames;
         // Runs not timed (their query set still pending) count as the timed ones' average.

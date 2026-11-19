@@ -48,11 +48,18 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::ColorSaturation, I18N(L"Saturation"), kColorSaturation),
     // Night cars (car_lighting.h): the switch, then percent each.
     spec_of(MenuItem::CarLightOn, I18N(L"Night car lighting"), kCarLight),
+    {MenuItem::CarLightQuality, I18N(L"Quality"), 0, kCarLightPresets - 1, 1},
     spec_of(MenuItem::CarLightFill, I18N(L"Fill light"), kCarLightFill),
     spec_of(MenuItem::CarLightOcclusion, I18N(L"Ambient occlusion"), kCarLightOcclusion),
     spec_of(MenuItem::CarLightHighlights, I18N(L"Highlights"), kCarLightHighlights),
     spec_of(MenuItem::CarLightGloss, I18N(L"Paint gloss"), kCarLightGloss),
     spec_of(MenuItem::CarLightSmooth, I18N(L"Smoothing"), kCarLightSmooth),
+    spec_of(MenuItem::CarLightShadows, I18N(L"Floodlight shadows"), kCarLightShadows),
+    spec_of(MenuItem::CarLightDetail, I18N(L"Paint detail"), kCarLightDetail),
+    spec_of(MenuItem::CarLightReflections, I18N(L"Lacquer reflections"), kCarLightReflections),
+    spec_of(MenuItem::CarLightHeadlights, I18N(L"Headlight highlights"), kCarLightHeadlights),
+    spec_of(MenuItem::CarLightGround, I18N(L"Shadows on the ground"), kCarLightGround),
+    spec_of(MenuItem::CarLightNightVision, I18N(L"Night vision color"), kCarLightNightVision),
     spec_of(MenuItem::EyeOff, I18N(L"Eye off"), kEyeOff),  // [quad] eye_off: none, left, right
     // Steps of kFocusQuadDistances.
     {MenuItem::FocusQuadDistance, I18N(L"Focus quad distance"), 0, kFocusQuadSteps - 1, 1},
@@ -324,8 +331,11 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.launch.carLighting) {  // Night cars: the switch, its values while it is on
             add({MenuItem::HeadCarLight, MenuItem::CarLightOn});
             if (v.carLight.on)
-                add({MenuItem::CarLightFill, MenuItem::CarLightOcclusion, MenuItem::CarLightHighlights,
-                     MenuItem::CarLightGloss, MenuItem::CarLightSmooth});
+                add({MenuItem::CarLightQuality, MenuItem::CarLightFill, MenuItem::CarLightOcclusion,
+                     MenuItem::CarLightHighlights,
+                     MenuItem::CarLightGloss, MenuItem::CarLightSmooth, MenuItem::CarLightShadows,
+                     MenuItem::CarLightDetail, MenuItem::CarLightReflections, MenuItem::CarLightHeadlights,
+                     MenuItem::CarLightGround, MenuItem::CarLightNightVision});
         }
     } else if (page == MenuPage::View) {  // the launcher's View & helmet card
         items.push_back(MenuItem::HeadView);
@@ -581,6 +591,14 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
             d = d <= kHelmetDepthMin ? 0 : d - (d > 20 ? 5 : 1);
         return d != before;
     }
+    case MenuItem::CarLightQuality: {  // Low .. High (no wrap): sets the switches; from Custom, the nearest first
+        const int before = car_lighting_preset_of(menu.values.carLight);
+        const int next = car_lighting_preset_step(menu.values.carLight, step);
+        if (next == before)
+            return false;
+        car_lighting_preset(menu.values.carLight, next);
+        return true;
+    }
     case MenuItem::Visor: {  // closed, half, open (no wrap)
         const int before = static_cast<int>(menu.values.helmet.visor);
         menu.values.helmet.visor = static_cast<VisorPosition>(std::clamp(before + step, 0, 2));
@@ -612,10 +630,18 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
         item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain ||
-        item == MenuItem::ColorOn || item == MenuItem::CarLightOn) {
+        item == MenuItem::ColorOn || item == MenuItem::CarLightOn || item == MenuItem::CarLightShadows ||
+        item == MenuItem::CarLightDetail || item == MenuItem::CarLightReflections ||
+        item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
                      : item == MenuItem::ColorOn     ? menu.values.color.on
                      : item == MenuItem::CarLightOn  ? menu.values.carLight.on
+                     : item == MenuItem::CarLightShadows ? menu.values.carLight.shadows
+                     : item == MenuItem::CarLightDetail ? menu.values.carLight.detail
+                     : item == MenuItem::CarLightReflections ? menu.values.carLight.reflections
+                     : item == MenuItem::CarLightHeadlights ? menu.values.carLight.headlights
+                     : item == MenuItem::CarLightGround ? menu.values.carLight.ground
+                     : item == MenuItem::CarLightNightVision ? menu.values.carLight.nightVision
                      : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
                      : item == MenuItem::CpuIsolateMain ? menu.values.cpuIsolateMain
                      : item == MenuItem::Shape       ? menu.values.shape.corners
@@ -1097,6 +1123,22 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = on_off(v.color.on);
         else if (items[i] == MenuItem::CarLightOn)
             line.value = on_off(v.carLight.on);
+        else if (items[i] == MenuItem::CarLightQuality) {
+            static const wchar_t* const kNames[kCarLightPresets] = {I18N(L"Low"), I18N(L"Medium"), I18N(L"High")};
+            const int p = car_lighting_preset_of(v.carLight);
+            line.value = w.t(p < 0 ? I18N(L"Custom") : kNames[p]);
+        } else if (items[i] == MenuItem::CarLightShadows)
+            line.value = on_off(v.carLight.shadows);
+        else if (items[i] == MenuItem::CarLightDetail)
+            line.value = on_off(v.carLight.detail);
+        else if (items[i] == MenuItem::CarLightReflections)
+            line.value = on_off(v.carLight.reflections);
+        else if (items[i] == MenuItem::CarLightHeadlights)
+            line.value = on_off(v.carLight.headlights);
+        else if (items[i] == MenuItem::CarLightGround)
+            line.value = on_off(v.carLight.ground);
+        else if (items[i] == MenuItem::CarLightNightVision)
+            line.value = on_off(v.carLight.nightVision);
         else if (items[i] == MenuItem::CarLightFill || items[i] == MenuItem::CarLightOcclusion ||
                  items[i] == MenuItem::CarLightHighlights || items[i] == MenuItem::CarLightGloss)
             line.value = std::to_wstring(*value_of(v, items[i])) + L"%";

@@ -72,7 +72,8 @@ enum class MenuItem {
     ColorOn, ColorExposure, ColorBrightness, ColorContrast, ColorSaturation,
     // The Colour page's Night cars section (quad/car_lighting.h; a game with it, MenuLaunch::carLighting): the switch,
     // then the game's light kept, ambient occlusion, the highlights and the gloss.
-    CarLightOn, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
+    CarLightOn, CarLightQuality, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
+    CarLightShadows, CarLightDetail, CarLightReflections, CarLightHeadlights, CarLightGround, CarLightNightVision,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,

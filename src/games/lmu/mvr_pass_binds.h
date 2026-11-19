@@ -461,30 +461,9 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
 // The pass's post-processing begins on `scene` (the resolve's target; with MSAA off the scene's own target, at YEBIS's
 // copy, before it reads it), which was drawn into `drawn` (the multisample target, or the same): DLAA on the eye and its
 // focus view, gate D's kept region, the focus post's window.
-// Night car lighting: the eye's camera as its draws used it (view_pair.h): of the pass's pairs with the eye's FOV, the
-// one most static-world draws used (as DLSS's camera, dlss_inputs.cpp). False: none.
-bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
-    float pairs[16][32];
-    unsigned world[16] = {};
-    const int n = mvr_view_pairs(eye, pairs, world, 16);
-    float expected[16];
-    const bool haveEye = qvfr_frame_eye_projection(eye, expected);
-    int best = -1;
-    for (int i = 0; i < n; ++i) {
-        float v[16], vp[16], p[16];
-        std::memcpy(v, pairs[i], sizeof(v));
-        std::memcpy(vp, pairs[i] + 16, sizeof(vp));
-        if (!projection_of_pair(v, vp, p) || (haveEye && !same_eye(p, expected)))
-            continue;
-        if (best < 0 || world[i] > world[best])
-            best = i;
-    }
-    if (best < 0)
-        return false;
-    std::memcpy(view, pairs[best], sizeof(view));
-    std::memcpy(viewProj, pairs[best] + 16, sizeof(viewProj));
-    return true;
-}
+// Night car lighting: the eye's camera (dlss_inputs.h lmu_pass_camera: the renderer's while it's the eye's on a known
+// build, else the drawn pairs' as DLSS takes them, else the eye's last). False: none.
+bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) { return lmu_pass_camera(eye, view, viewProj); }
 
 void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn, int eye) {
     CarLightView v;
@@ -509,8 +488,8 @@ void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Re
                  simqvfr::d3d11_state::kGsHsDs | simqvfr::d3d11_state::kOMTargets | simqvfr::d3d11_state::kBlend |
                  simqvfr::d3d11_state::kDepth | simqvfr::d3d11_state::kRSState | simqvfr::d3d11_state::kViewports |
                  simqvfr::d3d11_state::kScissors;
-    spec.psCb = {0, 2};
-    spec.psSrv = {0, 4};
+    spec.psCb = {0, 3};
+    spec.psSrv = {0, 6};
     bool stereoOff = false;
     if (g.stereo && !g.instanced) {
         if (g.twoViews(g.context, false) == 0)
@@ -525,7 +504,9 @@ void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Re
         // g.replaying too): the hooks see the game's shader and targets bound again.
         const simqvfr::d3d11_state::Guard<> keep(context, spec);
         if (g.carLightPass.run(context, scene, depthTexture.Get(), g.slotSrv.Get(), g.slotSamples > 1, g.carLights, v,
-                               g.carLightSettings, eye, g.normalsOn ? g.normalSrv.Get() : nullptr))
+                               g.carLightSettings, eye, g.normalsOn ? g.normalSrv.Get() : nullptr,
+                               g.detailOn ? g.detailSrv.Get() : nullptr, g.spotValid ? g.spotShadow.data() : nullptr,
+                               g.spotValid ? g.spotShadow.size() : 0))
             ++g.carLightRuns;
     }
     g.replaying = was;

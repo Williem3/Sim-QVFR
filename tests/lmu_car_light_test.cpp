@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -88,6 +89,93 @@ void settings_checks() {
     DeleteFileW(ini.c_str());
 }
 
+// Quality presets: each sets the costly switches and is recognised again; a switch flipped is Custom; steps clamp.
+void preset_checks() {
+    simqvfr::CarLighting c;
+    c.nightVision = true;
+    bool ok = true;
+    for (int p = 0; p < simqvfr::kCarLightPresets; ++p) {
+        simqvfr::car_lighting_preset(c, p);
+        ok &= simqvfr::car_lighting_preset_of(c) == p && c.nightVision;
+    }
+    check(ok, "presets: Low .. High recognised, night vision left alone");
+    check(c.shadows && c.reflections && c.ground && c.detail && c.headlights, "presets: High is every switch");
+    simqvfr::car_lighting_preset(c, 0);
+    check(!c.shadows && c.reflections && !c.ground && c.detail && c.headlights,
+          "presets: Low is detail, reflections and headlights");
+    c.shadows = true;  // Low + floodlight shadows: Custom; one step up from it is High (one costly one on, then the step)
+    check(simqvfr::car_lighting_preset_of(c) == -1 && simqvfr::car_lighting_preset_step(c, 1) == 2,
+          "presets: a flipped switch is Custom, and Right goes on from the nearest");
+    simqvfr::car_lighting_preset(c, 2);
+    check(simqvfr::car_lighting_preset_step(c, 1) == 2 && simqvfr::car_lighting_preset_step(c, -1) == 1,
+          "presets: Right on High stays, Left goes to Medium");
+}
+
+// The automatic A/B: the blocks alternate the menu's settings and one switch off; a pair's cost is the mean of the A
+// blocks either side minus the variant's; blocks without the pass on every frame, or tainted, don't count.
+void ab_checks() {
+    lmu::CarLightAb ab;
+    simqvfr::CarLighting light;
+    light.on = true;
+    light.shadows = true;
+    light.reflections = true;
+    light.detail = false;
+    light.headlights = false;
+    light.ground = false;
+    light.nightVision = false;
+    check(ab.start(light) && ab.variants() == 3, "A/B: two switches on, three variants (each off, then both)");
+    simqvfr::CarLighting none = light;
+    none.shadows = none.reflections = false;
+    lmu::CarLightAb idle;
+    check(!idle.start(none), "A/B: nothing to vary with every switch off");
+    // A pretend pass: GPU 1.0 ms with both on, shadows cost 0.3, reflections 0.5; block serials in, sums out.
+    std::vector<lmu::CarLightBlock> blocks(64);
+    bool flips = true;
+    unsigned taintedSerial = 0;
+    for (unsigned f = 0; f < lmu::CarLightAb::kFrames * 28; ++f) {
+        simqvfr::CarLighting frame = light;
+        unsigned ended = 0;
+        const unsigned serial = ab.frame(frame, ended);
+        if (f == lmu::CarLightAb::kFrames * 15 - 1) {  // the comparison hotkey on the 15th block's last frame: not counted
+            ab.taint();                                  // (after frame(), as the layer calls it)
+            taintedSerial = 15;
+        }
+        if (ended)
+            ab.add(blocks[ended]);
+        const int kind = ab.kind();
+        if (kind == -1)
+            flips &= frame.shadows && frame.reflections;
+        else if (kind == 0)
+            flips &= !frame.shadows && frame.reflections;
+        else if (kind == 1)
+            flips &= frame.shadows && !frame.reflections;
+        else
+            flips &= !frame.shadows && !frame.reflections;
+        lmu::CarLightBlock& b = blocks[serial];
+        b.serial = serial;
+        const double gpu = 0.4 + (frame.shadows ? 0.3 : 0) + (frame.reflections ? 0.5 : 0) + (serial == taintedSerial ? 5 : 0);
+        b.gpuSum += gpu;  // two runs a frame (the eyes), each half: their sum per pair of runs
+        b.gpuRuns += 2;
+        b.runs += 2;
+        b.cpuSum += 0.1;
+        ++b.frames;
+    }
+    check(flips, "A/B: each block's switches as its variant says");
+    const std::vector<std::string> lines = ab.report();
+    std::string all;
+    for (const std::string& l : lines)
+        all += l + "\n";
+    std::printf("%s", all.c_str());
+    check(lines.size() == 4 && lines[0].find("1.200 ms GPU") != std::string::npos &&
+              lines[1].find("floodlight shadows: 0.300 ms GPU (+-0.000)") != std::string::npos &&
+              lines[2].find("lacquer reflections: 0.500 ms GPU") != std::string::npos &&
+              lines[3].find("every switch (the base relight): 0.800 ms GPU") != std::string::npos,
+          "A/B: each switch's cost from its pairs (the tainted block left out)");
+    check(ab.rounds() == 4, "A/B: 28 blocks of 3 variants are 4 rounds and a bit");
+    ab.stop();
+    check(!ab.active(), "A/B: stops");
+}
+
 // The comparison image (dev builds' Ctrl+Alt+L): the two views side by side under a bar with the labels, opaque.
 void compare_checks() {
     constexpr unsigned w = 64, h = 40;
@@ -128,15 +216,15 @@ void table_checks() {
     check(table.lights().size() == 3, "table: the three usable floodlights in the table (the invalid one left out)");
     check((w[0] & 0xff) == 0 && ((w[0] >> 8) & 0xff) == 1 && ((w[0] >> 16) & 0xff) == 0xff,
           "table: slot 3 lists the two that reach it (the far one left out), the rest none");
-    check(w[2] == 1, "table: slot 3 is paint");
+    check((w[2] & 0xff) == 1 && w[3] == 0xffffffffu, "table: slot 3 is paint, no spotlights");
     // Another part of another car, with one of the same lights: no new light in the table.
     table.draw(7, origin, buffer.data(), buffer.size(), layout, 2, false);
     table.packed(7, w);
-    check(table.lights().size() == 3 && (w[0] & 0xffff) == 0x0100 && w[2] == 0,
+    check(table.lights().size() == 3 && (w[0] & 0xffff) == 0x0100 && (w[2] & 0xff) == 0,
           "table: the same buffer again (another part): its lights reused, slot 7 not paint");
     check(table.first_slot() == 3 && table.last_slot() == 7, "table: the slots written this frame");
     table.packed(5, w);
-    check(w[0] == 0xffffffffu && w[1] == 0xffffffffu && w[2] == 0, "table: a slot not drawn has no lights");
+    check(w[0] == 0xffffffffu && w[1] == 0xffffffffu && (w[2] & 0xff) == 0, "table: a slot not drawn has no lights");
     // A new frame: the slots' lists start again.
     table.begin_frame();
     table.packed(3, w);
@@ -363,6 +451,510 @@ void pass_checks(bool hardware) {
         context->UpdateSubresource(depth.Get(), 0, nullptr, nearPx.data(), kW * 4, 0);
     }
 
+    // Reflections: a floor of car paint 1 m below the eye up to 8 m out, a bright wall (2.0, not a car) at 8 m behind
+    // it. With the reflections the floor near the wall (seen at a grazing angle) shows the wall; without, it is as drawn.
+    {
+        std::vector<float> roomDepth(size_t{kW} * kH);
+        std::vector<uint16_t> roomSlots(size_t{kW} * kH, 0), roomPx(size_t{kW} * kH * 4);
+        for (UINT y = 0; y < kH; ++y) {
+            const float ndcY = 1 - (y + 0.5f) / kH * 2;
+            const float floorZ = ndcY < 0 ? -1 / ndcY : 1e9f;  // the floor (y = -1) along this row's rays
+            const bool floor = floorZ < 8;
+            for (UINT x = 0; x < kW; ++x) {
+                const size_t i = size_t{y} * kW + x;
+                roomDepth[i] = kNear / (floor ? floorZ : 8.0f);
+                roomSlots[i] = floor ? 1 : 0;
+                const uint16_t c = float_to_half(floor ? 0.1f : 2.0f);
+                roomPx[i * 4] = roomPx[i * 4 + 1] = roomPx[i * 4 + 2] = c;
+                roomPx[i * 4 + 3] = float_to_half(1.0f);
+            }
+        }
+        context->UpdateSubresource(depth.Get(), 0, nullptr, roomDepth.data(), kW * 4, 0);
+        context->UpdateSubresource(slots.Get(), 0, nullptr, roomSlots.data(), kW * 2, 0);
+        lmu::CarLightTable none(16);
+        none.begin_frame();
+        std::vector<uint8_t> noLights(640, 0);  // no floodlight reaches: the reflections alone change the floor
+        const float there[3] = {0, -1, 4};
+        none.draw(0, there, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+        const auto floor_near_wall = [&](bool reflections) {
+            context->UpdateSubresource(scene.Get(), 0, nullptr, roomPx.data(), kW * 8, 0);
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 0;
+            f.highlights = 0;
+            f.gloss = 100;
+            f.shadows = false;
+            f.reflections = reflections;
+            pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, none, view, f, 0);
+            const std::vector<float> img = read();
+            float sum = 0, brightest = 0;
+            int n = 0;
+            for (UINT y = 0; y < kH; ++y) {
+                const float ndcY = 1 - (y + 0.5f) / kH * 2;
+                if (ndcY >= 0 || -1 / ndcY >= 8 || -1 / ndcY < 2)  // the floor 2-8 m out: low angles
+                    continue;
+                for (UINT x = 8; x + 8 < kW; ++x) {
+                    sum += img[size_t{y} * kW + x];
+                    brightest = (std::max)(brightest, img[size_t{y} * kW + x]);
+                    ++n;
+                }
+            }
+            return std::pair<float, float>{n ? sum / n : 0.0f, brightest};
+        };
+        const auto off = floor_near_wall(false), on = floor_near_wall(true);
+        std::snprintf(text, sizeof(text),
+                      "pass: the lacquer reflects the wall at low angles (floor 2-8 m: %.3f without, %.3f with; "
+                      "brightest %.3f)",
+                      off.first, on.first, on.second);
+        check(std::fabs(off.first - 0.1f) < 2e-3f && on.first > off.first + 0.05f && on.second <= 0.1f + 1.5f + 0.01f,
+              text);
+        context->UpdateSubresource(slots.Get(), 0, nullptr, slotPx.data(), kW * 2, 0);
+        context->UpdateSubresource(depth.Get(), 0, nullptr, nearPx.data(), kW * 4, 0);
+    }
+
+    // Headlights: one spotlight 2 m in front of the wall of paint, aimed at it (LMU's layout: position and range,
+    // direction and outer cone's cosine, attenuation and inner cone's cosine, colour and falloff): a highlight where its
+    // light mirrors to the eye; aimed away, or with the switch off, nothing.
+    {
+        std::vector<float> wallDepth(size_t{kW} * kH, kNear / 5.0f);
+        context->UpdateSubresource(depth.Get(), 0, nullptr, wallDepth.data(), kW * 4, 0);
+        context->UpdateSubresource(slots.Get(), 0, nullptr, slotPx.data(), kW * 2, 0);  // the left half paint
+        std::vector<float> spotBuffer(16 * 4, 0.0f);
+        const float spot[16] = {-1.25f, 0, 3, 40, 0, 0, 1, 0.8f, 1, 0.15f, 0.0005f, 0.95f, 6, 6, 6, 2};
+        std::memcpy(spotBuffer.data() + 16 * 2, spot, sizeof(spot));  // spotlight 2 of 4
+        lmu::CarLightTable lamps(16);
+        lamps.begin_frame();
+        std::vector<uint8_t> noLights(640, 0);
+        const float at[3] = {-2.5f, 0, 5};
+        lamps.draw(0, at, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+        const uint32_t packed[10] = {2};  // one index: 2
+        lamps.add_spots(0, 1, packed, 4, at, reinterpret_cast<const uint8_t*>(spotBuffer.data()), spotBuffer.size() * 4);
+        check(lamps.spots().size() == 1 && lamps.spots()[0] == 2, "headlights: the draw's spotlight kept for the frame");
+        uint32_t sw[4];
+        lamps.packed(0, sw);
+        check((sw[3] & 0xff) == 0 && ((sw[3] >> 8) & 0xff) == 0xff && ((sw[2] >> 8) & 0xffff) == 0xffff,
+              "headlights: slot 0 lists it (the frame's spotlight 0), the rest none");
+        {  // Eight spotlights handed to one part, the brighter the higher: the six strongest kept, not LMU's first six.
+            std::vector<float> eight(16 * 8, 0.0f);
+            for (int k = 0; k < 8; ++k) {
+                float* d = eight.data() + 16 * k;
+                d[0] = 0;
+                d[1] = 0;
+                d[2] = 10;
+                d[3] = 40;  // position, range
+                d[6] = -1;  // aimed back at the part
+                d[7] = 0.8f;
+                d[8] = 1;   // attenuation 1
+                d[11] = 0.95f;
+                d[12] = d[13] = d[14] = 1.0f + k;  // brightness
+                d[15] = 2;
+            }
+            lmu::CarLightTable many(16);
+            many.begin_frame();
+            const float part[3] = {0, 0, 0};
+            many.draw(1, part, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+            const uint32_t eightPacked[4] = {0x00010000u, 0x00030002u, 0x00050004u, 0x00070006u};
+            many.add_spots(1, 8, eightPacked, 8, part, reinterpret_cast<const uint8_t*>(eight.data()), eight.size() * 4);
+            uint32_t mw[4];
+            many.packed(1, mw);
+            unsigned keptMask = 0;
+            for (int k = 0; k < 6; ++k) {
+                const uint32_t si = (k < 4 ? mw[3] >> (8 * k) : mw[2] >> (8 * (k - 3))) & 0xff;
+                if (si < 8)
+                    keptMask |= 1u << many.spots()[si];
+            }
+            check(keptMask == 0xfcu, "headlights: a part handed eight keeps the six strongest (not LMU's first six)");
+        }
+        const auto brightest_car = [&](bool on, const std::vector<float>& buffer) {
+            reset();
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 0;
+            f.highlights = 100;
+            f.gloss = 70;
+            f.shadows = false;
+            f.reflections = false;
+            f.ground = false;
+            f.headlights = on;
+            pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, lamps, view, f, 0, nullptr, nullptr,
+                     reinterpret_cast<const uint8_t*>(buffer.data()), buffer.size() * 4);
+            const std::vector<float> img = read();
+            float most = 0;
+            for (UINT y = 0; y < kH; ++y)
+                for (UINT x = 0; x < kW / 2; ++x)
+                    most = (std::max)(most, img[size_t{y} * kW + x]);
+            return most;
+        };
+        std::vector<float> away = spotBuffer;
+        away[16 * 2 + 6] = -1;  // aimed back at the eye
+        const float lit = brightest_car(true, spotBuffer), off = brightest_car(false, spotBuffer),
+                    turned = brightest_car(true, away);
+        std::snprintf(text, sizeof(text),
+                      "headlights: a highlight where it shines on the paint (brightest %.3f; off %.3f, aimed away %.3f)",
+                      lit, off, turned);
+        check(lit > 0.25f && std::fabs(off - 0.2f) < 2e-3f && std::fabs(turned - 0.2f) < 2e-3f, text);
+    }
+
+    // The ground's shadows: the room again, the wall now a car's (slot 1) and the floor the ground (no slot). The
+    // floor beside the car darkens (the car's occlusion); with the switch off, or away from any car, it stays.
+    {
+        std::vector<float> roomDepth(size_t{kW} * kH);
+        std::vector<uint16_t> roomSlots(size_t{kW} * kH, 0), roomPx(size_t{kW} * kH * 4);
+        for (UINT y = 0; y < kH; ++y) {
+            const float ndcY = 1 - (y + 0.5f) / kH * 2;
+            const float floorZ = ndcY < 0 ? -1 / ndcY : 1e9f;
+            const bool floor = floorZ < 4.7f;  // the car stands where the floor's nearest coarse row ends (4.57 m)
+            for (UINT x = 0; x < kW; ++x) {
+                const size_t i = size_t{y} * kW + x;
+                roomDepth[i] = kNear / (floor ? floorZ : 4.7f);
+                roomSlots[i] = floor ? 0 : 1;
+                const uint16_t c = float_to_half(0.2f);
+                roomPx[i * 4] = roomPx[i * 4 + 1] = roomPx[i * 4 + 2] = c;
+                roomPx[i * 4 + 3] = float_to_half(1.0f);
+            }
+        }
+        context->UpdateSubresource(depth.Get(), 0, nullptr, roomDepth.data(), kW * 4, 0);
+        context->UpdateSubresource(slots.Get(), 0, nullptr, roomSlots.data(), kW * 2, 0);
+        lmu::CarLightTable car(16);
+        car.begin_frame();
+        std::vector<uint8_t> noLights(640, 0);
+        const float at[3] = {0, 0, 4.7f};
+        car.draw(0, at, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+        const auto floor_rows = [&](bool ground, UINT firstRow, UINT lastRow) {
+            context->UpdateSubresource(scene.Get(), 0, nullptr, roomPx.data(), kW * 8, 0);
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 100;
+            f.highlights = 0;
+            f.shadows = false;
+            f.reflections = false;
+            f.ground = ground;
+            pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, car, view, f, 0);
+            const std::vector<float> img = read();
+            float sum = 0;
+            int n = 0;
+            for (UINT y = firstRow; y <= lastRow && y < kH; ++y)
+                for (UINT x = 8; x + 8 < kW; ++x) {
+                    sum += img[size_t{y} * kW + x];
+                    ++n;
+                }
+            return n ? sum / n : 0.0f;
+        };
+        // The floor's rows nearest the wall (just below the horizon of the 6 m floor), and the nearest to the eye.
+        UINT firstFloor = kH;
+        for (UINT y = 0; y < kH && firstFloor == kH; ++y)
+            if (roomSlots[size_t{y} * kW] == 0)
+                firstFloor = y;
+        const float besideOn = floor_rows(true, firstFloor, firstFloor + 1), besideOff = floor_rows(false, firstFloor, firstFloor + 1);
+        const float farOn = floor_rows(true, kH - 2, kH - 1);
+        std::snprintf(text, sizeof(text),
+                      "ground: the floor beside the car darkens (%.3f with, %.3f without; the floor 1 m from the eye %.3f)",
+                      besideOn, besideOff, farOn);
+        check(besideOn < besideOff - 0.01f && std::fabs(besideOff - 0.2f) < 2e-3f && std::fabs(farOn - 0.2f) < 2e-3f, text);
+        // A floodlight behind the car (2.5 m above the floor, 6 m past the car), the car now 1.2 m tall (sky above it):
+        // the floor just in front of the car fully in its shadow, softening with the distance from the car (the
+        // occlusion off, the shadow alone; lit 0.200, fully hidden 0.067).
+        {
+            std::vector<float> lowDepth = roomDepth;
+            std::vector<uint16_t> lowSlots = roomSlots;
+            for (UINT y = 0; y < kH; ++y) {
+                const float ndcY = 1 - (y + 0.5f) / kH * 2;
+                if (roomSlots[size_t{y} * kW] && ndcY * 6 > 0.2f)  // above the car's roof: nothing (the sky)
+                    for (UINT x = 0; x < kW; ++x) {
+                        lowDepth[size_t{y} * kW + x] = 0;
+                        lowSlots[size_t{y} * kW + x] = 0;
+                    }
+            }
+            context->UpdateSubresource(depth.Get(), 0, nullptr, lowDepth.data(), kW * 4, 0);
+            context->UpdateSubresource(slots.Get(), 0, nullptr, lowSlots.data(), kW * 2, 0);
+            std::vector<uint8_t> lit(640, 0);
+            put_light(lit, 0, 0, 1.5f, 12, 40, 2);
+            lmu::CarLightTable lamp(16);
+            lamp.begin_frame();
+            lamp.draw(0, at, lit.data(), lit.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+            context->UpdateSubresource(scene.Get(), 0, nullptr, roomPx.data(), kW * 8, 0);
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 0;
+            f.highlights = 0;
+            f.shadows = false;
+            f.reflections = false;
+            f.headlights = false;
+            f.ground = true;
+            pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, lamp, view, f, 0);
+            const std::vector<float> img = read();
+            const auto row = [&](UINT y) {
+                float sum = 0;
+                for (UINT x = 8; x + 8 < kW; ++x)
+                    sum += img[size_t{y} * kW + x];
+                return sum / (kW - 16);
+            };
+            // Rows 19-22: the floor 4.6, 3.2, 2.7 and 2.3 m ahead (1.4, 2.8, 3.3 and 3.7 m from the car).
+            const float r19 = row(19), r20 = row(20), r21 = row(21), r22 = row(22);
+            std::snprintf(text, sizeof(text),
+                          "ground: a floodlight's shadow in front of the car, softening away from it (1.4 m %.3f, 2.8 m "
+                          "%.3f, 3.3 m %.3f, 3.7 m %.3f; lit 0.200, hidden 0.067)",
+                          r19, r20, r21, r22);
+            check(r19 < 0.08f && r20 >= r19 - 1e-3f && r21 > r20 + 0.005f && r22 > r21 && r22 < 0.2f, text);
+            context->UpdateSubresource(depth.Get(), 0, nullptr, roomDepth.data(), kW * 4, 0);
+        }
+        context->UpdateSubresource(slots.Get(), 0, nullptr, slotPx.data(), kW * 2, 0);
+    }
+
+    // The focus view and the periphery agree: an atlas of a 128x128 eye and its 128x128 focus view beside it (the
+    // eye's middle half at twice the density). A car's side (a wall at x = 2.2 m, 3-9 m ahead, slot 1) stands mostly
+    // past the focus view's edge; the ground beside it darkens alike in both views, compared over the same ground (run
+    // 4, 2026-11-19: the focus view lost the occluders past its edge, so its shadows ended short).
+    {
+        constexpr UINT kE = 128, kAW = 2 * kE, kAH = kE;
+        std::vector<float> fDepth(size_t{kAW} * kAH, 0.0f), worldX(size_t{kAW} * kAH, 0), worldZ(size_t{kAW} * kAH, 0);
+        std::vector<uint16_t> fSlots(size_t{kAW} * kAH, 0), fPx(size_t{kAW} * kAH * 4);
+        for (UINT y = 0; y < kAH; ++y)
+            for (UINT x = 0; x < kAW; ++x) {
+                const bool focus = x >= kE;
+                float nx = ((x % kE) + 0.5f) / kE * 2 - 1, ny = 1 - (y + 0.5f) / kE * 2;
+                if (focus) {  // the focus view's ndc is twice the eye's
+                    nx /= 2;
+                    ny /= 2;
+                }
+                const size_t i = size_t{y} * kAW + x;
+                float z = 0;
+                uint16_t slot = 0;
+                if (ny < 0)  // the ground, 1 m below the eye
+                    z = -1 / ny;
+                if (nx > 0) {  // the car's side
+                    const float t = 2.2f / nx, h = ny * t;
+                    if (t >= 3 && t <= 9 && h >= -1 && h <= 0.3f && (z == 0 || t < z)) {
+                        z = t;
+                        slot = 1;
+                    }
+                }
+                if (z > 60)
+                    z = 0;
+                fDepth[i] = z > 0 ? kNear / z : 0;
+                fSlots[i] = slot;
+                worldX[i] = nx * z;
+                worldZ[i] = z;
+                const uint16_t c = float_to_half(0.2f);
+                fPx[i * 4] = fPx[i * 4 + 1] = fPx[i * 4 + 2] = c;
+                fPx[i * 4 + 3] = float_to_half(1.0f);
+            }
+        D3D11_TEXTURE2D_DESC asd = sd, add = dd, ald = ld;
+        asd.Width = add.Width = ald.Width = kAW;
+        asd.Height = add.Height = ald.Height = kAH;
+        const D3D11_SUBRESOURCE_DATA ai{fPx.data(), kAW * 8}, adi{fDepth.data(), kAW * 4}, ali{fSlots.data(), kAW * 2};
+        ComPtr<ID3D11Texture2D> aScene, aDepth, aSlots, aStaging;
+        ComPtr<ID3D11ShaderResourceView> aSlotView;
+        D3D11_TEXTURE2D_DESC ast = asd;
+        ast.Usage = D3D11_USAGE_STAGING;
+        ast.BindFlags = 0;
+        ast.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(device->CreateTexture2D(&asd, &ai, &aScene)) || FAILED(device->CreateTexture2D(&add, &adi, &aDepth)) ||
+            FAILED(device->CreateTexture2D(&ald, &ali, &aSlots)) ||
+            FAILED(device->CreateShaderResourceView(aSlots.Get(), nullptr, &aSlotView)) ||
+            FAILED(device->CreateTexture2D(&ast, nullptr, &aStaging))) {
+            check(false, "ground: the focus test's textures made");
+        } else {
+            lmu::CarLightTable car(16);
+            car.begin_frame();
+            std::vector<uint8_t> noLights(640, 0);
+            const float at[3] = {2.2f, 0, 5};
+            car.draw(0, at, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+            lmu::CarLightView fv = view;
+            fv.eyeW = fv.eyeH = fv.focusW = fv.focusH = kE;
+            const float remap[4] = {2, 0, 2, 0};
+            std::memcpy(fv.remap, remap, sizeof(remap));
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 100;
+            f.highlights = 0;
+            f.shadows = false;
+            f.reflections = false;
+            f.headlights = false;
+            f.ground = true;
+            pass.run(context.Get(), aScene.Get(), aDepth.Get(), aSlotView.Get(), false, car, fv, f, 0);
+            context->CopyResource(aStaging.Get(), aScene.Get());
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (SUCCEEDED(context->Map(aStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                // The ground 0.1-0.7 m beside the car (inside the focus view: x below half its distance), 4.25-6.5 m
+                // ahead, in both views.
+                double sum[2] = {}, n[2] = {};
+                for (UINT y = 0; y < kAH; ++y)
+                    for (UINT x = 0; x < kAW; ++x) {
+                        const size_t i = size_t{y} * kAW + x;
+                        if (fSlots[i] || fDepth[i] <= 0 || worldX[i] < 1.5f || worldX[i] > 2.1f || worldZ[i] < 4.25f ||
+                            worldZ[i] > 6.5f)
+                            continue;
+                        const float v = half_to_float(reinterpret_cast<const uint16_t*>(
+                            static_cast<const uint8_t*>(m.pData) + size_t{y} * m.RowPitch)[x * 4]);
+                        sum[x >= kE] += v;
+                        n[x >= kE] += 1;
+                    }
+                context->Unmap(aStaging.Get(), 0);
+                const double eye = n[0] ? sum[0] / n[0] : 0, focus = n[1] ? sum[1] / n[1] : 0;
+                std::snprintf(text, sizeof(text),
+                              "ground: the focus view's shadow beside a car past its edge as the eye's (focus %.3f over "
+                              "%.0f px, eye %.3f over %.0f px, unshaded 0.200)",
+                              focus, n[1], eye, n[0]);
+                check(n[0] >= 20 && n[1] >= 60 && eye < 0.19 && focus < 0.19 && std::fabs(focus - eye) < 0.006, text);
+            }
+        }
+    }
+
+    // Reflections agree between the focus view and the periphery: a glossy bonnet (paint, slot 1, the floor 1 m down,
+    // 2-8 m ahead) reflects a bright wall (8 m, not a car); the focus view (twice the density, its box low: d = 1.2)
+    // holds the bonnet but not the wall it reflects. The bonnet reflects the wall alike in both views (replay,
+    // 2026-11-19: each eye's focus view only searched itself, its box placed differently per eye, so the eyes disagreed).
+    {
+        constexpr UINT kE = 128, kAW = 2 * kE, kAH = kE;
+        const float a = 2, b = 0, c = 2, d = 1.2f;
+        std::vector<float> rDepth(size_t{kAW} * kAH, 0.0f), rX(size_t{kAW} * kAH, 0), rZ(size_t{kAW} * kAH, 0);
+        std::vector<uint16_t> rSlots(size_t{kAW} * kAH, 0), rPx(size_t{kAW} * kAH * 4);
+        for (UINT y = 0; y < kAH; ++y)
+            for (UINT x = 0; x < kAW; ++x) {
+                const bool focus = x >= kE;
+                float nx = ((x % kE) + 0.5f) / kE * 2 - 1, ny = 1 - (y + 0.5f) / kE * 2;
+                if (focus) {  // back to the eye's ndc
+                    nx = (nx - b) / a;
+                    ny = (ny - d) / c;
+                }
+                const size_t i = size_t{y} * kAW + x;
+                float z = 8;
+                bool bonnet = false;
+                if (ny < 0 && -1 / ny < 8) {
+                    z = -1 / ny;
+                    bonnet = true;
+                }
+                rDepth[i] = kNear / z;
+                rSlots[i] = bonnet ? 1 : 0;
+                rX[i] = nx * z;
+                rZ[i] = z;
+                const uint16_t col = float_to_half(bonnet ? 0.1f : 1.0f);
+                rPx[i * 4] = rPx[i * 4 + 1] = rPx[i * 4 + 2] = col;
+                rPx[i * 4 + 3] = float_to_half(1.0f);
+            }
+        D3D11_TEXTURE2D_DESC asd = sd, add = dd, ald = ld;
+        asd.Width = add.Width = ald.Width = kAW;
+        asd.Height = add.Height = ald.Height = kAH;
+        const D3D11_SUBRESOURCE_DATA ai{rPx.data(), kAW * 8}, adi{rDepth.data(), kAW * 4}, ali{rSlots.data(), kAW * 2};
+        ComPtr<ID3D11Texture2D> aScene, aDepth, aSlots, aStaging;
+        ComPtr<ID3D11ShaderResourceView> aSlotView;
+        D3D11_TEXTURE2D_DESC ast = asd;
+        ast.Usage = D3D11_USAGE_STAGING;
+        ast.BindFlags = 0;
+        ast.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(device->CreateTexture2D(&asd, &ai, &aScene)) || FAILED(device->CreateTexture2D(&add, &adi, &aDepth)) ||
+            FAILED(device->CreateTexture2D(&ald, &ali, &aSlots)) ||
+            FAILED(device->CreateShaderResourceView(aSlots.Get(), nullptr, &aSlotView)) ||
+            FAILED(device->CreateTexture2D(&ast, nullptr, &aStaging))) {
+            check(false, "reflections: the focus test's textures made");
+        } else {
+            lmu::CarLightTable car(16);
+            car.begin_frame();
+            std::vector<uint8_t> noLights(640, 0);
+            const float at[3] = {0, -1, 5};
+            car.draw(0, at, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
+            lmu::CarLightView fv = view;
+            fv.eyeW = fv.eyeH = fv.focusW = fv.focusH = kE;
+            const float remap[4] = {a, b, c, d};
+            std::memcpy(fv.remap, remap, sizeof(remap));
+            simqvfr::CarLighting f;
+            f.on = true;
+            f.fill = 100;
+            f.occlusion = 0;
+            f.highlights = 0;
+            f.gloss = 100;
+            f.smooth = 0;
+            f.shadows = false;
+            f.detail = false;
+            f.reflections = true;
+            f.headlights = false;
+            f.ground = false;
+            pass.run(context.Get(), aScene.Get(), aDepth.Get(), aSlotView.Get(), false, car, fv, f, 0);
+            context->CopyResource(aStaging.Get(), aScene.Get());
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (SUCCEEDED(context->Map(aStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                // The bonnet 4-7 m ahead, 1 m either side of the middle, in both views (the focus view's box ends below
+                // the wall it reflects).
+                double sum[2] = {}, n[2] = {};
+                for (UINT y = 0; y < kAH; ++y)
+                    for (UINT x = 0; x < kAW; ++x) {
+                        const size_t i = size_t{y} * kAW + x;
+                        if (!rSlots[i] || rZ[i] < 4 || rZ[i] > 7 || std::fabs(rX[i]) > 1)
+                            continue;
+                        const float v = half_to_float(reinterpret_cast<const uint16_t*>(
+                            static_cast<const uint8_t*>(m.pData) + size_t{y} * m.RowPitch)[x * 4]);
+                        sum[x >= kE] += v;
+                        n[x >= kE] += 1;
+                    }
+                context->Unmap(aStaging.Get(), 0);
+                const double eye = n[0] ? sum[0] / n[0] : 0, focus = n[1] ? sum[1] / n[1] : 0;
+                std::snprintf(text, sizeof(text),
+                              "reflections: the focus view's bonnet reflects the wall past its box as the eye's (focus "
+                              "%.3f over %.0f px, eye %.3f over %.0f px, unreflected 0.100)",
+                              focus, n[1], eye, n[0]);
+                check(n[0] >= 20 && n[1] >= 60 && eye > 0.12 && focus > 0.12 && std::fabs(focus - eye) < 0.1 * eye,
+                      text);
+            }
+        }
+    }
+
+    // Night vision: a dark reddish pixel loses its colour toward a bluish grey; a lit one stays as it was.
+    {
+        std::vector<uint16_t> nightPx(size_t{kW} * kH * 4);
+        for (UINT y = 0; y < kH; ++y)
+            for (UINT x = 0; x < kW; ++x) {
+                const size_t i = (size_t{y} * kW + x) * 4;
+                const bool dark = x >= kW / 2;
+                nightPx[i] = float_to_half(dark ? 0.012f : 0.5f);
+                nightPx[i + 1] = float_to_half(dark ? 0.004f : 0.4f);
+                nightPx[i + 2] = float_to_half(dark ? 0.004f : 0.3f);
+                nightPx[i + 3] = float_to_half(1.0f);
+            }
+        context->UpdateSubresource(scene.Get(), 0, nullptr, nightPx.data(), kW * 8, 0);
+        simqvfr::CarLighting f;
+        f.on = true;
+        f.fill = 100;
+        f.occlusion = 0;
+        f.highlights = 0;
+        f.shadows = false;
+        f.reflections = false;
+        f.ground = false;
+        f.nightVision = true;
+        pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, table, view, f, 0);
+        D3D11_TEXTURE2D_DESC st = sd;
+        st.Usage = D3D11_USAGE_STAGING;
+        st.BindFlags = 0;
+        st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        D3D11_MAPPED_SUBRESOURCE mm{};
+        if (SUCCEEDED(device->CreateTexture2D(&st, nullptr, &staging))) {
+            context->CopyResource(staging.Get(), scene.Get());
+            if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mm))) {
+                const auto at = [&](UINT x, int c) {
+                    return half_to_float(reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mm.pData) +
+                                                                           size_t{kH / 2} * mm.RowPitch)[x * 4 + c]);
+                };
+                const float dr = at(kW - 4, 0), dg = at(kW - 4, 1), db = at(kW - 4, 2);
+                const float lr = at(8, 0), lg = at(8, 1), lb = at(8, 2);
+                context->Unmap(staging.Get(), 0);
+                std::snprintf(text, sizeof(text),
+                              "night vision: the dark goes grey-blue (%.4f %.4f %.4f from 0.012 0.004 0.004), the lit "
+                              "stays (%.3f %.3f %.3f)",
+                              dr, dg, db, lr, lg, lb);
+                check(dr < 0.012f && db > 0.004f && db > dg && std::fabs(lr - 0.5f) < 0.01f &&
+                          std::fabs(lb - 0.3f) < 0.01f,
+                      text);
+            }
+        }
+    }
+    context->UpdateSubresource(depth.Get(), 0, nullptr, nearPx.data(), kW * 4, 0);
+
     // Timings: averaged over 90 frames.
     for (int f = 0; f < 95; ++f) {
         pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, table, view, s, 0);
@@ -412,11 +1004,14 @@ V vs_other(uint id : SV_VertexID, float3 n : NORMAL0) {
 }
 cbuffer Light : register(b1) { float4 toLight; };
 Texture2D aoSpecularMap : register(t0);
+TextureCube irradDiffuse : register(t1);
 SamplerState aoSampler : register(s0);
 float4 ps_lit(V i) : SV_Target0 {
     float3 N = float3(i.t2.z, i.t3.z, i.t4.z);  // as LMU's: the normal from the frame's z column
     float ao = aoSpecularMap.Sample(aoSampler, i.t2.xy).y;  // as LMU's: the baked occlusion in .y
-    return float4(saturate(dot(N, toLight.xyz)) * ao, i.t2.x, i.t3.y, 1);
+    float3 bent = (N + float3(0, 0, 0.5)) * 3;               // bent, not unit length (a cube map's lookup needn't be)
+    float ambient = irradDiffuse.Sample(aoSampler, bent).x;  // as LMU's: the ambient cube looked up with it
+    return float4(saturate(dot(N, toLight.xyz)) * ao + ambient, i.t2.x, i.t3.y, 1);
 }
 )";
 
@@ -435,10 +1030,13 @@ void normal_checks(bool hardware) {
     simqvfr::dxbc::SlotOutputOptions options;
     options.normalReg = 2;
     options.aoResource = 0;  // aoSpecularMap at t0
+    options.detailReg = 3;
+    options.detailResource = 1;  // irradDiffuse at t1
     const simqvfr::dxbc::SlotOutput twin =
         simqvfr::dxbc::add_slot_output(static_cast<const uint8_t*>(lit->GetBufferPointer()), lit->GetBufferSize(), options);
     check(!twin.bytecode.empty() && twin.normal, "normals: the pixel shader's slot twin writes the normal too");
     check(twin.ao, "normals: and its baked occlusion (the .y of aoSpecularMap's sample) in the w");
+    check(twin.detail, "normals: and the normal it looks its ambient cube map up with (the bent one) to target 3");
 
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -460,8 +1058,8 @@ void normal_checks(bool hardware) {
         const D3D11_TEXTURE2D_DESC d{kSize, kSize, 1, 1, f, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET};
         return SUCCEEDED(device->CreateTexture2D(&d, nullptr, &t)) && SUCCEEDED(device->CreateRenderTargetView(t.Get(), nullptr, &v));
     };
-    ComPtr<ID3D11Texture2D> colourTex, slotTex, normalTex;
-    ComPtr<ID3D11RenderTargetView> colour, slot, normal;
+    ComPtr<ID3D11Texture2D> colourTex, slotTex, normalTex, detailTex;
+    ComPtr<ID3D11RenderTargetView> colour, slot, normal, detailRtv;
     const uint32_t slotWord = 7;
     D3D11_BUFFER_DESC wd{4, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, 0};
     const D3D11_SUBRESOURCE_DATA winit{&slotWord, 4, 0};
@@ -476,7 +1074,8 @@ void normal_checks(bool hardware) {
     const D3D11_SUBRESOURCE_DATA cinit{frame, 0, 0};
     ComPtr<ID3D11Buffer> cb;
     if (!target(DXGI_FORMAT_R8G8B8A8_UNORM, colourTex, colour) || !target(DXGI_FORMAT_R16_UINT, slotTex, slot) ||
-        !target(DXGI_FORMAT_R16G16B16A16_UNORM, normalTex, normal) || FAILED(device->CreateBuffer(&wd, &winit, &word)) ||
+        !target(DXGI_FORMAT_R16G16B16A16_UNORM, normalTex, normal) ||
+        !target(DXGI_FORMAT_R16G16B16A16_FLOAT, detailTex, detailRtv) || FAILED(device->CreateBuffer(&wd, &winit, &word)) ||
         FAILED(device->CreateShaderResourceView(word.Get(), &wv, &wordView)) ||
         FAILED(device->CreateBuffer(&cd, &cinit, &cb))) {
         check(false, "normals: the targets");
@@ -521,8 +1120,8 @@ void normal_checks(bool hardware) {
     context->VSSetConstantBuffers(0, 1, cb.GetAddressOf());
     context->PSSetShader(ps.Get(), nullptr, 0);
     context->PSSetShaderResources(127, 1, wordView.GetAddressOf());
-    ID3D11RenderTargetView* rtvs[3] = {colour.Get(), slot.Get(), normal.Get()};
-    context->OMSetRenderTargets(3, rtvs, nullptr);
+    ID3D11RenderTargetView* rtvs[4] = {colour.Get(), slot.Get(), normal.Get(), detailRtv.Get()};
+    context->OMSetRenderTargets(4, rtvs, nullptr);
     const D3D11_VIEWPORT vp{0, 0, kSize, kSize, 0, 1};
     context->RSSetViewports(1, &vp);
     context->Draw(3, 0);
@@ -550,6 +1149,32 @@ void normal_checks(bool hardware) {
     check(std::fabs(nx - 0.6f) < 0.01f && std::fabs(ny - 0.8f) < 0.01f && std::fabs(nz) < 0.01f, text);
     std::snprintf(text, sizeof(text), "normals: its w holds the baked occlusion (%.3f of 0.251)", aoRead);
     check(std::fabs(aoRead - 64.0f / 255.0f) < 0.01f, text);
+    // Target 3: the bent normal, normalize(0.6, 0.8, 0.5).
+    D3D11_TEXTURE2D_DESC dd{kSize, kSize, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_STAGING, 0,
+                            D3D11_CPU_ACCESS_READ};
+    ComPtr<ID3D11Texture2D> detailStaging;
+    if (FAILED(device->CreateTexture2D(&dd, nullptr, &detailStaging))) {
+        check(false, "normals: read back target 3");
+        return;
+    }
+    context->CopyResource(detailStaging.Get(), detailTex.Get());
+    if (FAILED(context->Map(detailStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        check(false, "normals: read back target 3");
+        return;
+    }
+    uint16_t raw[4];
+    std::memcpy(raw, static_cast<const uint8_t*>(m.pData) + 4 * 8 + m.RowPitch * 4, 8);
+    context->Unmap(detailStaging.Get(), 0);
+    // Stored as the shader looked up with it (three times the bent direction: components past 1), normalised here as the
+    // pass does.
+    const float rx = half_to_float(raw[0]), ry = half_to_float(raw[1]), rz = half_to_float(raw[2]);
+    const float rl = std::sqrt(rx * rx + ry * ry + rz * rz);
+    const float bx = rl > 0 ? rx / rl : 0, by = rl > 0 ? ry / rl : 0, bz = rl > 0 ? rz / rl : 0;
+    const float len = std::sqrt(0.36f + 0.64f + 0.25f);
+    std::snprintf(text, sizeof(text), "normals: target 3 holds the bent normal (%.3f %.3f %.3f of %.3f %.3f %.3f)", bx, by,
+                  bz, 0.6f / len, 0.8f / len, 0.5f / len);
+    check(std::fabs(bx - 0.6f / len) < 0.01f && std::fabs(by - 0.8f / len) < 0.01f && std::fabs(bz - 0.5f / len) < 0.01f,
+          text);
 }
 
 // --scan <folder>: LMU's shaders saved from a capture (PS_*.dxbc, VS_*.dxbc; local only, never in the repository):
@@ -560,7 +1185,7 @@ int scan(const char* folder) {
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,
                                  nullptr)))
         return 1;
-    int ps = 0, twins = 0, normals = 0, aos = 0, invalid = 0, vs = 0, rows = 0;
+    int ps = 0, twins = 0, normals = 0, aos = 0, details = 0, invalid = 0, vs = 0, rows = 0;
     for (const auto& entry : std::filesystem::directory_iterator(folder)) {
         const std::string name = entry.path().filename().string();
         std::ifstream f(entry.path(), std::ios::binary);
@@ -570,12 +1195,20 @@ int scan(const char* folder) {
             simqvfr::dxbc::SlotOutputOptions options;
             options.normalReg = 2;
             ComPtr<ID3D11ShaderReflection> reflection;
-            if (SUCCEEDED(D3DReflect(code.data(), code.size(), IID_PPV_ARGS(&reflection))))
-                for (const char* aoName : {"aoSpecularMap", "aoSpecMask"}) {
+            D3D11_SHADER_DESC rdesc{};
+            if (SUCCEEDED(D3DReflect(code.data(), code.size(), IID_PPV_ARGS(&reflection))) &&
+                SUCCEEDED(reflection->GetDesc(&rdesc)))
+                for (UINT b = 0; b < rdesc.BoundResources; ++b) {  // (samplers share the textures' names: each binding)
                     D3D11_SHADER_INPUT_BIND_DESC bind{};
-                    if (SUCCEEDED(reflection->GetResourceBindingDescByName(aoName, &bind)) && bind.Type == D3D_SIT_TEXTURE) {
+                    if (FAILED(reflection->GetResourceBindingDesc(b, &bind)) || bind.Type != D3D_SIT_TEXTURE || !bind.Name)
+                        continue;
+                    const std::string bn = bind.Name;
+                    if (bn == "irradDiffuse" && bind.Dimension == D3D_SRV_DIMENSION_TEXTURECUBE) {
+                        options.detailReg = 3;
+                        options.detailResource = bind.BindPoint;
+                    } else if ((bn == "aoSpecularMap" || bn == "aoSpecMask") && options.aoResource == ~0u &&
+                               bind.Dimension == D3D_SRV_DIMENSION_TEXTURE2D) {
                         options.aoResource = bind.BindPoint;
-                        break;
                     }
                 }
             const simqvfr::dxbc::SlotOutput t = simqvfr::dxbc::add_slot_output(code.data(), code.size(), options);
@@ -586,6 +1219,9 @@ int scan(const char* folder) {
             ++twins;
             normals += t.normal ? 1 : 0;
             aos += t.ao ? 1 : 0;
+            details += t.detail ? 1 : 0;
+            if (options.detailResource != ~0u && t.normal && !t.detail)
+                std::printf("  %s: has an ambient cube map (t%u) but no bent normal\n", name.c_str(), options.detailResource);
             if (options.aoResource != ~0u && !t.ao)
                 std::printf("  %s: has an occlusion texture (t%u) but no copy of it%s\n", name.c_str(), options.aoResource,
                             t.normal ? "" : " (no normal either)");
@@ -601,9 +1237,9 @@ int scan(const char* folder) {
             std::printf("  %s: %s\n", name.c_str(), r ? "normal rows" : "another layout");
         }
     }
-    std::printf("scan: %d pixel shaders, %d twins (%d write the normal, %d with the baked occlusion, %d invalid); %d "
-                "vertex shaders, %d hand on the normal in TEXCOORD2-4's z\n",
-                ps, twins, normals, aos, invalid, vs, rows);
+    std::printf("scan: %d pixel shaders, %d twins (%d write the normal, %d with the baked occlusion, %d the bent normal, "
+                "%d invalid); %d vertex shaders, %d hand on the normal in TEXCOORD2-4's z\n",
+                ps, twins, normals, aos, details, invalid, vs, rows);
     return invalid ? 1 : 0;
 }
 
@@ -614,6 +1250,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         return scan(argv[2]);
     const bool hardware = argc > 1 && std::strcmp(argv[1], "--hardware") == 0;
     settings_checks();
+    preset_checks();
+    ab_checks();
     compare_checks();
     table_checks();
     math_checks();

@@ -20,6 +20,12 @@ struct CarLighting {
     int highlights = kCarLightHighlights.def;  // the floodlights' lacquer highlights, percent (0..200)
     int gloss = kCarLightGloss.def;            // the lacquer's gloss, percent (0 rough .. 100 mirror-like)
     int smooth = kCarLightSmooth.def;          // the surface directions smoothed over this width, cm (0..50; 0 none)
+    bool shadows = kCarLightShadows.def != 0;  // the floodlights' shadows
+    bool detail = kCarLightDetail.def != 0;    // the paint's fine detail (the game's normal maps)
+    bool reflections = kCarLightReflections.def != 0;  // the lacquer's reflections of what the eye sees
+    bool headlights = kCarLightHeadlights.def != 0;    // the headlights' highlights on the paint
+    bool ground = kCarLightGround.def != 0;            // the cars' shadows on the ground
+    bool nightVision = kCarLightNightVision.def != 0;  // night vision's colour
     bool operator==(const CarLighting&) const = default;
 };
 
@@ -40,6 +46,12 @@ inline CarLighting read_car_lighting(const wchar_t* ini) {
     c.highlights = ini_int(ini, kCarLightHighlights);
     c.gloss = ini_int(ini, kCarLightGloss);
     c.smooth = ini_int(ini, kCarLightSmooth);
+    c.shadows = ini_flag(ini, kCarLightShadows);
+    c.detail = ini_flag(ini, kCarLightDetail);
+    c.reflections = ini_flag(ini, kCarLightReflections);
+    c.headlights = ini_flag(ini, kCarLightHeadlights);
+    c.ground = ini_flag(ini, kCarLightGround);
+    c.nightVision = ini_flag(ini, kCarLightNightVision);
     return c;
 }
 
@@ -51,15 +63,25 @@ inline bool write_car_lighting(const wchar_t* ini, const CarLighting& in) {
     ok &= ini_put(ini, kCarLightHighlights.section, kCarLightHighlights.key, c.highlights);
     ok &= ini_put(ini, kCarLightGloss.section, kCarLightGloss.key, c.gloss);
     ok &= ini_put(ini, kCarLightSmooth.section, kCarLightSmooth.key, c.smooth);
+    ok &= ini_put(ini, kCarLightShadows.section, kCarLightShadows.key, c.shadows ? 1 : 0);
+    ok &= ini_put(ini, kCarLightDetail.section, kCarLightDetail.key, c.detail ? 1 : 0);
+    ok &= ini_put(ini, kCarLightReflections.section, kCarLightReflections.key, c.reflections ? 1 : 0);
+    ok &= ini_put(ini, kCarLightHeadlights.section, kCarLightHeadlights.key, c.headlights ? 1 : 0);
+    ok &= ini_put(ini, kCarLightGround.section, kCarLightGround.key, c.ground ? 1 : 0);
+    ok &= ini_put(ini, kCarLightNightVision.section, kCarLightNightVision.key, c.nightVision ? 1 : 0);
     return ok;
 }
 
-// Packed into one word for the live atomic: bit 0 on, then a byte each (fill, occlusion, highlights, gloss, smooth).
+// Packed into one word for the live atomic: bit 0 on, then a byte each (fill, occlusion, highlights, gloss, smooth),
+// then bit 48 the shadows, bit 49 the detail, bit 50 the reflections, bits 51-53 the headlights, the ground, night vision.
 inline uint64_t car_lighting_bits(const CarLighting& in) {
     const CarLighting c = clamped(in);
     const auto byte = [](int v) { return static_cast<uint64_t>(v) & 0xff; };
     return (c.on ? 1u : 0u) | byte(c.fill) << 8 | byte(c.occlusion) << 16 | byte(c.highlights) << 24 |
-           byte(c.gloss) << 32 | byte(c.smooth) << 40;
+           byte(c.gloss) << 32 | byte(c.smooth) << 40 | uint64_t{c.shadows ? 1u : 0u} << 48 |
+           uint64_t{c.detail ? 1u : 0u} << 49 | uint64_t{c.reflections ? 1u : 0u} << 50 |
+           uint64_t{c.headlights ? 1u : 0u} << 51 | uint64_t{c.ground ? 1u : 0u} << 52 |
+           uint64_t{c.nightVision ? 1u : 0u} << 53;
 }
 inline CarLighting car_lighting_from_bits(uint64_t bits) {
     const auto value = [bits](int shift) { return static_cast<int>((bits >> shift) & 0xff); };
@@ -70,6 +92,12 @@ inline CarLighting car_lighting_from_bits(uint64_t bits) {
     c.highlights = value(24);
     c.gloss = value(32);
     c.smooth = value(40);
+    c.shadows = (bits >> 48) & 1;
+    c.detail = (bits >> 49) & 1;
+    c.reflections = (bits >> 50) & 1;
+    c.headlights = (bits >> 51) & 1;
+    c.ground = (bits >> 52) & 1;
+    c.nightVision = (bits >> 53) & 1;
     return clamped(c);
 }
 
@@ -83,13 +111,49 @@ inline void set_car_lighting(const CarLighting& c) {
     car_lighting_state().store(car_lighting_bits(c), std::memory_order_relaxed);
 }
 
-// For the log: "off", or "fill 80%, occlusion 70%, highlights 100%, gloss 70%, smoothing 15 cm".
+// For the log: "off", or "fill 80%, occlusion 70%, highlights 100%, gloss 70%, smoothing 15 cm, shadows on, detail on".
+// Quality presets: which of the switches that cost GPU time are on (night vision is taste, not quality, and the
+// values stay as they are). Ordered by their cost in the A/B of 2026-11-19 run 5 (traffic, everything on 0.96 ms GPU,
+// the base 0.51): headlight highlights 0.04 (per-part lists), lacquer reflections 0.01, paint detail ~0, shadows on
+// the ground 0.17, floodlight shadows 0.21. 0 Low: paint detail, reflections, headlights; 1 Medium: + shadows on the
+// ground; 2 High: + floodlight shadows (every one).
+inline constexpr int kCarLightPresets = 3;
+inline void car_lighting_preset(CarLighting& c, int preset) {
+    c.detail = true;
+    c.reflections = true;
+    c.headlights = true;
+    c.ground = preset >= 1;
+    c.shadows = preset >= 2;
+}
+// The preset the switches match (-1: none, "Custom").
+inline int car_lighting_preset_of(const CarLighting& c) {
+    for (int p = 0; p < kCarLightPresets; ++p) {
+        CarLighting t = c;
+        car_lighting_preset(t, p);
+        if (t.detail == c.detail && t.headlights == c.headlights && t.shadows == c.shadows &&
+            t.reflections == c.reflections && t.ground == c.ground)
+            return p;
+    }
+    return -1;
+}
+// A step from the switches as they are (Left -1, Right +1): from Custom, the preset with as many of the costly
+// two (ground, floodlight shadows) on, then the step.
+inline int car_lighting_preset_step(const CarLighting& c, int step) {
+    int now = car_lighting_preset_of(c);
+    if (now < 0)
+        now = (c.ground ? 1 : 0) + (c.shadows ? 1 : 0);
+    const int next = now + step;
+    return next < 0 ? 0 : next >= kCarLightPresets ? kCarLightPresets - 1 : next;
+}
+
 inline std::string car_lighting_log(const CarLighting& c) {
     if (!c.on)
         return "off";
-    char text[128];
-    snprintf(text, sizeof(text), "fill %d%%, occlusion %d%%, highlights %d%%, gloss %d%%, smoothing %d cm", c.fill,
-             c.occlusion, c.highlights, c.gloss, c.smooth);
+    char text[256];
+    snprintf(text, sizeof(text), "fill %d%%, occlusion %d%%, highlights %d%%, gloss %d%%, smoothing %d cm, shadows %s, "
+             "detail %s, reflections %s, headlights %s, ground %s, night vision %s", c.fill, c.occlusion, c.highlights,
+             c.gloss, c.smooth, c.shadows ? "on" : "off", c.detail ? "on" : "off", c.reflections ? "on" : "off",
+             c.headlights ? "on" : "off", c.ground ? "on" : "off", c.nightVision ? "on" : "off");
     return text;
 }
 

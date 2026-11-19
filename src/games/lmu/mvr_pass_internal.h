@@ -99,6 +99,12 @@ struct PsTwinEntry {
     bool paint = false;       // night car lighting: a car body's lacquer shader (kPsPaintGuid)
     bool slotNormal = false;  // its slot twin writes the game's normal to target 2 (kPsSlotNormalGuid)
     bool slotAo = false;      // and its baked ambient occlusion in that target's w (kPsSlotAoGuid)
+    bool slotDetail = false;  // and the normal its normal maps bent to target 3 (kPsSlotDetailGuid)
+    // Its spotlights (kPsSpotsGuid): their slot (-1 none), their count in the array, and in the per-draw buffer the
+    // draw's count's and indices' offsets.
+    int spotSlot = -1;
+    UINT spotCapacity = 0, spotCountOffset = 0, spotIndexOffset = 0;
+    UINT spotWorldOffset = ~0u;  // the worldMatrix's offset in the buffer holding the count (~0u: not in it)
 };
 struct PsTwinSet {
     PsTwinEntry entry[2];
@@ -238,6 +244,7 @@ struct State {
     ID3D11Buffer* worldCb = nullptr;
     ID3D11Resource* worldRes = nullptr;  // the same, as Map and Unmap name it (compared with every one of theirs)
     ComPtr<ID3D11Buffer> worldCbHeld;
+    UINT worldBytes = 0;  // its size (what a read beside the matrix may reach)
     UINT worldCbOffset = 0;
     ID3D11Buffer* vbChecked = nullptr;  // the vertex buffer last checked for dynamic usage (reset each frame)
     bool vbDynamic = false;
@@ -266,6 +273,30 @@ struct State {
     ComPtr<ID3D11Texture2D> normalTex;
     ComPtr<ID3D11RenderTargetView> normalRtv;
     ComPtr<ID3D11ShaderResourceView> normalSrv;
+    // The bent normals (render target 3, RGBA16F: the normal maps' detail as the shader looked its cube map up with
+    // it, any length), made with the normals.
+    bool detailOn = false;
+    ComPtr<ID3D11Texture2D> detailTex;
+    ComPtr<ID3D11RenderTargetView> detailRtv;
+    ComPtr<ID3D11ShaderResourceView> detailSrv;
+    // The headlights: the spotlights' buffer (learned from a car part's draw, PSGetConstantBuffers), our copy of it
+    // the game writes into (handed out at its Map, as the floodlights'), whether it holds this frame's write; the
+    // per-draw buffer's spotlight count and indices as last written (read with the matrix at its Unmap).
+    ID3D11Resource* spotRes = nullptr;
+    ComPtr<ID3D11Buffer> spotHeld;
+    UINT spotBytes = 0;
+    std::vector<uint8_t> spotShadow;
+    void* spotReal = nullptr;
+    bool spotValid = false;
+    UINT spotCapacity = 0;
+    // The per-draw buffer's bytes [spotLo, spotHi) as last written (copied at its Unmap, with the matrix): the draw's
+    // spotlight count and indices are read from it at the record with the draw's own shader's offsets. The range
+    // covers every offset a shader has asked for so far (a new one widens it from the next write). drawSpotsRead: the
+    // last write was copied (none while the relight was off then).
+    UINT spotLo = ~0u, spotHi = 0;
+    std::vector<uint8_t> drawSpotBytes;
+    bool drawSpotsRead = false;
+    unsigned long long spotCheckedFrame = 0;  // the frame the spotlights' buffer was last checked to be still the one bound
     ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
     ComPtr<ID3D11Buffer> omniHeld;
     UINT omniBytes = 0;

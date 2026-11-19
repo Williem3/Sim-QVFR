@@ -135,6 +135,12 @@ struct SlotOutputOptions {
     uint32_t normalFirst = 2;
     uint32_t aoResource = ~0u;
     uint32_t aoComponent = 1;
+    // With the normal, `detailReg` (a render target; ~0u none) and `detailResource` (a texture register): the direction
+    // the shader looks its first sample of that texture up with (LMU: the ambient cube map, irradDiffuse, with the
+    // normal its normal maps bent), xyz * 0.5 + 0.5, copied right before that sample (its result may land in the
+    // coordinate's register); until then the vertex shader's normal as at `normalReg` (a path without it keeps that).
+    uint32_t detailReg = ~0u;
+    uint32_t detailResource = ~0u;
 };
 
 struct SlotOutput {
@@ -142,6 +148,7 @@ struct SlotOutput {
     std::string error;
     bool normal = false;  // the normal output was added
     bool ao = false;      // and the baked ambient occlusion in its w
+    bool detail = false;  // and the bent normal at detailReg
 };
 
 SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options = {});

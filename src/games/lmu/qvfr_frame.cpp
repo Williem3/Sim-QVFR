@@ -684,6 +684,7 @@ bool install_mvr(ID3D11Device* device) {
 // Night car lighting's comparison (dev builds' Ctrl+Alt+L; below, with the frame capture).
 void compare_frame_begin(simqvfr::CarLighting& light);
 void compare_views();
+void ab_frame_begin(simqvfr::CarLighting& light);
 
 void mvr_before_pass(int p) {
     if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: qvfr_frame_frame_end)
@@ -714,6 +715,7 @@ void mvr_before_pass(int p) {
             }
             if (cfg.carLight) {  // night car lighting: its live settings (between frames)
                 simqvfr::CarLighting light = simqvfr::car_lighting();
+                ab_frame_begin(light);       // dev builds' Ctrl+Alt+N: each switch off in turn, costs paired
                 compare_frame_begin(light);  // dev builds' Ctrl+Alt+L: off, then on, whatever the menu says
                 mvr_car_light_frame(light);
                 if (light.on != carLightLogged || !carLightSaid) {
@@ -1075,9 +1077,78 @@ void compare_poll() {
     }
 }
 
+// ---- Night car lighting's automatic A/B (dev builds: Ctrl+Alt+N) ----
+// Each switch that's on, turned off for a second in turn between seconds of the menu's settings (CarLightAb), while
+// the player drives: the switch's cost from the blocks either side, logged every 4 rounds and at the end (Ctrl+Alt+N
+// again, or ~5 minutes). The switches flip on screen as it goes: what changes each second is that switch.
+CarLightAb carAb;
+bool abKeyHeld = false;
+unsigned abRoundsLogged = 0;
+int abKindLogged = -2;
+
+void ab_report(const char* when) {
+    simqvfr::logf("lmu car light A/B: %s, %u rounds (%u frames); each switch's cost is your settings minus it off:",
+                  when, carAb.rounds(), carAb.frames());
+    for (const std::string& line : carAb.report())
+        simqvfr::logf("lmu car light A/B:   %s", line.c_str());
+}
+
+void ab_frame_begin(simqvfr::CarLighting& light) {
+    if constexpr (simqvfr::kDevBuild) {  // a diagnostic hotkey: never in a player's build (dev_build.h)
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                          (GetAsyncKeyState('N') & 0x8000);
+        if (down && !abKeyHeld) {
+            if (carAb.active()) {
+                carAb.stop();
+                ab_report("stopped (Ctrl+Alt+N)");
+            } else if (carAb.start(light)) {
+                abRoundsLogged = 0;
+                abKindLogged = -2;
+                std::string names;
+                for (int v = 0; v < carAb.variants(); ++v)
+                    names += std::string(v ? ", " : "") + carAb.variant_name(v);
+                simqvfr::logf("lmu car light A/B: Ctrl+Alt+N: started: %u frames of your settings, then %u with one "
+                              "off, in turn: %s (%s); Ctrl+Alt+N again stops it, else it stops after %u frames",
+                              CarLightAb::kFrames, CarLightAb::kFrames, names.c_str(),
+                              simqvfr::car_lighting_log(light).c_str(), CarLightAb::kMaxFrames);
+            } else {
+                simqvfr::log_line("lmu car light A/B: Ctrl+Alt+N: nothing to vary (night car lighting or every switch "
+                                  "off)");
+            }
+        }
+        abKeyHeld = down;
+        if (!carAb.active()) {
+            mvr_car_light_block(0);
+            return;
+        }
+        unsigned ended = 0;
+        const unsigned serial = carAb.frame(light, ended);
+        if (ended) {
+            CarLightBlock b;
+            if (mvr_car_light_block_cost(ended, b))
+                carAb.add(b);
+        }
+        mvr_car_light_block(serial);
+        if (carAb.kind() != abKindLogged && carAb.rounds() == 0) {  // the first round: what each second is
+            abKindLogged = carAb.kind();
+            simqvfr::logf("lmu car light A/B: frame %llu: %s%s", static_cast<unsigned long long>(frames),
+                          carAb.kind() < 0 ? "" : "off: ", carAb.variant_name(carAb.kind()));
+        }
+        if (!carAb.active()) {
+            mvr_car_light_block(0);
+            ab_report("done");
+        } else if (carAb.rounds() != abRoundsLogged && carAb.rounds() % 4 == 0) {
+            abRoundsLogged = carAb.rounds();
+            ab_report("so far");
+        }
+    }
+}
+
 // Before pass 0: the frame's relight as the comparison wants it.
 void compare_frame_begin(simqvfr::CarLighting& light) {
     compare_poll();
+    if (compareState != 0)
+        carAb.taint();
     if (compareState == 1 || compareState == 2)
         light.on = true;
     else if (compareState == 3)

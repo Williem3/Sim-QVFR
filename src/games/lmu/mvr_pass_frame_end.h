@@ -423,6 +423,10 @@ bool mvr_car_light_costs(double& gpuMs, double& cpuMs) {
     return true;
 }
 
+void mvr_car_light_block(unsigned serial) { g.carLightPass.set_block(serial); }
+
+bool mvr_car_light_block_cost(unsigned serial, CarLightBlock& out) { return g.carLightPass.block(serial, out); }
+
 bool mvr_broken() { return g.context && g.broken; }
 
 void mvr_track_drive(TrackFn begin, TrackFn end) {

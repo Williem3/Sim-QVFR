@@ -139,6 +139,20 @@ const PsTwinEntry& ps_entry(ID3D11PixelShader* ps) {
         UINT ao = 0;
         size = sizeof(ao);
         set.entry[k].slotAo = SUCCEEDED(ps->GetPrivateData(kPsSlotAoGuid, &size, &ao)) && size == sizeof(ao) && ao;
+        UINT detail = 0;
+        size = sizeof(detail);
+        set.entry[k].slotDetail =
+            SUCCEEDED(ps->GetPrivateData(kPsSlotDetailGuid, &size, &detail)) && size == sizeof(detail) && detail;
+        UINT spots[5] = {};
+        size = sizeof(spots);
+        if (SUCCEEDED(ps->GetPrivateData(kPsSpotsGuid, &size, spots)) && size == sizeof(spots) &&
+            spots[0] < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
+            set.entry[k].spotSlot = static_cast<int>(spots[0]);
+            set.entry[k].spotCapacity = spots[1];
+            set.entry[k].spotCountOffset = spots[2];
+            set.entry[k].spotIndexOffset = spots[3];
+            set.entry[k].spotWorldOffset = spots[4];
+        }
     }
     return set.entry[k];
 }

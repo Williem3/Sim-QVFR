@@ -60,6 +60,17 @@ inline constexpr IniInt kCarLightHighlights{L"quad", L"car_light_highlights", 10
 inline constexpr IniInt kCarLightGloss{L"quad", L"car_light_gloss", 70, 0, 100, 5};
 // The width the cars' surface directions are smoothed over, cm (0: pixel to pixel, the triangles' facets show).
 inline constexpr IniInt kCarLightSmooth{L"quad", L"car_light_smooth", 15, 0, 50, 1};
+// The floodlights' shadows (the depth searched toward each light: a wing on the deck, a car on the next) and the paint's
+// fine detail (the game's normal maps: orange peel, carbon weave), each on or off.
+inline constexpr IniInt kCarLightShadows{L"quad", L"car_light_shadows", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightDetail{L"quad", L"car_light_detail", 1, 0, 1, 1};
+// The lacquer's reflections of what the eye sees (screen-space: the grandstands' lights, other cars), on or off.
+inline constexpr IniInt kCarLightReflections{L"quad", L"car_light_reflections", 1, 0, 1, 1};
+// The headlights as the floodlights (their highlights on the paint), the cars' shadows on the ground (the floodlights'
+// and the cars' own occlusion), and night vision's colour (the dark loses its colour, a little blue), each on or off.
+inline constexpr IniInt kCarLightHeadlights{L"quad", L"car_light_headlights", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightGround{L"quad", L"car_light_ground", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightNightVision{L"quad", L"car_light_night_vision", 0, 0, 1, 1};
 // The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};
