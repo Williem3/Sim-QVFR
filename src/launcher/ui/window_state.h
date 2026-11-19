@@ -77,6 +77,8 @@ enum Ctl {
     kClockOn, kClockYaw, kClockPitch, kClockSize, kClockPanel,
     // Sharpening ([quad] sharpen_percent, Resolution pane).
     kSharpen,
+    // Colour correction ([quad] color_correction and its values, the Picture tab's Color card).
+    kGradeOn, kGradeExposure, kGradeBrightness, kGradeContrast, kGradeSaturation,
     // One eye off ([quad] eye_off, Headset tab's Vision card; a game with GameFeatures::eyeOff).
     kEyeOff,
     // The FOV crop ([crop], Resolution pane).

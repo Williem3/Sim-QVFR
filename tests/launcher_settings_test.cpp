@@ -358,6 +358,22 @@ int SIM_QVFR_TEST_MAIN() {
             }
             detail.sharpen = 0;
             save_settings(ini, detail);
+            check(!detail.grade.on, "settings: colour correction defaults to off");
+            detail.grade = {true, -5, 10, -20, 40};
+            save_live_settings(ini, detail);
+            check(load_settings(ini).grade == detail.grade && ini_int(ini, L"quad", L"color_correction") == 1,
+                  "settings: colour correction round-trips, live, negative values included");
+            {
+                Settings graded;
+                graded.grade = {true, 0, 0, 0, -100};
+                bool inProfile = false;
+                for (const ProfileKey& k : settings_profile(graded, L"graded").keys)
+                    inProfile |= k.section == L"quad" && k.key == L"color_saturation" && k.value == L"-100";
+                check(inProfile, "settings: a profile holds the colour correction");
+                check(!restored_defaults(graded).grade.on, "settings: Restore Defaults turns colour correction off");
+            }
+            detail.grade = {};
+            save_settings(ini, detail);
         }
         LaunchSizes launched;
         launched.known = true;

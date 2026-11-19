@@ -193,6 +193,36 @@ Card resolution_card() {
     return c;
 }
 
+// ---- Color ---------------------------------------------------------------------------------------
+
+// Colour correction (quad/color_grade.h): the headset image's exposure, brightness, contrast and saturation, the
+// periphery and the focus views alike; the headset menu's Color page holds the same.
+Card color_card() {
+    Card c{Tab::Picture, tr(L"Color"), Applies::Live};
+    c.body = [](Body& b) {
+        if (!qvfr()) {
+            b.note(tr(L"Color correction is available in Quad View Foveated Rendering."));
+            return;
+        }
+        const ColorGrade& g = app.s.grade;
+        b.toggle(kGradeOn, tr(L"Color correction"), g.on,
+                 g.on ? tr(L"The headset image’s exposure, brightness, contrast and saturation.") : tr(L"Off"));
+        b.reveal(kGradeOn, g.on, tr(L"Color correction"),
+                 {tr(L"Exposure"), tr(L"Brightness"), tr(L"Contrast"), tr(L"Saturation")}, [](Body& r) {
+            const ColorGrade& cg = app.s.grade;
+            r.slider({kGradeExposure, tr(L"Exposure"), cg.exposure, L" EV", L"", true});
+            r.sliders({kGradeBrightness, tr(L"Brightness"), cg.brightness},
+                      {kGradeContrast, tr(L"Contrast"), cg.contrast});
+            r.slider({kGradeSaturation, tr(L"Saturation"), cg.saturation, L"%",
+                      cg.saturation == -100 ? tr(L"Grey") : L""});
+            r.note(tr(L"0 leaves a value as the game draws it. The periphery and the focus area change alike; menus "
+                      L"and loading screens show as the game draws them."));
+        });
+    };
+    c.reset = [](Settings& s) { s.grade = Settings{}.grade; };
+    return c;
+}
+
 // ---- Foveation ---------------------------------------------------------------------------------
 
 void outline_color_row(Body& b) {
@@ -731,6 +761,8 @@ std::vector<Card> picture_cards() {
     std::vector<Card> cards = {resolution_card(), foveation_card(), preview_card()};
     if (game_has(&games::GameFeatures::fovCrop) || game_has(&games::GameFeatures::helmet))
         cards.push_back(view_card());
+    if (game_has(&games::GameFeatures::sharpening))  // every game whose compositor runs
+        cards.push_back(color_card());
     if (rendering_shown())
         cards.push_back(rendering_card());
     // Each feature's card holds its switch; what its switch turns on follows straight under it.

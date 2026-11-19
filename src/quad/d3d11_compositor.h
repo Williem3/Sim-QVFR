@@ -39,6 +39,11 @@ public:
     // premultiplied, alpha its feather (FocusLayerPS).
     bool draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* target, const EyeComposition (&eyes)[2],
                           const int (&rects)[2][4]);
+    // Native quad views with colour correction: each eye's region of `sources[e]` (from: x, y, width, height in texels)
+    // drawn graded (compose_shader.h GradePS, `grade` color_grade_constants') texel for texel into `output` at to[e]
+    // (x, y). The eyes' copies of the periphery the runtime shows, so they match the graded focus views.
+    bool draw_graded(ID3D11Texture2D* const (&sources)[2], const int (&from)[2][4], ID3D11RenderTargetView* output,
+                     const int (&to)[2][2], const float (&grade)[3]);
     void request_light() override { lightWanted_ = true; }
     bool read_light(float (&rgb)[2][4][3]) override;
     void shutdown();
@@ -64,7 +69,7 @@ private:
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> immediate_, deferred_;
     Com<ID3D11VertexShader> vs_;
-    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_, focusPs_;
+    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_, focusPs_, gradePs_;
     static constexpr int kLightBuffer = 2, kLayerBuffer = 3;
     Com<ID3D11Buffer> constants_[4];  // one per eye, the light pass, the helmet layer
     Com<ID3D11SamplerState> sampler_;

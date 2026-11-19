@@ -44,7 +44,27 @@ constexpr Help kHelp[] = {
      L"other CAS sharpeners show it: any setting above 0% already sharpens. Only the focus area is sharpened, fading out "
      L"across its feather so its edge stays even: your side vision sees shimmer more than detail. 0% is off; it changes "
      L"while you drive.")},
+    {I18N(L"Color correction"),
+     I18N(L"Adjusts the picture in the headset: exposure, brightness, contrast and saturation, for a game that looks too "
+     L"dark, washed out or dull in your headset. Sim-QVFR applies it as it composes the views, the periphery and the "
+     L"focus area alike, so the focus area never stands out; it costs almost no GPU time and changes while you drive. "
+     L"Menus and loading screens show as the game draws them. Off, or every value at 0, leaves the picture as it was.")},
+    {I18N(L"Exposure"),
+     I18N(L"Scales all of the light, in stops (EV): +1.0 EV is twice as bright, -1.0 EV half, up to 3 stops either way. "
+     L"Highlights brighten with the rest and can clip, so raise it a little at a time; Brightness lifts the darks "
+     L"without touching them.")},
     {I18N(L"Brightness"),
+     I18N(L"Lightens or darkens the mid tones and shadows while black stays black and white stays white, so an OLED "
+     L"headset keeps its deep blacks: raise it to see into dark cockpits and night stints, lower it for a richer, "
+     L"darker picture.")},
+    {I18N(L"Contrast"),
+     I18N(L"Spreads the picture’s tones away from mid grey (above 0) or draws them towards it (below 0), as a gentle "
+     L"S-curve: black and white stay where they are and colours keep their hue. More contrast gives deeper shadows and "
+     L"brighter highlights; less shows more detail in both.")},
+    {I18N(L"Saturation"),
+     I18N(L"How strong the colours are: above 0 more vivid, below 0 more muted, -100% grey. Brightness is kept as each "
+     L"colour changes.")},
+    {I18N(L"Accent brightness"),
      I18N(L"How light or dark the game’s colour is. The wheel picks its hue and how strong it is; the launcher keeps "
      L"its text and edges readable in light and dark mode.")},
     {I18N(L"Focus width"),

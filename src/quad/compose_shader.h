@@ -2,7 +2,9 @@
 // (d3d11_compositor.h): a full-screen triangle per eye, the outer view upscaled over the eye's tangents
 // with the focus view blended into the focus box (it resampled by CAS with sharpening on: focus_sample),
 // and the helmet overlay. Its constants, cbuffer b0:
-// kComposeConstants floats, compose_constants filling all but the helmet's (40-59), helmet_constants those.
+// kComposeConstants floats, compose_constants filling all but the helmet's (40-59), helmet_constants those; 60-62 the
+// colour correction (color_grade.h), 63 padding (the D3D11 buffer's 16-byte size; the D3D12 root takes 63 constants, its
+// limit with the descriptor table).
 // Sources: t0 the outer view's texture, t1 the focus view's (the same texture when one image holds both),
 // t2 the helmet's light, t3-t5 its pieces (helmet_pieces.h); s0 a linear clamp sampler.
 #pragma once
@@ -16,7 +18,8 @@
 
 namespace simqvfr {
 
-inline constexpr unsigned kComposeConstants = 60;
+inline constexpr unsigned kComposeConstants = 64;
+inline constexpr unsigned kComposeRootConstants = 63;  // the shader's cbuffer: 63 floats (the D3D12 root's 64 DWORDs)
 
 // EyeComposition `c` for eye `eye` as the shader's cbuffer, but for the helmet's constants (40-59: 0).
 inline void compose_constants(const EyeComposition& c, int eye, float (&constants)[kComposeConstants]) {
@@ -46,6 +49,8 @@ inline void compose_constants(const EyeComposition& c, int eye, float (&constant
         constants[32 + i] = c.borderColor[i];
         constants[36 + i] = c.viewTan[i];
     }
+    for (int i = 0; i < 3; ++i)
+        constants[60 + i] = c.color[i];
 }
 
 // The helmet's constants (40-59) for eye `c`, with the compositor's loaded pieces (`pieceMask`, 1 << HelmetPiece)
@@ -134,6 +139,10 @@ cbuffer Eye : register(b0) {
     // Look 2: rows taking a direction in the eye's frame into the images'; w: tangent half extents across and
     // up/down, the visor's slide in image heights.
     float4 helmetRot0, helmetRot1, helmetRot2;
+    // Colour correction (color_grade.h color_grade_constants): x the exposure's scale (0: off), y the brightness's
+    // power, z the contrast's curve exponent in thousandths + 2048 x the saturation's scale in thousandths (a whole
+    // number, exact in a float).
+    float3 grade;
 };
 Texture2D outerTex : register(t0);
 Texture2D focusTex : register(t1);
@@ -154,6 +163,24 @@ V VS(uint id : SV_VertexID) {
 float2 inside(float2 uv, float4 src, float2 size) {
     const float2 h = 0.5 / size;
     return clamp(uv, src.xy + h, src.xy + src.zw - h);
+}
+// Colour correction of a linear colour (`grade`; off: as it was), in OpenXR Toolkit's manner but exposure first, as a
+// camera's: the exposure scales the light; brightness is a power curve in display terms (gamma 2.2), so black stays
+// black and white white (an offset would grey an OLED's blacks); contrast is an S-curve of the luminance about mid grey
+// with its ends fixed, the colour following it (no hue shift, no clipping); then the saturation moves the colour from
+// or towards its luminance (Rec. 709). The same for every view, so the focus area matches.
+float3 color_grade(float3 c) {
+    if (grade.x <= 0)
+        return c;
+    const float saturation1000 = floor(grade.z / 2048);
+    const float contrast = (grade.z - saturation1000 * 2048) / 1000.0, saturation = saturation1000 / 1000.0;
+    c = max(c, 0) * grade.x;
+    float3 d = pow(pow(c, 1 / 2.2), grade.y);
+    const float l = saturate(dot(d, float3(0.2126, 0.7152, 0.0722)));
+    const float s = l < 0.5 ? 0.5 * pow(2 * l, contrast) : 1 - 0.5 * pow(2 - 2 * l, contrast);
+    c = pow(max(d + (s - l), 0), 2.2);
+    const float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+    return max(lerp(luma.xxx, c, saturation), 0);
 }
 )"
     R"(// Sharpening: AMD FidelityFX CAS (Contrast Adaptive Sharpening, ffx_cas.h 1.20190610; Copyright (c) 2017-2019 Advanced
@@ -384,8 +411,10 @@ float3 helmet_apply(float3 scene, float2 a, float2 p) {
     }
     // The outer view (not where the focus view covers it whole).
     float4 color = float4(0, 0, 0, 1);
-    if (rendered && w < 1)
+    if (rendered && w < 1) {
         color = bilinear(outerTex, outerSrc.xy + o * outerSrc.zw, outerSrc, outerSize);
+        color.rgb = color_grade(color.rgb);  // colour correction: each view where it was rendered, then blended
+    }
     if (e >= 0) {
         // A supersampled focus view has several texels per output pixel: average four taps spread over the
         // pixel's footprint instead of sampling it once (which would alias), sharpened at the output's pixel scale.
@@ -398,10 +427,11 @@ float3 helmet_apply(float3 scene, float2 a, float2 p) {
         } else {
             focus = focus_sample(focusTex, uv, focusSrc, size, w);
         }
+        focus.rgb = color_grade(focus.rgb);
         color = lerp(color, focus, w);
-        if (e < params.y)
-            color = borderColor;
     }
+    if (e >= 0 && e < params.y)
+        color = borderColor;
     if (helmet.w > 0)
         color.rgb = helmet_apply(color.rgb, a.xy, v.uv);
     return color;
@@ -451,6 +481,7 @@ float4 FocusLayerPS(V v) : SV_Target {
     } else {
         color = focus_sample(focusTex, uv, focusSrc, size, w);
     }
+    color.rgb = color_grade(color.rgb);  // only with the periphery graded too (the layer zeroes it otherwise)
     if (viewTan.x > 0.5) {
         // Where this texel lies in the outer view.
         const float2 t = a.xy / max(-a.z, 1e-6);
@@ -459,7 +490,9 @@ float4 FocusLayerPS(V v) : SV_Target {
         outerTex.GetDimensions(outerSize.x, outerSize.y);
         float4 outer = bilinear(outerTex, outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize);
         if (region && (any(o < 0) || any(o > 1)))
-            outer = float4(0, 0, 0, 1);
+            outer = float4(0, 0, 0, 1);  // black past what the eye rendered, as the pad's clear: never graded
+        else
+            outer.rgb = color_grade(outer.rgb);  // as GradePS grades the periphery's copy
         color = lerp(outer, color, w);
         if (e >= viewTan.y && e < viewTan.y + params.y)
             color = borderColor;
@@ -470,6 +503,14 @@ float4 FocusLayerPS(V v) : SV_Target {
         w = 1;
     }
     return float4(color.rgb * w, w);
+}
+// The periphery's copy graded (native quad views with colour correction: the runtime shows the game's eyes as they are
+// otherwise): texel for texel from outerTex, outerSrc.xy the source's texel at the viewport's origin outerSrc.zw.
+float4 GradePS(V v) : SV_Target {
+    const int2 p = int2(v.position.xy - outerSrc.zw) + int2(outerSrc.xy);
+    float4 c = outerTex.Load(int3(p, 0));
+    c.rgb = color_grade(c.rgb);
+    return c;
 }
 )"
     R"(// The helmet as its own layer: the quad spans tangents +-outerTan.xy of the images' plane, the images

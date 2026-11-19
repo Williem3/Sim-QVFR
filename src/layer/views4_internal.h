@@ -62,6 +62,7 @@ void views4_eye(const Views4Frame& frame, int e, const Source& source, EyeCompos
     c.cornerRadius = static_cast<float>(experiment.cornerRadius);
     focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
     c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
+    color_grade_constants(color_grade_from_bits(experiment.colorGrade.load(std::memory_order_relaxed)), c.color);
 }
 
 }  // namespace simqvfr::layer

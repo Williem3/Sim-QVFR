@@ -60,6 +60,8 @@ struct EyeComposition {
     // Sharpening of the focus view (compose_shader.h's cas_peak, AMD's CAS): CAS's own sharpness 0..1 (lobe -1/8..-1/5)
     // above 0; 0 off (bilinear). The periphery is never sharpened.
     float sharpness = 0;
+    // Colour correction of the whole eye, periphery and focus alike (color_grade.h color_grade_constants): all 0 off.
+    float color[3] = {};
 };
 
 // The helmet as its own layer (helmet.h): the pieces, lit by the frame, drawn into a head-locked quad that

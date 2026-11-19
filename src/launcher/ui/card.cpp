@@ -23,7 +23,7 @@ constexpr float kHeaderH = 50;     // a card's header, to its rule
 constexpr float kPad = 16;         // a card's padding
 
 std::wstring value_text(const SliderSpec& s) {
-    return (s.tenths ? gaze_deadzone_text(s.value) : std::to_wstring(s.value)) + s.unit;
+    return (s.tenths ? tenths_text(s.value) : std::to_wstring(s.value)) + s.unit;
 }
 
 // A slider's label line and track in `r` (its width), at y.

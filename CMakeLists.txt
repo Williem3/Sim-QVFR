@@ -383,6 +383,13 @@ sim_qvfr_test(cas_sharpen_test tests/cas_sharpen_test.cpp)
 target_include_directories(cas_sharpen_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(cas_sharpen_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(cas_sharpen_test PRIVATE sim_qvfr_core d3d11)
+# Offline check of colour correction: its settings, the headset menu's Color page and the compositor's grading on a
+# WARP device (tests/color_grade_test.cpp).
+sim_qvfr_test(color_grade_test tests/color_grade_test.cpp)
+target_include_directories(color_grade_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(color_grade_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(color_grade_test PRIVATE /utf-8)
+target_link_libraries(color_grade_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the panels' D3D11 upload on a WARP device (tests/panel_upload_test.cpp).
 sim_qvfr_test(panel_upload_test tests/panel_upload_test.cpp)

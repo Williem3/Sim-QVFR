@@ -267,6 +267,11 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.padW = v4d3d11.padH = 0;
         v4d3d11.padRetiredFrames = 0;
         v4d3d11.padFailed = false;
+        v4d3d11.padGradeFailed = false;
+        v4d3d11.padGradeRetry = 0;
+        v4d3d11.padGradeLogged = false;
+        v4d3d11.gradeLayerLogged = false;
+        v4d3d11.gradeState = 0;
         if (v4d3d11.padded)
             logf("native quad views: %llu frames with views 0-1 padded out to the runtime's eyes (%llu of them without "
                  "focus views)",

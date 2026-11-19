@@ -70,7 +70,7 @@ bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     D3D12_DESCRIPTOR_RANGE srvRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kSrvsPerSlot, 0, 0, 0};
     D3D12_ROOT_PARAMETER params[2] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[0].Constants = {0, 0, kConstants};
+    params[0].Constants = {0, 0, kComposeRootConstants};
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[1].DescriptorTable = {1, &srvRange};
@@ -299,7 +299,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         float constants[kConstants] = {};
         compose_constants(c, eye, constants);
         helmet_constants(c, pieceMask, visor_tints(c.visorBlend), visor_white_point(), constants);
-        list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
+        list->SetGraphicsRoot32BitConstants(0, kComposeRootConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
     }
     D3D12_RESOURCE_BARRIER back = transition(focusImage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, focusState);
@@ -360,7 +360,7 @@ bool QuadCompositor::record_light(ID3D12GraphicsCommandList* list, const float (
         list->RSSetScissorRects(1, &lightScissor);
         float constants[kConstants] = {};
         light_constants(source0, source1, constants);
-        list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
+        list->SetGraphicsRoot32BitConstants(0, kComposeRootConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
         if (lightWanted_ && lightReadback_ && !lightCopyFence_) {  // for read_light
             D3D12_RESOURCE_BARRIER toCopy =
@@ -413,7 +413,7 @@ bool QuadCompositor::draw_helmet_layer(ID3D12Resource* target, const HelmetLayer
     list->RSSetViewports(1, &vp);
     float constants[kConstants] = {};
     helmet_layer_constants(d, pieceMask, visor_tints(d.visorBlend), visor_white_point(), constants);
-    list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
+    list->SetGraphicsRoot32BitConstants(0, kComposeRootConstants, constants, 0);
     // Only the bands the pieces draw on (the rest of the image is never submitted).
     const std::vector<HelmetBand> whole = {{0, 1}};
     for (const HelmetBand& b : d.bands.empty() ? whole : d.bands) {

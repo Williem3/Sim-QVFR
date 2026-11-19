@@ -56,6 +56,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.objectDetail = ini_int(ini, kObjectDetail);
     if (features.sharpening)
         l.sharpen = ini_int(ini, kSharpenPercent);
+    if (features.sharpening)  // every game whose compositor runs (as sharpening)
+        l.color = read_color_grade(ini);
     l.outputDensityMax = ini_int(ini, kOutputDensityMax);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
@@ -388,6 +390,7 @@ void load_experiment() {
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
+    experiment.colorGrade = color_grade_bits(settings.color);
     experiment.outputDensityMax = settings.outputDensityMax;
     set_eye_off(settings.eyeOff);
     // Applied on the render thread at its next xrEndFrame; nothing in a baseline or a log-only run.
@@ -528,6 +531,9 @@ void load_experiment() {
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
     if (game_features().sharpening)
         logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS on the focus views as they are composed)" : " (off)");
+    if (game_features().sharpening)
+        logf("experiment: colour correction %s%s", color_grade_log(settings.color).c_str(),
+             settings.color.active() && !experiment.views4 ? " (not applied: QVFR only)" : "");
     if (experiment.composing())
         logf("experiment: output density up to %d%% of the native eye%s", settings.outputDensityMax,
              settings.outputDensityMax <= 100 ? " (composed at native size, [quad] output_density_max=100)"
