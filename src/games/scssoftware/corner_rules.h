@@ -245,10 +245,10 @@ bool isEyeSize(float4 v) {
     if (i >= count)
         return;
     float4 v = at(i);
-    // Only the size half: an eye-shaped size is never anything else, but a (1,1,1,1) may be a white colour sitting
-    // before one in the same block (the violet came back with the block rule, 2026-11-18). The (1,1,1,1) half stays.
     if (i > 0 && (i & 15) != 0 && isOnes(at(i - 1)) && isEyeSize(v))
         v = float4(f * v.xy, f);
+    else if (i + 1 < count && ((i + 1) & 15) != 0 && isOnes(v) && isEyeSize(at(i + 1)))
+        v = float4(f, 1 / f);
     dst.Store4(i * 16, asuint(v));
 }
 )";

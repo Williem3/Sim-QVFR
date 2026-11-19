@@ -468,9 +468,9 @@ void warp_checks() {
         D3D11_MAPPED_SUBRESOURCE rm;
         if (SUCCEEDED(context->Map(readBack.Get(), 0, D3D11_MAP_READ, 0, &rm))) {
             const float* v = static_cast<const float*>(rm.pData);
-            check(v[80 * 4] == 1 && v[80 * 4 + 2] == 1 && close_to(v[81 * 4], W / 2.0f, 1e-4f) &&  // the (1,1,1,1) half kept
+            check(close_to(v[80 * 4], 0.5f, 1e-4f) && close_to(v[80 * 4 + 2], 2, 1e-4f) && close_to(v[81 * 4], W / 2.0f, 1e-4f) &&
                       v[96 * 4] == 1 && v[97 * 4] == 4096 && v[65 * 4 + 3] == 7,
-                  "the copy: the eye's sizes rewritten (their (1,1,1,1) kept), a shadow map's pair and other values as the game wrote them");
+                  "the copy: the eye's pairs rewritten, a shadow map's pair and other values as the game wrote them");
             check(v[82 * 4] == 5 && v[82 * 4 + 3] == 8, "a buffer the game wrote again mid-frame is copied again at its next bind");
             context->Unmap(readBack.Get(), 0);
         } else {
