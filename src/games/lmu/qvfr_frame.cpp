@@ -1141,6 +1141,7 @@ void ab_frame_begin(simqvfr::CarLighting& light) {
         bothKeyHeld = bothDown;
         if (!carAb.active()) {
             mvr_car_light_block(0);
+            car_light_ab_both_eyes_off(false);
             return;
         }
         unsigned ended = 0;
@@ -1151,6 +1152,7 @@ void ab_frame_begin(simqvfr::CarLighting& light) {
                 carAb.add(b);
         }
         mvr_car_light_block(serial);
+        car_light_ab_both_eyes_off(carAb.both_eyes_off_now());
         if (carAb.kind() != abKindLogged && carAb.rounds() == 0) {  // the first round: what each second is
             abKindLogged = carAb.kind();
             simqvfr::logf("lmu car light A/B: frame %llu: %s%s", static_cast<unsigned long long>(frames),

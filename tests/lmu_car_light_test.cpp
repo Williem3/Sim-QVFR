@@ -125,6 +125,11 @@ void ab_checks() {
     light.headlights = false;
     light.ground = false;
     light.nightVision = false;
+    lmu::car_light_set_both_eyes(true);
+    lmu::CarLightAb withCheck;
+    check(withCheck.start(light) && withCheck.variants() == 4,
+          "A/B: with the reflections' both-eyes check on, a variant of its own (four)");
+    lmu::car_light_set_both_eyes(false);  // the rest without it
     check(ab.start(light) && ab.variants() == 3, "A/B: two switches on, three variants (each off, then both)");
     simqvfr::CarLighting none = light;
     none.shadows = none.reflections = false;
@@ -176,6 +181,7 @@ void ab_checks() {
     check(ab.rounds() == 4, "A/B: 28 blocks of 3 variants are 4 rounds and a bit");
     ab.stop();
     check(!ab.active(), "A/B: stops");
+    lmu::car_light_set_both_eyes(true);  // its default
 }
 
 // The comparison image (dev builds' Ctrl+Alt+L): the two views side by side under a bar with the labels, opaque.

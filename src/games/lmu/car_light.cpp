@@ -1038,6 +1038,7 @@ float ps_depth(float4 pos : SV_Position) : SV_Target { return load_depth(int2(po
 constexpr unsigned kSlotsMax = 4096;
 std::atomic<bool> debugView{false};
 std::atomic<bool> bothEyes{true};
+std::atomic<bool> bothEyesAbOff{false};
 constexpr unsigned kTimerSlots = 8;
 
 bool invert4(const double (&m)[16], double (&out)[16]) {
@@ -1390,7 +1391,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     bool keepSeen = false, otherSeen = false;
     m.relitRuns += relight ? 1 : 0;  // every relit run counted: one without the check leaves the next without
     if (relight && settings.reflections && (eye == 0 || eye == 1) && m.depthPs[slotsMs ? 1 : 0] &&
-        car_light_both_eyes()) {
+        car_light_both_eyes() && !bothEyesAbOff.load(std::memory_order_relaxed)) {
         keepSeen = true;
         const Impl::EyeSeen& other = m.eyeSeen[1 - eye];
         const bool fresh = other.view && other.run + 1 == m.relitRuns && other.w == view.eyeW && other.h == view.eyeH;
@@ -1696,6 +1697,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
 
 void car_light_set_debug_view(bool on) { debugView.store(on, std::memory_order_relaxed); }
 void car_light_set_both_eyes(bool on) { bothEyes.store(on, std::memory_order_relaxed); }
+void car_light_ab_both_eyes_off(bool off) { bothEyesAbOff.store(off, std::memory_order_relaxed); }
 bool car_light_both_eyes() { return bothEyes.load(std::memory_order_relaxed); }
 bool car_light_debug_view() { return debugView.load(std::memory_order_relaxed); }
 
@@ -1723,9 +1725,10 @@ bool& car_light_switch(CarLightSettings& c, int s) {
     default: return c.nightVision;
     }
 }
-const char* const kCarLightSwitchNames[7] = {"floodlight shadows",   "paint detail",          "lacquer reflections",
+const char* const kCarLightSwitchNames[8] = {"floodlight shadows",   "paint detail",          "lacquer reflections",
                                              "headlight highlights", "shadows on the ground", "night vision color",
-                                             "every switch (the base relight)"};
+                                             "every switch (the base relight)",
+                                             "the reflections' both-eyes check"};
 }  // namespace
 
 bool CarLightAb::start(const CarLightSettings& light) {
@@ -1744,6 +1747,10 @@ bool CarLightAb::start(const CarLightSettings& light) {
         switches_[variants_] = 6;
         names_[variants_++] = kCarLightSwitchNames[6];
     }
+    if (light.reflections && car_light_both_eyes()) {  // the reflections' check against the other eye, its own cost
+        switches_[variants_] = 7;
+        names_[variants_++] = kCarLightSwitchNames[7];
+    }
     if (!variants_)
         return false;
     active_ = true;
@@ -1756,6 +1763,8 @@ bool CarLightAb::start(const CarLightSettings& light) {
 void CarLightAb::apply(int variant, CarLightSettings& light) const {
     if (variant < 0)
         return;
+    if (switches_[variant] == 7)
+        return;  // the both-eyes check: both_eyes_off_now(), not a setting
     if (switches_[variant] == 6) {
         for (int s = 0; s < 6; ++s)
             car_light_switch(light, s) = false;

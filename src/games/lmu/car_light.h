@@ -173,7 +173,7 @@ class CarLightAb {
 public:
     static constexpr unsigned kFrames = 90;        // ~1 s a block at 90 Hz: long enough to see what changes
     static constexpr unsigned kMaxFrames = 27000;  // ~5 minutes at 90 Hz, then it stops by itself
-    static constexpr int kMaxVariants = 7;
+    static constexpr int kMaxVariants = 8;
 
     // Starts (the variants from `light`'s switches now); false: nothing to vary (the relight or every switch off).
     bool start(const CarLightSettings& light);
@@ -200,6 +200,9 @@ public:
     int variants() const { return variants_; }
     // The block now: -1 the menu's settings, else the variant.
     int kind() const { return kinds_[serial_ % kSeen]; }
+    // This block turns the reflections' both-eyes check off (its own variant, when reflections and the check were on at
+    // the start): the caller passes it to car_light_ab_both_eyes_off.
+    bool both_eyes_off_now() const { const int k = kind(); return active_ && k >= 0 && switches_[k] == 7; }
     const char* variant_name(int v) const { return v >= 0 && v < variants_ ? names_[v] : "your settings"; }
 
 private:
@@ -224,7 +227,7 @@ private:
     void apply(int variant, CarLightSettings& light) const;
     bool active_ = false;
     int variants_ = 0;
-    int switches_[kMaxVariants] = {};  // per variant: the switch turned off (0-5), or 6 every one
+    int switches_[kMaxVariants] = {};  // per variant: the switch turned off (0-5), 6 every one, 7 the both-eyes check
     const char* names_[kMaxVariants] = {};
     unsigned serial_ = 0, inBlock_ = 0, frames_ = 0;
     bool tainted_[kSeen] = {};
@@ -242,6 +245,8 @@ bool car_light_debug_view();
 // Ctrl+Alt+J, qvfr_frame.cpp). Off: each eye's own, as found in its own image.
 void car_light_set_both_eyes(bool on);
 bool car_light_both_eyes();
+// The automatic A/B's block without the both-eyes check (on top of the Ctrl+Alt+J state).
+void car_light_ab_both_eyes_off(bool off);
 
 // The D3D11 pass. Made on the render thread at its first run.
 class CarLightPass {
