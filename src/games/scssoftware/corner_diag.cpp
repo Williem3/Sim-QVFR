@@ -107,7 +107,7 @@ void perf_line() {
         g.mirrorsOff = !g.mirrorsOff;
         if (g.active) {
             const ch::Bypass bypass;  // our own binds (at a release: outside an observer), not seen by on_constant_buffers
-            swap_bound(!g.mirrorsOff);  // what is bound now: the game's buffers back, or our copies
+            mirrors_for_target();  // what is bound now: the game's buffers back, or our copies (for an eye target)
         }
         simqvfr::logf("scs corner: Ctrl+Alt+N: the scene draws read %s (writes to them from other threads so far: %llu, "
                       "%llu with the eyes in the corner)",

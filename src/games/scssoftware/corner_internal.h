@@ -144,6 +144,8 @@ struct State {
     // Ctrl+Alt+N: the scene draws read the game's own buffers (no mirror copies), live; the full-screen passes keep their
     // per-draw rewrite (it reads the game's buffer itself).
     bool mirrorsOff = false, mirrorsKeyDown = false;
+    bool mirrorsBound = false;      // our copies are bound in the game's place now (mirrors_for_target)
+    uint64_t mirrorTargetSwaps = 0;
     Range vs, ps;
     CornerStats stats;
     uint64_t loggedDraws = 0;
@@ -427,6 +429,7 @@ void evict_mirrors(bool orphans = false);
 // stayed full for up to 900 frames, 3.5 million binds unmirrored and not rewritten for the corner).
 void release_orphans();
 void swap_bound(bool on);
+void mirrors_for_target();  // our copies bound or not for the bound target (corner_mirrors.cpp)
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.

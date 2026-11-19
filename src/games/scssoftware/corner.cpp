@@ -127,6 +127,7 @@ void take_frame_end() {
         g.activeNow.store(false, std::memory_order_relaxed);
         two_views(false);
         apply_views();      // the next frame's shared work at the game's own sizes
+        g.mirrorsBound = false;
         swap_bound(false);  // and the game's own constant buffers
     }
     if (g.stats.frames % kEvictFrames == 0)
@@ -293,13 +294,12 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         g.activeNow.store(true, std::memory_order_relaxed);
         if (g.gpuTimes)
             gpu_pass_begin();
-        if (!g.mirrorsOff)
-            swap_bound(true);  // the binds made before this one, to our rewritten copies
     }
     g.boundW = w;
     g.boundH = h;
     g.cut = eye_shaped(w, h);
     g.smallTarget = w > 0 && w <= 64 && h <= 64;
+    mirrors_for_target();
     if ((g.active && g.cut) != wasCut || (g.active && g.cut))
         apply_views();
 }
@@ -580,6 +580,7 @@ void restore_game_state() {
     two_views(false);
     g.viewsDual = false;
     apply_views();  // not active: the game's own
+    g.mirrorsBound = false;
     swap_bound(false);
 }
 
