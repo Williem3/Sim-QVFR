@@ -17,6 +17,7 @@
 #include "../input/hotkeys.h"
 #include "../profile/profiles.h"
 #include "../quad/color_grade.h"
+#include "../quad/car_lighting.h"
 #include "../quad/focus_offset.h"
 #include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
@@ -41,6 +42,9 @@ struct Settings {
     // [quad] color_correction and its values (QVFR, a game with GameFeatures::sharpening; quad/color_grade.h): the
     // headset image's exposure, brightness, contrast and saturation, off (the default) or on (live).
     ColorGrade grade;
+    // [quad] car_light and its values (QVFR, a game with GameFeatures::carLighting: LMU; quad/car_lighting.h): the cars
+    // relit at night. The switch takes effect at the next launch, its values and effects while the game runs.
+    CarLighting carLight;
     // [quad] eye_off (a game with GameFeatures::eyeOff: LMU; quad/eye_off.h): 0 both eyes on (the default), 1 the left
     // eye off, 2 the right. The headset shows that eye black and the game renders little of it (live).
     int eyeOff = 0;
@@ -126,6 +130,9 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
     kCropRange = range_of(kCropTop), kObjectDetailRange = range_of(kObjectDetail), kSharpenRange = range_of(kSharpenPercent),
     kColorExposureRange = range_of(kColorExposure), kColorBrightnessRange = range_of(kColorBrightness),
     kColorContrastRange = range_of(kColorContrast), kColorSaturationRange = range_of(kColorSaturation),
+    kCarFillRange = range_of(kCarLightFill), kCarOcclusionRange = range_of(kCarLightOcclusion),
+    kCarHighlightsRange = range_of(kCarLightHighlights), kCarGlossRange = range_of(kCarLightGloss),
+    kCarSmoothRange = range_of(kCarLightSmooth),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its

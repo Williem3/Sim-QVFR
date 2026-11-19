@@ -204,6 +204,7 @@ void activate(Ctl id, int option) {
         app.layerMessage.clear();
         break;
     case kGameTab: select_game(option); return;
+    case kNightQuality:
     case kMode:
     case kShape:
     case kVisor:
@@ -363,6 +364,18 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kNightOn:
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::carLighting)) {
+            app.s.carLight.on = !app.s.carLight.on;
+            changed();
+        }
+        return;
+    case kNightShadows: app.s.carLight.shadows = !app.s.carLight.shadows; changed(); return;
+    case kNightDetail: app.s.carLight.detail = !app.s.carLight.detail; changed(); return;
+    case kNightReflections: app.s.carLight.reflections = !app.s.carLight.reflections; changed(); return;
+    case kNightHeadlights: app.s.carLight.headlights = !app.s.carLight.headlights; changed(); return;
+    case kNightGround: app.s.carLight.ground = !app.s.carLight.ground; changed(); return;
+    case kNightVision: app.s.carLight.nightVision = !app.s.carLight.nightVision; changed(); return;
     case kCheekyUse: app.s.cheeky.load = !app.s.cheeky.load; changed(); return;
     case kCheekyOn: app.s.cheeky.processing = !app.s.cheeky.processing; changed(); return;
     case kCheekyOuter: app.s.cheeky.outerDlaa = !app.s.cheeky.outerDlaa; changed(); return;
@@ -474,6 +487,14 @@ bool space_control(Ctl id) {
     case kMode:
     case kOutline:
     case kGradeOn:
+    case kNightOn:
+    case kNightQuality:
+    case kNightShadows:
+    case kNightDetail:
+    case kNightReflections:
+    case kNightHeadlights:
+    case kNightGround:
+    case kNightVision:
     case kCheekyUse:
     case kCheekyOn:
     case kCheekyOuter:

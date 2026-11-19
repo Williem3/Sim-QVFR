@@ -79,6 +79,9 @@ enum Ctl {
     kSharpen,
     // Colour correction ([quad] color_correction and its values, the Picture tab's Color card).
     kGradeOn, kGradeExposure, kGradeBrightness, kGradeContrast, kGradeSaturation,
+    // Night car lighting ([quad] car_light and its values, the Picture tab's Night cars card; LMU).
+    kNightOn, kNightQuality, kNightFill, kNightOcclusion, kNightHighlights, kNightGloss, kNightSmooth, kNightShadows,
+    kNightDetail, kNightReflections, kNightHeadlights, kNightGround, kNightVision,
     // One eye off ([quad] eye_off, Headset tab's Vision card; a game with GameFeatures::eyeOff).
     kEyeOff,
     // The FOV crop ([crop], Resolution pane).

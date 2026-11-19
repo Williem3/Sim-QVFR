@@ -44,6 +44,44 @@ constexpr Help kHelp[] = {
      L"other CAS sharpeners show it: any setting above 0% already sharpens. Only the focus area is sharpened, fading out "
      L"across its feather so its edge stays even: your side vision sees shimmer more than detail. 0% is off; it changes "
      L"while you drive.")},
+    {I18N(L"Night car lighting"),
+     I18N(L"Makes the cars look lit at night instead of flat: LMU lights the paint with a flat wash from the floodlights. "
+     L"Sim-QVFR relights each car after the game draws it, before the game's own post-processing: highlights where the "
+     L"floodlights and headlights reflect off the paint, shading in creases and under the car, and the effects below. "
+     L"The rest of the scene is untouched. It costs about 0.5 to 1 ms of GPU time with everything on. The switch takes "
+     L"effect at the next launch; the values and effects change while you drive.")},
+    {I18N(L"Quality"),
+     I18N(L"Sets the switches below by their GPU cost: Low keeps paint detail, lacquer reflections and headlight "
+     L"highlights, Medium adds shadows on the ground, High adds floodlight shadows. Night vision color isn't part of it. "
+     L"Changing any switch yourself shows no preset selected.")},
+    {I18N(L"Fill light"),
+     I18N(L"How much of the game's flat floodlight wash stays on the cars. Lower makes the shading and highlights stand "
+     L"out more; 100% keeps the game's brightness.")},
+    {I18N(L"Ambient occlusion"),
+     I18N(L"Darkens creases, wheel arches and the underside, where light reaches less. 0% is off.")},
+    {I18N(L"Highlights"),
+     I18N(L"The strength of the floodlights' and headlights' reflections on the paint. 0% is off; above 100% is brighter "
+     L"than the lights would make it.")},
+    {I18N(L"Paint gloss"),
+     I18N(L"How glossy the lacquer is: higher gives smaller, sharper highlights, lower broad soft ones.")},
+    {I18N(L"Smoothing"),
+     I18N(L"Smooths the surface direction over this distance where the game's own normals aren't available, which "
+     L"hides faceted highlights on low-polygon parts. About 15 cm suits most cars; 0 is off.")},
+    {I18N(L"Floodlight shadows"),
+     I18N(L"A part of a car hidden from a floodlight, behind a wing or another car, loses that light and its highlight.")},
+    {I18N(L"Paint detail"),
+     I18N(L"Uses the paint's fine surface detail, orange peel and the carbon weave, in the highlights.")},
+    {I18N(L"Lacquer reflections"),
+     I18N(L"Mirrors what's around a car in its paint, strongest at shallow angles. Only what's on screen can be "
+     L"reflected, and only where both eyes can see it, so both eyes show the same.")},
+    {I18N(L"Headlight highlights"),
+     I18N(L"Other cars' headlights, and yours in the mirrors, shine on the paint as the floodlights do.")},
+    {I18N(L"Shadows on the ground"),
+     I18N(L"Darkens the track and walls under and beside the cars, and casts soft floodlight shadows, so the cars sit on "
+     L"the ground.")},
+    {I18N(L"Night vision color"),
+     I18N(L"As eyes do at night, dark areas lose their colour and turn slightly blue while lit areas keep theirs. A "
+     L"matter of taste, off by default.")},
     {I18N(L"Color correction"),
      I18N(L"Adjusts the picture in the headset: exposure, brightness, contrast and saturation, for a game that looks too "
      L"dark, washed out or dull in your headset. Sim-QVFR applies it as it composes the views, the periphery and the "

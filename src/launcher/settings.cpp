@@ -53,6 +53,7 @@ Settings load_settings(const std::wstring& ini) {
     s.objectDetail = ini_int(f, kObjectDetail);
     s.sharpen = ini_int(f, kSharpenPercent);
     s.grade = read_color_grade(f);
+    s.carLight = read_car_lighting(f);
     s.eyeOff = ini_int(f, kEyeOff);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     if (read_int(ini, L"launcher", L"native_quad_reset", 0) == 0)  // its card is gone: an off it saved goes back to auto
@@ -203,6 +204,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
         ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
         ok &= write_color_grade(ini.c_str(), s.grade);
+        ok &= write_car_lighting(ini.c_str(), s.carLight);
     }
     ok &= write(ini, kFocusPercent, n(s.width));
     ok &= write(ini, kFocusHeightPercent, n(s.height));

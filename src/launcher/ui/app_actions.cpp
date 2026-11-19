@@ -341,6 +341,11 @@ int* slider_value(Ctl id) {
     case kGradeBrightness: return &app.s.grade.brightness;
     case kGradeContrast: return &app.s.grade.contrast;
     case kGradeSaturation: return &app.s.grade.saturation;
+    case kNightFill: return &app.s.carLight.fill;
+    case kNightOcclusion: return &app.s.carLight.occlusion;
+    case kNightHighlights: return &app.s.carLight.highlights;
+    case kNightGloss: return &app.s.carLight.gloss;
+    case kNightSmooth: return &app.s.carLight.smooth;
     case kColorValue: return &app.colorValue;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
@@ -403,6 +408,11 @@ Range slider_range(Ctl id) {
     case kGradeBrightness: return kColorBrightnessRange;
     case kGradeContrast: return kColorContrastRange;
     case kGradeSaturation: return kColorSaturationRange;
+    case kNightFill: return kCarFillRange;
+    case kNightOcclusion: return kCarOcclusionRange;
+    case kNightHighlights: return kCarHighlightsRange;
+    case kNightGloss: return kCarGlossRange;
+    case kNightSmooth: return kCarSmoothRange;
     case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
