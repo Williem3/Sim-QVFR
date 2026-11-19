@@ -102,6 +102,9 @@ struct Settings {
     // user says otherwise: the first start asks once, and [launcher] update_asked keeps the answer from being asked again.
     bool updateCheck = false;
     bool updateAsked = false;
+    // [launcher] update_skip: a release the user chose to skip (About's Skip this version, or going back from it): the
+    // update check doesn't offer it (no badge); a newer one is offered again. Empty: none skipped.
+    std::wstring updateSkip;
     // The game tabs (Games pane; game_tabs.h), every game's, not per-game settings. An installed game has a tab unless
     // [launcher] hidden_games lists it; one that isn't installed has none unless [launcher] shown_games lists it (the
     // user gave it one). [launcher] color_<id>: a game's own colour (RRGGBB) in place of its built-in accent.

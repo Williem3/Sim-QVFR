@@ -303,6 +303,9 @@ void activate(Ctl id, int option) {
         return;
     case kUpdateBadge: open_panel(PanelKind::About); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kUpdateRollback: start_restore(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kUpdateSkip: skip_release(true); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kUpdateUnskip: skip_release(false); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kGameShown: {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
@@ -405,6 +408,9 @@ bool push_button(Ctl id) {
     case kUpdateNow:
     case kUpdateDownload:
     case kUpdateInstall:
+    case kUpdateRollback:
+    case kUpdateSkip:
+    case kUpdateUnskip:
     case kUpdateBadge:
     case kLayerApply:
     case kLayerRevert:

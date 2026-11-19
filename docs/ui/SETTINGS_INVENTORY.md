@@ -331,6 +331,7 @@ The overlay's content has no options in the launcher (the brief mentions "conten
 | About | Sim-QVFR Launcher, "Starts <game> with foveated rendering enabled.", Version (or "· development build") | info | — | — | — | — | Rail bottom (version) and About sheet |
 | About | Ko-fi line and "Support on Ko-fi" button | button | — (opens ko-fi.com/williem3) | — | — | — | Rail bottom (red heart), Overview › Ko-fi tile, About sheet |
 | About | Check for updates when the launcher starts | toggle | `[launcher] update_check` (+ `update_asked`) | Launcher | — | No | About sheet |
+| About | Skip this version / Don't skip (also set by Go back) | button | `[launcher] update_skip` | Launcher | — | No | Kept |
 | About | Update status: Not checked, Checking…, Up to date, X is available, Newest release (dev), Couldn't check; install progress and errors | info | — | — | — | — | About sheet; "available" also as a dot on the rail version and in the top bar status |
 | About | Install <tag> / Try again · Download · Check now | button | — | — | Install when `installable()`; Download when available/dev with a URL; none while installing | — | About sheet |
 | About | Disclaimer "Experimental and unofficial. Use at your own risk." | info | — | — | — | — | About sheet |

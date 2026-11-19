@@ -310,14 +310,11 @@ InstallResult install_staged(const std::wstring& folderText, const std::wstring&
     return r;
 }
 
-void clean_update_folder(const std::wstring& folderText) {
-    const fs::path update = fs::path(folderText) / L"update";
+namespace {
+
+// update\backup-* folders, newest first.
+std::vector<fs::path> backups_newest_first(const fs::path& update) {
     std::error_code ec;
-    if (!fs::exists(update, ec))
-        return;
-    fs::remove_all(update / L"staged", ec);
-    fs::remove(update / L"release.zip", ec);
-    // The newest backup stays (to go back by hand); older ones go.
     std::vector<fs::directory_entry> backups;
     for (const auto& entry : fs::directory_iterator(update, ec))
         if (entry.is_directory(ec) && entry.path().filename().wstring().rfind(L"backup-", 0) == 0)
@@ -325,8 +322,151 @@ void clean_update_folder(const std::wstring& folderText) {
     std::sort(backups.begin(), backups.end(), [&](const fs::directory_entry& a, const fs::directory_entry& b) {
         return a.last_write_time(ec) > b.last_write_time(ec);
     });
+    std::vector<fs::path> out;
+    for (const auto& entry : backups)
+        out.push_back(entry.path());
+    return out;
+}
+
+}  // namespace
+
+void clean_update_folder(const std::wstring& folderText) {
+    const fs::path update = fs::path(folderText) / L"update";
+    std::error_code ec;
+    if (!fs::exists(update, ec))
+        return;
+    fs::remove_all(update / L"staged", ec);
+    fs::remove(update / L"release.zip", ec);
+    // The newest backup stays (Go back); older ones go.
+    const std::vector<fs::path> backups = backups_newest_first(update);
     for (size_t i = 1; i < backups.size(); ++i)
-        fs::remove_all(backups[i].path(), ec);
+        fs::remove_all(backups[i], ec);
+}
+
+bool find_backup(const std::wstring& folderText, Backup& backup) {
+    std::error_code ec;
+    const std::vector<fs::path> backups = backups_newest_first(fs::path(folderText) / L"update");
+    if (backups.empty() || !fs::exists(backups[0] / kHashList, ec))
+        return false;
+    backup.folder = backups[0].wstring();
+    backup.version = backups[0].filename().wstring().substr(7);  // after "backup-"
+    // VERSION.txt's first line, "Sim-QVFR <version>", when the backup has it (the install replaced it).
+    std::string text;
+    if (read_file((backups[0] / L"VERSION.txt").wstring(), text)) {
+        std::string line = text.substr(0, text.find_first_of("\r\n"));
+        constexpr char kPrefix[] = "Sim-QVFR ";
+        if (line.rfind(kPrefix, 0) == 0 && line.size() > sizeof(kPrefix) - 1 && line.size() < 80)
+            backup.version = widen(line.substr(sizeof(kPrefix) - 1));
+    }
+    return true;
+}
+
+std::vector<RestoreStep> plan_restore(const std::map<std::wstring, std::string>& backupRelease,
+                                      const std::map<std::wstring, std::string>& release,
+                                      const std::function<bool(const std::wstring&)>& inBackup,
+                                      const std::function<std::string(const std::wstring&)>& current) {
+    std::map<std::wstring, bool> paths;  // both lists' files, once
+    for (const auto& [path, hash] : backupRelease)
+        paths[path] = true;
+    for (const auto& [path, hash] : release)
+        paths[path] = true;
+    std::vector<RestoreStep> out;
+    for (const auto& [path, unused] : paths) {
+        if (_wcsicmp(path.c_str(), kSettingsFile) == 0 || _wcsicmp(path.c_str(), kHashList) == 0)
+            continue;
+        const auto mine = release.find(path);
+        const std::string now = lower(current(path));
+        // As the release in place has it (or not there at all): the install put it there, nobody changed it since.
+        const bool asInstalled = now.empty() || (mine != release.end() && mine->second == now);
+        if (inBackup(path)) {
+            out.push_back({path, asInstalled ? RestoreAction::Restore : RestoreAction::Keep});
+        } else if (mine != release.end() && !backupRelease.count(path) && !now.empty()) {
+            out.push_back({path, asInstalled ? RestoreAction::Remove : RestoreAction::Keep});
+        }
+    }
+    return out;
+}
+
+InstallResult restore_backup(const std::wstring& folderText, const Backup& backupInfo, const std::wstring& currentVersion,
+                             const std::function<void(const InstallProgress&)>& progress) {
+    InstallResult r;
+    const fs::path folder = folderText, from = backupInfo.folder;
+    const fs::path into = folder / L"update" / (L"backup-" + version_folder(currentVersion));
+    r.backup = into.wstring();
+    std::error_code ec;
+    if (fs::equivalent(from, into, ec)) {
+        r.error = tr(L"the backup is of the version in place");
+        return r;
+    }
+    const std::map<std::wstring, std::string> backupRelease = read_hash_list(from / kHashList);
+    if (backupRelease.empty()) {
+        r.error = tr(L"the backup has no SHA256.txt");
+        return r;
+    }
+    // The backup's files as its release had them (one not on its list was the user's at the install: as it is).
+    int checked = 0;
+    for (const auto& [path, hash] : backupRelease) {
+        progress({tr(L"Checking the backup"), static_cast<double>(++checked) / backupRelease.size()});
+        if (fs::exists(from / path, ec) && lower(sha256_file((from / path).c_str())) != hash) {
+            r.error = trf(L"{file} in the backup doesn't match its SHA256.txt", {{L"file", path}});
+            return r;
+        }
+    }
+    const std::map<std::wstring, std::string> release = read_hash_list(folder / kHashList);
+    std::vector<RestoreStep> plan = plan_restore(
+        backupRelease, release, [&](const std::wstring& path) { return fs::is_regular_file(from / path, ec); },
+        [&](const std::wstring& path) {
+            return fs::exists(folder / path, ec) ? sha256_file((folder / path).c_str()) : std::string();
+        });
+    plan.push_back({kHashList, RestoreAction::Restore});  // last: the backup's list
+
+    // The release in place into its own backup, the old files back; on a failure, everything back as it was.
+    progress({tr(L"Going back"), 0});
+    fs::remove_all(into, ec);
+    std::vector<std::wstring> movedOut, movedIn;  // folder -> into; from -> folder
+    const auto move = [&](const fs::path& source, const fs::path& target, const std::wstring& path) {
+        fs::create_directories(target.parent_path(), ec);
+        if (MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING))
+            return true;
+        r.error = trf(L"couldn't move {file} (error {code}): is it in use?",
+                      {{L"file", path}, {L"code", std::to_wstring(GetLastError())}});
+        return false;
+    };
+    bool ok = true;
+    for (size_t i = 0; i < plan.size() && ok; ++i) {
+        const RestoreStep& s = plan[i];
+        progress({tr(L"Going back"), static_cast<double>(i + 1) / plan.size()});
+        if (s.action == RestoreAction::Keep) {
+            ++r.kept;
+            continue;
+        }
+        if (fs::exists(folder / s.path, ec)) {
+            if (!(ok = move(folder / s.path, into / s.path, s.path)))
+                break;
+            movedOut.push_back(s.path);
+        }
+        if (s.action == RestoreAction::Restore) {
+            if (!(ok = move(from / s.path, folder / s.path, s.path)))
+                break;
+            movedIn.push_back(s.path);
+            ++r.replaced;
+        }
+    }
+    if (!ok) {
+        for (auto it = movedIn.rbegin(); it != movedIn.rend(); ++it)
+            MoveFileExW((folder / *it).c_str(), (from / *it).c_str(), MOVEFILE_REPLACE_EXISTING);
+        for (auto it = movedOut.rbegin(); it != movedOut.rend(); ++it)
+            MoveFileExW((into / *it).c_str(), (folder / *it).c_str(), MOVEFILE_REPLACE_EXISTING);
+        fs::remove_all(into, ec);
+        r.replaced = r.added = r.kept = 0;
+        return r;
+    }
+    // The backup is in place now; what's left of it (the old release's copies of files the user changed since) goes,
+    // and the release that was in place is the newest backup: Go back again returns to it.
+    fs::remove_all(from, ec);
+    fs::last_write_time(into, fs::file_time_type::clock::now(), ec);
+    r.ok = true;
+    return r;
 }
 
 }  // namespace simqvfr::launcher

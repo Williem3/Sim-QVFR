@@ -11,6 +11,7 @@
 // 4. Each file replaced moves into update\backup-<old version>\ first (the running launcher too: a running exe
 //    can be renamed). If a step fails, the files moved go back.
 // 5. The launcher restarts as the new one; the next start clears update\ but the backup.
+// 6. If the new release doesn't suit the player, Go back puts the backup in place again (restore_backup, below).
 #pragma once
 
 #include <functional>
@@ -65,5 +66,37 @@ InstallResult install_staged(const std::wstring& folder, const std::wstring& sta
 
 // At a start: update\ cleared but the newest backup.
 void clean_update_folder(const std::wstring& folder);
+
+// Going back (the About pane's Go back): the backup an install left put back in place, for a player the new release
+// doesn't suit. The release in place goes into update\backup-<its version>\ the same way an install's old files do,
+// so going back is itself undone with the same button. The user's files stay as they are, as an install keeps them.
+//
+// The backup that can be restored: the newest update\backup-*\ with its release's SHA256.txt; `version` from its
+// VERSION.txt ("Sim-QVFR 1.1.0-beta" -> "1.1.0-beta"), else from the folder's name. False if there is none.
+struct Backup {
+    std::wstring folder, version;
+};
+bool find_backup(const std::wstring& folder, Backup& backup);
+
+enum class RestoreAction { Restore, Remove, Keep };
+struct RestoreStep {
+    std::wstring path;  // relative, backslashes
+    RestoreAction action = RestoreAction::Restore;
+};
+// What going back does with each file (sim-qvfr.ini and SHA256.txt aside): Restore (the backup has it: the file in
+// place, as the release in place has it or missing, swapped for the backup's), Remove (the release in place added it
+// and it is still as added), Keep (the user's: changed since, so the backup's or the removal waits). `release` is the
+// release in place's list, `backupRelease` the backup's; `inBackup` whether the backup has a file, `current` an
+// installed file's hash (lowercase hex; empty: not there). Files neither list has are never touched.
+std::vector<RestoreStep> plan_restore(const std::map<std::wstring, std::string>& backupRelease,
+                                      const std::map<std::wstring, std::string>& release,
+                                      const std::function<bool(const std::wstring&)>& inBackup,
+                                      const std::function<std::string(const std::wstring&)>& current);
+
+// Puts `backup` (find_backup) back into `folder`, the release in place (`currentVersion`) into
+// update\backup-<currentVersion>; the backup's files are checked against its SHA256.txt first, and on a failure
+// everything goes back as it was. `result.backup` is where the release in place went.
+InstallResult restore_backup(const std::wstring& folder, const Backup& backup, const std::wstring& currentVersion,
+                             const std::function<void(const InstallProgress&)>& progress);
 
 }  // namespace simqvfr::launcher
