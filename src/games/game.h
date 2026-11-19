@@ -43,6 +43,16 @@ struct GameFeatures {
     bool focusMask = false;
 };
 
+// How the layer offers the game its QVFR views (GameAdapter::qvfr_eye_columns, qvfr_one_view_size, qvfr_separate_views,
+// layer/session.cpp), so the launcher checks the same image against the runtime's maximum size.
+enum class QvfrImage {
+    DoubleWide,     // ACE: one double-wide image, each eye an outer and a focus view side by side (half the maximum width)
+    EyeColumns,     // ACC: double-wide, each eye a column of its outer view over its focus view
+    OneViewSize,    // X-Plane: double-wide, each eye a column of two views at one size
+    SeparateViews,  // LMU: each view an image of its own (the whole maximum width); with multi-view the focus view beside
+                    // its eye (Views4Layout::beside_scale)
+};
+
 struct GameInfo {
     const char* id;              // "ace": its folder in src/games, and [launcher] game in the ini
     const wchar_t* name;         // "Assetto Corsa EVO", in the launcher and the headset notices
@@ -85,6 +95,7 @@ struct GameInfo {
     // QVFR runs on builds other than `builds` too (a game update, a beta branch), from what OpenXR and Direct3D show.
     // The launcher then warns instead of saying Sim-QVFR stays off.
     bool anyBuild = false;
+    QvfrImage qvfrImage = QvfrImage::DoubleWide;
 };
 
 // The game's id as the ini and the launcher's maps hold it (ids are ASCII: widened char by char).

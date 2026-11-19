@@ -23,6 +23,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     {false, false, true, false, false, true, false, false, true},
     kBuilds, std::size(kBuilds),
     true,  // early load: X-Plane creates its shader modules at startup, before OpenXR (docs/recon-xplane.md)
+    nullptr, nullptr, nullptr, {}, false,  // no crash reports known, no anti-cheat, the launcher's default sizes, its builds
+    simqvfr::games::QvfrImage::OneViewSize,  // adapter.cpp qvfr_eye_columns + qvfr_one_view_size
 };
 
 }  // namespace xplane

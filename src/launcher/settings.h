@@ -14,6 +14,7 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
+#include "../games/game.h"
 #include "../input/hotkeys.h"
 #include "../profile/profiles.h"
 #include "../quad/color_grade.h"
@@ -265,10 +266,12 @@ struct Readouts {
     double centerPpd = 0;      // the focus area's pixels per degree at its centre (0: not known yet)
     bool overRuntimeLimit = false;  // the offered eye is wider or taller than the runtime's maximum
 };
-// The chosen game (games::launcher_game) says whether it masks its focus views (GameFeatures::focusMask); the second
-// form says it outright (tests).
+// The chosen game (games::launcher_game) says whether it masks its focus views (GameFeatures::focusMask), how the layer
+// offers it its views (GameInfo::qvfrImage: which image the runtime's maximum size limits) and whether it has multi-view
+// rendering; the second form says them outright (tests).
 Readouts readouts(const Settings& settings, const RuntimeInfo& runtime);
-Readouts readouts(const Settings& settings, const RuntimeInfo& runtime, bool gameMasksFocus);
+Readouts readouts(const Settings& settings, const RuntimeInfo& runtime, bool gameMasksFocus,
+                  games::QvfrImage image = games::QvfrImage::DoubleWide, bool multiView = false);
 
 // VRAM at `settings` (QVFR), from the last launch's measurement: ACE's render targets that follow its
 // target scale with the target's area, the rest of its use stays. `mb` 0: not known (no QVFR launch yet,
