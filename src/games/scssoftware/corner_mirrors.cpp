@@ -341,9 +341,7 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
             g.context->VSGetShader(&s, nullptr, nullptr);
             shader.Attach(s);
         }
-        // The eye's own passes too (2026-11-18, the one-frame violet ground in one eye, with the focus view off as well):
-        // their pair rule wrote leftovers in arrays (the occluder pass's boxes) that happened to look like a pair.
-        if (shader && pixel) {
+        if (shader && pixel && focus) {
             UINT rowsSize = sizeof(rows);
             haveRows = SUCCEEDED(shader->GetPrivateData(lmu::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
         }
