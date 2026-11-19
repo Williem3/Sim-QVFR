@@ -96,6 +96,8 @@ void refresh(Mirror& m) {
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
+    ++m.serial;
+    mirror_diag_refresh(m);
     ++g.mirrorRefreshes;
 }
 
@@ -271,8 +273,22 @@ void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT) {
         }
 }
 
+// Our copies only for draws into eye-shaped targets (the corner's scale is theirs), not into anything else: the UI's own
+// 2880x1800 texture (its white elements turned violet: only they, not the panel's map, so there and not at its
+// composite onto the headset image), shadow maps.
+// The copies rewrite every eye-shaped pair by value, so a white colour (1,1,1,1) followed by such a size became the
+// corner's (0.4, 0.4, 2.5, 2.5): the one-frame violet UI and ground of 2026-11-18.
+void mirrors_for_target() {
+    const bool want = g.active && !g.mirrorsOff && g.cut;
+    if (want == g.mirrorsBound)
+        return;
+    g.mirrorsBound = want;
+    swap_bound(want);
+    ++g.mirrorTargetSwaps;
+}
+
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out) {
-    if (session_ending() || !g.active || g.mirrorsOff || GetCurrentThreadId() != g.thread)
+    if (session_ending() || !g.active || !g.mirrorsBound || g.mirrorsOff || GetCurrentThreadId() != g.thread)
         return false;
     bool changed = false;
     for (UINT i = 0; i < count; ++i) {

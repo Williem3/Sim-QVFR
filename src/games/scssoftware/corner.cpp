@@ -49,6 +49,7 @@ void take_frame_end() {
     mark(kMarkFrameEnd, 0);
     g.frameDraw = 0;
     ++g.stats.frames;
+    mirror_diag_frame_end();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
@@ -127,6 +128,7 @@ void take_frame_end() {
         g.activeNow.store(false, std::memory_order_relaxed);
         two_views(false);
         apply_views();      // the next frame's shared work at the game's own sizes
+        g.mirrorsBound = false;
         swap_bound(false);  // and the game's own constant buffers
     }
     if (g.stats.frames % kEvictFrames == 0)
@@ -143,15 +145,15 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("scs corner: %llu frames, %llu with the eyes in the corner; draws rewritten %llu, nothing to rewrite "
-                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu (drawn again for the focus view %llu), passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
+                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, drawn at full size and sent as drawn %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu (drawn again for the focus view %llu), non-indexed scene draws %llu, passes replayed %llu (%llu at the box's place), twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
                       static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames),
                       static_cast<unsigned long long>(g.stats.rewritten), static_cast<unsigned long long>(g.stats.notRewritten),
                       static_cast<unsigned long long>(g.stats.skipped),
                       g.mirrors.size(), static_cast<unsigned long long>(g.mirrorRefreshes),
                       static_cast<unsigned long long>(g.midFrameWrites), static_cast<unsigned long long>(g.mirrorSwaps),
-                      static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses),
+                      static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses), static_cast<unsigned long long>(g.fullImages),
                       static_cast<unsigned long long>(g.heldTwo), static_cast<unsigned long long>(g.focusDraws),
-                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.redraws), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
+                      static_cast<unsigned long long>(g.noTwin), static_cast<unsigned long long>(g.redraws), static_cast<unsigned long long>(g.geometryDraws), static_cast<unsigned long long>(g.replays), static_cast<unsigned long long>(g.positioned), g.twinViews.size(),
                       g.twinBytes / 1048576.0, static_cast<unsigned long long>(g.twinCopies),
                       static_cast<unsigned long long>(g.stretched), static_cast<unsigned long long>(g.composed), g.box[0][0], g.box[0][1],
                       g.box[1][0], g.box[1][1], static_cast<unsigned long long>(g.boxMoves),
@@ -256,7 +258,7 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
     g.boundSwapchain = false;
     for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
         g.boundRt[i] = nullptr;
-        if (g.focusPercent && rtvs && i < count && rtvs[i]) {
+        if (rtvs && i < count && rtvs[i]) {  // the corner alone too: its final blit into the headset image (blitAs)
             ComPtr<ID3D11Resource> res;
             rtvs[i]->GetResource(&res);
             D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
@@ -266,13 +268,16 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         }
     }
     g.boundChainEye = -1;
-    if (g.focusPercent && g.boundRt[0]) {
+    g.boundChain = -1;
+    if (g.boundRt[0]) {
         std::lock_guard lock(g.frameMutex);
         for (size_t i = 0; i < g.chains.size(); ++i)
-            for (ID3D11Texture2D* t : g.chains[i].images)
-                if (t == g.boundRt[0]) {
+            for (size_t k = 0; k < g.chains[i].images.size(); ++k)
+                if (g.chains[i].images[k] == g.boundRt[0]) {
                     g.boundSwapchain = true;
                     g.boundChainEye = g.chains[i].eye >= 0 ? g.chains[i].eye : static_cast<int>(i & 1);
+                    g.boundChain = static_cast<int>(i);
+                    g.boundImage = static_cast<uint32_t>(k);
                 }
     }
     if (g.active && w > 0 && w * 3 < g.eyeW)
@@ -290,13 +295,12 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         g.activeNow.store(true, std::memory_order_relaxed);
         if (g.gpuTimes)
             gpu_pass_begin();
-        if (!g.mirrorsOff)
-            swap_bound(true);  // the binds made before this one, to our rewritten copies
     }
     g.boundW = w;
     g.boundH = h;
     g.cut = eye_shaped(w, h);
     g.smallTarget = w > 0 && w <= 64 && h <= 64;
+    mirrors_for_target();
     if ((g.active && g.cut) != wasCut || (g.active && g.cut))
         apply_views();
 }
@@ -331,6 +335,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     g.instancedDraw = false;
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
+    mirror_diag_draw();
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
@@ -349,6 +354,18 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         return;
     mark(kMarkDraw, ++g.frameDraw & 0xFFFFFF);  // the full-screen passes: few, each marked
     two_views(false);  // the full-screen passes: one view
+    // The game's final blit into a headset image: into the corner (this frame's corner holds the eye) or at full size
+    // (a frame the corner didn't take: its image must go out as drawn, not scaled back: the sky-flash, 2026-11-18).
+    if (g.boundSwapchain && g.boundChain >= 0 && count == 3 && entry == ch::kDraw) {
+        std::lock_guard lock(g.frameMutex);
+        if (static_cast<size_t>(g.boundChain) < g.chains.size()) {
+            State::Chain& c = g.chains[g.boundChain];
+            if (c.blitAs.size() < c.images.size())
+                c.blitAs.resize(c.images.size(), 0);
+            if (g.boundImage < c.blitAs.size())
+                c.blitAs[g.boundImage] = g.active && g.cut ? 1 : 2;
+        }
+    }
     if (g.focusPercent && g.boundSwapchain && g.burstFramesLeft > 0 && count == 3) {  // the eye's final image, whole
         ID3D11ShaderResourceView* v = nullptr;
         g.context->PSGetShaderResources(0, 1, &v);
@@ -382,6 +399,14 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         }
         vs = rewrite(g.vs, false, false, haveRows ? rows : nullptr);
         ps = rewrite(g.ps, true);
+    }
+    // Scene geometry drawn without an index buffer (ATS's rain: a compute pass makes the drops, then Draw of thousands of
+    // vertices into the full-size target with the scene's depth, 2026-11-18: no drops in the focus box): its focus
+    // view too, as an indexed scene draw's. More than 6 vertices: not a full-screen pass (3) nor a UI quad (6).
+    if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize && !g.boundSwapchain && count > 6) {
+        const Timed t(State::kTimeFocusDraws);
+        focus_draw();
+        ++g.geometryDraws;
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
     if (focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
@@ -557,6 +582,7 @@ void restore_game_state() {
     two_views(false);
     g.viewsDual = false;
     apply_views();  // not active: the game's own
+    g.mirrorsBound = false;
     swap_bound(false);
 }
 
@@ -852,6 +878,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 }
 
 void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
+
+void corner_mirror_diag(bool on) { mirror_diag_enable(on); }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
                      bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {

@@ -238,13 +238,16 @@ bool isEyeSize(float4 v) {
     return v.z == 1 && v.w == 1 && v.x >= 16 && v.x <= eye.x && v.y <= eye.y && v.x == floor(v.x) && v.y == floor(v.y) &&
            abs(v.x * eye.y - v.y * eye.x) <= max(eye.x, eye.y);
 }
+// A pair is one draw's two vectors: the game hands out these buffers in blocks of 16 vectors (every bound range starts
+// at a multiple of 16), so both lie in one block. A (1,1,1,1) closing one block before a size opening the next is two
+// draws' data meeting (a white colour: the one-frame violet UI and ground, 2026-11-18, gone with the mirrors off).
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= count)
         return;
     float4 v = at(i);
-    if (i > 0 && isOnes(at(i - 1)) && isEyeSize(v))
+    if (i > 0 && (i & 15) != 0 && isOnes(at(i - 1)) && isEyeSize(v))
         v = float4(f * v.xy, f);
-    else if (i + 1 < count && isOnes(v) && isEyeSize(at(i + 1)))
+    else if (i + 1 < count && ((i + 1) & 15) != 0 && isOnes(v) && isEyeSize(at(i + 1)))
         v = float4(f, 1 / f);
     dst.Store4(i * 16, asuint(v));
 }

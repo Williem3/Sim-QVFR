@@ -58,6 +58,7 @@ struct Mirror {
     uint64_t usedFrame = 0;  // the last frame a bind used it (evict_mirrors)
     int id = -1;             // its slot in State::mirrorIds (every mirror has one: learn mirrors nothing without)
     uint32_t seenGen = 0;    // State::mirrorGen[id] as of the copy
+    uint32_t serial = 0;     // its refreshes so far (the mirror diagnostic's key)
 };
 
 struct Range {
@@ -90,6 +91,11 @@ struct State {
     // The rewrite: the game's range copied in, rewritten out, then copied into the constant buffer bound.
     ComPtr<ID3D11Buffer> params;
     uint64_t positioned = 0;  // focus replays drawn with their shader's position twin
+    uint64_t geometryDraws = 0;  // non-indexed scene draws (particles: rain) given their focus view
+    int boundChain = -1;          // the headset image bound (g.chains index, image index), with boundSwapchain
+    uint32_t boundImage = 0;
+    uint64_t fullImages = 0, fullSent = 0;  // eye images drawn at full size in a cornered frame: not scaled back
+    int fullLogged = 0;
     bool forceUiRedraw = false;  // [experiment] scs_force_ui_redraw=1 (dev builds): redraw_focus for every UI draw
     bool redrawFocus = false;  // this draw (onto the headset's image, no twin) is drawn again for the focus view after it
     uint64_t redraws = 0, redrawsOutOfBounds = 0;
@@ -139,6 +145,8 @@ struct State {
     // Ctrl+Alt+N: the scene draws read the game's own buffers (no mirror copies), live; the full-screen passes keep their
     // per-draw rewrite (it reads the game's buffer itself).
     bool mirrorsOff = false, mirrorsKeyDown = false;
+    bool mirrorsBound = false;      // our copies are bound in the game's place now (mirrors_for_target)
+    uint64_t mirrorTargetSwaps = 0;
     Range vs, ps;
     CornerStats stats;
     uint64_t loggedDraws = 0;
@@ -156,6 +164,10 @@ struct State {
         // image and released this one unscaled: the small copy popping in).
         std::deque<uint32_t> held;
         bool scaled = false;                   // scaled back at this frame's release
+        // Per image: how the game's last full-screen blit into it went this frame (1 into the corner, 2 at full size:
+        // a frame the corner didn't hold, sent as drawn), cleared at its release; fullThisFrame: such an image was released.
+        std::vector<uint8_t> blitAs;
+        bool fullThisFrame = false;
         int eye = -1;                          // the view it is submitted for (xrEndFrame)
     };
     std::vector<Chain> chains;
@@ -418,6 +430,12 @@ void evict_mirrors(bool orphans = false);
 // stayed full for up to 900 frames, 3.5 million binds unmirrored and not rewritten for the corner).
 void release_orphans();
 void swap_bound(bool on);
+void mirrors_for_target();  // our copies bound or not for the bound target (corner_mirrors.cpp)
+// corner_mirror_diag.cpp (dev builds, [experiment] scs_mirror_diag=1)
+void mirror_diag_enable(bool on);
+void mirror_diag_refresh(const Mirror& m);
+void mirror_diag_draw();
+void mirror_diag_frame_end();
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
