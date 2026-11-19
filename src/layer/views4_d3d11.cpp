@@ -311,14 +311,18 @@ bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<Xr
     }
     if (!any && !grade)
         return false;
+    // Off for the session: the padding when the crop needed it (with colour correction, both), only colour correction
+    // when the copy was for it alone, so a crop turned on later is still padded (issue 29).
     const auto fail = [any](const char* why) {
-        if (any)
+        if (any) {
             logf("native quad views: the FOV crop's periphery can't be padded out to the runtime's eyes (%s): views 0-1 "
                  "as rendered (the runtime may stretch them)",
                  why);
-        else
+            v4d3d11.padFailed = true;
+        } else {
             logf("native quad views: colour correction off: the periphery can't be copied to grade it (%s)", why);
-        v4d3d11.padFailed = true;
+            v4d3d11.padGradeFailed = true;
+        }
         return false;
     };
     ID3D11Texture2D* source[2] = {};

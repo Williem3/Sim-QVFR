@@ -221,7 +221,14 @@ void start_restore() {
     s.title = newer ? trf(L"Return to Sim-QVFR {version}?", {{L"version", app.backup->version}})
                     : trf(L"Go back to Sim-QVFR {version}?", {{L"version", app.backup->version}});
     const std::wstring mine = widen(SIM_QVFR_VERSION);
-    s.text = newer ? trf(L"The launcher puts back the version you went back from and restarts. Your settings, profiles, "
+    // A launcher before 1.2.2-beta has no Go back and no skipped version: it offers this one again as an update.
+    const bool olderLauncher = !newer && compare_versions(app.backup->version, L"1.2.2") < 0;
+    s.text = olderLauncher
+                 ? trf(L"The launcher puts back the version you had before the last update and restarts. Your settings, "
+                       L"profiles, logs and any file you changed stay. {old} has no Go back of its own and offers "
+                       L"{version} again as an update: to come back, install it from About.",
+                       {{L"old", app.backup->version}, {L"version", mine.substr(0, mine.find(L' '))}})
+           : newer ? trf(L"The launcher puts back the version you went back from and restarts. Your settings, profiles, "
                          L"logs and any file you changed stay. The version you have now ({version}) is kept in the "
                          L"update folder, so you can switch back the same way.",
                          {{L"version", mine}})

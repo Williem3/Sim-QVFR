@@ -274,6 +274,15 @@ int SIM_QVFR_TEST_MAIN() {
               "go back: a backup file that doesn't match its list stops it");
         check(!restore_backup(app.wstring(), backup, L"1", [](const InstallProgress&) {}).ok,
               "go back: never into the backup it reads from");
+
+        // A backup without its launcher (deleted by hand, quarantined): refused, nothing moved.
+        put(app / "update/backup-1/layer/sim-qvfr.dll", "old layer");
+        fs::remove(app / "update/backup-1/sim-qvfr-launcher.exe", ec);
+        const InstallResult partial = restore_backup(app.wstring(), backup, L"2", [](const InstallProgress&) {});
+        check(!partial.ok && partial.error.find(L"launcher") != std::wstring::npos &&
+                  read_file((app / "sim-qvfr-launcher.exe").wstring(), readBack) && readBack == "new launcher" &&
+                  read_file((app / "VERSION.txt").wstring(), version) && version == "Sim-QVFR 2",
+              "go back: a backup missing its launcher or layer is refused");
     }
 
     fs::remove_all(folder, ec);

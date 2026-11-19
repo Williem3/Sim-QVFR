@@ -412,6 +412,18 @@ InstallResult restore_backup(const std::wstring& folderText, const Backup& backu
             return r;
         }
     }
+    // Its launcher and layer, as an install asks of a release: each in the backup, or the one in place already its
+    // release's (an install left a file it didn't change in place). Otherwise going back would mix two versions.
+    for (const wchar_t* path : {L"sim-qvfr-launcher.exe", L"layer\\sim-qvfr.dll"}) {
+        const auto listed = backupRelease.find(path);
+        const bool there = listed != backupRelease.end() &&
+                           (fs::is_regular_file(from / path, ec) ||
+                            (fs::is_regular_file(folder / path, ec) && lower(sha256_file((folder / path).c_str())) == listed->second));
+        if (!there) {
+            r.error = tr(L"the backup has no launcher or layer in it");
+            return r;
+        }
+    }
     const std::map<std::wstring, std::string> release = read_hash_list(folder / kHashList);
     std::vector<RestoreStep> plan = plan_restore(
         backupRelease, release, [&](const std::wstring& path) { return fs::is_regular_file(from / path, ec); },
