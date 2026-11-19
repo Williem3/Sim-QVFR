@@ -153,6 +153,9 @@ bool spots_place(const void* code, size_t size, UINT (&out)[5]) {
     D3D11_SHADER_BUFFER_DESC bd{};
     if (!cb || FAILED(cb->GetDesc(&bd)))
         return false;
+    // The array at its buffer's start (the readers index it from 0, 64 bytes each): anything before it, none taken.
+    if (sd.StartOffset != 0)
+        return false;
     // The count's and the indices' buffer, and the worldMatrix in it (every member is listed, used or not).
     out[4] = ~0u;
     ID3D11ShaderReflectionConstantBuffer* drawCb = count->GetBuffer();

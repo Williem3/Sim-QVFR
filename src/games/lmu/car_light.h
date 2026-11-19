@@ -75,6 +75,7 @@ public:
     void add_spots(unsigned slot, uint32_t count, const uint32_t* packed, unsigned capacity, const float (&origin)[3],
                    const uint8_t* spotBuffer, size_t spotBytes);
     static constexpr unsigned kSpotsPerSlot = 6;
+    // The frame's spotlights (LMU's indices) the slots packed so far use: packed() adds a slot's kept ones.
     const std::vector<uint16_t>& spots() const { return spots_; }
     static constexpr unsigned kMaxSpots = 32;
     // The frame's floodlights the most car parts were handed (the ground's shadows'), up to 4 (-1: none). Chosen at the
@@ -99,7 +100,7 @@ private:
         float distance[kPerSlot];
         uint8_t count = 0;
         uint64_t generation = ~0ull;
-        uint8_t spot[kSpotsPerSlot];
+        uint16_t spot[kSpotsPerSlot];  // LMU's indices
         float spotWeight[kSpotsPerSlot];
         uint8_t spotCount = 0;
     };
@@ -114,7 +115,7 @@ private:
     uint32_t frame_ = 1;
     // The last buffer parsed (most draws repeat the draw before's lights: run 1 had ~1,000 car part draws a frame, and
     // each matched its 20 entries against the frame's table): its bytes, and per entry the light's index (-1 unusable).
-    std::vector<uint16_t> spots_;
+    mutable std::vector<uint16_t> spots_;  // the frame's spotlights the passes relit parts with (packed() adds)
     std::vector<uint8_t> lastBuffer_;
     int lastIndex_[32] = {};
     uint32_t lastFrame_ = 0;

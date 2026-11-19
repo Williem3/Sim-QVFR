@@ -231,7 +231,7 @@ void table_checks() {
     {
         lmu::CarLightTable frozen(16);
         frozen.begin_frame();
-        frozen.draw(3, origin, buffer.data(), buffer.size(), layout, 1, true);
+        frozen.draw(3, origin, buffer.data(), buffer.size(), layout, 1, true, true, true, true);
         int topBefore[4], topAfter[4];
         frozen.top_lights(topBefore);
         uint32_t before[4], after[4];
@@ -243,8 +243,11 @@ void table_checks() {
         frozen.draw(3, origin, other.data(), other.size(), layout, 9, false);
         frozen.packed(3, after);
         frozen.top_lights(topAfter);
-        check(std::memcmp(before, after, sizeof(before)) == 0 && std::memcmp(topBefore, topAfter, sizeof(topBefore)) == 0,
+        check(before[0] == after[0] && before[1] == after[1] && before[3] == after[3] &&
+                  (before[2] & 0xffff00u) == (after[2] & 0xffff00u) && std::memcmp(topBefore, topAfter, sizeof(topBefore)) == 0,
               "table: a relit slot's lists and the ground's floodlights kept for the frame (the other eye's draws)");
+        check((before[2] & 0xff) == 15 && (after[2] & 0xff) == 1,
+              "table: drawn again without the game's normal, its flags go (that pass's targets hold none for it)");
     }
     // A new frame: the slots' lists start again.
     table.begin_frame();
@@ -551,9 +554,9 @@ void pass_checks(bool hardware) {
         lamps.draw(0, at, noLights.data(), noLights.size(), lmu::OmniLayout{0, 320, 20}, 1, true);
         const uint32_t packed[10] = {2};  // one index: 2
         lamps.add_spots(0, 1, packed, 4, at, reinterpret_cast<const uint8_t*>(spotBuffer.data()), spotBuffer.size() * 4);
-        check(lamps.spots().size() == 1 && lamps.spots()[0] == 2, "headlights: the draw's spotlight kept for the frame");
         uint32_t sw[4];
         lamps.packed(0, sw);
+        check(lamps.spots().size() == 1 && lamps.spots()[0] == 2, "headlights: the draw's spotlight kept for the frame");
         check((sw[3] & 0xff) == 0 && ((sw[3] >> 8) & 0xff) == 0xff && ((sw[2] >> 8) & 0xffff) == 0xffff,
               "headlights: slot 0 lists it (the frame's spotlight 0), the rest none");
         {  // Eight spotlights handed to one part, the brighter the higher: the six strongest kept, not LMU's first six.
@@ -585,7 +588,9 @@ void pass_checks(bool hardware) {
                 if (si < 8)
                     keptMask |= 1u << many.spots()[si];
             }
-            check(keptMask == 0xfcu, "headlights: a part handed eight keeps the six strongest (not LMU's first six)");
+            check(keptMask == 0xfcu && many.spots().size() == 6,
+                  "headlights: a part handed eight keeps the six strongest (not LMU's first six), the frame's list only "
+                  "those");
         }
         const auto brightest_car = [&](bool on, const std::vector<float>& buffer) {
             reset();

@@ -54,6 +54,14 @@ void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t*
         return;
     SlotLights& s = slotLights_[slot];
     if (slotFrozen_[slot] == frame_ && slotFrame_[slot] == frame_) {  // relit already this frame: its lists kept
+        // Its targets' flags still go with this draw: drawn in this pass by a shader that doesn't write the normal
+        // (occlusion, bent normal), the target holds none for it here (cleared: a black normal, occlusion 0).
+        if (!normal)
+            slotPaint_[slot] &= static_cast<uint8_t>(~14u);
+        if (!ao)
+            slotPaint_[slot] &= static_cast<uint8_t>(~4u);
+        if (!detail)
+            slotPaint_[slot] &= static_cast<uint8_t>(~8u);
         firstSlot_ = (std::min)(firstSlot_, slot);
         lastSlot_ = (std::max)(lastSlot_, slot);
         return;
@@ -154,28 +162,25 @@ void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* pac
     SlotLights* s = slot < slotLights_.size() && slotFrame_[slot] == frame_ && slotFrozen_[slot] != frame_
                         ? &slotLights_[slot]
                         : nullptr;
+    if (!s)
+        return;
+    // The slot's own: LMU's indices kept (the strongest six at it); the frame's list (what the GPU's spotlights are)
+    // gets only kept ones, when a pass packs the slot. Every listed one there filled its 32 first-come, and cars drawn
+    // later lost their headlights (review, 2026-11-19).
     for (uint32_t k = 0; k < count; ++k) {
         const uint32_t index = (packed[k / 2] >> (16 * (k & 1))) & 0xffff;
         if (index >= capacity)
             continue;
-        auto at = std::find(spots_.begin(), spots_.end(), static_cast<uint16_t>(index));
-        if (at == spots_.end()) {
-            if (spots_.size() >= kMaxSpots)
-                continue;
-            spots_.push_back(static_cast<uint16_t>(index));
-            at = spots_.end() - 1;
-        }
-        const uint8_t local = static_cast<uint8_t>(at - spots_.begin());
-        if (!s)
-            continue;
         bool known = false;
         for (uint8_t j = 0; j < s->spotCount; ++j)
-            known = known || s->spot[j] == local;
+            known = known || s->spot[j] == index;
         if (known)
             continue;
         const float w = spot_weight(spotBuffer, spotBytes, index, origin);
+        if (w <= 0)
+            continue;  // out of its reach, or unreadable
         if (s->spotCount < kSpotsPerSlot) {
-            s->spot[s->spotCount] = local;
+            s->spot[s->spotCount] = static_cast<uint16_t>(index);
             s->spotWeight[s->spotCount++] = w;
         } else {  // full: in place of the weakest, when stronger
             uint8_t weakest = 0;
@@ -183,7 +188,7 @@ void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* pac
                 if (s->spotWeight[j] < s->spotWeight[weakest])
                     weakest = j;
             if (w > s->spotWeight[weakest]) {
-                s->spot[weakest] = local;
+                s->spot[weakest] = static_cast<uint16_t>(index);
                 s->spotWeight[weakest] = w;
             }
         }
@@ -233,13 +238,24 @@ void CarLightTable::packed(unsigned slot, uint32_t (&out)[4]) const {
         const unsigned shift = 8 * (k % 4);
         word = (word & ~(0xffu << shift)) | (static_cast<uint32_t>(s.index[k]) << shift);
     }
-    // The spotlights: 0-3 in the last word, 4-5 above the flags.
+    // The spotlights: 0-3 in the last word, 4-5 above the flags, as their places in the frame's list (added now: the
+    // ones a pass relights; one past its 32 left out).
     out[3] = 0xffffffffu;
     out[2] = slotPaint_[slot] | 0xffff00u;
+    uint8_t n = 0;
     for (uint8_t k = 0; k < s.spotCount; ++k) {
-        uint32_t& word = k < 4 ? out[3] : out[2];
-        const unsigned shift = k < 4 ? 8 * k : 8 * (k - 3);
-        word = (word & ~(0xffu << shift)) | (static_cast<uint32_t>(s.spot[k]) << shift);
+        auto at = std::find(spots_.begin(), spots_.end(), s.spot[k]);
+        if (at == spots_.end()) {
+            if (spots_.size() >= kMaxSpots)
+                continue;
+            spots_.push_back(s.spot[k]);
+            at = spots_.end() - 1;
+        }
+        const uint32_t local = static_cast<uint32_t>(at - spots_.begin());
+        uint32_t& word = n < 4 ? out[3] : out[2];
+        const unsigned shift = n < 4 ? 8u * n : 8u * (n - 3);
+        word = (word & ~(0xffu << shift)) | (local << shift);
+        ++n;
     }
 }
 
@@ -776,7 +792,9 @@ Out ps_main(float4 pos : SV_Position) {
     float3 Nh = N;
     if (mode.y > 0 && (info.z & 8) != 0) {
         float3 bent = mul(float4(load_detail(p), 0), viewM).xyz;  // as the game looked up with it (any length)
-        if (dot(bent, bent) > 1e-6) {
+        // Taken while it stays near the surface's own (a normal map bends it by tens of degrees at most): a lookup in
+        // another space (swizzled or negated axes) or with another vector would point elsewhere.
+        if (dot(bent, bent) > 1e-6 && dot(normalize(bent), N) > 0.5) {
             Nh = normalize(bent);
             if (dot(Nh, V) < 0)
                 Nh = -Nh;
@@ -1350,11 +1368,9 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
     // Without the copy the modes that read it are off (night vision's output from a missing copy is black).
     const bool copied = sceneView != nullptr;
     if (!relight && !copied) {
-        if (timed) {
+        if (timed) {  // ended, not counted (no run: its time would skew the averages)
             context->End(timer.end.Get());
             context->End(timer.disjoint.Get());
-            timer.pending = true;
-            m.nextTimer = (m.nextTimer + 1) % kTimerSlots;
         }
         return false;
     }
@@ -1440,8 +1456,9 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         rest[21] = s.ground ? 1.0f : 0.0f;
         rest[22] = s.nightVision && copied ? 1.0f : 0.0f;
         rest[23] = relight ? 0.0f : 1.0f;  // night vision's colour alone
-        int top[4];
-        table.top_lights(top);
+        int top[4] = {-1, -1, -1, -1};
+        if (relight)  // (night vision's colour alone doesn't fix the frame's choice: none of its parts were drawn yet)
+            table.top_lights(top);
         for (int k = 0; k < 4; ++k)
             rest[24 + k] = static_cast<float>(top[k]);
         context->UpdateSubresource(m.passCb.Get(), 0, nullptr, cb, 0, 0);

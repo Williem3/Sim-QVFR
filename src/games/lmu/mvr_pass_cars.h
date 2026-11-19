@@ -612,31 +612,33 @@ void car_light_record(unsigned slot) {
         // The headlights: the spotlights' buffer learned from the first draw whose shader reads them; the draw's own
         // spotlights (its indices, read with its matrix) kept for the frame.
         if (pe && pe->spotSlot >= 0) {
-            // Still the buffer bound (checked once a frame): LMU making a new one (a session's change) would leave our
-            // copy of the old one, stale, in use.
-            if (g.spotRes && g.spotCheckedFrame != g.carFrame) {
+            // The buffer this draw has bound, checked when the pixel shader changes (and each frame): a draw with
+            // another buffer is given no headlights (its indices are into that one). A new frame whose checks never
+            // found ours, 30 frames in a row: LMU made a new one (a session's change), learned again (never between
+            // the game's Map and Unmap of it: its write is in our copy until then).
+            if (g.spotCheckedFrame != g.carFrame) {
+                if (g.spotFrameChecked && !g.spotFrameMatched)
+                    ++g.spotOtherFrames;
+                else if (g.spotFrameChecked)
+                    g.spotOtherFrames = 0;
+                g.spotFrameChecked = g.spotFrameMatched = false;
                 g.spotCheckedFrame = g.carFrame;
-                ID3D11Buffer* b = nullptr;
-                g.context->PSGetConstantBuffers(static_cast<UINT>(pe->spotSlot), 1, &b);
-                // Another for 30 frames in a row (a car shader with a buffer of its own now and then doesn't flip it).
-                g.spotOtherFrames = b && b != g.spotRes ? g.spotOtherFrames + 1 : 0;
-                if (g.spotOtherFrames >= 30 && !g.spotReal) {  // (never between the game's Map and Unmap of it:
-                                                               // its write is in our copy until then)
+                g.spotCheckedPs = nullptr;
+                if (g.spotRes && g.spotOtherFrames >= 30 && !g.spotReal) {
                     g.spotOtherFrames = 0;
                     if (++g.spotRelearned <= 3)
                         simqvfr::logf("lmu car light: the spotlights' buffer changed: learned again (%u)", g.spotRelearned);
                     g.spotRes = nullptr;
                     g.spotHeld.Reset();
-                    g.spotReal = nullptr;
                     g.spotValid = false;
                 }
-                if (b)
-                    b->Release();
             }
-            if (!g.spotRes) {
+            if (g.gamePs != g.spotCheckedPs) {
+                g.spotCheckedPs = g.gamePs;
                 ID3D11Buffer* b = nullptr;
                 g.context->PSGetConstantBuffers(static_cast<UINT>(pe->spotSlot), 1, &b);
-                if (b) {
+                if (!g.spotRes && b && g.spotLearnFrame != g.carFrame) {  // learning: once a frame at most
+                    g.spotLearnFrame = g.carFrame;
                     D3D11_BUFFER_DESC bd{};
                     b->GetDesc(&bd);
                     if (bd.Usage == D3D11_USAGE_DYNAMIC && bd.ByteWidth >= pe->spotCapacity * 64 && bd.ByteWidth <= 262144) {
@@ -649,9 +651,18 @@ void car_light_record(unsigned slot) {
                         simqvfr::logf("lmu car light: the spotlights' buffer learned (%u bytes, %u spotlights; the draw's "
                                       "count at %u, indices at %u)",
                                       bd.ByteWidth, pe->spotCapacity, pe->spotCountOffset, pe->spotIndexOffset);
+                    } else if (!g.spotRefusalSaid) {
+                        g.spotRefusalSaid = true;
+                        simqvfr::logf("lmu car light: the spotlights' buffer not taken (usage %d, %u bytes for %u "
+                                      "spotlights): no headlight highlights until one is",
+                                      static_cast<int>(bd.Usage), bd.ByteWidth, pe->spotCapacity);
                     }
-                    b->Release();
                 }
+                g.spotBoundOk = b && b == g.spotRes;
+                g.spotFrameChecked = true;
+                g.spotFrameMatched = g.spotFrameMatched || g.spotBoundOk;
+                if (b)
+                    b->Release();
             }
             // The draw's count and indices, at its shader's offsets, from the per-draw buffer's last write: only where
             // its shader's count sits in the buffer the matrix is read from (its worldMatrix at the same offset).
@@ -661,7 +672,7 @@ void car_light_record(unsigned slot) {
             if (sameBuffer && hi <= g.worldBytes && (lo < g.spotLo || hi > g.spotHi)) {  // from the next write
                 g.spotLo = (std::min)(g.spotLo, lo);
                 g.spotHi = (std::max)(g.spotHi, hi);
-            } else if (sameBuffer && g.spotValid && g.drawSpotsRead && lo >= g.spotLo && hi <= g.spotHi &&
+            } else if (sameBuffer && g.spotBoundOk && g.spotValid && g.drawSpotsRead && lo >= g.spotLo && hi <= g.spotHi &&
                        g.drawSpotBytes.size() >= g.spotHi - g.spotLo) {
                 uint32_t count = 0, packed[10] = {};
                 std::memcpy(&count, g.drawSpotBytes.data() + (pe->spotCountOffset - g.spotLo), 4);

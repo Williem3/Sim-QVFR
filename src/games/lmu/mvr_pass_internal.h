@@ -296,8 +296,14 @@ struct State {
     UINT spotLo = ~0u, spotHi = 0;
     std::vector<uint8_t> drawSpotBytes;
     bool drawSpotsRead = false;
+    bool carLightsBegun = false;  // the table began this frame at pass 0 (pass 1 begins it otherwise)
     unsigned long long spotCheckedFrame = 0;  // the frame the spotlights' buffer was last checked to be still the one bound
-    unsigned spotOtherFrames = 0;             // frames in a row another buffer was bound there (30: learned again)
+    unsigned spotOtherFrames = 0;             // frames in a row no check found ours bound (30: learned again)
+    ID3D11PixelShader* spotCheckedPs = nullptr;  // the pixel shader the bound buffer was last checked for (compared only)
+    bool spotBoundOk = false;                 // that check found ours bound
+    bool spotFrameChecked = false, spotFrameMatched = false;  // this frame: a check made, one found ours
+    unsigned long long spotLearnFrame = 0;    // the frame a buffer was last tried for learning (once a frame)
+    bool spotRefusalSaid = false;
     unsigned spotRelearned = 0;               // times learned again (the log: the first few)
     ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
     ComPtr<ID3D11Buffer> omniHeld;

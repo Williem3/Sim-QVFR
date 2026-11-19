@@ -92,7 +92,7 @@ bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const c
             *why = "several pairs with the eye's FOV, none with static-world draws";
         return false;
     }
-    if (matching > 1 && choiceSaid < 3) {  // which spaces share the eye's FOV (the log)
+    if (matching > 1 && !strict && choiceSaid < 3) {  // which spaces share the eye's FOV (the log: DLSS's calls only)
         ++choiceSaid;
         char text[768];
         int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d: %d cameras with the eye's FOV, "
@@ -242,7 +242,7 @@ namespace {
 // lmu_pass_camera's: the last camera found per eye and when (ms, GetTickCount64), the source this frame's first eye
 // took (the second takes the same), the renderer's eye mismatches.
 float camLastView[2][16], camLastViewProj[2][16];
-unsigned long long camFoundAt[2] = {}, camOtherEye = 0, camSourceMixed = 0;
+unsigned long long camFoundAt[2] = {}, camOtherEye = 0, camSourceMixed = 0, camDecidedAt = 0;
 bool camHave[2] = {};
 int camOtherEyeSaid = 0, camMixedSaid = 0;
 bool camFrameRenderer = false;  // eye 0 took the renderer's this frame
@@ -285,9 +285,15 @@ bool lmu_pass_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
     // Both eyes of a frame from one source: the renderer's where the first eye had it, else the drawn pairs' for both
     // (the two can differ a little: one eye from each would reconstruct depth and place lights differently).
     bool found = false;
-    if (e == 0) {
+    const unsigned long long now = GetTickCount64();
+    // The second eye follows the first only when the first decided this frame (within 20 ms): with the first eye off,
+    // or not relit, it decides for itself.
+    const bool followFirst = e == 1 && camDecidedAt && now - camDecidedAt <= 20;
+    if (e == 0 || !followFirst) {
         camFrameRenderer = renderer_camera(eye, view, projection);
         found = camFrameRenderer;
+        if (e == 0)
+            camDecidedAt = now;
     } else if (camFrameRenderer) {
         found = renderer_camera(eye, view, projection);
         if (!found) {
@@ -302,7 +308,6 @@ bool lmu_pass_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
     }
     if (!found)
         found = drawn_matrices(eye, view, projection, nullptr, true);
-    const unsigned long long now = GetTickCount64();
     if (found) {
         view_proj(view, projection, viewProj);
         std::memcpy(camLastView[e], view, sizeof(view));
@@ -311,9 +316,9 @@ bool lmu_pass_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
         camHave[e] = true;
         return true;
     }
-    // None this pass: the eye's last within 100 ms (a few frames; a pause, the garage or a session change in between
-    // is longer, and an old pose isn't taken).
-    if (camHave[e] && now - camFoundAt[e] <= 100) {
+    // None this pass: the eye's last within 50 ms (~4 frames: a head turn in that time moves its lights a little; a
+    // pause, the garage or a session change in between is longer, and an old pose isn't taken).
+    if (camHave[e] && now - camFoundAt[e] <= 50) {
         std::memcpy(view, camLastView[e], sizeof(view));
         std::memcpy(viewProj, camLastViewProj[e], sizeof(viewProj));
         return true;
