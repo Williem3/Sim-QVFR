@@ -618,8 +618,13 @@ void car_light_record(unsigned slot) {
                 g.spotCheckedFrame = g.carFrame;
                 ID3D11Buffer* b = nullptr;
                 g.context->PSGetConstantBuffers(static_cast<UINT>(pe->spotSlot), 1, &b);
-                if (b && b != g.spotRes) {
-                    simqvfr::log_line("lmu car light: the spotlights' buffer changed: learned again");
+                // Another for 30 frames in a row (a car shader with a buffer of its own now and then doesn't flip it).
+                g.spotOtherFrames = b && b != g.spotRes ? g.spotOtherFrames + 1 : 0;
+                if (g.spotOtherFrames >= 30 && !g.spotReal) {  // (never between the game's Map and Unmap of it:
+                                                               // its write is in our copy until then)
+                    g.spotOtherFrames = 0;
+                    if (++g.spotRelearned <= 3)
+                        simqvfr::logf("lmu car light: the spotlights' buffer changed: learned again (%u)", g.spotRelearned);
                     g.spotRes = nullptr;
                     g.spotHeld.Reset();
                     g.spotReal = nullptr;

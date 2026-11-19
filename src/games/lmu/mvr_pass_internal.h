@@ -297,6 +297,8 @@ struct State {
     std::vector<uint8_t> drawSpotBytes;
     bool drawSpotsRead = false;
     unsigned long long spotCheckedFrame = 0;  // the frame the spotlights' buffer was last checked to be still the one bound
+    unsigned spotOtherFrames = 0;             // frames in a row another buffer was bound there (30: learned again)
+    unsigned spotRelearned = 0;               // times learned again (the log: the first few)
     ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
     ComPtr<ID3D11Buffer> omniHeld;
     UINT omniBytes = 0;

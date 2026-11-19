@@ -53,6 +53,11 @@ void CarLightTable::draw(unsigned slot, const float (&origin)[3], const uint8_t*
     if (bufferBytes < need)
         return;
     SlotLights& s = slotLights_[slot];
+    if (slotFrozen_[slot] == frame_ && slotFrame_[slot] == frame_) {  // relit already this frame: its lists kept
+        firstSlot_ = (std::min)(firstSlot_, slot);
+        lastSlot_ = (std::max)(lastSlot_, slot);
+        return;
+    }
     if (slotFrame_[slot] != frame_) {  // its first draw this frame: a list of its own again
         slotFrame_[slot] = frame_;
         s.count = 0;
@@ -146,7 +151,9 @@ void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* pac
                               const float (&origin)[3], const uint8_t* spotBuffer, size_t spotBytes) {
     if (!packed || count > 20)
         return;
-    SlotLights* s = slot < slotLights_.size() && slotFrame_[slot] == frame_ ? &slotLights_[slot] : nullptr;
+    SlotLights* s = slot < slotLights_.size() && slotFrame_[slot] == frame_ && slotFrozen_[slot] != frame_
+                        ? &slotLights_[slot]
+                        : nullptr;
     for (uint32_t k = 0; k < count; ++k) {
         const uint32_t index = (packed[k / 2] >> (16 * (k & 1))) & 0xffff;
         if (index >= capacity)
@@ -184,6 +191,11 @@ void CarLightTable::add_spots(unsigned slot, uint32_t count, const uint32_t* pac
 }
 
 void CarLightTable::top_lights(int (&out)[4]) const {
+    if (topFrame_ == frame_) {
+        for (int k = 0; k < 4; ++k)
+            out[k] = top_[k];
+        return;
+    }
     for (int& o : out)
         o = -1;
     std::vector<unsigned> refs(lights_.size(), 0);
@@ -204,13 +216,17 @@ void CarLightTable::top_lights(int (&out)[4]) const {
         out[n] = best;
         refs[static_cast<size_t>(best)] = 0;
     }
+    topFrame_ = frame_;
+    for (int k = 0; k < 4; ++k)
+        top_[k] = out[k];
 }
 
 void CarLightTable::packed(unsigned slot, uint32_t (&out)[4]) const {
-    out[0] = out[1] = 0xffffffffu;
-    out[2] = out[3] = 0;
+    out[0] = out[1] = out[3] = 0xffffffffu;
+    out[2] = 0xffff00u;  // no flags, no spotlights (a 0 there read as spotlight 0: review, 2026-11-19)
     if (slot >= slotLights_.size() || slotFrame_[slot] != frame_)
         return;
+    slotFrozen_[slot] = frame_;
     const SlotLights& s = slotLights_[slot];
     for (uint8_t k = 0; k < s.count; ++k) {
         uint32_t& word = out[k / 4];
@@ -430,6 +446,12 @@ float2 world_noise(float3 P, float lp) {
     return float2(h & 0xffff, h >> 16) / 65536.0;
 }
 
+// Our focus mask (mvr_pass_focus_mask.h) writes the nearest depth (1 under LMU's reversed depth) into the focus box's
+// texels outside the focus shape: nothing was drawn there. Read as a surface at the near plane it was a hit for every
+// search crossing a masked corner (review, 2026-11-19).
+static const float kMaskDepth = 0.99999;
+bool drawn_depth(float d) { return d > 0 && d < kMaskDepth; }
+
 int lookup_world(float3 S, out float lq, out uint slot, out int2 pixel, out float edge) {
     lq = 0;
     slot = 0;
@@ -445,7 +467,7 @@ int lookup_world(float3 S, out float lq, out uint slot, out int2 pixel, out floa
         if (all(abs(f) < 1)) {
             float2 q = float2(region.x, 0) + (f * float2(0.5, -0.5) + 0.5) * region.zw;
             float ds = load_depth(int2(q));
-            if (ds > 0) {
+            if (drawn_depth(ds)) {  // else (the sky, a masked corner) the eye's region below
                 pixel = int2(q);
                 lq = length(view_pos(floor(q) + 0.5, ds, 1, float2(region.x, 0), region.zw));
                 slot = load_slot(pixel);
@@ -458,7 +480,7 @@ int lookup_world(float3 S, out float lq, out uint slot, out int2 pixel, out floa
     float2 q = (ndc * float2(0.5, -0.5) + 0.5) * region.xy;
     pixel = int2(q);
     float ds = load_depth(pixel);
-    if (ds <= 0)
+    if (!drawn_depth(ds))
         return 0;
     lq = length(view_pos(floor(q) + 0.5, ds, 0, float2(0, 0), region.xy));
     slot = load_slot(pixel);
@@ -474,7 +496,7 @@ int sample_world(float3 S, out float lq, out uint slot) {
 float3 neighbour(int2 q, int r, float2 origin, float2 size, float3 none) {
     q = clamp(q, int2(origin), int2(origin + size) - 1);
     float d = load_depth(q);
-    if (d <= 0)
+    if (!drawn_depth(d))
         return none;
     return view_pos(float2(q) + 0.5, d, r, origin, size);
 }
@@ -504,7 +526,7 @@ float3 smooth_normal(int2 p, float3 P, float3 own, float3 V, uint s, int r, floa
             float dq = load_depth(q);
             ok[k] = false;
             pts[k] = 0;
-            if (dq > 0 && load_slot(q) == s) {
+            if (drawn_depth(dq) && load_slot(q) == s) {
                 float3 Q = view_pos(float2(q) + 0.5, dq, r, origin, size);
                 float span = reach * pixelMetres;
                 ok[k] = abs(length(Q) - lp) < 2.5 * span;  // a surface up to ~68 degrees to the view, not a step
@@ -678,8 +700,16 @@ Out ps_main(float4 pos : SV_Position) {
     int r = region_of(p, origin, size);
     if (r < 0)
         discard;
+    if (mode2.w > 0) {  // night vision's colour alone (no camera or depth for the relight this pass): every pixel
+        Out nv;
+        nv.add = float4(night_vision(sceneTex.Load(int3(p, 0)).rgb), 0);
+        nv.mul = float4(0, 0, 0, 1);
+        return nv;
+    }
     uint s = load_slot(p);
     float d = load_depth(p);
+    if (d >= kMaskDepth)
+        discard;  // a masked texel of the focus box: nothing drawn there
     if (s == 0)
         return other_pixel(pos, p, r, origin, size, d);
     if (d <= 0)
@@ -697,7 +727,8 @@ Out ps_main(float4 pos : SV_Position) {
     float3 N = dot(c, c) > 1e-14 ? normalize(c) : V;
     if (dot(N, V) < 0)
         N = -N;
-    uint4 info = slotInfo[s - 1];
+    // A slot past the per-slot buffer (a load out of it reads 0: spotlight 0, six times): no lights, no flags.
+    uint4 info = s <= 4096 ? slotInfo[s - 1] : uint4(0xffffffff, 0xffffffff, 0xffff00, 0xffffffff);
     float baked = 1;  // the game's own baked occlusion where its shader has one (the normals' w)
     if ((info.z & 2) != 0) {
         // The game's own normal (the vertex shader's, interpolated: smooth, its creases kept), world to view.
@@ -867,10 +898,14 @@ Out ps_main(float4 pos : SV_Position) {
             uint sq;
             int2 qi;
             float edge;
+            // The start in the eye's own pixels: the skip below the same distance in the focus view as around it (in
+            // the asking view's pixels it was fewer metres at the focus density).
+            float2 start;
+            bool startSeen = pixel_ahead(O, 0, float2(0, 0), region.xy, start);
             [loop] for (int k = 1; k <= 16; ++k) {
                 float t = 0.08 * pow(1.4, k);
                 float2 own;
-                if (pixel_ahead(O + R * t, r, origin, size, own) && length(own - pos.xy) < 2.5) {
+                if (startSeen && pixel_ahead(O + R * t, 0, float2(0, 0), region.xy, own) && length(own - start) < 2.5) {
                     prev = t;  // still on the pixel's own surface: no hit there (grazing rays)
                     continue;
                 }
@@ -1017,6 +1052,8 @@ struct CarLightPass::Impl {
     ComPtr<ID3D11Buffer> passCb, lightCb, spotCb, slotBuffer;
     ComPtr<ID3D11ShaderResourceView> slotView;
     std::vector<uint32_t> slotWords;
+    unsigned uploadedFirst = 1, uploadedLast = 0;  // the slots the last upload wrote (emptied when not drawn again)
+    bool copyFailSaid = false;
     // The scene's render target view and the depth's resource view, kept for the resources they're of.
     ID3D11Resource* rtvFor = nullptr;
     ComPtr<ID3D11Resource> rtvHeld;
@@ -1102,7 +1139,14 @@ struct CarLightPass::Impl {
         sb.Usage = D3D11_USAGE_DEFAULT;
         sb.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         sb.ByteWidth = 16 * kSlotsMax;
-        if (FAILED(device->CreateBuffer(&sb, nullptr, &slotBuffer)))
+        // Every slot empty to start (no lights, flags or spotlights): a slot the twins write that no draw recorded.
+        std::vector<uint32_t> empty(size_t{4} * kSlotsMax);
+        for (size_t i = 0; i < empty.size(); i += 4) {
+            empty[i] = empty[i + 1] = empty[i + 3] = 0xffffffffu;
+            empty[i + 2] = 0xffff00u;
+        }
+        const D3D11_SUBRESOURCE_DATA emptyData{empty.data(), 0, 0};
+        if (FAILED(device->CreateBuffer(&sb, &emptyData, &slotBuffer)))
             return false;
         D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
         sv.Format = DXGI_FORMAT_R32G32B32A32_UINT;
@@ -1184,7 +1228,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
                        const uint8_t* spotBuffer, size_t spotBytes) {
     (void)eye;
     Impl& m = *impl_;
-    if (failed_ || !context || !scene || !depth || !slots || !view.eyeW || !view.eyeH)
+    if (failed_ || !context || !scene || !slots || !view.eyeW || !view.eyeH)
         return false;
     LARGE_INTEGER t0{};
     QueryPerformanceCounter(&t0);
@@ -1200,37 +1244,119 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         simqvfr::log_line("lmu car light: the pass is made (relights the cars after each eye pass's scene)");
         QueryPerformanceCounter(&t0);  // its making (the shaders' compile, once) isn't a frame's cost
     }
-    if (table.first_slot() > table.last_slot() && !settings.nightVision)
+    const bool anyCar = table.first_slot() <= table.last_slot();
+    if (!anyCar && !settings.nightVision)
         return false;  // no car part drawn (night vision's colour still wanted on the rest)
     bool depthMs = false;
     ID3D11RenderTargetView* rtv = m.scene_rtv(scene);
-    ID3D11ShaderResourceView* depthView = m.depth_srv(depth, depthMs);
-    if (!rtv || !depthView || depthMs != slotsMs)
+    if (!rtv)
         return false;
+    ID3D11ShaderResourceView* depthView = depth ? m.depth_srv(depth, depthMs) : nullptr;
 
-    // The camera: projection = inverse(view) x viewProj (row vectors), and its inverse.
-    double v[16], vp[16], vi[16], p[16], pi[16];
+    // The camera: projection = inverse(view) x viewProj (row vectors), and its inverse. The relight needs it, the depth
+    // (alike in samples with the slots) and a car part; night vision's colour none of them: without them it runs alone
+    // (one eye desaturated and the other not, where a pass missed its camera, stood out far more than a highlight).
+    double v[16], vp[16], vi[16], p[16] = {}, pi[16] = {};
     for (int i = 0; i < 16; ++i) {
         v[i] = view.view[i];
         vp[i] = view.viewProj[i];
     }
-    if (!invert4(v, vi))
+    bool relight = anyCar && view.camera && depthView && depthMs == slotsMs && invert4(v, vi);
+    if (relight) {
+        mul4(vi, vp, p);
+        relight = invert4(p, pi);
+    }
+    if (!relight && !settings.nightVision)
         return false;
-    mul4(vi, vp, p);
-    if (!invert4(p, pi))
-        return false;
+    if (!relight)
+        for (int i = 0; i < 16; ++i)
+            p[i] = pi[i] = (i % 5 == 0) ? 1.0 : 0.0;
 
-    // The slots this pass drew: their lights and flags.
+    // The slots this pass drew: their lights and flags; the ones the last upload wrote and this frame didn't draw
+    // emptied (a slot id the twins still write, no draw recorded, would read its old lists).
     const unsigned first = table.first_slot(), last = (std::min)(table.last_slot(), kSlotsMax - 1);
-    if (first <= last) {
-        m.slotWords.resize(size_t{4} * (last - first + 1));
-        for (unsigned s = first; s <= last; ++s) {
+    if (relight) {
+        const unsigned lo = m.uploadedFirst <= m.uploadedLast ? (std::min)(first, m.uploadedFirst) : first;
+        const unsigned hi = m.uploadedFirst <= m.uploadedLast ? (std::max)(last, m.uploadedLast) : last;
+        m.slotWords.resize(size_t{4} * (hi - lo + 1));
+        for (unsigned slot = lo; slot <= hi; ++slot) {
             uint32_t w[4];
-            table.packed(s, w);
-            std::memcpy(&m.slotWords[size_t{4} * (s - first)], w, sizeof(w));
+            table.packed(slot, w);
+            std::memcpy(&m.slotWords[size_t{4} * (slot - lo)], w, sizeof(w));
         }
-        const D3D11_BOX box{16 * first, 0, 0, 16 * (last + 1), 1, 1};
+        const D3D11_BOX box{16 * lo, 0, 0, 16 * (hi + 1), 1, 1};
         context->UpdateSubresource(m.slotBuffer.Get(), 0, &box, m.slotWords.data(), 0, 0);
+        m.uploadedFirst = first;
+        m.uploadedLast = last;
+    }
+
+    Impl::Timer& timer = m.timers[m.nextTimer];
+    const bool timed = !timer.pending;
+    if (timed) {
+        timer.block = m.block;
+        context->Begin(timer.disjoint.Get());
+        context->End(timer.begin.Get());
+    }
+    ComPtr<ID3D11Texture2D> sceneTex;
+    scene->QueryInterface(IID_PPV_ARGS(&sceneTex));
+    D3D11_TEXTURE2D_DESC sd{};
+    if (sceneTex)
+        sceneTex->GetDesc(&sd);
+    // Every target the pass uses: nothing of ours left bound on a target the game then reads (the caller restores the
+    // game's own).
+    ID3D11ShaderResourceView* none[6] = {};
+    context->PSSetShaderResources(0, 6, none);
+    const LONG right = static_cast<LONG>((std::min)(sd.Width, view.eyeW + view.focusW));
+    const LONG bottom = static_cast<LONG>((std::min)(sd.Height, (std::max)(view.eyeH, view.focusH)));
+    // The reflections and night vision read the scene as it stood: the eye's and focus view's regions copied first.
+    ID3D11ShaderResourceView* sceneView = nullptr;
+    if ((settings.reflections || settings.nightVision) && sceneTex && right > 0 && bottom > 0) {
+        D3D11_TEXTURE2D_DESC cd{};
+        if (m.sceneCopy)
+            m.sceneCopy->GetDesc(&cd);
+        if (!m.sceneCopy || cd.Width != sd.Width || cd.Height != sd.Height || cd.Format != sd.Format) {
+            m.sceneCopy.Reset();
+            m.sceneCopyView.Reset();
+            D3D11_TEXTURE2D_DESC c = sd;
+            c.MipLevels = 1;
+            c.ArraySize = 1;
+            c.SampleDesc = {1, 0};
+            c.Usage = D3D11_USAGE_DEFAULT;
+            c.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            c.CPUAccessFlags = 0;
+            c.MiscFlags = 0;
+            D3D11_SHADER_RESOURCE_VIEW_DESC copyView{};
+            copyView.Format = rtv_format(sd.Format);
+            copyView.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            copyView.Texture2D.MipLevels = 1;
+            if (FAILED(m.device->CreateTexture2D(&c, nullptr, &m.sceneCopy)) ||
+                FAILED(m.device->CreateShaderResourceView(m.sceneCopy.Get(), &copyView, &m.sceneCopyView))) {
+                m.sceneCopy.Reset();
+                m.sceneCopyView.Reset();
+                if (!m.copyFailSaid) {
+                    m.copyFailSaid = true;
+                    simqvfr::logf("lmu car light: the scene's copy (%ux%u, format %d) couldn't be made: no lacquer "
+                                  "reflections or night vision colour",
+                                  sd.Width, sd.Height, static_cast<int>(sd.Format));
+                }
+            }
+        }
+        if (m.sceneCopy) {
+            const D3D11_BOX box{0, 0, 0, static_cast<UINT>(right), static_cast<UINT>(bottom), 1};
+            context->CopySubresourceRegion(m.sceneCopy.Get(), 0, 0, 0, 0, scene, 0, &box);
+            sceneView = m.sceneCopyView.Get();
+        }
+    }
+    // Without the copy the modes that read it are off (night vision's output from a missing copy is black).
+    const bool copied = sceneView != nullptr;
+    if (!relight && !copied) {
+        if (timed) {
+            context->End(timer.end.Get());
+            context->End(timer.disjoint.Get());
+            timer.pending = true;
+            m.nextTimer = (m.nextTimer + 1) % kTimerSlots;
+        }
+        return false;
     }
     {
         float lights[CarLightTable::kMaxLights * 8] = {};
@@ -1272,7 +1398,7 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         rest[15] = s.smooth / 100.0f;  // the smoothing width, cm to m
         rest[16] = s.shadows ? 1.0f : 0.0f;
         rest[17] = s.detail ? 1.0f : 0.0f;
-        rest[18] = s.reflections ? 1.0f : 0.0f;
+        rest[18] = s.reflections && copied ? 1.0f : 0.0f;
         // The headlights: the frame's spotlights the car parts were handed, from the spotlights' buffer as written.
         unsigned spots = 0;
         if (s.headlights && spotBuffer) {
@@ -1312,7 +1438,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         }
         rest[20] = static_cast<float>(spots);
         rest[21] = s.ground ? 1.0f : 0.0f;
-        rest[22] = s.nightVision ? 1.0f : 0.0f;
+        rest[22] = s.nightVision && copied ? 1.0f : 0.0f;
+        rest[23] = relight ? 0.0f : 1.0f;  // night vision's colour alone
         int top[4];
         table.top_lights(top);
         for (int k = 0; k < 4; ++k)
@@ -1320,57 +1447,6 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         context->UpdateSubresource(m.passCb.Get(), 0, nullptr, cb, 0, 0);
     }
 
-    Impl::Timer& timer = m.timers[m.nextTimer];
-    const bool timed = !timer.pending;
-    if (timed) {
-        timer.block = m.block;
-        context->Begin(timer.disjoint.Get());
-        context->End(timer.begin.Get());
-    }
-    ComPtr<ID3D11Texture2D> sceneTex;
-    scene->QueryInterface(IID_PPV_ARGS(&sceneTex));
-    D3D11_TEXTURE2D_DESC sd{};
-    if (sceneTex)
-        sceneTex->GetDesc(&sd);
-    // Every target the pass uses: nothing of ours left bound on a target the game then reads (the caller restores the
-    // game's own).
-    ID3D11ShaderResourceView* none[6] = {};
-    context->PSSetShaderResources(0, 6, none);
-    const LONG right = static_cast<LONG>((std::min)(sd.Width, view.eyeW + view.focusW));
-    const LONG bottom = static_cast<LONG>((std::min)(sd.Height, (std::max)(view.eyeH, view.focusH)));
-    // The reflections read the scene as it stood: the eye's and focus view's regions copied first.
-    ID3D11ShaderResourceView* sceneView = nullptr;
-    if ((settings.reflections || settings.nightVision) && sceneTex && right > 0 && bottom > 0) {
-        D3D11_TEXTURE2D_DESC cd{};
-        if (m.sceneCopy)
-            m.sceneCopy->GetDesc(&cd);
-        if (!m.sceneCopy || cd.Width != sd.Width || cd.Height != sd.Height || cd.Format != sd.Format) {
-            m.sceneCopy.Reset();
-            m.sceneCopyView.Reset();
-            D3D11_TEXTURE2D_DESC c = sd;
-            c.MipLevels = 1;
-            c.ArraySize = 1;
-            c.SampleDesc = {1, 0};
-            c.Usage = D3D11_USAGE_DEFAULT;
-            c.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            c.CPUAccessFlags = 0;
-            c.MiscFlags = 0;
-            D3D11_SHADER_RESOURCE_VIEW_DESC copyView{};
-            copyView.Format = rtv_format(sd.Format);
-            copyView.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            copyView.Texture2D.MipLevels = 1;
-            if (FAILED(m.device->CreateTexture2D(&c, nullptr, &m.sceneCopy)) ||
-                FAILED(m.device->CreateShaderResourceView(m.sceneCopy.Get(), &copyView, &m.sceneCopyView))) {
-                m.sceneCopy.Reset();
-                m.sceneCopyView.Reset();
-            }
-        }
-        if (m.sceneCopy) {
-            const D3D11_BOX box{0, 0, 0, static_cast<UINT>(right), static_cast<UINT>(bottom), 1};
-            context->CopySubresourceRegion(m.sceneCopy.Get(), 0, 0, 0, 0, scene, 0, &box);
-            sceneView = m.sceneCopyView.Get();
-        }
-    }
     context->OMSetRenderTargets(1, &rtv, nullptr);
     const D3D11_VIEWPORT vpPort{0, 0, static_cast<float>(sd.Width), static_cast<float>(sd.Height), 0, 1};
     const D3D11_RECT scissor{0, 0, right, bottom};
@@ -1499,7 +1575,7 @@ void CarLightAb::add(const CarLightBlock& b) {
     s.cpu = b.cpu_ms();
     // Counted when the pass ran on every frame (both eyes) and was timed: with the cars out of view a block says
     // nothing either way.
-    s.ok = !tainted_[b.serial % kSeen] && b.frames && b.gpuRuns && b.runs >= b.frames;
+    s.ok = !tainted_[b.serial % kSeen] && b.frames && b.gpuRuns && b.runs >= 2 * b.frames;
     if (s.kind == -1 && s.ok)
         all_.add(s.gpu, s.cpu);
     // An A block closes the pair before it: A (serial - 2), V (serial - 1), A (this one).

@@ -137,8 +137,9 @@ struct SlotOutputOptions {
     uint32_t aoComponent = 1;
     // With the normal, `detailReg` (a render target; ~0u none) and `detailResource` (a texture register): the direction
     // the shader looks its first sample of that texture up with (LMU: the ambient cube map, irradDiffuse, with the
-    // normal its normal maps bent), xyz * 0.5 + 0.5, copied right before that sample (its result may land in the
-    // coordinate's register); until then the vertex shader's normal as at `normalReg` (a path without it keeps that).
+    // normal its normal maps bent), as it is (any length: a float target), copied right before that sample (its result
+    // may land in the coordinate's register); until then the vertex shader's normal, as it is (a path without the sample
+    // keeps that).
     uint32_t detailReg = ~0u;
     uint32_t detailResource = ~0u;
 };

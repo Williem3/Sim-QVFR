@@ -49,7 +49,8 @@ struct OmniLayout {
 class CarLightTable {
 public:
     static constexpr unsigned kMaxLights = 128, kPerSlot = 8, kNone = 0xff;
-    explicit CarLightTable(unsigned slots = 4096) : slotLights_(slots), slotPaint_(slots, 0), slotFrame_(slots, 0) {}
+    explicit CarLightTable(unsigned slots = 4096)
+        : slotLights_(slots), slotPaint_(slots, 0), slotFrame_(slots, 0), slotFrozen_(slots, 0) {}
 
     void begin_frame() {
         ++frame_;
@@ -57,6 +58,7 @@ public:
         spots_.clear();
         firstSlot_ = ~0u;
         lastSlot_ = 0;
+        topFrame_ = 0;
     }
     // A car part's draw (slot `slot`, its world matrix's translation `origin`) with the omni buffer `buffer` (its bytes
     // as the game wrote them, layout `layout`); `paint`: its pixel shader is a car body's (lacquer); `normal`: the game's
@@ -75,7 +77,9 @@ public:
     static constexpr unsigned kSpotsPerSlot = 6;
     const std::vector<uint16_t>& spots() const { return spots_; }
     static constexpr unsigned kMaxSpots = 32;
-    // The frame's floodlights the most car parts were handed (the ground's shadows'), up to 4 (-1: none).
+    // The frame's floodlights the most car parts were handed (the ground's shadows'), up to 4 (-1: none). Chosen at the
+    // frame's first call (the first eye's pass) and kept for the frame: the second eye's draws add parts and could
+    // reorder near ties, and each eye would shadow the ground from different lights.
     void top_lights(int (&out)[4]) const;
     // The slots written this frame: [first, last] (first > last: none).
     unsigned first_slot() const { return firstSlot_; }
@@ -83,7 +87,8 @@ public:
     // Slot `slot`'s lights packed 4 to a uint (8 bits each, kNone: none), and its flags (bit 0: paint, bit 1: the game's
     // normal, bit 2: its baked occlusion, bit 3: its bent normal), for the GPU's per-slot buffer (uint4: lights 0-3,
     // 4-7, flags in bits 0-7 and spotlights 4-5 in bits 8-15 and 16-23, spotlights 0-3; the spotlights as indices into
-    // spots(), kNone: none).
+    // spots(), kNone: none). A slot not drawn this frame: every list empty, no flags. A slot packed (a pass relit it)
+    // keeps its lists for the frame: the other eye's pass draws it again and would otherwise light it differently.
     void packed(unsigned slot, uint32_t (&out)[4]) const;
     const std::vector<CarLight>& lights() const { return lights_; }
     size_t slot_count() const { return slotLights_.size(); }
@@ -103,6 +108,9 @@ private:
     std::vector<SlotLights> slotLights_;
     std::vector<uint8_t> slotPaint_;
     std::vector<uint32_t> slotFrame_;
+    mutable std::vector<uint32_t> slotFrozen_;  // the frame a pass packed the slot (its lists kept from then on)
+    mutable uint32_t topFrame_ = 0;              // top_lights' choice's frame
+    mutable int top_[4] = {-1, -1, -1, -1};
     uint32_t frame_ = 1;
     // The last buffer parsed (most draws repeat the draw before's lights: run 1 had ~1,000 car part draws a frame, and
     // each matched its 20 entries against the frame's table): its bytes, and per entry the light's index (-1 unusable).
@@ -119,6 +127,7 @@ struct CarLightView {
     unsigned focusW = 0, focusH = 0;        // the focus view's region beside it (x from eyeW), as drawn; 0: none
     float remap[4] = {1, 0, 1, 0};          // the focus view's clip x = a x + b w, y = c y + d w (mvr_pass.h)
     float view[16] = {}, viewProj[16] = {}; // the eye's camera as its draws used it (row vectors, reversed depth)
+    bool camera = true;                     // false: none found this pass (night vision's colour alone, if on)
 };
 
 // The comparison image (dev builds' Ctrl+Alt+L, qvfr_frame.cpp): `before` and `after` (BGRA, w x h each) side by side

@@ -224,7 +224,28 @@ void table_checks() {
           "table: the same buffer again (another part): its lights reused, slot 7 not paint");
     check(table.first_slot() == 3 && table.last_slot() == 7, "table: the slots written this frame");
     table.packed(5, w);
-    check(w[0] == 0xffffffffu && w[1] == 0xffffffffu && (w[2] & 0xff) == 0, "table: a slot not drawn has no lights");
+    check(w[0] == 0xffffffffu && w[1] == 0xffffffffu && w[2] == 0xffff00u && w[3] == 0xffffffffu,
+          "table: a slot not drawn has no lights, no flags and no spotlights (none read as spotlight 0)");
+    // Packed (a pass relit slot 3): the same slot drawn again in the frame (the other eye's pass, with another light)
+    // keeps its lists; the ground's floodlights are kept likewise from the frame's first choice.
+    {
+        lmu::CarLightTable frozen(16);
+        frozen.begin_frame();
+        frozen.draw(3, origin, buffer.data(), buffer.size(), layout, 1, true);
+        int topBefore[4], topAfter[4];
+        frozen.top_lights(topBefore);
+        uint32_t before[4], after[4];
+        frozen.packed(3, before);
+        std::vector<uint8_t> other(640, 0);
+        put_light(other, 0, 1, 1, 1, 50, 9);  // a new light, near and bright
+        for (int k = 0; k < 6; ++k)
+            frozen.draw(4 + k, origin, other.data(), other.size(), layout, 2 + k, true);
+        frozen.draw(3, origin, other.data(), other.size(), layout, 9, false);
+        frozen.packed(3, after);
+        frozen.top_lights(topAfter);
+        check(std::memcmp(before, after, sizeof(before)) == 0 && std::memcmp(topBefore, topAfter, sizeof(topBefore)) == 0,
+              "table: a relit slot's lists and the ground's floodlights kept for the frame (the other eye's draws)");
+    }
     // A new frame: the slots' lists start again.
     table.begin_frame();
     table.packed(3, w);
@@ -802,6 +823,54 @@ void pass_checks(bool hardware) {
                               "%.0f px, eye %.3f over %.0f px, unshaded 0.200)",
                               focus, n[1], eye, n[0]);
                 check(n[0] >= 20 && n[1] >= 60 && eye < 0.19 && focus < 0.19 && std::fabs(focus - eye) < 0.006, text);
+                // The focus box's right part masked as our focus mask does it (the nearest depth, 1, no slot): the car
+                // behind it read from the eye's region, the ground beside it as dark as before (a masked texel read
+                // as a surface at the near plane hid the car).
+                std::vector<float> mDepth = fDepth;
+                std::vector<uint16_t> mSlots = fSlots;
+                std::vector<bool> masked(size_t{kAW} * kAH, false);
+                for (UINT y = 0; y < kAH; ++y)
+                    for (UINT x = kE; x < kAW; ++x)
+                        if (((x - kE) + 0.5f) / kE * 2 - 1 > 0.7f) {
+                            const size_t i = size_t{y} * kAW + x;
+                            mDepth[i] = 1.0f;
+                            mSlots[i] = 0;
+                            masked[i] = true;
+                        }
+                context->UpdateSubresource(aDepth.Get(), 0, nullptr, mDepth.data(), kAW * 4, 0);
+                context->UpdateSubresource(aSlots.Get(), 0, nullptr, mSlots.data(), kAW * 2, 0);
+                context->UpdateSubresource(aScene.Get(), 0, nullptr, fPx.data(), kAW * 8, 0);
+                // The same ground pixels (the focus view's unmasked ones) with and without the mask.
+                const auto subset = [&](bool withMask) {
+                    context->UpdateSubresource(aDepth.Get(), 0, nullptr, withMask ? mDepth.data() : fDepth.data(), kAW * 4, 0);
+                    context->UpdateSubresource(aSlots.Get(), 0, nullptr, withMask ? mSlots.data() : fSlots.data(), kAW * 2, 0);
+                    context->UpdateSubresource(aScene.Get(), 0, nullptr, fPx.data(), kAW * 8, 0);
+                    pass.run(context.Get(), aScene.Get(), aDepth.Get(), aSlotView.Get(), false, car, fv, f, 0);
+                    context->CopyResource(aStaging.Get(), aScene.Get());
+                    double sum = 0, count = 0;
+                    D3D11_MAPPED_SUBRESOURCE mm;
+                    if (SUCCEEDED(context->Map(aStaging.Get(), 0, D3D11_MAP_READ, 0, &mm))) {
+                        for (UINT y = 0; y < kAH; ++y)
+                            for (UINT x = kE; x < kAW; ++x) {
+                                const size_t i = size_t{y} * kAW + x;
+                                if (masked[i] || fSlots[i] || fDepth[i] <= 0 || worldX[i] < 1.2f || worldX[i] > 2.1f ||
+                                    worldZ[i] < 4.25f || worldZ[i] > 6.5f)
+                                    continue;
+                                sum += half_to_float(reinterpret_cast<const uint16_t*>(
+                                    static_cast<const uint8_t*>(mm.pData) + size_t{y} * mm.RowPitch)[x * 4]);
+                                count += 1;
+                            }
+                        context->Unmap(aStaging.Get(), 0);
+                    }
+                    return std::pair<double, double>(count ? sum / count : 0, count);
+                };
+                const auto withMask = subset(true), without = subset(false);
+                std::snprintf(text, sizeof(text),
+                              "ground: with the focus box's corner masked, the car behind it still shadows (the same "
+                              "%.0f focus pixels %.4f masked, %.4f not)",
+                              without.second, withMask.first, without.first);
+                check(without.second >= 20 && without.first < 0.199 && std::fabs(withMask.first - without.first) < 0.002,
+                      text);
             }
         }
     }
@@ -952,6 +1021,32 @@ void pass_checks(bool hardware) {
                       text);
             }
         }
+    }
+    // Night vision's colour without the relight's camera (a pass that missed it): the colour alone, every pixel; with
+    // it off as well, nothing (no camera, nothing to do).
+    {
+        std::vector<uint16_t> dark(size_t{kW} * kH * 4);
+        for (size_t i = 0; i < dark.size(); i += 4) {
+            dark[i] = float_to_half(0.012f);
+            dark[i + 1] = dark[i + 2] = float_to_half(0.004f);
+            dark[i + 3] = float_to_half(1.0f);
+        }
+        lmu::CarLightView blind = view;
+        blind.camera = false;
+        simqvfr::CarLighting f;
+        f.on = true;
+        f.nightVision = true;
+        context->UpdateSubresource(scene.Get(), 0, nullptr, dark.data(), kW * 8, 0);
+        const bool nvRan = pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, table, blind, f, 0);
+        const std::vector<float> img = read();
+        f.nightVision = false;
+        context->UpdateSubresource(scene.Get(), 0, nullptr, dark.data(), kW * 8, 0);
+        const bool ranOff = pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, table, blind, f, 0);
+        std::snprintf(text, sizeof(text),
+                      "night vision: without a camera the colour alone (a car pixel %.4f, the floor %.4f, from 0.012; "
+                      "ran %d, with it off too %d)",
+                      img[size_t{kH / 2} * kW + 4], img[size_t{kH / 2} * kW + kW - 4], nvRan ? 1 : 0, ranOff ? 1 : 0);
+        check(nvRan && !ranOff && img[size_t{kH / 2} * kW + 4] < 0.011f && img[size_t{kH / 2} * kW + kW - 4] < 0.011f, text);
     }
     context->UpdateSubresource(depth.Get(), 0, nullptr, nearPx.data(), kW * 4, 0);
 

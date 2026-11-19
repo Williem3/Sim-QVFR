@@ -467,15 +467,16 @@ bool car_light_camera(int eye, float (&view)[16], float (&viewProj)[16]) { retur
 
 void car_light_run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn, int eye) {
     CarLightView v;
-    if (!car_light_camera(eye, v.view, v.viewProj)) {
+    // Without a camera or the pass's depth the relight can't run; night vision's colour still can (CarLightPass::run).
+    v.camera = car_light_camera(eye, v.view, v.viewProj);
+    if (!v.camera)
         ++g.carLightMisses;
-        return;
-    }
     ID3D11DepthStencilView* dsv = scene_depth(drawn);
-    if (!dsv)
-        return;
     ComPtr<ID3D11Resource> depthTexture;
-    dsv->GetResource(&depthTexture);
+    if (dsv)
+        dsv->GetResource(&depthTexture);
+    if ((!v.camera || !depthTexture) && !g.carLightSettings.nightVision)
+        return;
     v.eyeW = g.view.eyeW;
     v.eyeH = g.view.eyeH;
     if (g.drawFocus && g.passTwinBinds > 0) {
