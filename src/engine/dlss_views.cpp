@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <vector>
 
 #include "../log.h"
 #include "d3d11_kit.h"
@@ -100,6 +101,8 @@ struct State {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch;
+    // The vectors with our single-sample depth copy beside multisample object slots; the copy's and the measurement's.
+    ComPtr<ID3D11PixelShader> vectorsCopyMs, depthCopyMs, depthCopySs, measureMs, measureSs, keepFarMs, keepFarSs;
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> linearClamp;
     ComPtr<ID3D11Texture2D> checkTarget[4], checkRead[4];
@@ -108,6 +111,39 @@ struct State {
     ID3D11Resource* depthFor = nullptr;
     ComPtr<ID3D11ShaderResourceView> depthSrv;
     bool depthMs = false, depthRefusedLogged = false;
+    // What this pass's vectors read as the depth (run_view): the depth target's view, or the copy made before the
+    // transparents (dlss_depth_copy_list), single-sample.
+    ID3D11ShaderResourceView* depthIn = nullptr;
+    bool depthInMs = false;
+    // The scene's depth as it stood before the transparents that write depth (dlss_depth_copy_list): our copy (the
+    // depth target's size, R32 float), the depth target it copies (raw, compared only) and the list that makes it.
+    struct DepthCopy {
+        ComPtr<ID3D11DeviceContext> deferred;
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11RenderTargetView> rtv;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        unsigned texW = 0, texH = 0;
+        ComPtr<ID3D11CommandList> list;
+        ID3D11Resource* source = nullptr;  // the list's depth target
+        unsigned w = 0, h = 0;             // the part it copies (from the top-left)
+        bool ms = false;
+        bool refusedLogged = false;
+        // The measurement (DlssRun::depthMeasure): every 8th texel, before and after, read back a frame or more later.
+        ComPtr<ID3D11Texture2D> grid, gridRead[2];
+        ComPtr<ID3D11RenderTargetView> gridRtv;
+        unsigned gridW = 0, gridH = 0;
+        struct Taken {
+            bool pending = false;
+            int eye = 0;
+            unsigned long long frame = 0;
+            unsigned eyeW = 0, eyeH = 0, focusW = 0, focusH = 0;  // the regions (the focus view right of the eye)
+            double terms[2] = {};                                 // depth = [0] + [1] / distance
+            double nearM = 0;                                     // DlssRun::depthCopyNear then
+        } taken[2];
+        unsigned long long nextFrame = 300;
+        int nextEye = 0;
+        unsigned long long used = 0, measured = 0;  // passes whose vectors read the copy; only measured it
+    } copy;
     Slot slots[4];
     int createFailures = 0;
     bool firstLogged = false;
@@ -207,9 +243,26 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto psSs = compile(kVectorsShader, "ps", "ps_5_0", nullptr);
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
     const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
-    if (!vs || !psMs || !psSs || !check || !stretch ||
+    const D3D_SHADER_MACRO bothMs[] = {{"MS", "1"}, {"DEPTH_MS", "1"}, {nullptr, nullptr}};
+    const auto psBoth = compile(kVectorsShader, "ps", "ps_5_0", bothMs);
+    const auto copyMs = compile(kDepthCopyShader, "ps", "ps_5_0", ms);
+    const auto copySs = compile(kDepthCopyShader, "ps", "ps_5_0", nullptr);
+    const auto measureMs = compile(kDepthMeasureShader, "ps", "ps_5_0", ms);
+    const auto measureSs = compile(kDepthMeasureShader, "ps", "ps_5_0", nullptr);
+    const auto keepFarMs = compile(kDepthKeepFarShader, "ps", "ps_5_0", ms);
+    const auto keepFarSs = compile(kDepthKeepFarShader, "ps", "ps_5_0", nullptr);
+    const auto made = [&](const ComPtr<ID3DBlob>& code, ComPtr<ID3D11PixelShader>& ps) {
+        return code && SUCCEEDED(d.device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &ps));
+    };
+    if (!made(psMs, d.vectorsCopyMs) || !made(copyMs, d.depthCopyMs) || !made(copySs, d.depthCopySs) ||
+        !made(measureMs, d.measureMs) || !made(measureSs, d.measureSs) || !made(keepFarMs, d.keepFarMs) ||
+        !made(keepFarSs, d.keepFarSs)) {
+        give_up("its shaders couldn't be made");
+        return false;
+    }
+    if (!vs || !psBoth || !psSs || !check || !stretch ||
         FAILED(d.device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &d.vs)) ||
-        FAILED(d.device->CreatePixelShader(psMs->GetBufferPointer(), psMs->GetBufferSize(), nullptr, &d.vectorsMs)) ||
+        FAILED(d.device->CreatePixelShader(psBoth->GetBufferPointer(), psBoth->GetBufferSize(), nullptr, &d.vectorsMs)) ||
         FAILED(d.device->CreatePixelShader(psSs->GetBufferPointer(), psSs->GetBufferSize(), nullptr, &d.vectorsSs)) ||
         FAILED(d.device->CreatePixelShader(check->GetBufferPointer(), check->GetBufferSize(), nullptr, &d.check)) ||
         FAILED(d.device->CreatePixelShader(stretch->GetBufferPointer(), stretch->GetBufferSize(), nullptr, &d.stretch))) {
@@ -716,10 +769,12 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
     ID3D11RenderTargetView* rtvs[2] = {s.depthRtv.Get(), s.vectorsRtv.Get()};
     context->OMSetRenderTargets(2, rtvs, nullptr);
-    ID3D11ShaderResourceView* inputs[3] = {d.depthSrv.Get(), objects ? pass.objectSlots : nullptr,
+    ID3D11ShaderResourceView* inputs[3] = {d.depthIn, objects ? pass.objectSlots : nullptr,
                                            objects ? pass.objectMotion : nullptr};
     context->PSSetShaderResources(0, 3, inputs);
-    draw_triangle(context, d.depthMs ? d.vectorsMs.Get() : d.vectorsSs.Get(), w, h);
+    // The depth target's own samples with the scene's slots; our copy (single-sample) beside multisample slots; or both
+    // single-sample.
+    draw_triangle(context, d.depthInMs ? d.vectorsMs.Get() : d.depthMs ? d.vectorsCopyMs.Get() : d.vectorsSs.Get(), w, h);
     if (!ok || !d.cfg.vectors) {
         const float zero[4] = {};
         context->ClearRenderTargetView(s.vectorsRtv.Get(), zero);
@@ -885,6 +940,135 @@ template <class F> struct OnExit {
     ~OnExit() { f(); }
 };
 template <class F> OnExit(F) -> OnExit<F>;
+
+// The measurement (DlssRun::depthMeasure), every ~2 s, the eyes in turn: every 8th texel of this pass's copy (before
+// its transparents) and of the depth target now (after them) into the grid, then to a staging texture read at a later
+// frame end (read_depth_measure). Inside dlss_after_resolve's state guard.
+void measure_depth(ID3D11DeviceContext* context, int eye, unsigned eyeW, unsigned eyeH, unsigned focusW, unsigned focusH,
+                   const double terms[2]) {
+    State::DepthCopy& c = d.copy;
+    if (d.frame < c.nextFrame || eye != c.nextEye)
+        return;
+    const int k = c.taken[0].pending ? 1 : 0;
+    if (c.taken[k].pending)
+        return;
+    const unsigned gw = (c.texW + 7) / 8, gh = (c.texH + 7) / 8;
+    if (!c.grid || c.gridW != gw || c.gridH != gh) {
+        c.grid.Reset();
+        c.gridRtv.Reset();
+        c.gridRead[0].Reset();
+        c.gridRead[1].Reset();
+        c.gridW = c.gridH = 0;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = gw, td.Height = gh, td.MipLevels = td.ArraySize = 1, td.SampleDesc.Count = 1;
+        td.Format = DXGI_FORMAT_R32G32_FLOAT, td.Usage = D3D11_USAGE_STAGING, td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (!make(c.grid, gw, gh, DXGI_FORMAT_R32G32_FLOAT, D3D11_BIND_RENDER_TARGET) ||
+            FAILED(d.device->CreateRenderTargetView(c.grid.Get(), nullptr, &c.gridRtv)) ||
+            FAILED(d.device->CreateTexture2D(&td, nullptr, &c.gridRead[0])) ||
+            FAILED(d.device->CreateTexture2D(&td, nullptr, &c.gridRead[1]))) {
+            c.grid.Reset();
+            c.nextFrame = ~0ull;  // not again this session
+            say("the depth measurement's textures couldn't be made: not measured");
+            return;
+        }
+        c.gridW = gw;
+        c.gridH = gh;
+    }
+    const unsigned w = eyeW + focusW, h = (std::max)(eyeH, focusH);
+    context->OMSetRenderTargets(1, c.gridRtv.GetAddressOf(), nullptr);
+    ID3D11ShaderResourceView* in[2] = {c.srv.Get(), d.depthSrv.Get()};
+    context->PSSetShaderResources(0, 2, in);
+    draw_triangle(context, d.depthMs ? d.measureMs.Get() : d.measureSs.Get(), (w + 7) / 8, (h + 7) / 8);
+    ID3D11ShaderResourceView* none[2] = {};
+    context->PSSetShaderResources(0, 2, none);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    context->CopyResource(c.gridRead[k].Get(), c.grid.Get());
+    State::DepthCopy::Taken& t = c.taken[k];
+    t.pending = true;
+    t.eye = eye;
+    t.frame = d.frame;
+    t.eyeW = eyeW, t.eyeH = eyeH, t.focusW = focusW, t.focusH = focusH;
+    t.terms[0] = terms[0], t.terms[1] = terms[1];
+    t.nearM = d.cfg.depthCopyNear;
+    c.nextFrame = d.frame + 180;
+    c.nextEye = 1 - eye;
+}
+
+// One region's points (x0..x1, y0..y1 in texels) of a read measurement: what the transparents drew nearer, as a
+// sentence into `out`.
+void depth_measure_region(const char* name, const State::DepthCopy::Taken& t, const float* grid, unsigned pitchFloats,
+                          unsigned x0, unsigned x1, unsigned y0, unsigned y1, char* out, size_t outSize) {
+    std::vector<float> nearer, behind;
+    unsigned points = 0, sky = 0;
+    const auto metres = [&](float depth) {  // reversed depth: 0 far (the sky), larger nearer
+        const double v = depth - t.terms[0];
+        return v > 1e-9 ? t.terms[1] / v : 1e9;
+    };
+    for (unsigned y = y0 / 8; y < (y1 + 7) / 8 && y < d.copy.gridH; ++y)
+        for (unsigned x = x0 / 8; x < (x1 + 7) / 8 && x < d.copy.gridW; ++x) {
+            const unsigned px = x * 8 + 4, py = y * 8 + 4;
+            if (px < x0 || px >= x1 || py < y0 || py >= y1)
+                continue;
+            const float before = grid[y * pitchFloats + x * 2], after = grid[y * pitchFloats + x * 2 + 1];
+            ++points;
+            if (after > before + 1e-7f + 1e-4f * before) {  // drawn nearer after the copy
+                nearer.push_back(static_cast<float>(metres(after)));
+                const double was = metres(before);
+                sky += was >= 1e8 ? 1 : 0;
+                behind.push_back(static_cast<float>((std::min)(was, 1e6)));
+            }
+        }
+    if (!points) {
+        std::snprintf(out, outSize, "%s: no points", name);
+        return;
+    }
+    if (nearer.empty()) {
+        std::snprintf(out, outSize, "%s: %u points, none drawn nearer", name, points);
+        return;
+    }
+    const auto q = [](std::vector<float>& v, double at) {
+        const size_t i = (std::min)(v.size() - 1, static_cast<size_t>(at * static_cast<double>(v.size())));
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(i), v.end());
+        return v[i];
+    };
+    const size_t n = nearer.size();
+    size_t beyond = 0;  // drawn nearer, but at or beyond DlssRun::depthCopyNear: left as drawn
+    for (const float m : nearer)
+        beyond += t.nearM > 0 && m >= t.nearM ? 1 : 0;
+    const float n25 = q(nearer, 0.25), n50 = q(nearer, 0.5), n75 = q(nearer, 0.75);
+    const float b25 = q(behind, 0.25), b50 = q(behind, 0.5), b75 = q(behind, 0.75);
+    std::snprintf(out, outSize,
+                  "%s: %.1f%% of %u points drawn nearer, at %.2f m (middle half %.2f-%.2f) where the depth before was "
+                  "%.1f m (%.1f-%.1f; %.0f%% sky); %.0f%% of them %.1f m or more away (left as drawn)",
+                  name, 100.0 * static_cast<double>(n) / points, points, n50, n25, n75, b50, b25, b75,
+                  100.0 * sky / static_cast<double>(n), 100.0 * static_cast<double>(beyond) / static_cast<double>(n),
+                  t.nearM);
+}
+
+// The frame end: measurements whose copies have arrived, logged.
+void read_depth_measure(ID3D11DeviceContext* context) {
+    State::DepthCopy& c = d.copy;
+    for (int k = 0; k < 2; ++k) {
+        State::DepthCopy::Taken& t = c.taken[k];
+        if (!t.pending || !c.gridRead[k] || d.frame < t.frame + 2)
+            continue;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(context->Map(c.gridRead[k].Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m)))
+            continue;
+        char eyeText[200], focusText[200] = "";
+        const float* grid = static_cast<const float*>(m.pData);
+        const unsigned pitch = m.RowPitch / sizeof(float);
+        depth_measure_region("eye", t, grid, pitch, 0, t.eyeW, 0, t.eyeH, eyeText, sizeof(eyeText));
+        if (t.focusW && t.focusH)
+            depth_measure_region("; focus view", t, grid, pitch, t.eyeW, t.eyeW + t.focusW, 0, t.focusH, focusText,
+                                 sizeof(focusText));
+        context->Unmap(c.gridRead[k].Get(), 0);
+        t.pending = false;
+        say("depth before the transparents, eye %d, frame %llu (every 8th texel; the copy against the depth at the pass's "
+            "end): %s%s",
+            t.eye, t.frame, eyeText, focusText);
+    }
+}
 
 }  // namespace
 
@@ -1134,6 +1318,16 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         ++d.failures;
         return;
     }
+    // The depth the vectors and DLSS read: the copy made before the pass's transparents wrote theirs, where this pass
+    // made it of this depth target and over both views' parts; else the depth target as it is now.
+    State::DepthCopy& dc = d.copy;
+    const unsigned copyW = pass.eyeWidth + (focus ? rw : 0), copyH = (std::max)(pass.eyeHeight, focus ? rh : 0u);
+    const bool copied = pass.depthCopied && dc.srv && dc.source == d.depthFor && dc.w >= copyW && dc.h >= copyH;
+    const bool readCopy = copied && pass.depthCopyRead;
+    d.depthIn = readCopy ? dc.srv.Get() : d.depthSrv.Get();
+    d.depthInMs = !readCopy && d.depthMs;
+    dc.used += readCopy ? 1 : 0;
+    dc.measured += copied && !readCopy ? 1 : 0;
     if (!d.firstLogged) {
         d.firstLogged = true;
         char drawn[64] = "";
@@ -1152,6 +1346,20 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     context->RSSetState(nullptr);
     context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     context->OMSetDepthStencilState(nullptr, 0);
+
+    if (copied && d.cfg.depthMeasure)  // the copy as made, against the depth at the pass's end
+        measure_depth(context, pass.eye, pass.eyeWidth, pass.eyeHeight, focus ? rw : 0, focus ? rh : 0, depthTerms);
+    if (readCopy && d.cfg.depthCopyNear > 0) {  // the copy only where what was drawn over it is near
+        Constants k{};
+        k.extra[3] = static_cast<float>(depthTerms[0] + depthTerms[1] / d.cfg.depthCopyNear);
+        context->UpdateSubresource(d.constants.Get(), 0, nullptr, &k, 0, 0);
+        context->OMSetRenderTargets(1, dc.rtv.GetAddressOf(), nullptr);
+        context->PSSetShaderResources(0, 1, d.depthSrv.GetAddressOf());
+        draw_triangle(context, d.depthMs ? d.keepFarMs.Get() : d.keepFarSs.Get(), copyW, copyH);
+        ID3D11ShaderResourceView* none = nullptr;
+        context->PSSetShaderResources(0, 1, &none);
+        context->OMSetRenderTargets(0, nullptr, nullptr);
+    }
 
     {  // the eye: rendered with its jitter; without it the clip shift is taken off
         const M4 off = dlss::clip_shift(eyeJitter.on ? -eyeJitter.cx : 0, eyeJitter.on ? -eyeJitter.cy : 0);
@@ -1175,6 +1383,64 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     d.jitteredFrames += eyeJitter.on && pass.eye == 0 ? 1 : 0;
 }
 
+ID3D11CommandList* dlss_depth_copy_list(ID3D11DepthStencilView* depth, unsigned width, unsigned height) {
+    if (!d.ready || d.off || !d.cfg.views || !depth || !width || !height)
+        return nullptr;
+    unsigned dw = 0, dh = 0;
+    if (!depth_view(depth, dw, dh))
+        return nullptr;
+    State::DepthCopy& c = d.copy;
+    width = (std::min)(width, dw);
+    height = (std::min)(height, dh);
+    if (!c.texture || c.texW != dw || c.texH != dh) {
+        c.texture.Reset();
+        c.rtv.Reset();
+        c.srv.Reset();
+        c.list.Reset();
+        c.texW = c.texH = 0;
+        if (!make(c.texture, dw, dh, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) ||
+            FAILED(d.device->CreateRenderTargetView(c.texture.Get(), nullptr, &c.rtv)) ||
+            FAILED(d.device->CreateShaderResourceView(c.texture.Get(), nullptr, &c.srv)) ||
+            (!c.deferred && FAILED(d.device->CreateDeferredContext(0, &c.deferred)))) {
+            c.texture.Reset();
+            c.rtv.Reset();
+            c.srv.Reset();
+            if (!c.refusedLogged) {
+                c.refusedLogged = true;
+                say("the depth's copy before the transparents couldn't be made (%ux%u): DLSS reads the depth target as it "
+                    "is at the pass's end",
+                    dw, dh);
+            }
+            return nullptr;
+        }
+        c.texW = dw;
+        c.texH = dh;
+        say("the depth's copy before the transparents made at %ux%u (the depth target's %s)", dw, dh,
+            d.depthMs ? "first samples" : "texels");
+    }
+    if (!c.list || c.source != d.depthFor || c.w != width || c.h != height || c.ms != d.depthMs) {
+        c.list.Reset();
+        ID3D11DeviceContext* dc = c.deferred.Get();
+        const D3D11_VIEWPORT vp{0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+        dc->OMSetRenderTargets(1, c.rtv.GetAddressOf(), nullptr);
+        dc->PSSetShaderResources(0, 1, d.depthSrv.GetAddressOf());
+        dc->RSSetViewports(1, &vp);
+        dc->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        dc->VSSetShader(d.vs.Get(), nullptr, 0);
+        dc->PSSetShader(d.depthMs ? d.depthCopyMs.Get() : d.depthCopySs.Get(), nullptr, 0);
+        dc->Draw(3, 0);
+        if (FAILED(dc->FinishCommandList(FALSE, &c.list))) {
+            c.list.Reset();
+            return nullptr;
+        }
+        c.source = d.depthFor;
+        c.w = width;
+        c.h = height;
+        c.ms = d.depthMs;
+    }
+    return c.list.Get();
+}
+
 void dlss_shutdown() {
     nr_shutdown();  // its features and its views of this device first
     if (!d.device)
@@ -1193,6 +1459,15 @@ void dlss_shutdown() {
     d.ngxRefused = false;
     d.depthFor = nullptr;
     d.depthSrv.Reset();
+    d.depthIn = nullptr;
+    d.copy = State::DepthCopy{};
+    d.vectorsCopyMs.Reset();
+    d.depthCopyMs.Reset();
+    d.depthCopySs.Reset();
+    d.measureMs.Reset();
+    d.measureSs.Reset();
+    d.keepFarMs.Reset();
+    d.keepFarSs.Reset();
     d.vs.Reset();
     d.vectorsMs.Reset();
     d.vectorsSs.Reset();
@@ -1378,6 +1653,11 @@ void dlss_frame_end(unsigned long long frame) {
     else if (pending)
         apply_live_sharpening(live);
     nr_frame_end(frame);
+    if (d.ready && (d.copy.taken[0].pending || d.copy.taken[1].pending)) {
+        ComPtr<ID3D11DeviceContext> context;
+        d.device->GetImmediateContext(&context);
+        read_depth_measure(context.Get());
+    }
     {  // FSR's frame time (its own clock between frame ends), and its released contexts collected
         const auto now = std::chrono::steady_clock::now();
         if (d.lastFrameEnd.time_since_epoch().count())
@@ -1428,6 +1708,11 @@ void dlss_frame_end(unsigned long long frame) {
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+            if (d.copy.used || d.copy.measured)
+                say("depth before the transparents: %llu passes read it, %llu only measured it (the A/B's other side) "
+                    "since the last line",
+                    d.copy.used, d.copy.measured);
+            d.copy.used = d.copy.measured = 0;
             if (d.backend == 1) {  // FSR's own GPU time per view (its D3D12 queue's timestamps)
                 double ms[4];
                 for (int i = 0; i < 4; ++i)

@@ -197,10 +197,12 @@ void realOMSetBlendState(ID3D11DeviceContext* c, ID3D11BlendState* bs, const FLO
     call_real<kHookBlend>(c, bs, factor, mask);
 }
 
+bool slot_writes();  // below
+
 // The blend state the draws should have now: the game's, or its twin while the slot target is bound.
 void apply_blend() {
     if (g.slotsBound) {
-        realOMSetBlendState(g.context, blend_twin(g.gameBlend, g.depthWrites), g.blendFactor, g.sampleMask);
+        realOMSetBlendState(g.context, blend_twin(g.gameBlend, slot_writes()), g.blendFactor, g.sampleMask);
         g.blendSwapped = true;
     } else if (g.blendSwapped) {
         realOMSetBlendState(g.context, g.gameBlend, g.blendFactor, g.sampleMask);
@@ -221,6 +223,39 @@ bool depth_writes(ID3D11DepthStencilState* ds) {
     return g.depthLook.writes;
 }
 
+// Does blend state `bs` blend into target 0 (a transparent's; null, D3D11's default: no)? An "opaque" blend (one, zero)
+// or a target it doesn't write isn't blending.
+bool blends_colour(ID3D11BlendState* bs) {
+    if (!bs)
+        return false;
+    D3D11_BLEND_DESC desc;
+    bs->GetDesc(&desc);
+    const D3D11_RENDER_TARGET_BLEND_DESC& t = desc.RenderTarget[0];
+    if (!t.BlendEnable || !(t.RenderTargetWriteMask & D3D11_COLOR_WRITE_ENABLE_ALL))
+        return false;
+    return !(t.SrcBlend == D3D11_BLEND_ONE && t.DestBlend == D3D11_BLEND_ZERO && t.BlendOp == D3D11_BLEND_OP_ADD);
+}
+
+// The car slots' target 1 is written where the draw writes depth, but not by a transparent while DLSS reads the depth
+// from before the transparents: the slot stays the surface's behind the glass, as the depth does.
+bool slot_writes() { return g.depthWrites && !(g.glass.mode && g.glass.read && g.glass.blends); }
+
+// DLSS's depth before the transparents (mvr_pass_glass.h). After the game's bind of a depth target in an eye pass:
+// whether it is the pass's scene depth (as bound at its begin).
+void glass_note_bind(ID3D11DepthStencilView* dsv) {
+    auto& gl = g.glass;
+    gl.dsv = nullptr;
+    gl.sceneBound = false;
+    if (!dsv || g.pass < 0 || g.pass > 1)
+        return;
+    ComPtr<ID3D11Resource> depthTarget;
+    dsv->GetResource(&depthTarget);
+    gl.sceneBound = depthTarget && depthTarget.Get() == g.mask.sceneDepth[g.pass];
+    if (gl.sceneBound)
+        gl.dsv = dsv;  // raw: bound now, used before the next bind only
+}
+
+
 using BlendFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11BlendState*, const FLOAT*, UINT);
 using DepthFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStencilState*, UINT);
 
@@ -231,9 +266,11 @@ inline void om_set_blend_state(BlendFn real, ID3D11DeviceContext* context, ID3D1
         for (int i = 0; i < 4; ++i)
             g.blendFactor[i] = factor ? factor[i] : 1.0f;
         g.sampleMask = mask;
+        if (g.glass.mode)  // DLSS's depth before the transparents (mvr_pass_glass.h)
+            g.glass.blends = blends_colour(bs);
         if (g.slotsBound) {
             Timed timed(g.time.slotState);
-            real(context, blend_twin(bs, g.depthWrites), g.blendFactor, mask);
+            real(context, blend_twin(bs, slot_writes()), g.blendFactor, mask);
             g.blendSwapped = true;
             return;
         }

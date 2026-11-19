@@ -144,14 +144,14 @@ bool wanted(int h) {
         return true;
     if (is_car_hook(h))
         return cb_track();
-    if (is_slot_hook(h))
-        return g.slotsOn;
+    if (is_slot_hook(h))  // the blend and depth states: the car slots' twins, DLSS's depth before the transparents
+        return g.slotsOn || g.glass.mode;
     if (is_undoubled_draw(h))
         return g.instanced || g.canInstance;
     if (h == kHookDrawIndexed && cb_track())  // car (or view) tracking's draws (LMU's scene draws are all DrawIndexed)
         return true;
     if (is_draw(h))
-        return g.focusReplay || g.instanced || g.canInstance;
+        return g.focusReplay || g.instanced || g.canInstance || g.glass.mode;
     return h != kHookCopy || g.focusReplay;
 }
 

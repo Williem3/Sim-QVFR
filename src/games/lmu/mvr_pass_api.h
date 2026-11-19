@@ -181,6 +181,14 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         if (dsv)
             dsv->GetResource(&depthTarget);
         g.mask.sceneDepth[pass] = depthTarget.Get();
+        // DLSS's depth before the transparents: none copied yet; the scene's depth as bound now.
+        auto& gl = g.glass;
+        gl.copies = 0;
+        gl.copied = false;
+        gl.opaqueSince = true;
+        gl.opaqueAfterCopy = 0;
+        gl.sceneBound = gl.mode && depthTarget;
+        gl.dsv = gl.sceneBound ? dsv.Get() : nullptr;  // raw: bound now
     }
     g.postWindow = g.focusCopied = g.focusComposited = false;
     g.postTrace.clear();
@@ -487,6 +495,13 @@ bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye 
 void mvr_mask_stale(const std::atomic<bool>* stale) { g.maskStale = stale; }
 
 void mvr_mask_ab_drop(bool drop) { g.maskAbDrop = drop; }
+
+void mvr_glass_depth(int mode) {
+    if (!g.context)  // before the install only: its hooks are chosen there
+        g.glass.mode = mode > 0 ? 1 : 0;
+}
+
+void mvr_glass_read(bool read) { g.glass.read = read; }
 
 void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
     auto& m = g.mask;

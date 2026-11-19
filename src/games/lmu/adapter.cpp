@@ -103,6 +103,10 @@ public:
             run.focusReplay = true;  // the eye passes post-process their focus views too (focus_post.h)
             // lmu_ui_mips=0: the VR UI panel samples the game's canvas (one mip) in the small periphery too.
             run.uiMips = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_ui_mips", 1, s.ini) != 0;
+            // lmu_dlss_glass_depth=0: DLSS reads the scene's depth as the pass ends it, the car's glass in it (mvr_pass.h
+            // mvr_glass_depth).
+            run.glassDepth = !s.ini ? 1 : static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_dlss_glass_depth", 1,
+                                                                                s.ini));
             run.focusFinal = true;     // the focus views from beside the eyes
             run.passTracker = true;    // the eye passes from the d3d11 calls
             run.trackerDrives = true;  // and nothing of the game's hooked
@@ -166,6 +170,12 @@ public:
             dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
+            // lmu_dlss_glass_measure=1 (development builds: 1 by default): every ~2 s the depth before the transparents
+            // against the pass's end, logged (engine/dlss_views.h DlssRun::depthMeasure).
+            dlss.depthMeasure = key(L"lmu_dlss_glass_measure", simqvfr::kDevBuild ? 1 : 0) != 0;
+            // lmu_dlss_glass_near_cm (300): DLSS's depth from before the transparents only where they lie nearer than
+            // this (the player's car's glass); 0 everywhere (DlssRun::depthCopyNear).
+            dlss.depthCopyNear = std::clamp(key(L"lmu_dlss_glass_near_cm", 300), 0, 100000) / 100.0;
             // AMD FSR in DLSS's place (engine/fsr_upscale.h; experimental): wherever DLSS can't run (not an NVIDIA GPU,
             // or NGX refuses to start), the launcher's FSR card. On an RTX card, lmu_fsr=1 (a test) lets [dlss]
             // upscaler=fsr choose it, live. lmu_fsr_provider=3 the newest FSR 3.x even where FSR 4 is offered;
@@ -194,11 +204,13 @@ public:
         simqvfr::NrSettings nr = nrSettings_;
         nr.on = nr.on && dlssPossible_;
         simqvfr::nr_start("lmu dlss-nr", nr);
-        // Diagnostics (lmu_diag=1; games/diag_switches.h), an A/B in one run: Ctrl+Alt+1 executes the game's command
-        // lists (its sun shadows) as before their fix (mvr_pass.h mvr_replay_lists_plain).
-        if (diag_.start(s.ini, L"lmu", {L"list_fix"}))
-            simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the multi-view shadow fix (lmu_diag_list_fix_off=1 in "
-                          "%ls turns it off)",
+        // Diagnostics (lmu_diag=1; games/diag_switches.h), A/Bs in one run: Ctrl+Alt+1 executes the game's command
+        // lists (its sun shadows) as before their fix (mvr_pass.h mvr_replay_lists_plain); Ctrl+Alt+2 has DLSS read the
+        // depth as the pass ends it, the car's glass in it (mvr_glass_read; the copy is still made and measured).
+        if (diag_.start(s.ini, L"lmu", {L"list_fix", L"glass_depth"}))
+            simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the multi-view shadow fix, Ctrl+Alt+2 DLSS's depth "
+                          "before the car's glass (lmu_diag_list_fix_off=1, lmu_diag_glass_depth_off=1 in %ls turn them "
+                          "off)",
                           diag_.ini().c_str());
         qvfr_ = qvfr_frame_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
@@ -311,8 +323,12 @@ public:
     void qvfr_frame_end() override {
         if (!qvfr_)
             return;
-        if (diag_.poll())  // the switch off: the lists executed as before the fix
+        if (diag_.poll()) {  // a switch off: the lists executed as before the fix; DLSS's depth with the glass in it
             mvr_replay_lists_plain(!diag_.off(0));
+            mvr_glass_read(!diag_.off(1));
+            simqvfr::logf("lmu: diagnostics: the multi-view shadow fix %s, DLSS's depth before the car's glass %s",
+                          diag_.off(0) ? "OFF" : "on", diag_.off(1) ? "OFF (the depth as the pass ends it)" : "on");
+        }
         qvfr_frame_frame_end();
     }
 

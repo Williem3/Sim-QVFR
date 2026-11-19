@@ -41,6 +41,10 @@ struct QvfrFrameRun {
     // [experiment] lmu_ui_mips (default 1): the VR UI panel's doubled draws sample a copy of its canvas with mips
     // (mvr_pass.h mvr_ui_mips); 0: the game's canvas (one mip) as it is.
     bool uiMips = true;
+    // DLSS's depth before the transparents that write depth, the car's glass ([experiment] lmu_dlss_glass_depth, 1 by
+    // default; mvr_pass.h mvr_glass_depth): 0 the depth as the pass ends it (the glass's distance for the world seen
+    // through it).
+    int glassDepth = 1;
     // The focus views are the focus finals beside the eyes (the game's two eye passes only).
     bool focusFinal = false;
     // R4b's pass tracker, observe only ([experiment] lmu_pass_tracker, with focusReplay): the eye passes found at the

@@ -143,6 +143,8 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         if (ours(context)) {  // the bind that began a tracked pass: its scene's targets
             note_scene_bind(n, rtvs, dsv);
             slot_bind(n, rtvs, dsv);
+            if (g.glass.mode)
+                glass_note_bind(dsv);
         } else if (tr.on && context == g.context && !g.replaying) {  // MSAA off: what the scene's target may be
             note_drawn_with_depth(n, rtvs, dsv);
         }
@@ -156,6 +158,8 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
     note_scene_bind(n, rtvs, dsv);
     if (ours(context))  // (a bind the tracker ended the pass at isn't the pass's)
         slot_bind(n, rtvs, dsv);
+    if (g.glass.mode && ours(context))
+        glass_note_bind(dsv);
     if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
         fsr_final(n, rtvs);
     track_fsr_final(n, rtvs);
@@ -188,10 +192,13 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
             track_bind(n, rtvs, dsv);
             track_fsr_final(n, rtvs);
         }
-        if (ours(context))
+        if (ours(context)) {
             note_scene_bind(n, rtvs, dsv);
-        else if (tr.on && context == g.context && !g.replaying)
+            if (g.glass.mode && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+                glass_note_bind(dsv);
+        } else if (tr.on && context == g.context && !g.replaying) {
             note_drawn_with_depth(n, rtvs, dsv);
+        }
         return;
     }
     Timed timed(g.time.hooks);
@@ -213,6 +220,8 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         g.overlayTarget = overlay_target(n, rtvs);
+        if (g.glass.mode && ours(context))
+            glass_note_bind(dsv);
         update();
     }
 }
@@ -457,6 +466,13 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
     ID3D11Resource* const dst = scene;
     const int eye = g.pass & 1;
     g.resolved[g.pass] = dst;
+    if (g.glass.mode && g.pass < 2) {  // DLSS's depth before the transparents: this pass's counts
+        g.stats.glassPasses += g.glass.copied ? 1 : 0;
+        g.stats.glassOpaqueAfter += g.glass.copied ? g.glass.opaqueAfterCopy : 0;
+        g.stats.glassPassDraws += g.glass.copied ? tr.draws - tr.actualBegin[g.pass] : 0;
+        g.glass.sceneBound = false;  // nothing after the scene is copied for
+        g.glass.dsv = nullptr;
+    }
     // Car slots: the slot target off the pipeline (the post doesn't draw into it; DLSS reads it), each part's motion
     // uploaded for this pass's vectors, now and then the gate image (level 1 and up).
     bool slotsDrawn = false;
@@ -506,6 +522,8 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
         dp.focusRenderWidth = g.view.focusRenderW;
         dp.focusRenderHeight = g.view.focusRenderH;
         std::memcpy(dp.remap, g.view.remap, sizeof(dp.remap));
+        dp.depthCopied = g.glass.copied;  // DLSS's depth before the transparents (mvr_pass_glass.h)
+        dp.depthCopyRead = g.glass.read;
         if (slotsDrawn && g.slotsLevel >= 2 && g.slotSrv && g.motionSrv) {  // DLSS's vectors take the parts' motion
             dp.objectSlots = g.slotSrv.Get();
             dp.objectMotion = g.motionSrv.Get();

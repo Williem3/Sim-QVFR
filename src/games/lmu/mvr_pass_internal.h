@@ -364,6 +364,18 @@ struct State {
     int maskDroppedSince = 0;                       // mvr_mask_dropped
     bool maskAbDrop = false;                        // mvr_mask_ab_drop
     PanelFn panelFn = nullptr;                      // mvr_panel_draws
+    // DLSS's depth before the transparents (mvr_glass_depth, mvr_pass_glass.h).
+    struct Glass {
+        int mode = 0;            // mvr_glass_depth
+        bool read = true;        // mvr_glass_read: DLSS reads the copy this frame
+        bool blends = false;     // the game's bound blend state blends into target 0 (at its bind, with mode)
+        bool sceneBound = false; // the bound depth target is this eye pass's scene depth
+        ID3D11DepthStencilView* dsv = nullptr;  // its view (raw: bound now)
+        bool opaqueSince = true; // an unblended draw wrote the depth since the pass began or its last copy
+        int copies = 0;          // this pass's
+        uint64_t opaqueAfterCopy = 0;  // unblended depth-writing draws since its last copy
+        bool copied = false;     // this pass has a copy for DLSS
+    } glass;
     // The game's latest CopySubresourceRegions (mvr_copy_source): dst raw, compared only; src held (hold: the caller
     // queries it after the game may have released it; given back two frame ends later); the frame count when seen.
     struct CopySeen {
