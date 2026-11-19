@@ -79,6 +79,11 @@ Picture
   sharpens harder: start low. It sharpens soft detail most and edges already sharp least; too much
   makes fine detail shimmer. X-Plane runs an FSR sharpening pass of its own, so start lower there. It
   applies live, also from the headset menu.
+  Color (off by default): Color correction, then Exposure (in stops, up to 3 either way), Brightness
+  (mid tones and shadows; black stays black), Contrast and Saturation (-100% = grey), for a game that
+  looks too dark, washed out or dull in your headset. The periphery and the focus area change alike;
+  menus and loading screens show as the game draws them, and the truck sims aren't corrected yet. It
+  applies live, also from the headset menu's Color page.
   Object detail (X-Plane only): how much detail trees and objects get. 100% (the default) is the
   detail the sharp focus area needs; lower costs X-Plane's main thread less, which often limits the
   frame rate with QVFR; 0% is X-Plane's own detail for the render size. It applies live.
@@ -153,7 +158,7 @@ Headset
 Game
 - Launch checks: what would stop Sim-QVFR at the next launch, each with a fix: a game update
   (Sim-QVFR supports specific builds of each game; after an update it stays off and the game runs
-  as normal), the game not found, Steam not running, the game already running, the launcher running as
+  as normal; LMU is the exception, see Le Mans Ultimate), the game not found, Steam not running, the game already running, the launcher running as
   administrator (a note: each launch registers Sim-QVFR for the game, see Start), ACC without OpenComposite
   or with a DLSS too old for Foveated DLSS, Cheeky's dxgi.dll or version.dll loader in the game
   folder, and with Cheeky Foveated DLSS on: its runtime and OpenXR layer, OpenXR Toolkit's place above
@@ -196,7 +201,12 @@ Game
   on this PC (through Steam or a folder you chose) are listed; the others are tagged Not found, and
   their switch shows them anyway. Pick a colour preset, or Custom... for any colour.
 
-About (the version at the bottom of the game list): Check for updates when the launcher starts (the
+About (the version at the bottom of the game list): Language: the launcher's and the headset menu's
+text, Windows' language by default (Czech, French, German, Italian, Polish, Brazilian Portuguese,
+Russian, Spanish and Turkish, else English). The translations are machine drafts: if a line reads
+wrong, pick English here, and tell us the language, the English line and your fix in a Translation fix
+issue on GitHub. A line not translated yet shows in English. It changes in a running game too.
+Check for updates when the launcher starts (the
 first start asks once): it asks GitHub for the newest release, nothing else, and the status says when
 one is available; Check now is there too. Install puts a newer release in place for you (close the
 game first): the launcher downloads it from GitHub, checks it, replaces its own files and restarts.
@@ -339,8 +349,10 @@ Le Mans Ultimate
 ----------------
 More frames in LMU: LMU-OPTIMIZATION-GUIDE.md, in this folder, explains which settings cost CPU and GPU
 time (DLSS, other cars' motion, MSAA, resolution) and what to turn down first.
-Pick LMU in the game list, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR supports LMU
-1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
+Pick LMU in the game list, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR is made for LMU
+1.4.2.0 (the Steam build of 23 October 2026), and also runs on other builds (a game update, a beta or
+alpha branch) from what OpenXR and Direct3D show, DLSS and FSR included. Launch checks then say the
+build isn't tested yet; if something looks wrong, look for a Sim-QVFR update.
 Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the
 headset menu, the performance overlay and Eye off work in LMU, and menus and the HUD are drawn sharp
 in the focus area.

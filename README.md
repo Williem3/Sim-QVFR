@@ -29,7 +29,8 @@ page compares the two.
 
 Each game works with the version named (Assetto Corsa EVO: its current Steam build when this release came out).
 **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new Sim-QVFR comes out: watch
-the [Releases page](https://github.com/Williem3/Sim-QVFR/releases), or the launcher's update dot.
+the [Releases page](https://github.com/Williem3/Sim-QVFR/releases), or the launcher's update dot. Le Mans Ultimate is
+the exception: it keeps running on newer builds and beta branches, untested until a release names them.
 
 **Headsets:** any PC VR headset whose software supports OpenXR, which today is nearly all of them: Meta Quest and
 Pico (through Virtual Desktop; Quest also through Quest Link or Air Link), Pimax, Varjo, Bigscreen, Valve Index and

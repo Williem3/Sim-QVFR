@@ -10,8 +10,9 @@
 > **View crop** instead (the launcher's **Picture › View & helmet**, or the headset menu). If you had LMU's Y scale
 > at 90%, about 8% off the top and bottom gives a similar view.
 
-- **Version 1.4.2.0** (the Steam build of 23 October 2026). On any other build, Sim-QVFR stays off and LMU runs as
-  usual.
+- **Made for version 1.4.2.0** (the Steam build of 23 October 2026). It also runs on other builds (a game update, a
+  beta or alpha branch), DLSS and FSR included; Launch checks then say the build isn't tested yet. If something looks
+  wrong there, look for a Sim-QVFR update.
 - **Always start LMU from the launcher.** Started from Steam, it runs without Sim-QVFR.
 - **Offline by default.** LMU's **Run with anti-cheat** option for online racing **risks a ban on your account**: read
   [Online play and anti-cheat](online-play.md) before you ever turn it on.
