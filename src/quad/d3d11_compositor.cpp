@@ -12,13 +12,14 @@ namespace simqvfr {
 
 bool D3D11Compositor::initialize(ID3D11Device* device, DXGI_FORMAT viewFormat) {
     shutdown();
-    Com<ID3DBlob> vs, ps, lightPs, helmetPs, focusPs, errors;
+    Com<ID3DBlob> vs, ps, lightPs, helmetPs, focusPs, gradePs, errors;
     const auto compile = [&](const char* entry, const char* profile, Com<ID3DBlob>& blob) {
         return SUCCEEDED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", nullptr, nullptr, entry,
                                     profile, 0, 0, &blob, &errors));
     };
     if (!compile("VS", "vs_5_0", vs) || !compile("PS", "ps_5_0", ps) || !compile("LightPS", "ps_5_0", lightPs) ||
-        !compile("HelmetLayerPS", "ps_5_0", helmetPs) || !compile("FocusLayerPS", "ps_5_0", focusPs)) {
+        !compile("HelmetLayerPS", "ps_5_0", helmetPs) || !compile("FocusLayerPS", "ps_5_0", focusPs) ||
+        !compile("GradePS", "ps_5_0", gradePs)) {
         logf("d3d11 compositor: shader compile failed: %s",
              errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
@@ -54,6 +55,8 @@ bool D3D11Compositor::initialize(ID3D11Device* device, DXGI_FORMAT viewFormat) {
                                                   &helmetPs_)) &&
               SUCCEEDED(device->CreatePixelShader(focusPs->GetBufferPointer(), focusPs->GetBufferSize(), nullptr,
                                                   &focusPs_)) &&
+              SUCCEEDED(device->CreatePixelShader(gradePs->GetBufferPointer(), gradePs->GetBufferSize(), nullptr,
+                                                  &gradePs_)) &&
               SUCCEEDED(device->CreateSamplerState(&sampler, &sampler_)) &&
               SUCCEEDED(device->CreateBlendState(&blend, &lightBlend_)) &&
               SUCCEEDED(device->CreateRasterizerState(&raster, &scissored_)) &&
@@ -235,6 +238,39 @@ bool D3D11Compositor::draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* 
     return finish();
 }
 
+bool D3D11Compositor::draw_graded(ID3D11Texture2D* const (&sources)[2], const int (&from)[2][4],
+                                  ID3D11RenderTargetView* output, const int (&to)[2][2], const float (&grade)[3]) {
+    if (!ready_ || !output || !sources[0] || !sources[1])
+        return false;
+    ID3D11DeviceContext* c = deferred_.Get();
+    c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    c->VSSetShader(vs_.Get(), nullptr, 0);
+    c->PSSetShader(gradePs_.Get(), nullptr, 0);
+    c->OMSetRenderTargets(1, &output, nullptr);
+    for (int eye = 0; eye < 2; ++eye) {
+        ID3D11ShaderResourceView* srv = source(sources[eye]);
+        if (!srv)
+            return discard();
+        c->PSSetShaderResources(0, 1, &srv);
+        float constants[kComposeConstants] = {};
+        for (int i = 0; i < 2; ++i) {
+            constants[20 + i] = static_cast<float>(from[eye][i]);  // outerSrc.xy: the source's texel at the origin
+            constants[22 + i] = static_cast<float>(to[eye][i]);    // outerSrc.zw: the viewport's origin
+        }
+        for (int i = 0; i < 3; ++i)
+            constants[60 + i] = grade[i];
+        if (!set_constants(eye, constants))
+            return discard();
+        const D3D11_VIEWPORT viewport{static_cast<float>(to[eye][0]), static_cast<float>(to[eye][1]),
+                                      static_cast<float>(from[eye][2]), static_cast<float>(from[eye][3]), 0, 1};
+        c->RSSetViewports(1, &viewport);
+        c->Draw(3, 0);
+    }
+    ID3D11ShaderResourceView* none = nullptr;
+    c->PSSetShaderResources(0, 1, &none);
+    return finish();
+}
+
 bool D3D11Compositor::draw_helmet_layer(ID3D11Texture2D* views, ID3D11Texture2D* target_, const HelmetLayerDraw& d) {
     if (!ready_ || !views || !target_ || !has_helmet_pieces())
         return false;
@@ -316,6 +352,7 @@ void D3D11Compositor::shutdown() {
     lightPs_.Reset();
     helmetPs_.Reset();
     focusPs_.Reset();
+    gradePs_.Reset();
     for (auto& buffer : constants_)
         buffer.Reset();
     sampler_.Reset();

@@ -272,14 +272,26 @@ void v4d3d11_region_note() {
 // was (no crop, the runtime's eyes unknown, or a chain, view or copy that failed or wasn't ready this frame).
 // `device` the session's (sessionGraphics.d3d11): read by the caller, which may hold quad.mutex (the race path does), so
 // this takes no lock but v4d3d11.mutex's, held by the caller too.
+// `grade` (colour correction, color_grade_constants'; a race frame's): the periphery drawn graded into the pad chain
+// instead of copied (compose_shader.h GradePS), padded or not (without the runtime's eyes too: each eye as rendered), so
+// it matches the graded focus views; `*graded` says whether it was, the focus views graded only then.
 bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<XrCompositionLayerProjectionView>& copy,
-                           ID3D11Device* device) {
+                           ID3D11Device* device, const float (*grade)[3] = nullptr, bool* graded = nullptr) {
+    if (graded)
+        *graded = false;
     if (v4d3d11.padRetired && --v4d3d11.padRetiredFrames <= 0) {
         next.DestroySwapchain(v4d3d11.padRetired);
         v4d3d11.padRetired = XR_NULL_HANDLE;
     }
+    if (grade && v4d3d11.padGradeRetry > 0) {  // a graded copy failed lately: ungraded (and the focus views) a while
+        --v4d3d11.padGradeRetry;
+        grade = nullptr;
+    }
+    if (grade && v4d3d11.padGradeFailed)
+        grade = nullptr;
     float runtimeEyes[2][4];
-    if (!device || v4d3d11.padFailed || copy.size() < 2 || !runtime_eye_tangents(displayTime, runtimeEyes))
+    const bool eyesKnown = runtime_eye_tangents(displayTime, runtimeEyes);
+    if (!device || v4d3d11.padFailed || copy.size() < 2 || (!eyesKnown && !grade))
         return false;
     RegionImage pad[2];
     bool any = false;
@@ -287,7 +299,8 @@ bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<Xr
         const XrExtent2Di ext = copy[e].subImage.imageRect.extent;
         float tan[4];
         fov_tangents(copy[e].fov, tan);  // the FOV the view was rendered over
-        if (narrower_than_eye(tan, runtimeEyes[e]) && eye_pad_image(tan, ext.width, ext.height, runtimeEyes[e], pad[e])) {
+        if (eyesKnown && narrower_than_eye(tan, runtimeEyes[e]) &&
+            eye_pad_image(tan, ext.width, ext.height, runtimeEyes[e], pad[e])) {
             any = true;
             continue;
         }
@@ -296,12 +309,15 @@ bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<Xr
         pad[e].height = ext.height;
         pad[e].boxX = pad[e].boxY = 0;
     }
-    if (!any)
+    if (!any && !grade)
         return false;
-    const auto fail = [](const char* why) {
-        logf("native quad views: the FOV crop's periphery can't be padded out to the runtime's eyes (%s): views 0-1 as "
-             "rendered (the runtime may stretch them)",
-             why);
+    const auto fail = [any](const char* why) {
+        if (any)
+            logf("native quad views: the FOV crop's periphery can't be padded out to the runtime's eyes (%s): views 0-1 "
+                 "as rendered (the runtime may stretch them)",
+                 why);
+        else
+            logf("native quad views: colour correction off: the periphery can't be copied to grade it (%s)", why);
         v4d3d11.padFailed = true;
         return false;
     };
@@ -397,7 +413,40 @@ bool v4d3d11_pad_periphery(XrSession session, XrTime displayTime, std::vector<Xr
     device->GetImmediateContext(&context);
     const float black[4] = {0, 0, 0, 1};
     context->ClearRenderTargetView(v4d3d11.padTargets[index], black);
-    for (int e = 0; e < 2; ++e) {
+    // Colour correction: each eye drawn graded, texel for texel, where it would be copied. A source the compositor's
+    // views can't read (an array image) turns colour correction off here for the session (the focus views with it).
+    bool drewGraded = false;
+    if (grade) {
+        D3D11_TEXTURE2D_DESC d;
+        source[0]->GetDesc(&d);
+        if (d.ArraySize > 1 || copy[0].subImage.imageArrayIndex || copy[1].subImage.imageArrayIndex) {
+            v4d3d11.padGradeFailed = true;  // the images stay arrays: for the session
+            log_line("native quad views: colour correction off: the game's eye images are arrays (the periphery's "
+                     "copy can't be graded)");
+        } else {
+            int from[2][4], to[2][2];
+            for (int e = 0; e < 2; ++e) {
+                const XrRect2Di rect = copy[e].subImage.imageRect;
+                from[e][0] = rect.offset.x;
+                from[e][1] = rect.offset.y;
+                from[e][2] = rect.extent.width;
+                from[e][3] = rect.extent.height;
+                to[e][0] = static_cast<int>(e * v4d3d11.padW) + pad[e].boxX;
+                to[e][1] = pad[e].boxY;
+            }
+            drewGraded = v4d3d11.compositor.draw_graded(source, from, v4d3d11.padTargets[index], to, *grade);
+            if (!drewGraded) {  // tried again in a second or so, the focus views ungraded meanwhile
+                v4d3d11.padGradeRetry = 90;
+                if (!v4d3d11.padGradeLogged)
+                    log_line("native quad views: the periphery's graded copy failed: colour correction paused, tried "
+                             "again in a second");
+                v4d3d11.padGradeLogged = true;
+            }
+        }
+    }
+    if (graded)
+        *graded = drewGraded;
+    for (int e = 0; !drewGraded && e < 2; ++e) {
         D3D11_TEXTURE2D_DESC d;
         source[e]->GetDesc(&d);
         const XrRect2Di rect = copy[e].subImage.imageRect;
@@ -508,30 +557,48 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     // Sharpening: the focus views' texels per display pixel (FocusLayerPS sharpens at the display's scale above 1.25).
     for (int e = 0; e < 2; ++e)
         drawn[e].viewTan[2] = texelsPerPixel[e];
+    // The periphery: the game's own image (its outer view at the top left), the FOV it was rendered over. The game's
+    // depth info, if any, is dropped as when composed (the proof's: its rect would need cutting too). Made in a copy of
+    // `copy`, which stays as it was if the focus layer fails below.
+    std::vector<XrCompositionLayerProjectionView> periphery = copy;
+    for (uint32_t v = 0; v < 2; ++v) {
+        periphery[v].fov = tangents_fov(eyes[v].outerTan);
+        periphery[v].next = nullptr;
+        periphery[v].subImage.imageRect.extent = outer[v];
+    }
+    // Native quad views: the periphery padded out to the runtime's eyes with the FOV crop (issue 29), and drawn graded
+    // with colour correction. First, so the focus views are graded only when the periphery was: the two always match.
+    // With focus_layer alone the runtime shows the game's own periphery, so neither is graded.
+    // Under quad.mutex (v4d3d11_compose): the device read here, not inside (a second lock of it threw: issue 29).
+    const bool wantGrade = nativeQuad.active && drawn[0].color[0] > 0;
+    bool graded = false;
+    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, displayTime, periphery, sessionGraphics.d3d11,
+                                                                   wantGrade ? &drawn[0].color : nullptr, &graded);
+    if (!graded)
+        for (EyeComposition& d : drawn)
+            std::memset(d.color, 0, sizeof(d.color));
+    v4d3d11.gradeState = wantGrade ? (graded ? 0 : 1) : eyes[0].color[0] > 0 && !nativeQuad.active ? 2 : 0;
+    if (eyes[0].color[0] > 0 && !nativeQuad.active && !v4d3d11.gradeLayerLogged) {
+        v4d3d11.gradeLayerLogged = true;
+        log_line("views4 d3d11: focus_layer: colour correction isn't applied (the runtime shows the game's own periphery)");
+    }
     const bool ok = v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
     if (!ok)
         return false;
     for (uint32_t v = 0; v < 2; ++v) {
-        // The periphery: the game's own image (its outer view at the top left), the FOV it was rendered over. The
-        // game's depth info, if any, is dropped as when composed (the proof's: its rect would need cutting too).
-        copy[v].fov = tangents_fov(eyes[v].outerTan);
-        copy[v].next = nullptr;
-        copy[v].subImage.imageRect.extent = outer[v];
         // The focus view: the eye's position, the focus camera's turn (a direction in the eye's frame is in the
         // focus view's after the inverse turn, views4_eye), its own FOV and pixels.
         // Over the runtime's focus view: the eye's own pose and the region image's FOV (the runtime's, out to whole
         // texels of the box's grid).
-        focus[v] = copy[v];
-        focus[v].pose.orientation = overRegion ? copy[v].pose.orientation : qmul(copy[v].pose.orientation, frame.turn[v]);
+        focus[v] = periphery[v];
+        focus[v].pose.orientation = overRegion ? periphery[v].pose.orientation : qmul(periphery[v].pose.orientation, frame.turn[v]);
         focus[v].fov = overRegion ? tangents_fov(regionImage[v].tan) : tangents_fov(eyes[v].focusTan);
         focus[v].subImage.swapchain = v4d3d11.focusChain;
         focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
         focus[v].subImage.imageArrayIndex = 0;
     }
-    // Native quad views with the FOV crop: the periphery padded out to the runtime's eyes (issue 29).
-    // Under quad.mutex (v4d3d11_compose): the device read here, not inside (a second lock of it threw: issue 29).
-    const bool padded = nativeQuad.active && v4d3d11_pad_periphery(session, displayTime, copy, sessionGraphics.d3d11);
+    copy.swap(periphery);
     if (nativeQuad.active) {
         if (overRegion) {
             ++v4d3d11.regionFrames;
@@ -720,6 +787,7 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
             v4d3d11.loggedTexelsPerPixel = texelsPerPixel[0];
         }
         bool focusTimedOut = false;
+        v4d3d11.gradeState = 0;  // v4d3d11_layered says otherwise; composed frames are always graded
         if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, texelsPerPixel,
                             displayTime, copy, *focus, &focusTimedOut)) {
             *layered = true;

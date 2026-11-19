@@ -183,6 +183,7 @@ void menu_open(int64_t now) {
         menu.model.launch.apiDlss = experiment.replayCompose && experiment.replayDlss != 0;
         menu.model.launch.apiFocusScale = experiment.replayDlssFocusScale;
         menu.model.dlssState.clear();
+        menu.model.colorState = v4d3d11.gradeState.load(std::memory_order_relaxed);  // the Color page's note
         if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
             const focus_ngx::State d = focus_ngx::state();
             // The panel's note (settings_menu.cpp menu_notes), in the player's language; never logged.

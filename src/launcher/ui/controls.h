@@ -10,6 +10,12 @@
 
 namespace simqvfr::launcher::ui::win {
 
+// A slider's value in tenths with one decimal ("1.5", "-0.3"): the gaze dead-zone's degrees, the exposure's stops.
+inline std::wstring tenths_text(int tenths) {
+    const int a = tenths < 0 ? -tenths : tenths;
+    return (tenths < 0 ? L"-" : L"") + std::to_wstring(a / 10) + L"." + std::to_wstring(a % 10);
+}
+
 // Button labels; the Launch button's (Jost, uppercase).
 inline constexpr t::TypeStyle kButtonLabel = t::kButton;
 

@@ -24,6 +24,7 @@
 #include "games/adapter.h"
 #include "input/hotkeys.h"
 #include "probe/cpu_load.h"
+#include "quad/color_grade.h"
 #include "quad/compositor.h"
 #include "quad/d3d11_compositor.h"
 #include "quad/focus_offset.h"
@@ -213,6 +214,9 @@ struct Experiment {
     // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS on the focus views as they are composed
     // (EyeComposition::sharpness), percent; 0 off.
     std::atomic<int> sharpen = 0;
+    // [quad] color_correction and its values (a game with GameFeatures::sharpening; quad/color_grade.h's bits): the
+    // composed image's exposure, brightness, contrast and saturation (EyeComposition::color). Live.
+    std::atomic<uint64_t> colorGrade = kColorGradeNone;
     // [quad] output_density_max (quad/output_density.h): the most the composed output grows past the native eye for
     // the focus density, percent; 100 composes at native size (as before). Live.
     std::atomic<int> outputDensityMax = 400;
@@ -255,6 +259,7 @@ struct LiveSettings {
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
+    ColorGrade color;        // [quad] color_correction and its values (a game with GameFeatures::sharpening)
     int outputDensityMax = 400;  // [quad] output_density_max, percent of the native eye (100: composed at native size)
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
@@ -562,6 +567,15 @@ struct V4D3D11 {
     XrSwapchain padRetired = XR_NULL_HANDLE;
     int padRetiredFrames = 0;
     bool padFailed = false;  // a chain, view or copy that can't be made: views 0-1 as rendered from then on
+    // Colour correction can't grade the periphery's copy (an array or a view the compositor can't read): no colour
+    // correction under native quad views from then on, so the focus views never differ from it.
+    bool padGradeFailed = false;
+    int padGradeRetry = 0;          // frames left before a failed graded copy is tried again (the focus views ungraded)
+    bool padGradeLogged = false;    // that failure, logged once a session
+    bool gradeLayerLogged = false;  // focus_layer without native quad views: "colour correction isn't applied", once
+    // How the last race frame's colour correction went (the headset menu's Color page): 0 applied or off, 1 paused
+    // (the periphery couldn't be graded this frame), 2 not available in this mode.
+    std::atomic<int> gradeState = 0;
     uint64_t padded = 0;     // frames padded
     uint64_t paddedEyesOnly = 0;  // of them, frames without focus views (v4d3d11_pad_eyes)
     float loggedTexelsPerPixel = 0;    // the focus views' texels per display pixel last logged (sharpening)

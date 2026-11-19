@@ -40,6 +40,12 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Density, I18N(L"Focus density"), kFocusDensity),
     spec_of(MenuItem::ObjectDetail, I18N(L"Object detail"), kObjectDetail),
     spec_of(MenuItem::Sharpening, I18N(L"Sharpening"), kSharpenPercent),
+    // The Colour page (color_grade.h): the switch, exposure in tenths of a stop, the rest in percent.
+    spec_of(MenuItem::ColorOn, I18N(L"Color correction"), kColorCorrection),
+    spec_of(MenuItem::ColorExposure, I18N(L"Exposure"), kColorExposure),
+    spec_of(MenuItem::ColorBrightness, I18N(L"Brightness"), kColorBrightness),
+    spec_of(MenuItem::ColorContrast, I18N(L"Contrast"), kColorContrast),
+    spec_of(MenuItem::ColorSaturation, I18N(L"Saturation"), kColorSaturation),
     spec_of(MenuItem::EyeOff, I18N(L"Eye off"), kEyeOff),  // [quad] eye_off: none, left, right
     // Steps of kFocusQuadDistances.
     {MenuItem::FocusQuadDistance, I18N(L"Focus quad distance"), 0, kFocusQuadSteps - 1, 1},
@@ -150,6 +156,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HeadClock, I18N(L"Clock"), 0, 0, 0},
     {MenuItem::HeadVision, I18N(L"Vision"), 0, 0, 0},
     {MenuItem::HeadCpu, L"CPU", 0, 0, 0},
+    {MenuItem::HeadColor, I18N(L"Color"), 0, 0, 0},
 };
 
 // AMD FSR runs the DLSS page's views: a PC without an NVIDIA RTX card, or the experiment's Upscaler on FSR.
@@ -196,6 +203,10 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Density: return &v.density;
     case MenuItem::ObjectDetail: return &v.objectDetail;
     case MenuItem::Sharpening: return &v.sharpen;
+    case MenuItem::ColorExposure: return &v.color.exposure;
+    case MenuItem::ColorBrightness: return &v.color.brightness;
+    case MenuItem::ColorContrast: return &v.color.contrast;
+    case MenuItem::ColorSaturation: return &v.color.saturation;
     case MenuItem::EyeOff: return &v.eyeOff;
     case MenuItem::FocusQuadDistance: return &v.focusQuadStep;
     case MenuItem::Width: return &v.width;
@@ -256,11 +267,15 @@ namespace {
 
 // The View page: the launcher's View & helmet card, as the game has it.
 bool view_section(const SettingsMenu& menu) { return menu.launch.qvfr && (menu.launch.cropPage || menu.launch.helmetPage); }
+// The Colour page: QVFR in a game whose compositor runs (as sharpening).
+bool color_section(const SettingsMenu& menu) { return menu.launch.qvfr && menu.launch.sharpening; }
 
 }  // namespace
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
     std::vector<MenuPage> pages = {MenuPage::Picture, MenuPage::Foveation};
+    if (color_section(menu))  // after Foveation, at the user's ask (2026-11-18)
+        pages.push_back(MenuPage::Color);
     if (view_section(menu))
         pages.push_back(MenuPage::View);
     pages.push_back(MenuPage::Headset);
@@ -289,6 +304,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             add({MenuItem::ClockYaw, MenuItem::ClockPitch, MenuItem::ClockWidth});
     } else if (page == MenuPage::Game) {
         add({MenuItem::HeadCpu, MenuItem::CpuIsolateMain});
+    } else if (page == MenuPage::Color) {  // the launcher's Colour card: the switch, its values while it is on
+        add({MenuItem::HeadColor, MenuItem::ColorOn});
+        if (v.color.on)
+            add({MenuItem::ColorExposure, MenuItem::ColorBrightness, MenuItem::ColorContrast, MenuItem::ColorSaturation});
     } else if (page == MenuPage::View) {  // the launcher's View & helmet card
         items.push_back(MenuItem::HeadView);
         if (l.cropPage) {
@@ -388,6 +407,7 @@ namespace {
 std::wstring page_name(const SettingsMenu&, MenuPage page, const Words& w) {
     switch (page) {
     case MenuPage::Foveation: return w.t(I18N(L"Foveation"));
+    case MenuPage::Color: return w.t(I18N(L"Color"));
     case MenuPage::View: return w.t(I18N(L"View"));
     case MenuPage::Headset: return w.t(I18N(L"Headset"));
     case MenuPage::Game: return w.t(I18N(L"Game"));
@@ -572,8 +592,10 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Clock ||
         item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
-        item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain) {
+        item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain ||
+        item == MenuItem::ColorOn) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
+                     : item == MenuItem::ColorOn     ? menu.values.color.on
                      : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
                      : item == MenuItem::CpuIsolateMain ? menu.values.cpuIsolateMain
                      : item == MenuItem::Shape       ? menu.values.shape.corners
@@ -625,6 +647,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.helmet = read_helmet_settings(ini);
     v.objectDetail = ini_int(ini, kObjectDetail);
     v.sharpen = ini_int(ini, kSharpenPercent);
+    v.color = read_color_grade(ini);
     v.eyeOff = ini_int(ini, kEyeOff);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
@@ -637,8 +660,10 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     bool ok = true;
     if (eyeOff)  // QVFR or not: the layer shows the eye black either way
         ok &= write(ini, kEyeOff, kEyeOff.clamp(v.eyeOff));
-    if (qvfr && sharpening)
+    if (qvfr && sharpening) {
         ok &= write(ini, kSharpenPercent, kSharpenPercent.clamp(v.sharpen));
+        ok &= write_color_grade(ini, v.color);
+    }
     if (qvfr && focusQuads)
         ok &= write(ini, L"experiment", L"focus_quad_distance", focus_quad_metres(v.focusQuadStep));
     if (qvfr && objectDetail)
@@ -806,6 +831,15 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     const MenuItem section = menu_section(menu);
     if (page == MenuPage::Headset || page == MenuPage::Game)
         return notes;
+    if (page == MenuPage::Color) {
+        if (menu.values.color.on && menu.colorState == 1)
+            notes.push_back(lang::tr(L"Paused: the runtime's periphery couldn't be graded, so the focus area isn't either"));
+        else if (menu.values.color.on && menu.colorState == 2)
+            notes.push_back(lang::tr(L"Not applied with focus_layer: the runtime shows the game's own periphery"));
+        if (menu.values.color.on)
+            notes.push_back(lang::tr(L"The whole view, periphery and focus alike; menus show as the game draws them"));
+        return notes;
+    }
     if (section == MenuItem::HeadFg) {
         if (menu.cheeky.values.fg)
             notes.push_back(lang::tr(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off"));
@@ -1029,6 +1063,13 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = on_off(v.hotkeyFooter);
         else if (items[i] == MenuItem::CpuIsolateMain)
             line.value = on_off(v.cpuIsolateMain);
+        else if (items[i] == MenuItem::ColorOn)
+            line.value = on_off(v.color.on);
+        else if (items[i] == MenuItem::ColorExposure)
+            line.value = color_exposure_text(v.color.exposure);
+        else if (items[i] == MenuItem::ColorBrightness || items[i] == MenuItem::ColorContrast ||
+                 items[i] == MenuItem::ColorSaturation)
+            line.value = color_percent_text(*value_of(v, items[i]));
         else if (items[i] == MenuItem::Crop)
             line.value = on_off(v.crop);
         else if (items[i] == MenuItem::Helmet)

@@ -43,6 +43,13 @@ inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};
 inline constexpr IniInt kGaze{L"quad", L"gaze", 1, 0, 1, 1};
 inline constexpr IniInt kSharpenPercent{L"quad", L"sharpen_percent", 0, 0, 100, 5};
+// Colour correction (quad/color_grade.h; a game whose compositor runs, GameFeatures::sharpening): the switch, then the
+// exposure in tenths of a stop and brightness, contrast and saturation in percent, each 0 unchanged. Live.
+inline constexpr IniInt kColorCorrection{L"quad", L"color_correction", 0, 0, 1, 1};
+inline constexpr IniInt kColorExposure{L"quad", L"color_exposure", 0, -30, 30, 1};
+inline constexpr IniInt kColorBrightness{L"quad", L"color_brightness", 0, -50, 50, 2};
+inline constexpr IniInt kColorContrast{L"quad", L"color_contrast", 0, -50, 50, 2};
+inline constexpr IniInt kColorSaturation{L"quad", L"color_saturation", 0, -100, 100, 5};
 // The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};
@@ -59,8 +66,11 @@ inline constexpr IniInt kHotkeyFooter{L"menu", L"hotkey_footer", 1, 0, 1, 1};
 inline constexpr IniInt kCpuIsolateMain{L"cpu", L"isolate_main_thread", 0, 0, 1, 1};
 
 // The key as written, `fallback` when missing; not clamped (0 keeps its "unset" meaning where a key has one).
-// GetPrivateProfileInt, as every reader had it: a negative value reads as 0.
+// GetPrivateProfileInt, as every reader had it: a negative value reads as 0; a key whose range goes below 0 (the
+// colour correction's) is read signed.
 inline int ini_raw(const wchar_t* ini, const IniInt& k, int fallback) {
+    if (k.min < 0)
+        return ini_signed(ini, k.section, k.key, fallback);
     return static_cast<int>(GetPrivateProfileIntW(k.section, k.key, fallback, ini));
 }
 // The key in its range, its default when missing.

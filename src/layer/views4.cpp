@@ -194,6 +194,7 @@ void replay_compose() {
         c.cornerRadius = static_cast<float>(experiment.cornerRadius);
         focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
         c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
+        color_grade_constants(color_grade_from_bits(experiment.colorGrade.load(std::memory_order_relaxed)), c.color);
         quad.v4Extent[e] = extent;
         views4_helmet_eye(helmet, helmetFrame, e, c, quad.v4SubmitFov[e], quad.v4Extent[e], quad.outDensity, focusTexels);
     }

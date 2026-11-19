@@ -169,7 +169,7 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
     const Rect track{r.x, cy - 10, trackW, 20};
     slider_track(id, track, value, range, disabled);
     const float vx = track.right() + t::kSpace5;
-    const std::wstring text = (tenths ? gaze_deadzone_text(value) : std::to_wstring(value)) + unit;
+    const std::wstring text = (tenths ? tenths_text(value) : std::to_wstring(value)) + unit;
     if (detail.empty()) {
         app.canvas.text(text, t::kValue, {vx, cy - 10, kSliderValueW, 20}, col(disabled ? app.c->label_tertiary : app.c->label),
                         Align::Trailing);

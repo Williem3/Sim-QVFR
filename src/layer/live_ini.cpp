@@ -97,6 +97,8 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
+    if (const uint64_t bits = color_grade_bits(l.color); experiment.colorGrade.exchange(bits) != bits)
+        logf("live: colour correction %s", color_grade_log(l.color).c_str());
     if (experiment.outputDensityMax.exchange(l.outputDensityMax) != l.outputDensityMax)
         logf("live: output density up to %d%% of the native eye%s", l.outputDensityMax,
              l.outputDensityMax <= 100 ? " (composed at native size)" : "");

@@ -16,6 +16,7 @@
 #include "../engine/nr_settings.h"
 #include "../input/hotkeys.h"
 #include "../profile/profiles.h"
+#include "../quad/color_grade.h"
 #include "../quad/focus_offset.h"
 #include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
@@ -37,6 +38,9 @@ struct Settings {
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening of the focus views as
     // they are composed (CAS's own sharpness), 0 off (the default) to 100 the strongest (live).
     int sharpen = kSharpenPercent.def;
+    // [quad] color_correction and its values (QVFR, a game with GameFeatures::sharpening; quad/color_grade.h): the
+    // headset image's exposure, brightness, contrast and saturation, off (the default) or on (live).
+    ColorGrade grade;
     // [quad] eye_off (a game with GameFeatures::eyeOff: LMU; quad/eye_off.h): 0 both eyes on (the default), 1 the left
     // eye off, 2 the right. The headset shows that eye black and the game renders little of it (live).
     int eyeOff = 0;
@@ -120,6 +124,8 @@ constexpr Range range_of(const IniInt& k) { return {k.min, k.max}; }
 inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = range_of(kFocusDensity),
     kSizeRange = range_of(kFocusPercent), kFeatherRange = range_of(kFeatherPercent), kCornerRange = range_of(kCornerRadiusPercent),
     kCropRange = range_of(kCropTop), kObjectDetailRange = range_of(kObjectDetail), kSharpenRange = range_of(kSharpenPercent),
+    kColorExposureRange = range_of(kColorExposure), kColorBrightnessRange = range_of(kColorBrightness),
+    kColorContrastRange = range_of(kColorContrast), kColorSaturationRange = range_of(kColorSaturation),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its

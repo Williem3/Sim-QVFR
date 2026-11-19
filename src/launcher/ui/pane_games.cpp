@@ -325,7 +325,7 @@ float color_panel(float x, float y, float w, bool draw) {
         app.canvas.text(rail_abbreviation(game), t::kRailAbbrev, {block.x + 16, block.y + 10, pw - 20, 24}, col(app.c->rail_text));
         app.canvas.text(game.name, t::kRailName, {block.x + 16, block.y + 36, pw - 20, 16}, col(app.c->rail_text_muted));
     });
-    b.slider({kColorValue, tr(L"Brightness"), app.colorValue});
+    b.slider({kColorValue, tr(L"Accent brightness"), app.colorValue});
     b.actions({{kColorReset, tr(L"Use its own colour")}, {kPanelClose, tr(L"Done"), Btn::Primary}});
     return b.height();
 }

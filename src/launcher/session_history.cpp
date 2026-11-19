@@ -208,6 +208,15 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
     values(L"Sharpening", percent(a.sharpen), percent(b.sharpen));
     {
+        const auto grade = [](const ColorGrade& g) {
+            if (!g.on)
+                return std::wstring(L"Off");
+            return color_exposure_text(g.exposure) + L", " + color_percent_text(g.brightness) + L" / " +
+                   color_percent_text(g.contrast) + L" / " + color_percent_text(g.saturation);
+        };
+        values(L"Color correction", grade(a.grade), grade(b.grade));
+    }
+    {
         const auto eye = [](int v) { return std::wstring(v == 1 ? L"Left" : v == 2 ? L"Right" : L"None"); };
         values(L"Eye off", eye(a.eyeOff), eye(b.eyeOff));  // a session with one eye off renders far less
     }

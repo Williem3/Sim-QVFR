@@ -9,6 +9,7 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
+#include "color_grade.h"
 #include "focus_offset.h"
 #include "focus_quad_distance.h"
 #include "focus_shape.h"
@@ -66,15 +67,17 @@ enum class MenuItem {
     CpuIsolateMain,
     // The clock's size ([clock] width, degrees), as the launcher's Clock card.
     ClockWidth,
+    // The Colour page (quad/color_grade.h; a game with it, MenuLaunch::sharpening): the switch, then its four values.
+    ColorOn, ColorExposure, ColorBrightness, ColorContrast, ColorSaturation,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
-    HeadVision, HeadCpu
+    HeadVision, HeadCpu, HeadColor
 };
-// A section header (HeadResolution .. HeadCpu): drawn as a heading, skipped by Up and Down.
+// A section header (HeadResolution .. HeadColor): drawn as a heading, skipped by Up and Down.
 inline bool menu_item_is_header(MenuItem item) {
     return static_cast<int>(item) >= static_cast<int>(MenuItem::HeadResolution) &&
-           static_cast<int>(item) <= static_cast<int>(MenuItem::HeadCpu);
+           static_cast<int>(item) <= static_cast<int>(MenuItem::HeadColor);
 }
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -114,6 +117,7 @@ struct MenuValues {
     HelmetSettings helmet;    // [helmet] (QVFR)
     int objectDetail = kObjectDetail.def;  // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
+    ColorGrade color;         // [quad] color_correction and its values (QVFR, a game with sharpening; the Colour page)
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
@@ -145,7 +149,8 @@ struct MenuLaunch {
     // Object detail on the settings page (GameFeatures::objectDetail): off unless the layer says the game has it, so
     // no other game ever shows it.
     bool objectDetail = false;
-    // Sharpening on the settings page (GameFeatures::sharpening), as objectDetail.
+    // Sharpening on the settings page (GameFeatures::sharpening), as objectDetail; with it (QVFR) the Colour page too:
+    // every game whose compositor runs.
     bool sharpening = false;
     // One eye off on the Picture page (GameFeatures::eyeOff), as objectDetail.
     bool eyeOff = false;
@@ -193,6 +198,9 @@ struct SettingsMenu {
     int scroll = 0;  // the first line drawn after the page switch (menu_panel.h menu_first_visible), the panel's to keep
     std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
+    // Colour correction in the layer's last race frame (the Color page's note): 0 applied (or off), 1 paused this frame
+    // (the periphery under native quad views couldn't be graded), 2 not applied in this mode (focus_layer).
+    int colorState = 0;
     std::wstring dlssState;  // the API path: what DLSS runs on the periphery and the focus views (empty: nothing to say)
     std::wstring notice;  // a passing message under the title of any page (a CPU capture running or done; empty: none)
     // The frame times beside the title (osd_menu_line; with the overlay off, how to see them), and whether they're over
@@ -209,10 +217,11 @@ struct SettingsMenu {
 };
 
 // The menu's pages, as tabs, their sections the launcher's cards by the launcher's names: Picture (Resolution, the
-// game's upscaler: DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), Foveation, View (View &
-// helmet; a game without either, no page), Headset (Headset menu, Performance overlay, Clock) and Game (CPU). The
-// user's layout (2026-11-16); before it ten pages of their own names, some of one line, the page shown only by its title.
-enum class MenuPage { Picture, Foveation, View, Headset, Game };
+// game's upscaler: DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), Foveation, Colour (QVFR, a
+// game with it: colour correction), View (View & helmet; a game without either, no page), Headset (Headset menu,
+// Performance overlay, Clock) and Game (CPU). The user's layout (2026-11-16); before it ten pages of their own names,
+// some of one line, the page shown only by its title. Colour: its own page after Foveation at the user's ask (2026-11-18).
+enum class MenuPage { Picture, Foveation, Color, View, Headset, Game };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 // The pages' names for the tab strip under the title, in order (menu_pages'); the current one is menu.page.
@@ -238,7 +247,7 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
 // Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
-// sharpening only with `sharpening`, a game that has it). False if the file cannot be written.
+// sharpening and colour correction only with `sharpening`, a game that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
                        bool focusQuads = false, bool sharpening = false, bool eyeOff = false);
 
