@@ -44,6 +44,7 @@ void set_slider_from_x(float x) {
     *v = slider_value_at(app.dragRange, f, app.dragging == kInner ? kInnerDragStep : 1);
     if (app.dragging == kColorValue)
         apply_color_edit();  // the brightness: the edited game's colour follows
+    shape_slider_set(app.dragging);
     changed(false);
     if (*v != before && app.iniFound)
         push_live();  // the running game follows the knob; the settings save once it is let go
@@ -54,6 +55,82 @@ std::pair<int*, int*> placement_of(Ctl id) {
     return id == kOsdPanel     ? std::pair{&app.s.osd.yaw, &app.s.osd.pitch}
            : id == kClockPanel ? std::pair{&app.s.clock.yaw, &app.s.clock.pitch}
                                : std::pair{&app.s.menuYaw, &app.s.menuPitch};
+}
+
+// The custom focus shape in the preview: where (x, y) lies in eye `eye`'s drawn focus box, as a point (percent of the
+// box from its centre, x right, y up; past the box held at its edge).
+FocusPoint shape_point_at(int eye, float x, float y) {
+    const Rect& box = app.shapeBox[std::clamp(eye, 0, 1)];
+    if (box.w <= 0 || box.h <= 0)
+        return {};
+    return clamp_focus_point({static_cast<int>(std::lround(((x - box.x) / box.w - 0.5f) * 100)),
+                              static_cast<int>(std::lround((0.5f - (y - box.y) / box.h) * 100))});
+}
+
+void shape_slider_set(Ctl id) {
+    if ((id != kShapePointY && id != kShapePointX) || app.shapePoint != kFocusWholeShape)
+        return;
+    const FocusPoint c = focus_shape_centre(app.s.shape);
+    focus_shape_move_to(app.s.shape, id == kShapePointX ? app.shapeCentre[0] : c.x,
+                        id == kShapePointY ? app.shapeCentre[1] : c.y);
+}
+
+void shape_press(int option, float x, float y) {
+    const int eye = option / kShapeCanvasEye, point = option % kShapeCanvasEye;
+    app.shapeDragEye = eye;
+    if (GetKeyState(VK_SHIFT) < 0) {  // Shift+drag anywhere on the area: the whole shape, held where it was pressed
+        app.shapePoint = kFocusWholeShape;
+        app.shapeGrab = shape_point_at(eye, x, y);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    if (point == kShapeCanvasBox) {  // on the area: a point there, between the neighbours of the edge it's nearest
+        const int added = focus_shape_add_point(app.s.shape, shape_point_at(eye, x, y));
+        if (added < 0) {
+            app.dragging = kNone;  // the outline is full
+            return;
+        }
+        app.shapePoint = added;
+        changed(false);
+        if (app.iniFound)
+            push_live();
+    } else {
+        app.shapePoint = std::clamp(point, 0, std::clamp(app.s.shape.count, 1, kFocusPointsMax) - 1);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+    }
+}
+
+void set_shape_point_from(float x, float y) {
+    FocusShape& s = app.s.shape;
+    if (app.shapePoint == kFocusWholeShape) {  // the whole shape follows the pointer from where it was held
+        const FocusPoint p = shape_point_at(app.shapeDragEye, x, y);
+        const FocusPoint before = focus_shape_centre(s);
+        focus_shape_move(s, p.x - app.shapeGrab.x, p.y - app.shapeGrab.y);
+        const FocusPoint after = focus_shape_centre(s);
+        app.shapeGrab = {app.shapeGrab.x + after.x - before.x, app.shapeGrab.y + after.y - before.y};
+        if (!(after == before)) {
+            changed(false);
+            if (app.iniFound)
+                push_live();
+        }
+        return;
+    }
+    app.shapePoint = std::clamp(app.shapePoint, 0, std::clamp(s.count, 1, kFocusPointsMax) - 1);
+    const FocusPoint p = shape_point_at(app.shapeDragEye, x, y);
+    if (p == s.points[app.shapePoint])
+        return;
+    s.points[app.shapePoint] = p;
+    changed(false);
+    if (app.iniFound)
+        push_live();  // the running game's shape follows the point; the settings save once it is let go
+}
+
+void shape_remove(int option) {
+    const int point = option % kShapeCanvasEye;
+    if (point == kShapeCanvasBox || !focus_shape_remove_point(app.s.shape, point))
+        return;
+    app.shapePoint = std::clamp(point - 1, 0, app.s.shape.count - 1);
+    changed();
 }
 
 // Dragging a panel in the placement preview: its centre follows the pointer (less where it was held).
@@ -147,7 +224,12 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
         selected = static_cast<int>(app.s.helmet.visor);
     } else if (owner == kShape) {
         add_all(kShapeNames);
-        selected = app.s.shape.corners ? 1 : 0;
+        selected = app.s.shape.custom ? 1 : 0;
+    } else if (owner == kShapePointPick) {  // "Whole shape", then "Point 1" .. the shape's last
+        items.push_back(tr(L"Whole shape"));
+        for (int i = 0; i < std::clamp(app.s.shape.count, 1, kFocusPointsMax); ++i)
+            items.push_back(trf(L"Point {n}", {{L"n", std::to_wstring(i + 1)}}));
+        selected = std::clamp(app.shapePoint + 1, 0, static_cast<int>(items.size()) - 1);
     } else if (owner == kDiagKind) {
         add_all(kIssueKinds);
         selected = app.reportKind;
@@ -347,6 +429,11 @@ void choose(Ctl owner, int option) {
         choose_overview_profile(option);
         return;
     }
+    if (owner == kShapePointPick) {  // which point the sliders move, not a setting
+        app.shapePoint = std::clamp(option - 1, kFocusWholeShape, std::clamp(app.s.shape.count, 1, kFocusPointsMax) - 1);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
     if (owner == kPreviewEye) {  // a view, not a setting
         app.previewEye = std::clamp(option, 0, 2);
         InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -396,7 +483,7 @@ void choose(Ctl owner, int option) {
     else if (owner == kNightQuality)
         car_lighting_preset(app.s.carLight, std::clamp(option, 0, kCarLightPresets - 1));
     else if (owner == kShape)
-        app.s.shape.corners = option == 1;
+        app.s.shape.custom = option == 1;
     else if (owner == kLayerProfile) {
         app.layerProfile = std::clamp(option, 0, 1);
         app.layerRow = 0;

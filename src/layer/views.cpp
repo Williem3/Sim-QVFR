@@ -88,11 +88,13 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
         aim_boxes(views, gazing, direction, distance, tan, valid);
         if (distance > 0)
             convergence_note(distance, fromGame, tan);
-        // The menu's vertical offset: on the gaze when tracked, on straight ahead otherwise (focus_offset.h).
+        // The menu's offset: on the gaze when tracked, on straight ahead otherwise (focus_offset.h).
         for (int e = 0; e < 2; ++e) {
             const bool tracked = gazing && valid[e];
             if (!valid[e])
                 tan[e][0] = tan[e][1] = 0;
+            tan[e][0] = static_cast<float>(
+                offset_tan_x(tan[e][0], tracked ? experiment.gazeOffsetX : experiment.fixedOffsetX));
             tan[e][1] = static_cast<float>(
                 offset_tan_y(tan[e][1], tracked ? experiment.gazeOffsetY : experiment.fixedOffsetY));
             valid[e] = true;
@@ -136,7 +138,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             }
             // Gaze: where the gaze ray points in each eye's frame (canted displays rotate each eye), as
             // tangents; the focus cameras turn towards it, clamped against the FOV ACE renders with
-            // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs. The vertical offset
+            // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs. The offset
             // (focus_offset.h) moves the tracked gaze, or the fixed box off each eye's forward axis.
             // A head-locked call (OpenComposite's eyes-to-head query) leaves the gaze to the scene-space one
             // (gaze_skips_space).
@@ -172,6 +174,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                                                         runtime_gaze(info->space, info->displayTime, direction));
                 steady_gaze(gazing, direction);
                 const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
+                const int offsetX = gazing ? experiment.gazeOffsetX : experiment.fixedOffsetX;
                 // Converging (focus_converge.h): both boxes on the point the eyes look at, the gaze (or the head's
                 // forward axis) out to the fixation distance, each as its eye sees it. Without a distance, parallel.
                 bool fromGame = false;
@@ -180,13 +183,13 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 if (distance > 0)
                     convergence_note(distance, fromGame, tan);
                 for (int e = 0; e < 2; ++e)
-                    if (!gazing && !valid[e] && offset != 0) {  // the fixed box, moved off straight ahead
+                    if (!gazing && !valid[e] && (offset != 0 || offsetX != 0)) {  // the fixed box, moved off ahead
                         tan[e][0] = tan[e][1] = 0;
                         valid[e] = true;
                     }
                 for (int e = 0; e < 2; ++e)
-                    if (valid[e] && offset != 0)
-                        tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
+                    if (valid[e])
+                        offset_tan(tan[e], offsetX, offset);
                 game->qvfr_set_gaze(tan, valid, gazing);
             }
         }
@@ -225,13 +228,14 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                                                     runtime_gaze(info->space, info->displayTime, direction));
             steady_gaze(gazing, direction);
             const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
+            const int offsetX = gazing ? experiment.gazeOffsetX : experiment.fixedOffsetX;
             bool fromGame = false;
             const double distance = converge_distance(fromGame);
             aim_boxes(views, gazing, direction, distance, tan, valid);
             if (distance > 0)
                 convergence_note(distance, fromGame, tan);
             for (int e = 0; e < 2; ++e)
-                if (!gazing && !valid[e] && offset != 0) {  // the fixed box, moved off straight ahead
+                if (!gazing && !valid[e] && (offset != 0 || offsetX != 0)) {  // the fixed box, moved off ahead
                     tan[e][0] = tan[e][1] = 0;
                     valid[e] = true;
                 }
@@ -239,8 +243,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             for (int e = 0; e < 2; ++e) {
                 if (!valid[e])
                     continue;
-                if (offset != 0)
-                    tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
+                offset_tan(tan[e], offsetX, offset);
                 const XrFovf& f = views[e].fov;
                 const float halfW = 0.5f * (std::tan(f.angleRight) - std::tan(f.angleLeft));
                 const float halfH = 0.5f * (std::tan(f.angleUp) - std::tan(f.angleDown));
@@ -270,8 +273,10 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                     tanY = d.y / -d.z;
                 }
             }
-            if (experiment.quad)  // the vertical offset (focus_offset.h), on the gaze or the fixed box
+            if (experiment.quad) {  // the offset (focus_offset.h), on the gaze or the fixed box
+                tanX = offset_tan_x(tanX, gazing ? experiment.gazeOffsetX : experiment.fixedOffsetX);
                 tanY = offset_tan_y(tanY, gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY);
+            }
             if (experiment.quad) {
                 turn_view(views[i], experiment.focusFraction, experiment.focus_y(), tanX, tanY);
             } else {

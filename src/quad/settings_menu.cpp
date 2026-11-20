@@ -70,17 +70,14 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Outline, I18N(L"Show focus outline"), kDebugBorder),
     spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
     {MenuItem::FocusOffset, I18N(L"Gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
+    {MenuItem::FocusOffsetX, I18N(L"Horizontal gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::GazeDeadzone, I18N(L"Gaze dead-zone"), 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
-    // The Foveation section's Custom corners: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
+    // The Foveation section's Custom shape: which point, then its place, percent of the box from its centre
+    // (focus_shape.h's kFocusPointReach).
     {MenuItem::Shape, I18N(L"Shape"), 0, 1, 1},
-    {MenuItem::ShapeTopLeftIn, I18N(L"Top left in"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopLeftDown, I18N(L"Top left down"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopRightIn, I18N(L"Top right in"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeTopRightDown, I18N(L"Top right down"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomLeftIn, I18N(L"Bottom left in"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomLeftUp, I18N(L"Bottom left up"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomRightIn, I18N(L"Bottom right in"), 0, kFocusCornerMax, 5},
-    {MenuItem::ShapeBottomRightUp, I18N(L"Bottom right up"), 0, kFocusCornerMax, 5},
+    {MenuItem::ShapePoint, I18N(L"Adjust point"), 0, kFocusPointsMax - 1, 1},
+    {MenuItem::ShapePointY, I18N(L"Up/Down"), -kFocusPointReach, kFocusPointReach, 1},
+    {MenuItem::ShapePointX, I18N(L"Left/Right"), -kFocusPointReach, kFocusPointReach, 1},
     // The performance overlay's place, degrees (the launcher's sliders).
     {MenuItem::Overlay, I18N(L"Show the overlay"), 0, 1, 1},
     {MenuItem::OverlayYaw, I18N(L"Horizontal"), -kOsdYawMax, kOsdYawMax, 1},
@@ -235,14 +232,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
     case MenuItem::GazeDeadzone: return &v.gazeDeadzone;
-    case MenuItem::ShapeTopLeftIn: return &v.shape.in[static_cast<int>(FocusCorner::TopLeft)];
-    case MenuItem::ShapeTopLeftDown: return &v.shape.vertical[static_cast<int>(FocusCorner::TopLeft)];
-    case MenuItem::ShapeTopRightIn: return &v.shape.in[static_cast<int>(FocusCorner::TopRight)];
-    case MenuItem::ShapeTopRightDown: return &v.shape.vertical[static_cast<int>(FocusCorner::TopRight)];
-    case MenuItem::ShapeBottomLeftIn: return &v.shape.in[static_cast<int>(FocusCorner::BottomLeft)];
-    case MenuItem::ShapeBottomLeftUp: return &v.shape.vertical[static_cast<int>(FocusCorner::BottomLeft)];
-    case MenuItem::ShapeBottomRightIn: return &v.shape.in[static_cast<int>(FocusCorner::BottomRight)];
-    case MenuItem::ShapeBottomRightUp: return &v.shape.vertical[static_cast<int>(FocusCorner::BottomRight)];
+    case MenuItem::FocusOffsetX: return &v.offset.for_mode_x(v.eyeTracking);
     case MenuItem::MenuYaw: return &v.placement.yaw;
     case MenuItem::MenuPitch: return &v.placement.pitch;
     case MenuItem::MenuWidth: return &v.placement.width;
@@ -353,18 +343,17 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
                 add({MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
         }
     } else if (page == MenuPage::Foveation) {
-        // The launcher's Foveation card in its order: mode, size, shape (its corner radius, or each corner's insets),
-        // feather, the focus's vertical place, the gaze dead-zone (eye tracked), the outline.
+        // The launcher's Foveation card in its order: mode, size, shape (its corner radius, or the point to adjust and
+        // its place: three lines for any number of points), feather, the focus's place, the gaze dead-zone (eye
+        // tracked), the outline.
         add({MenuItem::HeadFoveation, MenuItem::EyeTracking, MenuItem::Width, MenuItem::Height});
         if (l.shapePage)
             items.push_back(MenuItem::Shape);
-        if (l.shapePage && v.shape.corners)
-            add({MenuItem::ShapeTopLeftIn, MenuItem::ShapeTopLeftDown, MenuItem::ShapeTopRightIn, MenuItem::ShapeTopRightDown,
-                 MenuItem::ShapeBottomLeftIn, MenuItem::ShapeBottomLeftUp, MenuItem::ShapeBottomRightIn,
-                 MenuItem::ShapeBottomRightUp});
+        if (l.shapePage && v.shape.custom)
+            add({MenuItem::ShapePoint, MenuItem::ShapePointY, MenuItem::ShapePointX});
         else
             items.push_back(MenuItem::Corners);
-        add({MenuItem::Feather, MenuItem::FocusOffset});
+        add({MenuItem::Feather, MenuItem::FocusOffset, MenuItem::FocusOffsetX});
         if (v.eyeTracking)
             items.push_back(MenuItem::GazeDeadzone);
         if (l.qvfr && l.focusQuads)  // focus_layer=2's test
@@ -535,6 +524,23 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         return *number != before;
     }
     switch (item) {
+    case MenuItem::ShapePoint: {  // Whole shape, then each point (wrapping): nothing changes but what the lines move
+        const int count = std::clamp(menu.values.shape.count, 1, kFocusPointsMax);
+        const int at = std::clamp(menu.shapePoint, kFocusWholeShape, count - 1) + 1;  // 0: the whole shape
+        menu.shapePoint = ((at + step) % (count + 1) + count + 1) % (count + 1) - 1;
+        return false;
+    }
+    case MenuItem::ShapePointY:
+    case MenuItem::ShapePointX: {  // one percent of the box a step (the box's edges hold)
+        FocusShape& sh = menu.values.shape;
+        menu.shapePoint = std::clamp(menu.shapePoint, kFocusWholeShape, std::clamp(sh.count, 1, kFocusPointsMax) - 1);
+        if (menu.shapePoint == kFocusWholeShape)  // every point together, the shape kept
+            return item == MenuItem::ShapePointY ? focus_shape_move(sh, 0, step) : focus_shape_move(sh, step, 0);
+        int& at = item == MenuItem::ShapePointY ? sh.points[menu.shapePoint].y : sh.points[menu.shapePoint].x;
+        const int before = at;
+        at = std::clamp(at + step, -kFocusPointReach, kFocusPointReach);
+        return at != before;
+    }
     case MenuItem::DlssOn: dl.on = !dl.on; return true;
     case MenuItem::DlssUpscaler: dl.upscaler = dl.upscaler == 1 ? 0 : 1; return true;
     case MenuItem::DlssFocusMode: {  // DLAA, then each smaller render (no wrap)
@@ -644,7 +650,7 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
                      : item == MenuItem::CarLightNightVision ? menu.values.carLight.nightVision
                      : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
                      : item == MenuItem::CpuIsolateMain ? menu.values.cpuIsolateMain
-                     : item == MenuItem::Shape       ? menu.values.shape.corners
+                     : item == MenuItem::Shape       ? menu.values.shape.custom
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
                      : item == MenuItem::Crop        ? menu.values.crop
                      : item == MenuItem::Helmet      ? menu.values.helmet.on
@@ -931,16 +937,19 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         (section == MenuItem::HeadDlss && !menu.launch.ownDlss))
         return notes;
     if (section == MenuItem::HeadFoveation) {
-        // On the shape's lines: what Custom corners does (the resolution's notes stay with the Resolution section).
+        // On the shape's lines: what Custom shape does (the resolution's notes stay with the Resolution section).
         const std::vector<MenuItem> items = menu_page_items(menu);
         const MenuItem at = items[std::clamp(menu.selected, 0, static_cast<int>(items.size()) - 1)];
-        const bool shapeLine = at == MenuItem::Shape || (at >= MenuItem::ShapeTopLeftIn && at <= MenuItem::ShapeBottomRightUp);
+        const bool shapeLine = at == MenuItem::Shape || at == MenuItem::ShapePoint || at == MenuItem::ShapePointY ||
+                               at == MenuItem::ShapePointX;
         if (shapeLine) {
             const bool masks = menu.launch.focusMask && menu.values.focusMask;
             notes.push_back(lang::tr(
-                !menu.values.shape.corners
-                    ? I18N(L"Custom corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid")
-                : masks ? I18N(L"The cut corners aren't rendered: the shape saves pixels too")
+                !menu.values.shape.custom
+                    ? I18N(L"Custom shape outlines the focus area with up to 10 points, e.g. your windscreen's shape")
+                : at == MenuItem::ShapePoint
+                    ? I18N(L"Add or remove points in the launcher: click the focus area to add, right-click a point to remove")
+                : masks ? I18N(L"What's outside the shape isn't rendered: the shape saves pixels too")
                         : I18N(L"The focus views still render the whole box: the shape picks what stays sharp")));
             return notes;
         }
@@ -1014,7 +1023,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
         line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu)        ? w.t(I18N(L"Use FSR"))
                      : items[i] == MenuItem::HeadDlss && fsr_runs(menu)    ? L"FSR"
                      : items[i] == MenuItem::FocusOffset && !v.eyeTracking ? w.t(I18N(L"Vertical position"))
-                                                                           : w.t(spec(items[i]).label);
+                     : items[i] == MenuItem::FocusOffsetX && !v.eyeTracking ? w.t(I18N(L"Horizontal position"))
+                                                                            : w.t(spec(items[i]).label);
         line.selected = static_cast<int>(i) == menu.selected;
         line.header = menu_item_is_header(items[i]);
         if (line.header) {
@@ -1108,7 +1118,21 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
         else if (items[i] == MenuItem::Outline)
             line.value = on_off(v.outline);
         else if (items[i] == MenuItem::Shape)
-            line.value = w.t(v.shape.corners ? I18N(L"Custom corners") : I18N(L"Rectangle"));
+            line.value = w.t(v.shape.custom ? I18N(L"Custom shape") : I18N(L"Rectangle"));
+        else if (items[i] == MenuItem::ShapePoint)  // "Whole shape", "Point 2 of 5"
+            line.value = menu.shapePoint <= kFocusWholeShape
+                             ? std::wstring(w.t(I18N(L"Whole shape")))
+                             : w.f(I18N(L"Point {n} of {count}"),
+                                   {{L"n", std::to_wstring(std::clamp(menu.shapePoint, 0, std::max(v.shape.count, 1) - 1) + 1)},
+                                    {L"count", std::to_wstring(v.shape.count)}});
+        else if (items[i] == MenuItem::ShapePointY || items[i] == MenuItem::ShapePointX) {
+            // The picked point's place, or the whole shape's middle.
+            const FocusPoint p =
+                menu.shapePoint <= kFocusWholeShape
+                    ? focus_shape_centre(v.shape)
+                    : v.shape.points[std::clamp(menu.shapePoint, 0, std::clamp(v.shape.count, 1, kFocusPointsMax) - 1)];
+            line.value = std::to_wstring(items[i] == MenuItem::ShapePointY ? p.y : p.x);
+        }
         else if (items[i] == MenuItem::EyeTracking)
             line.value = w.t(v.eyeTracking ? I18N(L"Eye tracked") : I18N(L"Fixed"));
         else if (items[i] == MenuItem::Overlay)
@@ -1163,6 +1187,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = degrees(w, v.helmet.height, I18N(L"{degrees} up"), I18N(L"{degrees} down"));
         else if (items[i] == MenuItem::FocusOffset)
             line.value = degrees(w, v.offset.for_mode(v.eyeTracking), I18N(L"{degrees} up"), I18N(L"{degrees} down"));
+        else if (items[i] == MenuItem::FocusOffsetX)
+            line.value = degrees(w, v.offset.for_mode_x(v.eyeTracking), I18N(L"{degrees} right"), I18N(L"{degrees} left"));
         else if (items[i] == MenuItem::GazeDeadzone)
             line.value = !v.eyeTracking        ? std::wstring(w.t(I18N(L"Eye tracking off")))
                          : v.gazeDeadzone == 0 ? std::wstring(w.t(I18N(L"Off (follows every sample)")))

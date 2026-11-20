@@ -271,8 +271,9 @@ constexpr Help kHelp[] = {
      L"it shows.")},
     // The Picture tab's cards (picture.cpp): what their rows' one line of help leaves out.
     {I18N(L"Shape"),
-     I18N(L"The shape of the sharp area. Rectangle: rounded by Corner radius. Custom corners: each corner moved in on its own; "
-     L"pull the top corners in for a trapezoid, more of the dash sharp at the same cost. To hide the area’s edge, raise "
+     I18N(L"The shape of the sharp area. Rectangle: rounded by Corner radius. Custom shape: an outline of up to 10 points "
+     L"you draw on the preview (click the area to add a point, drag one to move it, right-click one to remove it); trace "
+     L"your windscreen, say, then place it with Vertical and Horizontal position. To hide the area’s edge, raise "
      L"Feather.")},
     {I18N(L"Outline color"), I18N(L"The outline’s colour in the headset. It shows while Show focus outline is on.")},
     {I18N(L"nvngx_dlss.dll"),

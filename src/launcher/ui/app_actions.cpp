@@ -352,17 +352,19 @@ int* slider_value(Ctl id) {
     case kFeather: return &app.s.feather;
     case kCorner: return &app.s.corner;
     case kFocusOffset: return &app.s.offset.for_mode(app.s.eyeTracking);
+    case kFocusOffsetX: return &app.s.offset.for_mode_x(app.s.eyeTracking);
     case kGazeDeadzone: return &app.s.gazeDeadzone;
-    case kShapeTopLeftIn:
-    case kShapeTopLeftDown:
-    case kShapeTopRightIn:
-    case kShapeTopRightDown:
-    case kShapeBottomRightIn:
-    case kShapeBottomRightUp:
-    case kShapeBottomLeftIn:
-    case kShapeBottomLeftUp: {
-        const int i = id - kShapeTopLeftIn;
-        return i % 2 ? &app.s.shape.vertical[i / 2] : &app.s.shape.in[i / 2];
+    case kShapePointY:
+    case kShapePointX: {  // the picked point of the custom shape, or the whole shape's middle (shape_slider_set)
+        app.shapePoint = std::clamp(app.shapePoint, kFocusWholeShape, std::clamp(app.s.shape.count, 1, kFocusPointsMax) - 1);
+        if (app.shapePoint == kFocusWholeShape) {
+            const FocusPoint c = focus_shape_centre(app.s.shape);
+            app.shapeCentre[0] = c.x;
+            app.shapeCentre[1] = c.y;
+            return id == kShapePointY ? &app.shapeCentre[1] : &app.shapeCentre[0];
+        }
+        FocusPoint& p = app.s.shape.points[app.shapePoint];
+        return id == kShapePointY ? &p.y : &p.x;
     }
     case kMenuYaw: return &app.s.menuYaw;
     case kMenuPitch: return &app.s.menuPitch;
@@ -416,16 +418,11 @@ Range slider_range(Ctl id) {
     case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
-    case kFocusOffset: return kFocusOffsetRange;
+    case kFocusOffset:
+    case kFocusOffsetX: return kFocusOffsetRange;
     case kGazeDeadzone: return kGazeDeadzoneRange;
-    case kShapeTopLeftIn:
-    case kShapeTopLeftDown:
-    case kShapeTopRightIn:
-    case kShapeTopRightDown:
-    case kShapeBottomRightIn:
-    case kShapeBottomRightUp:
-    case kShapeBottomLeftIn:
-    case kShapeBottomLeftUp: return kFocusCornerRange;
+    case kShapePointY:
+    case kShapePointX: return kFocusPointRange;
     case kMenuYaw: return kMenuYawRange;
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;

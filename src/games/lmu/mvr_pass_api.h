@@ -531,7 +531,7 @@ void mvr_glass_read(bool read) { g.glass.read = read; }
 
 void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
     auto& m = g.mask;
-    const bool shape = area.corners() || area.radius > 0;
+    const bool shape = area.outline() || area.radius > 0;
     if (m.on != (on && shape) || m.margin != marginTexels) {  // (a new shape logs its mesh as it's made)
         if (on && shape)
             simqvfr::logf("lmu mvr: focus mask on: the focus views' texels %u past the focus shape skip the scene%s",

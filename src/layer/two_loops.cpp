@@ -164,7 +164,7 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
         eyes[e].border = experiment.border ? 0.008f : 0.0f;
         std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
         eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
-        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), eyes[e].cornerInset);
+        eyes[e].shape = experiment.focusShape.load();
     }
 
     uint32_t outIndex = 0;
@@ -314,7 +314,7 @@ XrResult test_focus_corner_mask(uint32_t viewIndex, XrVisibilityMaskKHR* mask) {
     const auto keep_in = [](double t, double lo, double hi, double half) {
         return lo + half >= hi - half ? (lo + hi) / 2 : std::clamp(t, lo + half, hi - half);
     };
-    const double cx = keep_in(0.0, tan[0], tan[1], hw);
+    const double cx = keep_in(experiment.fixedOffsetX ? offset_tan_x(0.0, experiment.fixedOffsetX) : 0.0, tan[0], tan[1], hw);
     const double cy = keep_in(experiment.fixedOffsetY ? offset_tan_y(0.0, experiment.fixedOffsetY) : 0.0, tan[3], tan[2], hh);
     const float l = static_cast<float>(cx - hw), r = static_cast<float>(cx + hw);
     const float d = static_cast<float>(cy - hh), u = static_cast<float>(cy + hh);

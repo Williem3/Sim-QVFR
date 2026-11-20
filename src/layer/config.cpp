@@ -72,7 +72,7 @@ LiveSettings read_live(const wchar_t* ini) {
     l.feather = ini_int(ini, kFeatherPercent) / 100.0;
     l.cornerRadius = ini_int(ini, kCornerRadiusPercent) / 100.0;
     l.shape = read_focus_shape(ini);
-    if (l.shape.corners)
+    if (l.shape.custom)
         l.cornerRadius = 0;
     l.border = ini_flag(ini, kDebugBorder);
     // Linear values; teal is #00A0A0 in sRGB. Green (LiveSettings' own) for anything else.
@@ -363,12 +363,10 @@ void load_experiment() {
     experiment.focusFractionY = settings.focusFractionY;
     experiment.feather = settings.feather;
     experiment.cornerRadius = settings.cornerRadius;
-    experiment.focusShape = focus_shape_bits(settings.shape);
-    {  // the focus mask at launch (live from then on: live_apply); a game that starts later keeps it until then
-        float inset[2 * kFocusCorners];
-        focus_shape_insets(experiment.focusShape.load(), inset);
-        game->qvfr_set_focus_mask(settings.focusMask, inset, settings.cornerRadius, settings.focusMaskMargin);
-    }
+    experiment.focusShape.store(focus_shape_words(settings.shape));
+    // the focus mask at launch (live from then on: live_apply); a game that starts later keeps it until then
+    game->qvfr_set_focus_mask(settings.focusMask, focus_area_from(focus_shape_words(settings.shape), settings.cornerRadius),
+                              settings.focusMaskMargin);
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
@@ -391,6 +389,8 @@ void load_experiment() {
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"gaze_poll_hz", 250, ini.c_str())), 30, 1000);
     experiment.fixedOffsetY = settings.offset.fixed;
     experiment.gazeOffsetY = settings.offset.gaze;
+    experiment.fixedOffsetX = settings.offset.fixedX;
+    experiment.gazeOffsetX = settings.offset.gazeX;
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
@@ -529,10 +529,11 @@ void load_experiment() {
                      percent(c.top) + L"," + percent(c.bottom) + L"," + percent(c.outer) + L"," + percent(c.inner));
     }
     logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%d feather_percent=%.0f corner_radius_percent=%.0f "
-         "debug_border=%d gaze=%d fixed_offset_y=%d gaze_offset_y=%d (from %ls)",
+         "debug_border=%d gaze=%d fixed_offset_y=%d gaze_offset_y=%d fixed_offset_x=%d gaze_offset_x=%d (from %ls)",
          mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
          experiment.cornerRadius * 100,
-         experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze, ini.c_str());
+         experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze,
+         settings.offset.fixedX, settings.offset.gazeX, ini.c_str());
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
     if (game_features().sharpening)
         logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS on the focus views as they are composed)" : " (off)");

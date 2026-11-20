@@ -84,8 +84,8 @@ int menu_first_visible(const std::vector<MenuLine>& lines, int first, int height
         return h <= heightPx;
     };
     if (selected >= 1) {
-        // Up past the top: the selected line first, with its section's heading if that is right above it.
-        if (selected < first)
+        // Up past the top (or at it): the selected line first, with its section's heading if that is right above it.
+        if (selected <= first)
             first = selected > 1 && lines[selected - 1].header ? selected - 1 : selected;
         // Down past the bottom: as little scroll as shows it.
         while (first < selected && !fits(first, selected))

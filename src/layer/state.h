@@ -213,7 +213,7 @@ struct Experiment {
     bool quad = false;           // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
-    std::atomic<uint64_t> focusShape = 0;  // the focus area's pulled-in corners (focus_shape.h's bits; 0 = the box)
+    SharedFocusShape focusShape;  // the focus area's free-form outline (focus_shape.h's words; none: the box)
     // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS on the focus views as they are composed
     // (EyeComposition::sharpness), percent; 0 off.
     std::atomic<int> sharpen = 0;
@@ -231,8 +231,8 @@ struct Experiment {
     // (a lookup took ~1.5 ms of ACE's render thread every frame on the Pimax runtime, 2026-11-03).
     bool gazeThread = true;
     int gazePollHz = 250;
-    // The focus box's vertical offset, degrees up (focus_offset.h): fixed, and added to a tracked gaze.
-    std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0;
+    // The focus box's offset, degrees up and right (focus_offset.h): fixed, and added to a tracked gaze.
+    std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0, fixedOffsetX = 0, gazeOffsetX = 0;
     // [quad] gaze_deadzone: the focus box holds still while the gaze stays this many degrees of where it
     // aims, so tracker noise does not turn the focus cameras every frame (MSAA shimmer in the box).
     std::atomic<double> gazeDeadzone = 1.5;

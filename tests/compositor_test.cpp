@@ -454,8 +454,7 @@ int SIM_QVFR_TEST_MAIN() {
         // left edge from there to the bottom-left corner). It replaces the rounded corners; the outline
         // follows the slanted edge.
         v4[0].border = 0;
-        v4[0].cornerInset[0] = 0.4f;  // top left, across
-        v4[0].cornerInset[2] = 0.4f;  // top right, across
+        v4[0].shape = focus_shape_words(focus_shape_of({{-10, 50}, {10, 50}, {50, -50}, {-50, -50}}));  // top corners 40% in
         if (!c4.compose(views.Get(), output.Get(), v4)) {
             std::printf("FAIL: views4 compose with a corner shape\n");
             return 1;
@@ -482,7 +481,7 @@ int SIM_QVFR_TEST_MAIN() {
                     side[0], side[1], side[2]);
         failures += onSide ? 0 : 1;
         expect(slant, 0, 0.50f, 0.50f, "focus", 0, 255, 0);
-        std::memset(v4[0].cornerInset, 0, sizeof(v4[0].cornerInset));
+        v4[0].shape = {};
 
         // FOV crop: eye 0 drawn into the top-left 50% x 75% of its half; the rest left as it was.
         clear_eyes(gpu, output.Get(), black, black);

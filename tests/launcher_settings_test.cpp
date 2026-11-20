@@ -47,13 +47,11 @@ void settings_round_trip_checks() {
     s.color = OutlineColor::Magenta;
     s.feather = 17;
     s.corner = 12;
-    s.shape.corners = true;
-    for (int i = 0; i < kFocusCorners; ++i) {
-        s.shape.in[i] = 5 + i;
-        s.shape.vertical[i] = 20 - i;
-    }
+    s.shape = simqvfr::focus_shape_of({{-45, 30}, {0, 50}, {45, 30}, {40, -50}, {-40, -50}});
     s.offset.fixed = 3;
     s.offset.gaze = -2;
+    s.offset.fixedX = -4;
+    s.offset.gazeX = 5;
     s.gazeDeadzone = 22;
     s.menuYaw = -9;
     s.menuPitch = 5;
@@ -194,22 +192,46 @@ int SIM_QVFR_TEST_MAIN() {
                   iniText.find("gaze_offset_y=3") != std::string::npos,
               "settings: both vertical offsets are written (negative too) and read back");
         {
-            // The focus shape: a box by default (the shipped ini has no shape keys); corners round-trip.
+            Settings across = reread;
+            across.offset.fixedX = -7;
+            across.offset.gazeX = 4;
+            save_live_settings(ini, across);
+            std::string acrossText;
+            read_file(ini, acrossText);
+            const Settings back = load_settings(ini);
+            check(back.offset.fixedX == -7 && back.offset.gazeX == 4 && back.offset.fixed == -6 &&
+                      acrossText.find("fixed_offset_x=-7") != std::string::npos &&
+                      acrossText.find("gaze_offset_x=4") != std::string::npos,
+                  "settings: both horizontal offsets are written live and read back");
+            save_settings(ini, reread);
+        }
+        {
+            // The focus shape: a box by default (the shipped ini has no shape keys); a custom outline round-trips.
             Settings f = reread;
-            check(!f.shape.corners && f.shape == simqvfr::FocusShape{}, "settings: the focus shape is a box by default");
-            f.shape.corners = true;
-            f.shape.in[static_cast<int>(simqvfr::FocusCorner::TopLeft)] = 25;
-            f.shape.in[static_cast<int>(simqvfr::FocusCorner::TopRight)] = 25;
-            f.shape.vertical[static_cast<int>(simqvfr::FocusCorner::BottomLeft)] = 60;  // clamps to kFocusCornerMax
+            check(!f.shape.custom && f.shape == simqvfr::FocusShape{}, "settings: the focus shape is a box by default");
+            f.shape = simqvfr::focus_shape_of({{-25, 50}, {25, 50}, {50, -50}, {-50, -50}, {-60, 0}});  // clamps to -50
             save_live_settings(ini, f);
             std::string shapeText;
             read_file(ini, shapeText);
             const Settings shape = load_settings(ini);
-            check(shape.shape.corners && shape.shape.in[0] == 25 && shape.shape.in[1] == 25 &&
-                      shape.shape.vertical[static_cast<int>(simqvfr::FocusCorner::BottomLeft)] == simqvfr::kFocusCornerMax &&
-                      shapeText.find("focus_shape=corners") != std::string::npos &&
-                      shapeText.find("shape_top_left_in=25") != std::string::npos,
-                  "settings: the corner shape is written live and read back, its insets clamped");
+            check(shape.shape.custom && shape.shape.count == 5 && shape.shape.points[0] == simqvfr::FocusPoint{-25, 50} &&
+                      shape.shape.points[4] == simqvfr::FocusPoint{-50, 0} &&
+                      shapeText.find("focus_shape=points") != std::string::npos &&
+                      shapeText.find("shape_points=-25,50 25,50 50,-50 -50,-50 -50,0") != std::string::npos,
+                  "settings: the custom shape is written live and read back, its points clamped to the box");
+            // An ini from before the outline (focus_shape=corners and the corners' insets) reads as their four points.
+            save_settings(ini, reread);
+            WritePrivateProfileStringW(L"quad", L"focus_shape", L"corners", ini.c_str());
+            WritePrivateProfileStringW(L"quad", L"shape_points", nullptr, ini.c_str());
+            WritePrivateProfileStringW(L"quad", L"shape_top_left_in", L"30", ini.c_str());
+            WritePrivateProfileStringW(L"quad", L"shape_bottom_right_up", L"10", ini.c_str());
+            const Settings legacy = load_settings(ini);
+            check(legacy.shape.custom && legacy.shape.count == 4 && legacy.shape.points[0] == simqvfr::FocusPoint{-20, 50} &&
+                      legacy.shape.points[1] == simqvfr::FocusPoint{50, 50} &&
+                      legacy.shape.points[2] == simqvfr::FocusPoint{50, -40},
+                  "settings: the old corner shape reads as its four points");
+            WritePrivateProfileStringW(L"quad", L"shape_top_left_in", nullptr, ini.c_str());
+            WritePrivateProfileStringW(L"quad", L"shape_bottom_right_up", nullptr, ini.c_str());
             save_settings(ini, reread);
         }
         {
@@ -511,8 +533,7 @@ int SIM_QVFR_TEST_MAIN() {
         // the focus shape leave the count; nothing for the plain box, the mask off or another game.
         {
             Settings trap;
-            trap.shape.corners = true;
-            trap.shape.in[0] = trap.shape.in[1] = 30;  // the top corners 30% in: a trapezoid
+            trap.shape = simqvfr::focus_shape_of({{-20, 50}, {20, 50}, {50, -50}, {-50, -50}});  // the top corners 30% in
             const Readouts other = readouts(trap, rt, false), lmu = readouts(trap, rt, true);
             const double share = focus_mask_share(focus_area_of(trap.shape, 0), static_cast<unsigned>(lmu.focus.width),
                                                   static_cast<unsigned>(lmu.focus.height), 16);

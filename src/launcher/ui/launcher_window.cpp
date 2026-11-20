@@ -200,6 +200,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         break;
+    case WM_RBUTTONDOWN: {  // a custom shape's point removed (right click on it in the preview)
+        if (app.popup.open || app.sheet.open || app.dragging != kNone)
+            return 0;
+        const Hit* h = hit_at(dip(lParam, false), dip(lParam, true));
+        if (h && h->id == kShapeCanvas)
+            shape_remove(h->option);
+        return 0;
+    }
     case WM_LBUTTONDOWN: {
         const float x = dip(lParam, false), y = dip(lParam, true);
         app.keyboard = false;
@@ -242,6 +250,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragging = kColorWheel;
             SetCapture(hwnd);
             set_color_from(x, y);
+        } else if (h->id == kShapeCanvas) {  // a custom shape's point picked, or one added where the area was pressed
+            app.dragging = kShapeCanvas;
+            SetCapture(hwnd);
+            shape_press(h->option, x, y);
+            if (app.dragging == kNone)
+                ReleaseCapture();
         } else if (h->id == kMenuPanel || h->id == kOsdPanel || h->id == kClockPanel) {
             app.dragging = h->id;
             const float k = app.placeFrame.w / kRefFovX;
@@ -271,6 +285,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             set_panel_from(x, y);
         else if (app.dragging == kColorWheel)
             set_color_from(x, y);
+        else if (app.dragging == kShapeCanvas)
+            set_shape_point_from(x, y);
         else if (app.dragging != kNone)
             set_slider_from_x(x);
         else if (app.popup.open) {

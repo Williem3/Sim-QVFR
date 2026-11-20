@@ -125,7 +125,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         go(f, MenuPage::Foveation);
         check(menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadFoveation, MenuItem::EyeTracking,
                                                           MenuItem::Width, MenuItem::Height, MenuItem::Shape, MenuItem::Corners,
-                                                          MenuItem::Feather, MenuItem::FocusOffset, MenuItem::GazeDeadzone,
+                                                          MenuItem::Feather, MenuItem::FocusOffset, MenuItem::FocusOffsetX, MenuItem::GazeDeadzone,
                                                           MenuItem::Outline} &&
                   menu_page_name(f) == L"Foveation" && line_of(f, MenuItem::HeadFoveation).label == L"Foveation",
               "Foveation: its own tab, the launcher's Foveation card in its order");
@@ -263,8 +263,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(menu_stats(unknownPpd).centerPpd == 0, "no PPD before ACE has rendered");
     {  // The focus mask: a game that masks (GameFeatures::focusMask) leaves the cut corners out of the pixels saved.
         SettingsMenu trap = stats;
-        trap.values.shape.corners = true;
-        trap.values.shape.in[0] = trap.values.shape.in[1] = 30;  // the top corners 30% in
+        trap.values.shape = focus_shape_of({{-20, 50}, {20, 50}, {50, -50}, {-50, -50}});  // the top corners 30% in
         SettingsMenu masks = trap;
         masks.launch.focusMask = true;
         SettingsMenu maskOff = masks;
@@ -941,57 +940,144 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     }
 
     // The focus shape (both methods), on the Foveation card as in the launcher: Rectangle by default with its Corner
-    // radius; Custom corners, its eight insets in the radius's place, stepped by 5 up to kFocusCornerMax, written to
-    // [quad] and read back.
+    // radius; Custom shape, three lines in the radius's place for any number of points (Adjust point, Up/Down,
+    // Left/Right), a percent of the box a step, written to [quad] and read back.
     {
         SettingsMenu f;
         f.launch.qvfr = false;
         go(f, MenuPage::Foveation);
         pick(f, MenuItem::Shape);
-        check(line_of(f, MenuItem::Shape).value == L"Rectangle" && has(f, MenuItem::Corners) && !has(f, MenuItem::ShapeTopLeftIn) &&
-                  !menu_notes(f).empty() && menu_notes(f).front().rfind(L"Custom corners", 0) == 0,
-              "Shape: Rectangle with its corner radius, and on the line a note on what Custom corners does");
-        check(menu_key(f, MenuKey::Right) && f.values.shape.corners && !has(f, MenuItem::Corners) &&
-                  at(f, MenuItem::ShapeTopLeftIn) == at(f, MenuItem::Shape) + 1 &&
-                  line_of(f, MenuItem::Shape).value == L"Custom corners" && line_of(f, MenuItem::ShapeTopLeftIn).label == L"Top left in",
-              "Custom corners: each corner's insets right under it, top left first, the radius gone");
-        pick(f, MenuItem::ShapeTopLeftIn);
-        for (int i = 0; i < 20; ++i)
-            menu_key(f, MenuKey::Right);
-        pick(f, MenuItem::ShapeTopRightIn);
-        for (int i = 0; i < 4; ++i)
-            menu_key(f, MenuKey::Right);
-        pick(f, MenuItem::ShapeBottomRightUp);
-        menu_key(f, MenuKey::Right);
-        const FocusShape& sh = f.values.shape;
-        check(sh.in[static_cast<int>(FocusCorner::TopLeft)] == kFocusCornerMax &&
-                  sh.in[static_cast<int>(FocusCorner::TopRight)] == 20 &&
-                  sh.vertical[static_cast<int>(FocusCorner::BottomRight)] == 5 &&
-                  sh.in[static_cast<int>(FocusCorner::BottomLeft)] == 0 && line_of(f, MenuItem::ShapeTopRightIn).value == L"20%",
-              "Custom corners: step by 5 and stop at 45%; the others stay");
+        check(line_of(f, MenuItem::Shape).value == L"Rectangle" && has(f, MenuItem::Corners) && !has(f, MenuItem::ShapePoint) &&
+                  !menu_notes(f).empty() && menu_notes(f).front().rfind(L"Custom shape", 0) == 0,
+              "Shape: Rectangle with its corner radius, and on the line a note on what Custom shape does");
+        check(menu_key(f, MenuKey::Right) && f.values.shape.custom && !has(f, MenuItem::Corners) &&
+                  at(f, MenuItem::ShapePoint) == at(f, MenuItem::Shape) + 1 &&
+                  at(f, MenuItem::ShapePointY) == at(f, MenuItem::Shape) + 2 &&
+                  at(f, MenuItem::ShapePointX) == at(f, MenuItem::Shape) + 3 &&
+                  line_of(f, MenuItem::Shape).value == L"Custom shape" &&
+                  line_of(f, MenuItem::ShapePoint).label == L"Adjust point" &&
+                  line_of(f, MenuItem::ShapePoint).value == L"Whole shape" &&
+                  line_of(f, MenuItem::ShapePointY).value == L"0" && line_of(f, MenuItem::ShapePointX).value == L"0",
+              "Custom shape: Adjust point (Whole shape first, its middle at the box's), its Up/Down and Left/Right under it");
+        // Point 2 (the top right): 6 down and 25 in; Left wraps the picker to the last point.
+        pick(f, MenuItem::ShapePoint);
+        check(!menu_key(f, MenuKey::Right) && f.shapePoint == 0 && line_of(f, MenuItem::ShapePoint).value == L"Point 1 of 4" &&
+                  line_of(f, MenuItem::ShapePointY).value == L"50" && line_of(f, MenuItem::ShapePointX).value == L"-50",
+              "Adjust point: Right from Whole shape picks point 1 (the box's top left), no value changed");
+        check(!menu_key(f, MenuKey::Right) && f.shapePoint == 1 && line_of(f, MenuItem::ShapePoint).value == L"Point 2 of 4",
+              "Adjust point: Right picks the next point");
+        pick(f, MenuItem::ShapePointY);
+        for (int i = 0; i < 6; ++i)
+            menu_key(f, MenuKey::Left);
+        pick(f, MenuItem::ShapePointX);
+        for (int i = 0; i < 25; ++i)
+            menu_key(f, MenuKey::Left);
+        check(f.values.shape.points[1] == FocusPoint{25, 44} && line_of(f, MenuItem::ShapePointY).value == L"44" &&
+                  line_of(f, MenuItem::ShapePointX).value == L"25" && f.values.shape.points[0] == FocusPoint{-50, 50},
+              "Up/Down, Left/Right: the picked point moves a percent a step; the others stay");
+        pick(f, MenuItem::ShapePointY);
+        f.values.shape.points[1].y = kFocusPointReach;
+        check(!menu_key(f, MenuKey::Right) && f.values.shape.points[1].y == kFocusPointReach, "Up/Down: held at the box's edge");
+        pick(f, MenuItem::ShapePoint);
+        f.shapePoint = 0;
+        check(!menu_key(f, MenuKey::Left) && f.shapePoint == kFocusWholeShape && !menu_key(f, MenuKey::Left) &&
+                  f.shapePoint == 3,
+              "Adjust point: Left from the first point to Whole shape, then wraps to the last");
         const auto shapeIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_shape.ini").wstring();
         DeleteFileW(shapeIni.c_str());
         write_menu_values(shapeIni.c_str(), f.values, false);
         const FocusShape back = read_focus_shape(shapeIni.c_str());
-        wchar_t text[16] = {};
-        GetPrivateProfileStringW(L"quad", L"shape_top_right_in", L"", text, 16, shapeIni.c_str());
-        WritePrivateProfileStringW(L"quad", L"shape_bottom_left_up", L"80", shapeIni.c_str());
+        wchar_t text[64] = {};
+        GetPrivateProfileStringW(L"quad", L"shape_points", L"", text, 64, shapeIni.c_str());
+        WritePrivateProfileStringW(L"quad", L"shape_points", L"-80,0 0,90 30,-10", shapeIni.c_str());
         const FocusShape clamped = read_focus_shape(shapeIni.c_str());
         DeleteFileW(shapeIni.c_str());
-        check(back == sh && std::wstring(text) == L"20" &&
-                  clamped.vertical[static_cast<int>(FocusCorner::BottomLeft)] == kFocusCornerMax,
-              "Focus shape: [quad] focus_shape and its corners round-trip; out of range clamps to 45%");
-        // The bits the layer keeps and the compositor's shares.
-        float inset[2 * kFocusCorners];
-        focus_shape_insets(focus_shape_bits(sh), inset);
-        FocusShape box = sh;
-        box.corners = false;
-        check(inset[0] == 0.45f && inset[1] == 0 && inset[2] == 0.2f && inset[5] == 0.05f && focus_shape_bits(box) == 0,
-              "Focus shape: the compositor gets shares of the box; a box sends none");
-        f.values.shape.corners = false;
+        check(back == f.values.shape && std::wstring(text) == L"-50,50 25,50 50,-50 -50,-50" && clamped.count == 3 &&
+                  clamped.points[0] == FocusPoint{-50, 0} && clamped.points[1] == FocusPoint{0, 50},
+              "Focus shape: [quad] focus_shape and shape_points round-trip; out of range clamps to the box");
+        // The words the layer keeps: a box sends none, as does the outline that is the box itself.
+        FocusShape box = f.values.shape;
+        box.custom = false;
+        FocusShape corners;
+        corners.custom = true;
+        check(focus_shape_words(f.values.shape).any() && !focus_shape_words(box).any() && !focus_shape_words(corners).any(),
+              "Focus shape: the compositor gets the outline; a box (or the box's own corners) sends none");
+        f.values.shape.custom = false;
         pick(f, MenuItem::Shape);
-        check(menu_key(f, MenuKey::Left) && f.values.shape.corners && f.values.shape.in[0] == kFocusCornerMax,
-              "Focus shape: back to Custom corners keeps the corners set before");
+        check(menu_key(f, MenuKey::Left) && f.values.shape.custom && f.values.shape.points[1] == FocusPoint{25, 50},
+              "Focus shape: back to Custom shape keeps the points set before");
+    }
+    // Whole shape: Up/Down and Left/Right move every point together, as far as the box allows, the shape kept.
+    {
+        SettingsMenu w;
+        w.launch.qvfr = false;
+        w.values.shape = focus_shape_of({{-30, 40}, {30, 40}, {40, -20}, {-40, -20}});  // a windscreen, 80 x 60
+        go(w, MenuPage::Foveation);
+        check(line_of(w, MenuItem::ShapePoint).value == L"Whole shape" && line_of(w, MenuItem::ShapePointY).value == L"10" &&
+                  line_of(w, MenuItem::ShapePointX).value == L"0",
+              "Whole shape: its middle 10 up of the box's");
+        pick(w, MenuItem::ShapePointY);
+        for (int i = 0; i < 20; ++i)
+            menu_key(w, MenuKey::Left);
+        pick(w, MenuItem::ShapePointX);
+        for (int i = 0; i < 6; ++i)
+            menu_key(w, MenuKey::Right);
+        check(w.values.shape.points[0] == FocusPoint{-24, 20} && w.values.shape.points[2] == FocusPoint{46, -40} &&
+                  line_of(w, MenuItem::ShapePointY).value == L"-10" && line_of(w, MenuItem::ShapePointX).value == L"6",
+              "Whole shape: 20 down and 6 right, every point with it");
+        for (int i = 0; i < 10; ++i)
+            menu_key(w, MenuKey::Right);
+        check(!menu_key(w, MenuKey::Right) && w.values.shape.points[2] == FocusPoint{50, -40} &&
+                  w.values.shape.points[3] == FocusPoint{-30, -40},
+              "Whole shape: stops at the box's edge without squashing the shape");
+        FocusShape s = focus_shape_of({{-10, 10}, {10, 10}, {0, -10}});
+        check(focus_shape_move_to(s, 30, -35) && focus_shape_centre(s) == FocusPoint{30, -35} &&
+                  s.points[2] == FocusPoint{30, -45},
+              "focus_shape_move_to: the middle where asked");
+    }
+    // Adding and removing points (the launcher's preview): between the neighbours of the nearest edge, at most ten, at
+    // least three.
+    {
+        FocusShape s = focus_shape_of({{-50, 50}, {50, 50}, {50, -50}, {-50, -50}});
+        check(focus_shape_add_point(s, {0, 52}) == 1 && s.count == 5 && s.points[1] == FocusPoint{0, 50} &&
+                  s.points[2] == FocusPoint{50, 50},
+              "a point added on the top edge goes between the top corners (clamped into the box)");
+        check(focus_shape_add_point(s, {-48, 0}) == 5 && s.points[5] == FocusPoint{-48, 0}, "one by the left edge: last");
+        while (s.count < kFocusPointsMax)
+            focus_shape_add_point(s, {10, -10});
+        check(focus_shape_add_point(s, {0, 0}) == -1 && s.count == kFocusPointsMax, "no more than ten points");
+        check(focus_shape_remove_point(s, 1) && s.count == kFocusPointsMax - 1 && s.points[1] == FocusPoint{50, 50},
+              "a point removed: the next takes its place");
+        FocusShape three = focus_shape_of({{0, 50}, {50, -50}, {-50, -50}});
+        check(!focus_shape_remove_point(three, 0) && three.count == 3, "never fewer than three");
+        check(focus_point_near(three, 48, -47, 6) == 1 && focus_point_near(three, 0, 0, 6) == -1, "the point near a click");
+    }
+    // The horizontal offset: on the Foveation page under the vertical one, its label by the mode, right and left.
+    {
+        SettingsMenu h;
+        h.launch.qvfr = false;
+        go(h, MenuPage::Foveation);
+        check(at(h, MenuItem::FocusOffsetX) == at(h, MenuItem::FocusOffset) + 1 &&
+                  line_of(h, MenuItem::FocusOffsetX).label == L"Horizontal gaze offset" &&
+                  line_of(h, MenuItem::FocusOffsetX).value == L"0°",
+              "Horizontal gaze offset: under Gaze offset, 0 to start");
+        pick(h, MenuItem::FocusOffsetX);
+        menu_key(h, MenuKey::Right);
+        menu_key(h, MenuKey::Right);
+        check(h.values.offset.gazeX == 2 && h.values.offset.fixedX == 0 &&
+                  line_of(h, MenuItem::FocusOffsetX).value == L"2° right",
+              "Horizontal gaze offset: Right moves it right, the fixed one stays");
+        h.values.eyeTracking = false;
+        menu_key(h, MenuKey::Left);
+        check(h.values.offset.fixedX == -1 && line_of(h, MenuItem::FocusOffsetX).label == L"Horizontal position" &&
+                  line_of(h, MenuItem::FocusOffsetX).value == L"1° left",
+              "Horizontal position: the fixed box's own, left");
+        const auto offsetIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_offset_x.ini").wstring();
+        DeleteFileW(offsetIni.c_str());
+        write_menu_values(offsetIni.c_str(), h.values, false);
+        const FocusOffset read = read_focus_offset(offsetIni.c_str());
+        DeleteFileW(offsetIni.c_str());
+        check(read.fixedX == -1 && read.gazeX == 2, "Horizontal offsets: written to [quad] and read back");
     }
     {  // The Profile line (profile/profiles.h): first on the Picture page, stepping through and asking the layer.
         SettingsMenu p;
@@ -1021,7 +1107,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         full.launch = {true, 50, 39, 39, 4000, 3400};
         full.launch.sharpening = true;
         full.profiles = {L"Performance", L"Balanced", L"Quality"};
-        full.values.shape.corners = true;  // Custom corners: eight insets in the radius's place
+        full.values.shape.custom = true;  // Custom shape: three lines in the radius's place
         go(full, MenuPage::Foveation);
         const std::vector<std::wstring> notes = {L"note one", L"note two", L"note three"};
         const std::wstring footer = L"Overlay Ctrl+Alt+P  ·  Visor Ctrl+Alt+V";

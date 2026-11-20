@@ -58,11 +58,9 @@ public:
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
         if (s.ini) {  // the focus mask at launch (live from then on: qvfr_set_focus_mask)
-            const simqvfr::FocusShape shape = simqvfr::read_focus_shape(s.ini);
-            float inset[2 * simqvfr::kFocusCorners];
-            simqvfr::focus_shape_insets(simqvfr::focus_shape_bits(shape), inset);
-            const double radius = shape.corners ? 0.0 : simqvfr::ini_int(s.ini, simqvfr::kCornerRadiusPercent) / 100.0;
-            qvfr_set_focus_mask_now(simqvfr::ini_flag(s.ini, simqvfr::kFocusMask), inset, radius,
+            const simqvfr::FocusArea area = simqvfr::focus_area_of(simqvfr::read_focus_shape(s.ini),
+                                                                   simqvfr::ini_int(s.ini, simqvfr::kCornerRadiusPercent));
+            qvfr_set_focus_mask_now(simqvfr::ini_flag(s.ini, simqvfr::kFocusMask), area,
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusMaskMargin));
         }
         // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (qvfr_frame.h).
@@ -237,14 +235,11 @@ public:
         if (qvfr_)
             qvfr_frame_set_box(focus, focusY);
     }
-    void qvfr_set_focus_mask(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) override {
+    void qvfr_set_focus_mask(bool on, const simqvfr::FocusArea& area, int marginTexels) override {
         if (qvfr_)
-            qvfr_set_focus_mask_now(on, inset, cornerRadius, marginTexels);
+            qvfr_set_focus_mask_now(on, area, marginTexels);
     }
-    static void qvfr_set_focus_mask_now(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) {
-        simqvfr::FocusArea area;
-        std::copy(std::begin(inset), std::end(inset), area.inset);
-        area.radius = area.corners() ? 0.0f : static_cast<float>(cornerRadius);
+    static void qvfr_set_focus_mask_now(bool on, const simqvfr::FocusArea& area, int marginTexels) {
         qvfr_frame_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);
     }
     // Live resolution: each pass at its own render scale inside the launch-size targets (qvfr_frame.h). On for QVFR

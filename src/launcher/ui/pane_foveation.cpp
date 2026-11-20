@@ -19,7 +19,8 @@ namespace simqvfr::launcher::ui::win {
 namespace {
 
 // One eye, a schematic, at (x, y), width w; `right`: the right eye, its crop mirrored (the outer side is the temple's,
-// so on the right). The focus shape's corners are the screen's in both eyes, as the compositor draws them. Returns its
+// so on the right). The focus shape's points are the screen's in both eyes, as the compositor draws them; with a custom
+// shape they are handles (kShapeCanvas: click the area to add one, drag one, right-click one to remove it). Returns its
 // height.
 float preview_eye(float x, float y, float w, bool draw, bool right) {
     const Readouts ro = readouts(app.s, app.runtime);
@@ -41,9 +42,10 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         const bool tfi = app.s.mode == RenderMode::TwoLoop;
         const bool eye = app.s.eyeTracking && !eye_warning();
         const float fw = W * app.s.width / 100, fh = H * app.s.height / 100;
-        // Centred on the lens in both modes (eye tracked: looking straight ahead), moved by the vertical
-        // offset, roughly: about 100 degrees of view top to bottom.
-        const float gx = 0.5f, gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
+        // Centred on the lens in both modes (eye tracked: looking straight ahead), moved by the offset, roughly:
+        // about 100 degrees of view across and top to bottom.
+        const float gx = 0.5f + app.s.offset.for_mode_x(app.s.eyeTracking) / 100.0f,
+                    gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
         // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
         const bool cropHere = game_has(&games::GameFeatures::fovCrop);  // none for a game without the crop
         const int temple = cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0,
@@ -66,20 +68,25 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
             for (float iy = 0; iy < H; iy += 4)
                 app.canvas.fill(R(0, iy, W, 2), col(app.c->preview_canvas, 0.55f));
         // Feather: the focus region fades in over feather % of its size, as the compositor blends it;
-        // its corners rounded by corner % of half the shorter side, or with the corner shape, each corner
-        // pulled in (focus_shape.h; its feather drawn as the quadrilateral shrunk toward its middle).
+        // its corners rounded by corner % of half the shorter side, or with a custom shape, the outline through its
+        // points (focus_shape.h; its feather drawn as the outline shrunk toward the box's middle).
         const float band = std::min(fw, fh) * app.s.feather / 100.0f;
-        const float corner = app.s.shape.corners ? 0.0f : std::min(fw, fh) / 2 * app.s.corner / 100.0f;
-        const auto quad = [&](float in) {  // the corner shape, `in` from its edges across and down
+        const bool custom = app.s.shape.custom;
+        const int points = std::clamp(app.s.shape.count, kFocusPointsMin, kFocusPointsMax);
+        const float corner = custom ? 0.0f : std::min(fw, fh) / 2 * app.s.corner / 100.0f;
+        const auto point_at = [&](int i, float sx, float sy) {  // point i on screen, the box scaled by sx, sy
+            const FocusPoint q = clamp_focus_point(app.s.shape.points[i]);
+            return D2D1_POINT_2F{x + (fx + fw / 2 + q.x / 100.0f * fw * sx) * k, y + (fy + fh / 2 - q.y / 100.0f * fh * sy) * k};
+        };
+        const auto quad = [&](float in) {  // the custom shape, `in` from the box's edges across and down
             ComPtr<ID2D1PathGeometry> path;
             app.canvas.factory()->CreatePathGeometry(&path);
             ComPtr<ID2D1GeometrySink> sink;
             path->Open(&sink);
+            sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);  // even-odd, as the shader's crossings
             const float sx = (fw - 2 * in) / fw, sy = (fh - 2 * in) / fh;
-            for (int i = 0; i < kFocusCorners; ++i) {
-                float u, v;
-                focus_corner_point(app.s.shape, static_cast<FocusCorner>(i), u, v);
-                const D2D1_POINT_2F p{x + (fx + fw / 2 + (u - 0.5f) * fw * sx) * k, y + (fy + fh / 2 + (v - 0.5f) * fh * sy) * k};
+            for (int i = 0; i < points; ++i) {
+                const D2D1_POINT_2F p = point_at(i, sx, sy);
                 if (i == 0)
                     sink->BeginFigure(p, D2D1_FIGURE_BEGIN_FILLED);
                 else
@@ -92,7 +99,7 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         const int steps = band > 0.5f ? 6 : 1;
         for (int i = 0; i < steps; ++i) {
             const float in = band * i / steps, alpha = steps == 1 ? 1.0f : static_cast<float>(i + 1) / steps;
-            if (app.s.shape.corners)
+            if (custom)
                 app.canvas.fill(quad(in).Get(), col(app.c->preview_focus, alpha));
             else
                 app.canvas.fill(R(fx + in, fy + in, fw - 2 * in, fh - 2 * in), col(app.c->preview_focus, alpha),
@@ -100,7 +107,7 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         }
         // The focus region's finer grid (the kit's focus pattern), on its own grid origin, inside its shape.
         ComPtr<ID2D1Geometry> shape;
-        if (app.s.shape.corners) {
+        if (custom) {
             shape = quad(0);
         } else {
             ComPtr<ID2D1RoundedRectangleGeometry> box;
@@ -115,10 +122,35 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         for (float ly = fy; ly <= fy + fh; ly += fc)
             app.canvas.line(x + fx * k, y + ly * k, x + (fx + fw) * k, y + ly * k, col(app.c->preview_periphery), 0.4f * k);
         rt->PopLayer();
-        if (app.s.outline && app.s.shape.corners)
+        if (app.s.outline && custom)
             app.canvas.stroke(quad(1).Get(), col(overlay(static_cast<int>(app.s.color))), 2 * k);
         else if (app.s.outline)
             app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k, corner * k);
+        if (custom) {
+            // The box the points live in, outlined faintly, and each point a handle (the picked one filled, numbered); the area
+            // and the handles are hit areas (the handles on top: pushed last, found first).
+            const int side = right ? 1 : 0;
+            const Rect box = R(fx, fy, fw, fh);
+            app.shapeBox[side] = box;
+            app.canvas.stroke(box, col(app.c->preview_label, 0.35f), 1);
+            app.hits.push_back({kShapeCanvas, box, side * kShapeCanvasEye + kShapeCanvasBox, {},
+                                tr(L"Focus shape: click to add a point")});
+            const bool whole = app.shapePoint == kFocusWholeShape;  // every handle filled, none numbered
+            const int picked = std::clamp(app.shapePoint, 0, points - 1);
+            const t::TypeStyle number{9 * std::max(k, 1.0f), 11 * std::max(k, 1.0f), 600, false};
+            for (int i = 0; i < points; ++i) {
+                const D2D1_POINT_2F p = point_at(i, 1, 1);
+                const bool held = whole || i == picked;
+                const float r = held ? 6.0f : 4.5f;
+                app.canvas.circle(p.x, p.y, r, col(held ? app.c->accent : app.c->preview_label), true, 0);
+                app.canvas.circle(p.x, p.y, r, col(app.c->preview_canvas), false, 1.2f);
+                if (held && !whole)
+                    app.canvas.text(std::to_wstring(i + 1), number, {p.x + 7, p.y - 14, 20, 12}, col(app.c->preview_label),
+                                    Align::Leading, false);
+                app.hits.push_back({kShapeCanvas, Rect{p.x - 8, p.y - 8, 16, 16}, side * kShapeCanvasEye + i, {},
+                                    trf(L"Point {n}", {{L"n", std::to_wstring(i + 1)}})});
+            }
+        }
         // The cropped edges, as the headset shows them; with the helmet, its rim reaches into the view.
         const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on && game_has(&games::GameFeatures::helmet);
         const float rim = helmet ? H * app.s.helmet.rim / 100.0f : 0;

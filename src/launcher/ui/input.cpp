@@ -249,7 +249,19 @@ void activate(Ctl id, int option) {
     case kDlssFocusMode:
     case kDlssSharpening:
     case kNrStyle:
-    case kNrPreset: open_popup(id); return;
+    case kNrPreset:
+    case kShapePointPick: open_popup(id); return;
+    case kShapeRemove:  // the picked point of the custom shape (not below three; nothing with Whole shape picked)
+        if (!focus_shape_remove_point(app.s.shape, app.shapePoint))
+            return;
+        app.shapePoint = std::clamp(app.shapePoint - 1, 0, app.s.shape.count - 1);
+        changed();
+        return;
+    case kShapeReset:  // the custom shape back to the box's four corners
+        focus_shape_reset(app.s.shape);
+        app.shapePoint = kFocusWholeShape;
+        changed();
+        return;
     case kNrOn:
         if (own_nr_available()) {  // greyed out without DLSS on or the player's nvngx_dlssnr.dll
             app.s.nr.on = !app.s.nr.on;
@@ -407,6 +419,7 @@ void set_slider(Ctl id, int value) {
     *v = std::clamp(value, r.min, r.max);
     if (id == kColorValue)
         apply_color_edit();
+    shape_slider_set(id);
     changed();
 }
 
@@ -420,6 +433,8 @@ namespace {
 // window's default button. Space presses these too.
 bool push_button(Ctl id) {
     switch (id) {
+    case kShapeRemove:
+    case kShapeReset:
     case kCheekyRuntime:
     case kDlssFolder:
     case kDlssIncluded:
