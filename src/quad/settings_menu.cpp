@@ -1,5 +1,6 @@
 #include "settings_menu.h"
 
+#include "corner_fit.h"
 #include "focus_mask.h"
 #include "fov_crop.h"
 #include "views4_layout.h"
@@ -763,6 +764,18 @@ MenuFit menu_fit(const SettingsMenu& menu) {
     f.densityX = f.densityY = v.density;
     if (!menu.launch.qvfr)
         return f;
+    if (menu.launch.cornerFit) {  // the corner path's own rule, the one it draws by
+        const CornerFit c = corner_fit(v.periphery, v.width, v.height, v.density);
+        f.periphery = c.periphery;
+        f.peripheryCapped = c.periphery != v.periphery;
+        f.peripheryByRoom = c.peripheryByRoom;
+        f.peripheryRaised = c.peripheryRaised;
+        f.focusCapped = c.densityCapped;
+        f.densityX = f.densityY = c.density * 100;
+        f.focusWidth = c.density * c.focusX;
+        f.focusHeight = c.density * c.focusY;
+        return f;
+    }
     // The layer's own rule (views4_fit), in percent.
     const Views4Fit fit = views4_fit(launch_layout(menu.launch), v.periphery / 100.0, f.wantFocusWidth / 100,
                                      f.wantFocusHeight / 100, v.crop_width() / 100, v.crop_height() / 100);
@@ -995,6 +1008,9 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
                               L"size to make room",
                               {{L"needed", periphery(menu.values.periphery)}, {L"left", periphery(f.periphery)}})
                   : std::wstring(lang::tr(L"Periphery needs more room: lower Focus density or size to make room")));
+    else if (f.peripheryCapped && f.peripheryRaised)
+        notes.push_back(lang::trf(L"Periphery below {percent} isn't used in this game: {percent} now",
+                                  {{L"percent", percent(f.periphery)}}));
     else if (f.peripheryCapped)
         notes.push_back(lang::trf(L"Periphery above {percent} does not fit this launch: relaunch to use it",
                                   {{L"percent", percent(f.periphery)}}));

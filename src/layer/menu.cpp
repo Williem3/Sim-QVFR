@@ -240,6 +240,7 @@ void menu_open(int64_t now) {
             menu.model.launch.helmetPage = false;
             menu.model.launch.shapePage = false;
             menu.model.launch.optimize = false;
+            menu.model.launch.cornerFit = true;  // the sizes in effect by the SCS corner's rule (quad/corner_fit.h)
         }
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.

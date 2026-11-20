@@ -17,6 +17,7 @@
 #include "games/xplane/game.h"
 #include "ini_put.h"
 #include "lang.h"
+#include "quad/corner_fit.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 #include "test_util.h"
@@ -241,6 +242,47 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
           "with inner at 50% the asked periphery 30% fits");
     check(menu_resolution(traded).current == L"4672x1250 (5.8 MP)" && !menu_resolution(traded).capped,
           "and the target now is under the max");
+
+    // The SCS corner path (quad/corner_fit.h), 2026-11-19 tester: the Performance profile asked a 20% periphery, the path
+    // drew 25% (its least) and the menu said 20%. Now the menu says what the path draws.
+    {
+        const CornerFit raised = corner_fit(20, 25, 25, 140);
+        check(raised.periphery == 25 && raised.peripheryRaised && !raised.peripheryByRoom && !raised.densityCapped &&
+                  std::lround(raised.density * 100) == 140,
+              "corner fit: 20% asked is raised to 25%, the 25% box at 140% kept");
+        const CornerFit room = corner_fit(80, 25, 25, 140);
+        check(room.periphery == 65 && room.peripheryByRoom && !room.peripheryRaised,
+              "corner fit: 80% asked is held to the 65% the focus region leaves");
+        const CornerFit dense = corner_fit(40, 60, 60, 200);
+        check(dense.densityCapped && std::lround(dense.density * 100) == 125 && dense.periphery == 25,
+              "corner fit: a 60% box at 200% is held to 125% (room for the least corner)");
+        check(corner_fit(40, 0, 0, 100).periphery == 40 && corner_fit(40, 0, 0, 100).focusX == 0,
+              "corner fit: no focus view, the corner as asked");
+
+        SettingsMenu scs;
+        scs.launch = {true, 40, 35, 35, 6240, 6280};
+        scs.launch.cornerFit = true;
+        scs.values.periphery = 20;
+        scs.values.density = 140;
+        scs.values.width = 25;
+        scs.values.height = 25;
+        const MenuFit f = menu_fit(scs);
+        check(f.peripheryCapped && f.peripheryRaised && std::lround(f.periphery) == 25 && !f.focusCapped &&
+                  std::lround(f.densityX) == 140,
+              "corner path: the menu has the periphery in effect (25%) and the density as asked");
+        pick(scs, MenuItem::Periphery);
+        check(line_of(scs, MenuItem::Periphery).capped && line_of(scs, MenuItem::Periphery).value == L"20%  (25% now)",
+              "corner path: the periphery line shows 20% asked, 25% now");
+        const std::vector<std::wstring> n = menu_notes(scs);
+        check(n.size() == 1 && n[0] == L"Periphery below 25% isn't used in this game: 25% now",
+              "corner path: the note says why");
+        scs.values.periphery = 50;  // room for 65%: as asked, nothing capped
+        check(!menu_fit(scs).peripheryCapped && std::lround(menu_fit(scs).periphery) == 50 && menu_notes(scs).empty(),
+              "corner path: 50% fits beside the focus region");
+        scs.values.periphery = 80;
+        check(menu_fit(scs).peripheryByRoom && std::lround(menu_fit(scs).periphery) == 65,
+              "corner path: 80% held to the room the focus region leaves, not the four views' launch rule");
+    }
 
     // Center PPD and pixels saved, from what is in effect. 45.32 PPD at 100% density.
     SettingsMenu stats = run;

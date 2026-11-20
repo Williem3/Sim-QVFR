@@ -14,6 +14,7 @@
 #include "../../log.h"
 #include "../../probe/aftermath.h"
 #include "../../probe/hang_watch.h"
+#include "../../quad/corner_fit.h"
 #include "corner_rules.h"
 #include "pass_probe.h"
 
@@ -65,22 +66,23 @@ void take_frame_end() {
     g.remapEye = -1;
     g.frameImage = -1;
     if (const int want = g.livePercent.load(std::memory_order_relaxed); want > 0 && g.eyeW) {  // the menu's sizes
-        const int wantFocus = g.focusPercent ? std::clamp(g.liveFocusPercent.load(std::memory_order_relaxed), 10, 60) : 0;
-        int wantY = g.liveFocusPercentY.load(std::memory_order_relaxed);
-        wantY = wantFocus ? std::clamp(wantY > 0 ? wantY : wantFocus, 10, 80) : 0;
-        // The focus region is box x density of the targets: it keeps what it asks for first, up to the room beside a
-        // 25% corner and the targets' height; the corner takes what the region leaves.
-        float density = std::clamp(g.liveDensity.load(std::memory_order_relaxed), 25, 400) / 100.0f;
-        if (wantFocus)
-            density = std::min({density, 75.0f / wantFocus, 100.0f / wantY});
-        const int room = wantFocus ? static_cast<int>(std::floor(100 - wantFocus * density)) : 99;
-        const int corner = std::clamp(want, 25, std::max(25, room));
+        // The menu's own rule too (quad/corner_fit.h): what the menu says is in effect is what is drawn.
+        const simqvfr::CornerFit fit = simqvfr::corner_fit(
+            want, g.focusPercent ? g.liveFocusPercent.load(std::memory_order_relaxed) : 0,
+            g.liveFocusPercentY.load(std::memory_order_relaxed), g.liveDensity.load(std::memory_order_relaxed));
+        const int wantFocus = fit.focusX, wantY = fit.focusY, corner = fit.periphery;
+        const float density = static_cast<float>(fit.density);
         if (corner != static_cast<int>(std::lround(g.percent)) || wantFocus != g.focusPercent || wantY != g.focusPercentY ||
             density != g.density) {
+            char why[96] = "";
+            if (fit.peripheryRaised)
+                snprintf(why, sizeof why, ": %d%% asked, raised to this path's least (%d%%)", want, simqvfr::kCornerMinPeriphery);
+            else if (fit.peripheryByRoom)
+                snprintf(why, sizeof why, ": %d%% asked, cut to what fits beside the focus region", want);
             simqvfr::logf("scs corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% x %d%% at %.0f%% density "
-                          "(was %d%% x %d%% at %.0f%%)%s",
+                          "(was %d%% x %d%% at %.0f%%)%s%s",
                           corner, g.percent, wantFocus, wantY, density * 100, g.focusPercent, g.focusPercentY, g.density * 100,
-                          corner != want ? ": the corner cut to what fits beside the focus region" : "");
+                          why, fit.densityCapped ? "; the density held to what fits" : "");
             g.percent = static_cast<float>(corner);
             const float oldFx = g.focusPercent ? focus_fx() : 0, oldFy = g.focusPercent ? focus_fy() : 0;
             g.focusPercent = wantFocus;
