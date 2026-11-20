@@ -1508,20 +1508,31 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(!has(r, MenuItem::FocusCorridor) && !has(r, MenuItem::FocusCorridorBand),
               "road focus: not on the Foveation page of a game without it");
         r.launch.focusCorridor = true;
-        check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::Outline) &&
+        check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
+                  at(r, MenuItem::FocusCorridorWidth) + 1 == at(r, MenuItem::Outline) &&
                   !has(r, MenuItem::FocusCorridorBand) && line_of(r, MenuItem::FocusCorridor).label == L"Road focus" &&
-                  line_of(r, MenuItem::FocusCorridor).value == L"On",
-              "road focus: on by default, before the outline; no DLSS band without Sim-QVFR's DLSS");
+                  line_of(r, MenuItem::FocusCorridor).value == L"On" &&
+                  line_of(r, MenuItem::FocusCorridorWidth).label == L"Road width" &&
+                  line_of(r, MenuItem::FocusCorridorWidth).value == L"10 m",
+              "road focus: on by default, its width (10 m) under it, before the outline; no DLSS band without Sim-QVFR's DLSS");
+        pick(r, MenuItem::FocusCorridorWidth);
+        for (int i = 0; i < 20; ++i)
+            menu_key(r, MenuKey::Right);
+        check(r.values.focusCorridorWidth == 20 && !menu_key(r, MenuKey::Right), "road width: up to 20 m, a metre a step");
+        for (int i = 0; i < 20; ++i)
+            menu_key(r, MenuKey::Left);
+        check(r.values.focusCorridorWidth == 5, "road width: down to 5 m");
         r.launch.ownDlss = true;
         r.values.dlss.on = true;
-        check(at(r, MenuItem::FocusCorridorBand) == at(r, MenuItem::FocusCorridor) + 1 &&
+        check(at(r, MenuItem::FocusCorridorBand) == at(r, MenuItem::FocusCorridorWidth) + 1 &&
                   line_of(r, MenuItem::FocusCorridorBand).label == L"DLAA on the road only",
               "road focus: with Sim-QVFR's DLSS on, its band follows");
         pick(r, MenuItem::FocusCorridorBand);
         check(menu_key(r, MenuKey::Left) && !r.values.focusCorridorBand, "road focus: the band switches off");
         pick(r, MenuItem::FocusCorridor);
-        check(menu_key(r, MenuKey::Right) && !r.values.focusCorridor && !has(r, MenuItem::FocusCorridorBand),
-              "road focus: off, its band hidden");
+        check(menu_key(r, MenuKey::Right) && !r.values.focusCorridor && !has(r, MenuItem::FocusCorridorBand) &&
+                  !has(r, MenuItem::FocusCorridorWidth),
+              "road focus: off, its width and band hidden");
         const std::wstring ini = temp_path(L"simqvfr-menu-corridor.ini");
         DeleteFileW(ini.c_str());
         write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, false);
@@ -1529,7 +1540,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "road focus: not written for a game without it");
         write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, true);
         const MenuValues back = read_menu_values(ini.c_str());
-        check(!back.focusCorridor && !back.focusCorridorBand &&
+        check(!back.focusCorridor && !back.focusCorridorBand && back.focusCorridorWidth == 5 &&
                   GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == 0,
               "road focus: written for a game with it, and read back");
         DeleteFileW(ini.c_str());

@@ -338,7 +338,9 @@ Card foveation_card() {
             b.toggle(kCorridorOn, tr(L"Road focus"), s.corridor,
                      s.corridor ? tr(L"Full detail along the road ahead; the scenery beside and above it from the periphery.")
                                 : tr(L"Off"));
-            b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"), {tr(L"DLAA on the road only")}, [](Body& r) {
+            b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"), {tr(L"Road width"), tr(L"DLAA on the road only")},
+                     [](Body& r) {
+                r.slider({kCorridorWidth, tr(L"Road width"), app.s.corridorWidth, L" m"});
                 const bool band = app.s.corridorBand;
                 r.toggle(kCorridorBand, tr(L"DLAA on the road only"), band,
                          band ? tr(L"With Sim-QVFR’s DLSS on: the focus area’s DLAA over the road’s rows alone.")
@@ -364,6 +366,7 @@ Card foveation_card() {
         s.color = d.color;
         s.corridor = d.corridor;
         s.corridorBand = d.corridorBand;
+        s.corridorWidth = d.corridorWidth;
     };
     return c;
 }

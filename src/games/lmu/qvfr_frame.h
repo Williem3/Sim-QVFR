@@ -88,7 +88,8 @@ struct QvfrFrameRun {
     int maskAb = 0;
     // The focus corridor's cost ([experiment] lmu_corridor_ab=N, a measurement; mvr_pass.h mvr_corridor): N frames with
     // the focus views kept to a corridor ahead, N without, in turn; GPU per pass by mvr_pass's modes. Its shape:
-    // lmu_corridor_half_cm, _tall_cm, _start_cm, _far_m (0 none), _eye_height_cm.
+    // lmu_corridor_half_cm (missing: corridorHalfM 0, the player's focus_corridor_width), _tall_cm, _start_cm, _far_m
+    // (0 none), _eye_height_cm.
     int corridorAb = 0;
     bool corridorShow = false;  // lmu_corridor_show=1: what lies outside the corridor tinted in the focus views
     // lmu_corridor=1: the corridor every frame (the focus views kept to it, the periphery composed into the rest);
@@ -99,7 +100,7 @@ struct QvfrFrameRun {
     // (lmu_corridor_dlss_band_pad_pct kept about them); 0 off; -1 (missing) the player's [quad] focus_corridor_dlss_band
     // (kCorridorBandPct when on).
     int corridorBandPct = -1, corridorBandPadPct = 6;
-    float corridorHalfM = 10, corridorTallM = 3.5f, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
+    float corridorHalfM = 0, corridorTallM = 3.5f, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
     float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
     // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
@@ -147,7 +148,7 @@ void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned
 // Road focus ([quad] focus_corridor, focus_corridor_dlss_band), live: the focus views kept to the corridor along the
 // road (mvr_pass.h mvr_corridor), and their DLSS over its rows alone (mvr_corridor_band). The [experiment] lmu_corridor
 // keys (on, A/B, show mode, the band's share) win over it.
-void qvfr_frame_set_corridor(bool on, bool dlssBand);
+void qvfr_frame_set_corridor(bool on, bool dlssBand, int widthM);
 // The latest composed frame's record (the eyes' and focus views' tangents, unturned); false before the first.
 bool qvfr_frame_record(simqvfr::Views4Frame& frame);
 // A frame with eye passes but no four views (the focus views didn't come): the part of each eye's image its pass

@@ -94,11 +94,12 @@ height times density. A small area can take a high density cheaply.
 - **Fixed focus:** larger (35-42% wide, 30-38% tall), as your eyes leave the centre.
 - **Feather** (how the sharp area blends into the periphery) and **Corner radius** cost nothing: raise them to hide
   the edge instead of making the area bigger.
-- **Road focus** (on by default) renders the sharp area in full detail only along the road ahead, about 10 m either
-  side of it and 3.5 m above it, following its hills and bends; the trees, grandstands, hills and sky beside and above
-  it, and the cockpit, come from the periphery. It saves the most with a large focus area, so with it on a larger area
-  costs less than before. **DLAA on the road only** (with DLSS on) runs the focus area's DLAA over the road's rows alone
-  for a further saving. Turn either off if something beside the road looks softer than you want.
+- **Road focus** (on by default) renders the sharp area in full detail only along the road ahead, 10 m either side of
+  it by default (**Road width**, 5 to 20 m: wider keeps the run-off and barriers sharp but saves less) and 3.5 m above
+  it, following its hills and bends; the trees, grandstands, hills and sky beside and above it, and the cockpit, come
+  from the periphery. It saves the most with a large focus area, so with it on a larger area costs less than before.
+  **DLAA on the road only** (with DLSS on) runs the focus area's DLAA over the road's rows alone for a further saving.
+  Turn either off if something beside the road looks softer than you want.
 
 ### 3.3 Focus density (Picture tab, Resolution)
 

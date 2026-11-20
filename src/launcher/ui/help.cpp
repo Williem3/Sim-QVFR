@@ -137,6 +137,10 @@ constexpr Help kHelp[] = {
      L"periphery’s image, as does the cockpit; where you look while you drive you shouldn’t see a difference. It saves "
      L"GPU time, more with a larger focus area. Turn it off if something beside the road looks softer than you want. "
      L"Changes while you drive.")},
+    {I18N(L"Road width"),
+     I18N(L"How far either side of the road’s centre stays in full detail with Road focus on. Lower keeps just the track "
+     L"sharp and saves the most; higher brings the kerbs, run-off and barriers into the focus area and saves less. 10 m "
+     L"suits most circuits. Changes while you drive.")},
     {I18N(L"DLAA on the road only"),
      I18N(L"With Road focus and Sim-QVFR’s DLSS on: the focus area’s DLAA runs only over the rows the road covers, the rest "
      L"takes the periphery’s DLAA. It saves more GPU time. Turn it off if you see a soft strip above or below the road "

@@ -69,6 +69,7 @@ struct Settings {
     // with Sim-QVFR's DLSS its DLAA over the road's rows alone. Live.
     bool corridor = kFocusCorridor.def != 0;
     bool corridorBand = kFocusCorridorBand.def != 0;
+    int corridorWidth = kFocusCorridorWidth.def;  // [quad] focus_corridor_width, metres either side of the road
     FocusOffset offset;       // [quad] fixed/gaze_offset_y, _x: the focus region's offset, degrees up and right
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
@@ -136,7 +137,7 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
     kColorContrastRange = range_of(kColorContrast), kColorSaturationRange = range_of(kColorSaturation),
     kCarFillRange = range_of(kCarLightFill), kCarOcclusionRange = range_of(kCarLightOcclusion),
     kCarHighlightsRange = range_of(kCarLightHighlights), kCarGlossRange = range_of(kCarLightGloss),
-    kCarSmoothRange = range_of(kCarLightSmooth),
+    kCarSmoothRange = range_of(kCarLightSmooth), kCorridorWidthRange = range_of(kFocusCorridorWidth),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusPointRange{-kFocusPointReach, kFocusPointReach};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its

@@ -76,7 +76,7 @@ enum class MenuItem {
     CarLightOn, CarLightQuality, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
     CarLightShadows, CarLightDetail, CarLightReflections, CarLightHeadlights, CarLightGround, CarLightNightVision,
     // The Foveation section's road focus ([quad] focus_corridor; MenuLaunch::focusCorridor), and with DLSS on its band.
-    FocusCorridor, FocusCorridorBand,
+    FocusCorridor, FocusCorridorBand, FocusCorridorWidth,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
@@ -116,6 +116,7 @@ struct MenuValues {
     bool focusMask = kFocusMask.def != 0;        // [quad] focus_mask (read only: the pixels saved)
     bool focusCorridor = kFocusCorridor.def != 0;          // [quad] focus_corridor (road focus)
     bool focusCorridorBand = kFocusCorridorBand.def != 0;  // [quad] focus_corridor_dlss_band
+    int focusCorridorWidth = kFocusCorridorWidth.def;      // [quad] focus_corridor_width, metres either side
     int focusMaskMargin = kFocusMaskMargin.def;  // [experiment] focus_mask_margin (likewise)
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     ClockPlacement clock;     // [clock]: the clock, on or off, and its place

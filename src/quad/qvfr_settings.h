@@ -43,6 +43,9 @@ inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
 // the focus views runs only over the rows the road covers (focus_corridor_dlss_band). Both live; on by default.
 inline constexpr IniInt kFocusCorridor{L"quad", L"focus_corridor", 1, 0, 1, 1};
 inline constexpr IniInt kFocusCorridorBand{L"quad", L"focus_corridor_dlss_band", 1, 0, 1, 1};
+// Road width: metres either side of the road's centre kept sharp. 5 holds the track's surface on most circuits (the
+// centre follows the road); 20 takes in run-off and barriers, the corridor then a good part of the box (less saved).
+inline constexpr IniInt kFocusCorridorWidth{L"quad", L"focus_corridor_width", 10, 5, 20, 1};
 // Diagnostics: the mask's margin past the shape, focus view texels (what DLSS, sharpening and screen-space effects read
 // beside the shown texels). Live.
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};

@@ -346,6 +346,7 @@ int* slider_value(Ctl id) {
     case kNightHighlights: return &app.s.carLight.highlights;
     case kNightGloss: return &app.s.carLight.gloss;
     case kNightSmooth: return &app.s.carLight.smooth;
+    case kCorridorWidth: return &app.s.corridorWidth;
     case kColorValue: return &app.colorValue;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
@@ -415,6 +416,7 @@ Range slider_range(Ctl id) {
     case kNightHighlights: return kCarHighlightsRange;
     case kNightGloss: return kCarGlossRange;
     case kNightSmooth: return kCarSmoothRange;
+    case kCorridorWidth: return kCorridorWidthRange;
     case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;

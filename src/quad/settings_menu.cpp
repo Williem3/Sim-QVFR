@@ -70,6 +70,7 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Outline, I18N(L"Show focus outline"), kDebugBorder),
     spec_of(MenuItem::FocusCorridor, I18N(L"Road focus"), kFocusCorridor),
     spec_of(MenuItem::FocusCorridorBand, I18N(L"DLAA on the road only"), kFocusCorridorBand),
+    spec_of(MenuItem::FocusCorridorWidth, I18N(L"Road width"), kFocusCorridorWidth),
     spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
     {MenuItem::FocusOffset, I18N(L"Gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::FocusOffsetX, I18N(L"Horizontal gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
@@ -231,6 +232,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Width: return &v.width;
     case MenuItem::Height: return &v.height;
     case MenuItem::Feather: return &v.feather;
+    case MenuItem::FocusCorridorWidth: return &v.focusCorridorWidth;
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
     case MenuItem::GazeDeadzone: return &v.gazeDeadzone;
@@ -362,6 +364,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             items.push_back(MenuItem::FocusQuadDistance);
         if (l.qvfr && l.focusCorridor) {  // road focus, and with Sim-QVFR's DLSS on its band
             items.push_back(MenuItem::FocusCorridor);
+            if (v.focusCorridor)
+                items.push_back(MenuItem::FocusCorridorWidth);
             if (v.focusCorridor && (l.ownDlss || l.apiDlss) && v.dlss.on)
                 items.push_back(MenuItem::FocusCorridorBand);
         }
@@ -698,6 +702,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.focusMaskMargin = ini_int(ini, kFocusMaskMargin);
     v.focusCorridor = ini_flag(ini, kFocusCorridor);
     v.focusCorridorBand = ini_flag(ini, kFocusCorridorBand);
+    v.focusCorridorWidth = ini_int(ini, kFocusCorridorWidth);
     v.overlay = read_osd_placement(ini);
     v.clock = read_clock_placement(ini);
     v.placement = read_menu_placement(ini);
@@ -726,6 +731,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     if (qvfr && focusCorridor) {
         ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
         ok &= write(ini, kFocusCorridorBand, v.focusCorridorBand ? 1 : 0);
+        ok &= write(ini, kFocusCorridorWidth, kFocusCorridorWidth.clamp(v.focusCorridorWidth));
     }
     if (qvfr && carLighting)
         ok &= write_car_lighting(ini, v.carLight);
@@ -1137,6 +1143,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = on_off(v.focusCorridor);
         else if (items[i] == MenuItem::FocusCorridorBand)
             line.value = on_off(v.focusCorridorBand);
+        else if (items[i] == MenuItem::FocusCorridorWidth)
+            line.value = std::to_wstring(v.focusCorridorWidth) + L" m";
         else if (items[i] == MenuItem::Shape)
             line.value = w.t(v.shape.custom ? I18N(L"Custom shape") : I18N(L"Rectangle"));
         else if (items[i] == MenuItem::ShapePoint)  // "Whole shape", "Point 2 of 5"

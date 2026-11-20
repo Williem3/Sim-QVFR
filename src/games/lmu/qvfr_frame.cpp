@@ -62,6 +62,7 @@ unsigned focusMaskMargin = 16;
 // as last logged. The band: this share of the focus view's rows (measured on Spa 2026-11-20: the road's rows with their
 // margin 41-44% of a 50% box; 60% leaves room for climbs).
 std::atomic<bool> corridorLive{simqvfr::kFocusCorridor.def != 0}, corridorBandLive{simqvfr::kFocusCorridorBand.def != 0};
+std::atomic<int> corridorWidthLive{simqvfr::kFocusCorridorWidth.def};
 int corridorLogged = -1;
 constexpr int kCorridorBandPct = 60, kCorridorBandPadPct = 6;
 float gazeTan[2][2] = {};
@@ -767,18 +768,23 @@ void mvr_before_pass(int p) {
             // Road focus: the player's switches, unless the [experiment] keys say otherwise (on, an A/B, show mode).
             const bool roadOn = cfg.corridorOn || corridorLive.load(std::memory_order_relaxed);
             const bool roadBand = corridorBandLive.load(std::memory_order_relaxed);
-            if (const int said = (roadOn ? 1 : 0) | (roadBand ? 2 : 0); said != corridorLogged) {
+            const float roadHalfM = cfg.corridorHalfM > 0
+                                        ? cfg.corridorHalfM
+                                        : static_cast<float>(corridorWidthLive.load(std::memory_order_relaxed));
+            if (const int said = (roadOn ? 1 : 0) | (roadBand ? 2 : 0) | (static_cast<int>(roadHalfM * 100) << 2);
+                said != corridorLogged) {
                 corridorLogged = said;
-                simqvfr::logf("lmu qvfr: road focus %s%s", roadOn ? "on" : "off",
-                              roadOn ? (roadBand ? ", DLSS over the road's rows" : ", DLSS over the whole focus view") : "");
+                simqvfr::logf("lmu qvfr: road focus %s%s, %.1f m either side of the road", roadOn ? "on" : "off",
+                              roadOn ? (roadBand ? ", DLSS over the road's rows" : ", DLSS over the whole focus view") : "",
+                              roadHalfM);
             }
             mvr_corridor_band(cfg.corridorBandPct >= 0 ? cfg.corridorBandPct : roadBand ? kCorridorBandPct : 0,
                               cfg.corridorBandPct >= 0 ? cfg.corridorBandPadPct : kCorridorBandPadPct);
             if (cfg.corridorShow && cfg.corridorAb <= 0)  // show mode alone: tinted, never masked
-                mvr_corridor(true, true, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
+                mvr_corridor(true, true, roadHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
                              cfg.corridorEyeHeightM, true, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
             else if (cfg.corridorAb <= 0)  // on every frame (masked, the periphery composed in), or off
-                mvr_corridor(roadOn, false, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
+                mvr_corridor(roadOn, false, roadHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
                              cfg.corridorEyeHeightM, false, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
             if (cfg.corridorAb > 0) {  // the focus corridor this frame or not (between frames)
                 if (!corridorAbLogged) {
@@ -789,7 +795,7 @@ void mvr_before_pass(int p) {
                                   cfg.corridorAb, cfg.corridorAb);
                 }
                 corridorSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.corridorAb)) % 2);
-                mvr_corridor(true, corridorSide == 1, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM,
+                mvr_corridor(true, corridorSide == 1, roadHalfM, cfg.corridorTallM, cfg.corridorStartM,
                              cfg.corridorFarM, cfg.corridorEyeHeightM, cfg.corridorShow, cfg.corridorSlopeDeg,
                              cfg.corridorCentreM, cfg.corridorFeatherM);
                 mvr_frame_mode(corridorSide);
@@ -1740,9 +1746,10 @@ void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned
     focusMaskMargin = marginTexels;
 }
 
-void qvfr_frame_set_corridor(bool on, bool dlssBand) {
+void qvfr_frame_set_corridor(bool on, bool dlssBand, int widthM) {
     corridorLive.store(on, std::memory_order_relaxed);
     corridorBandLive.store(dlssBand, std::memory_order_relaxed);
+    corridorWidthLive.store(simqvfr::kFocusCorridorWidth.clamp(widthM), std::memory_order_relaxed);
 }
 
 simqvfr::games::QvfrMultiView qvfr_frame_multi_view() {
