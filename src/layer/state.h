@@ -140,6 +140,7 @@ struct Experiment {
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
     bool replayTyres = true;               // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
     bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
+    bool replayFixation = true;            // replay_fixation=0: no focus-depth read for the boxes' convergence
     bool replayCostAb = false;
     int replayDiagMode = 0;                // replay_diag=2: MSAA refraction-source A/B by sample
     bool replayDiag = false;               // replay_diag=1: per-sample fog / atmosphere schedule (the haze band)             // replay_cost_ab=1: all focus replays on / off every 1800 frames

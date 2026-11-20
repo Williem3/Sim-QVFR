@@ -2414,6 +2414,7 @@ void replay_probe_frame_end() {
         focus_ngx::install();
     if (probeMode == 3) {
         const uint64_t ended = focus.frame.fetch_add(1);  // the frame that just ended
+        focus_fixation_frame_end(ended);
         if (focus.settings.cullProbe && ended % 900 == 0) {  // the window that just ended, then the next one's phase
             static const char* const kPhase[] = {"everything drawn", "the indirect draws left out", "the direct draws left out"};
             const int was = cullProbePhase.load();

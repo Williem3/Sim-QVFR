@@ -79,6 +79,8 @@ struct ReplayFocusSettings {
     bool tyres = false;           // ACE's tyre pipeline has no single-pass-stereo variant (one instance, viewport 0: the left
                                   // eye only): each tyre draw in a stereo list drawn again for the right eye, in ACE's own
                                   // lists and in the focus replays
+    bool fixation = true;         // replay_fixation: the left focus view's depth at its centre read (replay_fixation.cpp),
+                                  // the layer converging both eyes' boxes at that distance (qvfr_fixation_m)
     int cull = 0;                 // replay_cull: ACE's instance visibility pass replayed with the focus frustums, the focus
                                   // replays' indirect draws from its results: 1 computed only, 2 used, 3 used in alternate
                                   // 900-frame windows (an A/B)
@@ -107,6 +109,13 @@ struct ReplayFocusSettings {
 // Returns false when the matrix doesn't invert. Exposed for the offline test.
 bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&focus)[16], double gazeX = 0,
                                      double gazeY = 0, double boxY = 0);
+
+// The depth terms (depth = a + b / w, w the view distance) and the centre ray's tangents (tx, ty) of a focus view from
+// its inverse projection as the tile culling takes it (q[i][k] = inverse[k * 4 + i], view = q . clip). False: not a
+// perspective view's. Pure, for tests/ace_fixation_test.cpp.
+bool replay_fixation_terms(const float (&inverse)[16], double& a, double& b, double& tx, double& ty);
+// How far the eyes look (the left focus view's depth at its centre, smoothed), metres; 0 before the first read or off.
+double replay_probe_fixation_m();
 
 // mode 1/2: re-emission cost (never executed); mode 3: focus depth replay (executed on `queue`).
 bool replay_probe_start(ID3D12Device* device, int mode, ID3D12CommandQueue* queue = nullptr,

@@ -280,6 +280,7 @@ void load_experiment() {
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
         experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", api, ini.c_str()) != 0;
         experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
+        experiment.replayFixation = GetPrivateProfileIntW(L"experiment", L"replay_fixation", 1, ini.c_str()) != 0;
         experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
         experiment.replayDiag = experiment.replayDiagMode == 1;
         experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", api, ini.c_str()) != 0;
