@@ -27,5 +27,8 @@ void fixation_pass(ID3D11DepthStencilView* dsv, const simqvfr::FocusBox& box, un
 void fixation_frame_end();
 // The smoothed fixation distance in metres; 0 before the first read (or off). Any thread.
 double fixation_m();
+// The scene depth's terms as last looked up (depth = a + b / z, the depth target's own convention: LMU's reversed);
+// false before the first.
+bool fixation_depth_terms(double& a, double& b);
 
 }  // namespace lmu

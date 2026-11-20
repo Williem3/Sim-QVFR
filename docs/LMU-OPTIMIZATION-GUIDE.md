@@ -94,6 +94,13 @@ height times density. A small area can take a high density cheaply.
 - **Fixed focus:** larger (35-42% wide, 30-38% tall), as your eyes leave the centre.
 - **Feather** (how the sharp area blends into the periphery) and **Corner radius** cost nothing: raise them to hide
   the edge instead of making the area bigger.
+- **Road focus** (on by default, fixed foveation only) renders the sharp area in full detail only along the road
+  ahead, 10 m either side of it by default (**Road width**, 5 to 20 m: wider keeps the run-off and barriers sharp but
+  saves less) and 3.5 m above it by default (**Road height**, 2 to 8 m), following its hills and bends, and in your
+  own car (the wheel, dash, displays and mirrors inside the sharp area); the trees, grandstands, hills and sky beside
+  and above the road come from the periphery. It saves the most with a large focus area, so with it on a larger area
+  costs less than before. It's off while the focus follows your eyes. Turn it off if something beside the road looks
+  softer than you want.
 
 ### 3.3 Focus density (Picture tab, Resolution)
 
@@ -253,6 +260,7 @@ and the session; use them to compare settings, not as promises.
 | Periphery resolution | In line with its pixels: the biggest saving | None | Live when lowered |
 | Focus density × focus size | In line with the focus area's pixels | None | Live when lowered |
 | Crop the view | In line with the pixels cut (saving) | None | Live |
+| Road focus (fixed foveation) | A saving, larger with a larger focus area | Small | Live |
 | DLSS on (four views, DLAA, preset K) | About +2 ms | Small | Live |
 | LMU's MSAA off with DLSS on | About −1.5 ms against 8x MSAA | — | LMU's settings |
 | DLSS Focus views below DLAA | Less, the lower the mode | None | Live |

@@ -56,9 +56,15 @@ int nvapi_two_views(ID3D11DeviceContext* context, bool on);
 
 // GPU time per pass, split at its multisample resolve: the scene (pass start to resolve) and the post-processing (resolve
 // to pass end). Timestamps in a ring of frames, read back a few frames later without waiting.
+constexpr int kCorridorStamps = 11;
 struct GpuFrame {
     ComPtr<ID3D11Query> disjoint, stamp[4][3];  // pass start, resolve, pass end
     bool stamped[4][3] = {};
+    // The focus corridor's own work in eye passes 0-1 (mvr_pass_corridor.h): before the depth copy, after it, after the
+    // road pass; before the mask, after it; before the fill, after it; and inside the fill's list: on entry, after the
+    // colour copy, after the outside draw, after the edge draw.
+    ComPtr<ID3D11Query> corridor[2][kCorridorStamps];
+    bool corridorStamped[2][kCorridorStamps] = {};
     bool pending = false;
     int mode = 0;  // mvr_frame_mode: 0 MVR, 1 the four passes alone (an A/B run)
 };
@@ -153,6 +159,14 @@ struct State {
     int mode = 0;                // this frame's (mvr_frame_mode)
     double sceneMs[2][4] = {}, postMs[2][4] = {};
     unsigned gpuCounts[2][4] = {};
+    // The focus corridor's GPU time per A/B side and eye pass: its depth copy, its road pass, its mask, its fill; and the frames
+    // each was timed in.
+    double corridorMs[2][2][4] = {};
+    unsigned corridorCounts[2][2][4] = {};
+    // The fill's parts per A/B side and eye pass: its list's entry, the colour copy, the outside draw, the edge draw, its
+    // list's exit (the game's state restored); and the frames each was timed in.
+    double fillMs[2][2][5] = {};
+    unsigned fillCounts[2][2][5] = {};
     TwinSet twins[kTwinSets];
     uint32_t twinEpoch = 1;
     uint64_t twinGeneration = 0;
@@ -539,6 +553,93 @@ struct State {
         bool done[2] = {};                     // drawn (or decided against) in this eye pass
         bool otherTestLogged = false;
     } mask;
+    // The focus corridor's measurement (mvr_corridor, mvr_pass_corridor.h).
+    struct Corridor {
+        bool on = false;
+        bool abOff = false;  // the A/B's side without it this frame (and always in show mode)
+        bool show = false;   // lmu_corridor_show: what's outside it tinted in the focus view, at the copy (this frame)
+        float halfM = 10, tallM = 3.5f, startM = 3, farM = 0, eyeHeightM = 1.3f;
+        float roadSlopeDeg = 35, centreReachM = 6;  // the steepest surface taken as road; how far the centre may move
+        float featherM = 1;  // the fill's blend at the corridor's edge, metres inside it
+        float carM = 3;      // the car kept sharp: whatever lies nearer than this, metres (0: none; mvr_corridor_car)
+        // The corridor's widening with distance, degrees either side (mvr_corridor_spread; -1: not set yet, logged when set).
+        float spreadDeg = -1;
+        // DLSS over a band of the focus view's rows (mvr_corridor_band): its height and the margin kept about the
+        // corridor's rows, percent of the view's height (0: off); since the last log line: bands placed, those whose
+        // corridor (with the margin) was taller than the band, its rows' share summed; each pass's band top as last set.
+        int bandPct = 0, bandPadPct = 6;
+        uint64_t bands = 0, bandsClipped = 0, bandsNoRows = 0;
+        double bandNeeded = 0;
+        unsigned bandTop[2] = {};
+        bool bandPlaced[2] = {};
+        ComPtr<ID3D11VertexShader> vs;
+        ComPtr<ID3D11PixelShader> copyMs, copySs, mask, tint;
+        // The fill: the eye's colour copied (multisampled or not), then its colour and depth into the focus view outside
+        // the corridor (written as they are), and its colour blended in at the corridor's edge.
+        ComPtr<ID3D11PixelShader> copyColourMs, copyColourSs, fillOutside, fillEdge;
+        ComPtr<ID3D11BlendState> fillBlend;   // src x alpha + dest x (1 - alpha): alpha the eye's share
+        ComPtr<ID3D11BlendState> fillOpaque;  // no blend, colour only (the target's alpha left as it was)
+        ComPtr<ID3D11SamplerState> linear;
+        ID3D11Resource* colourFor = nullptr;  // the game's colour target the view below reads (raw, compared only)
+        ComPtr<ID3D11ShaderResourceView> colourSrv;
+        bool colourMs = false, colourUnreadableLogged = false;
+        uint32_t stamp[2] = {};  // each pass's mask stamp (the number its texels get; the fill finds them by it)
+        bool maskedThisPass[2] = {};
+        // The fill ran in this pass, with this stamp (DLSS then composes the same pixels from the eye's finished image:
+        // corridor_keep).
+        bool filledThisPass[2] = {};
+        uint32_t fillStamp[2] = {};
+        ComPtr<ID3D11ComputeShader> classify, columns, centre;  // road or not; the road under each texel; its centre
+        ComPtr<ID3D11ComputeShader> margin;  // how far inside the corridor each copy texel lies (the map the rest reads)
+        ComPtr<ID3D11BlendState> blend;  // show mode's tint, alpha over the focus view
+        ComPtr<ID3D11DepthStencilState> depth, noDepth;
+        ComPtr<ID3D11RasterizerState> raster;
+        ComPtr<ID3D11Buffer> cb;
+        ComPtr<ID3D11DeviceContext> deferred;
+        ID3D11Resource* depthFor = nullptr;  // the game's depth target the view below reads (raw, compared only)
+        ComPtr<ID3D11ShaderResourceView> depthSrv;
+        bool depthMs = false;
+        struct Copy {
+            ComPtr<ID3D11Texture2D> texture;
+            ComPtr<ID3D11RenderTargetView> rtv;
+            ComPtr<ID3D11ShaderResourceView> srv;
+            unsigned w = 0, h = 0;
+            bool valid = false;  // copied at least once
+            // The road beneath each texel (R32F, the copy's size), each column's sums, the road's centre (1 float, kept
+            // from pass to pass: smoothed).
+            ComPtr<ID3D11Texture2D> ground;
+            ComPtr<ID3D11UnorderedAccessView> groundUav, sumsUav, centreUav, roadUav;
+            ComPtr<ID3D11ShaderResourceView> groundSrv, centreSrv, roadSrv;
+            ComPtr<ID3D11Texture2D> road;  // the grid's road texels (RGBA32F: height, centre share, area)
+            // The margin map (R16F, the copy's size): how far inside the corridor each texel's point lies.
+            ComPtr<ID3D11Texture2D> marginMap;
+            ComPtr<ID3D11UnorderedAccessView> marginUav;
+            ComPtr<ID3D11ShaderResourceView> marginSrv;
+            // The corridor's rows (margin_main's u5: the height less the top row, the bottom row + 1), copied to a
+            // ring of staging buffers read a frame or two later (never waited for).
+            ComPtr<ID3D11Buffer> rows, rowsRead[3];
+            ComPtr<ID3D11UnorderedAccessView> rowsUav;
+            uint64_t rowsWritten[3] = {};  // the serial each holds (0: none waiting)
+            uint64_t rowsSerial = 0;
+            unsigned rowsTop = 0, rowsBottom = 0;  // the newest read: the corridor's rows [top, bottom) of the copy
+            bool rowsHave = false;
+            // The fill's: the eye's colour over the box (the copy's size); the mask's stamps (R32_UINT, the focus
+            // viewport's size: fw x fh).
+            ComPtr<ID3D11Texture2D> colour, stamps;
+            ComPtr<ID3D11RenderTargetView> colourRtv;
+            ComPtr<ID3D11ShaderResourceView> colourSrv, stampsSrv;
+            ComPtr<ID3D11UnorderedAccessView> stampsUav;
+            unsigned fw = 0, fh = 0;
+            unsigned colourW = 0, colourH = 0;  // the colour copy's size: the box's own texels in the eye
+            unsigned gw = 0, gh = 0;       // the road grid: half the copy each way, rounded up
+            ComPtr<ID3D11Buffer> sums, centre;
+            bool groundValid = false;
+        } copy[2];
+        float copyBox[2][4] = {};  // each pass's box region as last copied (texels: x0, y0, width, height)
+        bool copiedThisPass[2] = {}, done[2] = {};
+        bool failed = false, unreadableLogged = false;
+        uint64_t geometrySaid[2] = {};  // passes since each pass's geometry line (logged every kCorridorSayEvery)
+    } corridor;
     MvrPassStats stats;
     // No destructor gives the held game objects back: g lives until the process ends, and calling into d3d11 from
     // DLL_PROCESS_DETACH risks its locks (held by threads ExitProcess already ended); the references go with the process.

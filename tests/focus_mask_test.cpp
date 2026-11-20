@@ -2,7 +2,9 @@
 // margin outside the focus area's shape (so no texel the compositor shows, nor one next to it, is masked), and nearly
 // all of those; the plain box and a margin past the rounding mask nothing; focus_area_inside agrees with the shader's
 // measure at known points.
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <cstdio>
 #include <vector>
 
@@ -174,6 +176,43 @@ int SIM_QVFR_TEST_MAIN() {
     r50tall.radius = 0.5f;
     r50tall.aspect = 0.8f;
     check_shape("rounded 50%, tall box", r50tall, margin, 0.035, 0.045);
+
+    // Native quad views: a box larger than the runtime's focus region (shown over 15-85% x 10-90% of it): the plain box
+    // masks the rest, past the margin, and nothing inside it; with the cockpit outline, both together.
+    {
+        FocusArea clipped;
+        clipped.visible[0] = 0.15f, clipped.visible[1] = 0.10f, clipped.visible[2] = 0.85f, clipped.visible[3] = 0.90f;
+        const std::vector<float> mesh = focus_mask_mesh(clipped, margin);
+        int wrong = 0, missed = 0, eligible = 0, covered = 0;
+        constexpr int kGrid = 400;
+        for (int y = 0; y < kGrid; ++y)
+            for (int x = 0; x < kGrid; ++x) {
+                const double fx = (x + 0.5) / kGrid, fy = (y + 0.5) / kGrid;
+                bool in = false;
+                for (size_t t = 0; t < mesh.size() / 6 && !in; ++t)
+                    in = in_triangle(2 * fx - 1, 1 - 2 * fy, &mesh[6 * t]);
+                const bool shown = fx >= 0.15 - margin && fx <= 0.85 + margin && fy >= 0.10 - margin && fy <= 0.90 + margin;
+                const bool unseen = fx < 0.15 - margin - 0.01 || fx > 0.85 + margin + 0.01 || fy < 0.10 - margin - 0.01 ||
+                                    fy > 0.90 + margin + 0.01;
+                covered += in ? 1 : 0;
+                wrong += in && shown ? 1 : 0;
+                eligible += unseen ? 1 : 0;
+                missed += unseen && !in ? 1 : 0;
+            }
+        std::printf("clipped box: %zu triangles, %.1f%% covered, %d of %d unseen points missed, %d shown points masked\n",
+                    mesh.size() / 6, 100.0 * covered / (kGrid * kGrid), missed, eligible, wrong);
+        expect(!mesh.empty() && wrong == 0 && missed == 0 && eligible > 0,
+               "clipped box: what the runtime never shows is masked (past the margin), nothing it shows");
+        const double share = focus_mask_share(clipped, 1000, 1000, 16);
+        expect(share > 0.38 && share < 0.46, "clipped box: its share counted (about 42% of the box: 70% x 80% shown)");
+        FocusArea cockpit = focus_area_points({{-34, 50}, {34, 50}, {50, 9}, {21, 15}, {5, 14}, {4, -5}, {5, -25},
+                                               {-50, -25}, {-50, -10}});
+        const double alone = focus_mask_share(cockpit, 1000, 1000, 16);
+        std::copy(std::begin(clipped.visible), std::end(clipped.visible), cockpit.visible);
+        const double both = focus_mask_share(cockpit, 1000, 1000, 16);
+        std::printf("cockpit outline: %.1f%% masked, %.1f%% with the runtime's region too\n", alone * 100, both * 100);
+        expect(both > alone + 0.05, "cockpit outline clipped: the runtime's region adds to its mask");
+    }
 
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;

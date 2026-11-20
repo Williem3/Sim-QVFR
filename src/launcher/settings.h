@@ -18,6 +18,7 @@
 #include "../profile/profiles.h"
 #include "../quad/color_grade.h"
 #include "../quad/car_lighting.h"
+#include "../quad/road_focus_shape.h"
 #include "../quad/focus_offset.h"
 #include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
@@ -65,6 +66,12 @@ struct Settings {
     // the focus views skip their pixels outside the shape; the readouts leave them out. Read only (the ini's own).
     bool focusMask = kFocusMask.def != 0;
     int focusMaskMargin = kFocusMaskMargin.def;
+    // [quad] focus_corridor (a game with GameFeatures::focusCorridor: LMU): road focus, with fixed foveation. Live.
+    bool corridor = kFocusCorridor.def != 0;
+    // The player's own focus shape and size while Road focus's cockpit shape is set ([quad] road_focus_saved...).
+    RoadFocusSaved roadSaved;
+    int corridorWidth = kFocusCorridorWidth.def;  // [quad] focus_corridor_width, metres either side of the road
+    int corridorHeight = kFocusCorridorHeight.def;  // [quad] focus_corridor_height, tenths of a metre above it
     FocusOffset offset;       // [quad] fixed/gaze_offset_y, _x: the focus region's offset, degrees up and right
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
@@ -132,7 +139,8 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
     kColorContrastRange = range_of(kColorContrast), kColorSaturationRange = range_of(kColorSaturation),
     kCarFillRange = range_of(kCarLightFill), kCarOcclusionRange = range_of(kCarLightOcclusion),
     kCarHighlightsRange = range_of(kCarLightHighlights), kCarGlossRange = range_of(kCarLightGloss),
-    kCarSmoothRange = range_of(kCarLightSmooth),
+    kCarSmoothRange = range_of(kCarLightSmooth), kCorridorWidthRange = range_of(kFocusCorridorWidth),
+    kCorridorHeightRange = range_of(kFocusCorridorHeight),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusPointRange{-kFocusPointReach, kFocusPointReach};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its

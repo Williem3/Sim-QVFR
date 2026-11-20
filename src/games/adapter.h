@@ -139,6 +139,18 @@ public:
         (void)area;
         (void)marginTexels;
     }
+    // Road focus ([quad] focus_corridor; GameFeatures::focusCorridor), at launch and live: the focus views kept to a
+    // corridor along the road (widthM metres either side of its centre: focus_corridor_width; heightDm tenths of a metre
+    // above it: focus_corridor_height) and the player's car. `on`
+    // is the player's switch with fixed foveation (the layer passes off while eye tracking is on).
+    // The part of the focus box the headset shows (shares of the box: left, top, right, bottom; all of it: 0 0 1 1), live:
+    // under native quad views the runtime's own focus region. A game that masks its focus views skips the rest too.
+    virtual void qvfr_set_focus_visible(const float (&visible)[4]) { (void)visible; }
+    virtual void qvfr_set_focus_corridor(bool on, int widthM, int heightDm) {
+        (void)on;
+        (void)widthM;
+        (void)heightDm;
+    }
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
     // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
     virtual void qvfr_set_object_detail(int percent) { (void)percent; }

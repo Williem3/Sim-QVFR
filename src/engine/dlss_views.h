@@ -141,6 +141,22 @@ struct DlssPass {
     // glass, not the glass); without, it is only measured (DlssRun::depthMeasure; an A/B's other side).
     bool depthCopied = false;
     bool depthCopyRead = true;
+    // DLAA on the focus view over a band of its rows alone (focusBandHeight rows from focusBandTop; 0: all of it), a
+    // feature of its own at that size; the rows outside it take the eye's image as DLSS made it, resampled (a game that
+    // draws only part of its focus view at full quality: LMU's corridor). DLAA alone (not super resolution), NGX alone.
+    // The band may move from frame to frame (its vectors carry the move); its height should hold (a new height makes
+    // its feature again).
+    unsigned focusBandTop = 0, focusBandHeight = 0;
+    // What of the focus view the game drew at full quality (LMU's corridor; null: all of it): after DLSS, the rest
+    // takes the eye's image as DLSS made it, so what the game filled in from the eye before DLSS (its raw, jittered
+    // image) never reaches the headset. focusKeep: a texture over the focus view (its texel nearest each pixel) whose
+    // value above 0 is kept, blended to the eye's image across focusKeepFeather of its units (0: a hard edge);
+    // focusStamps: a uint texture the focus view's size whose texels equal to focusStamp take the eye's image too.
+    ID3D11ShaderResourceView* focusKeep = nullptr;
+    unsigned focusKeepWidth = 0, focusKeepHeight = 0;
+    float focusKeepFeather = 0;
+    ID3D11ShaderResourceView* focusStamps = nullptr;
+    uint32_t focusStamp = 0;
 };
 // Transparents that write depth (LMU's car glass: blended, depth written): through them DLSS would see the glass's
 // distance for the world behind it, and every pixel there would get the vector of a point half a metre away (the road

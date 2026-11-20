@@ -100,4 +100,12 @@ void fixation_frame_end() {
 
 double fixation_m() { return tracker.metres(); }  // 0 once stopped
 
+bool fixation_depth_terms(double& a, double& b) {
+    if (!started || !haveTerms)
+        return false;
+    a = terms[0];
+    b = terms[1];
+    return true;
+}
+
 }  // namespace lmu

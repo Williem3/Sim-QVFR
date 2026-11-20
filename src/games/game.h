@@ -45,6 +45,10 @@ struct GameFeatures {
     // game's scene (lacquer highlights from the floodlights, ambient occlusion, the game's flat light scaled), switched on
     // at launch, its values live. Offered in the headset menu only with this.
     bool carLighting = false;
+    // Road focus ([quad] focus_corridor and focus_corridor_width, live; GameAdapter::qvfr_set_focus_corridor): the focus
+    // views render only a corridor along the road ahead and the player's car, with fixed foveation. Offered in the
+    // launcher and the headset menu only with this (and fixed foveation).
+    bool focusCorridor = false;
 };
 
 struct GameInfo {

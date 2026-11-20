@@ -595,6 +595,11 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
         dp.focusRenderWidth = g.view.focusRenderW;
         dp.focusRenderHeight = g.view.focusRenderH;
         std::memcpy(dp.remap, g.view.remap, sizeof(dp.remap));
+        // DLSS over the corridor's rows alone (mvr_corridor_band).
+        if (dp.focus && !corridor_band(context, g.pass, g.view.focusH, dp.focusBandTop, dp.focusBandHeight))
+            dp.focusBandTop = dp.focusBandHeight = 0;
+        if (dp.focus)  // and what's outside the corridor from the eye's finished image, after DLSS
+            corridor_keep(g.pass, dp);
         dp.depthCopied = g.glass.copied;  // DLSS's depth before the transparents (mvr_pass_glass.h)
         dp.depthCopyRead = g.glass.read;
         if (slotsDrawn && g.slotsLevel >= 2 && g.slotSrv && g.motionSrv) {  // DLSS's vectors take the parts' motion

@@ -67,6 +67,9 @@ bool mvr_pass_install(ID3D11Device* device) {
         for (auto& pass : f.stamp)
             for (auto& q : pass)
                 device->CreateQuery(&tq, &q);
+        for (auto& pass : f.corridor)
+            for (auto& q : pass)
+                device->CreateQuery(&tq, &q);
     }
     if (!simqvfr::minhook_ready(nullptr))  // no line here, as before
         return false;
@@ -181,6 +184,10 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         if (dsv)
             dsv->GetResource(&depthTarget);
         g.mask.sceneDepth[pass] = depthTarget.Get();
+        g.corridor.done[pass] = false;  // the focus corridor: its mask and its copy once each this pass
+        g.corridor.copiedThisPass[pass] = false;
+        g.corridor.maskedThisPass[pass] = false;
+        g.corridor.filledThisPass[pass] = false;
         // DLSS's depth before the transparents: none copied yet; the scene's depth as bound now.
         auto& gl = g.glass;
         gl.copies = 0;
@@ -235,6 +242,9 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         g.gpuSlot = -1;
         if (!f.pending && f.disjoint) {
             for (auto& p : f.stamped)
+                for (bool& s : p)
+                    s = false;
+            for (auto& p : f.corridorStamped)
                 for (bool& s : p)
                     s = false;
             f.mode = g.mode;
@@ -522,6 +532,62 @@ void mvr_mask_stale(const std::atomic<bool>* stale) { g.maskStale = stale; }
 
 void mvr_mask_ab_drop(bool drop) { g.maskAbDrop = drop; }
 
+void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, float farM, float eyeHeightM, bool show,
+                  float roadSlopeDeg, float centreReachM, float featherM) {
+    auto& c = g.corridor;
+    if (show && !c.show)
+        simqvfr::log_line("lmu mvr: corridor show mode: what lies outside the corridor tinted blue in the focus views");
+    c.show = show;
+    if (!on && c.on)
+        simqvfr::log_line("lmu mvr: corridor off: the focus views render all of their box");
+    if (on && !c.on)
+        simqvfr::logf("lmu mvr: corridor on: the focus views render only what lies within %.1f m either side of the road's "
+                      "centre, up to %.1f m above the road beneath it, %.1f m%s ahead (the eye %.2f m above the road); the "
+                      "rest of each focus view filled with the eye's view (show mode: tinted instead, nothing skipped)",
+                      halfM, tallM, startM, farM > 0 ? (" to " + std::to_string(static_cast<int>(farM)) + " m").c_str()
+                                                      : " and further",
+                      eyeHeightM);
+    c.on = on;
+    c.abOff = off;
+    c.halfM = halfM;
+    c.tallM = tallM;
+    c.startM = startM;
+    c.farM = farM;
+    c.eyeHeightM = eyeHeightM;
+    c.roadSlopeDeg = roadSlopeDeg;
+    c.centreReachM = centreReachM;
+    c.featherM = featherM;
+}
+
+void mvr_corridor_band(int pct, int padPct) {
+    auto& c = g.corridor;
+    if (pct > 0 && c.bandPct <= 0)
+        simqvfr::logf("lmu mvr: corridor DLSS band: DLAA on %d%% of each focus view's rows, over the corridor's (%d%% kept "
+                      "about them); the other rows the eye's image",
+                      pct, padPct);
+    if (pct <= 0 && c.bandPct > 0)
+        simqvfr::log_line("lmu mvr: corridor DLSS band off: DLAA over the whole focus view");
+    c.bandPct = std::clamp(pct, 0, 100);
+    c.bandPadPct = std::clamp(padPct, 0, 50);
+}
+
+void mvr_corridor_spread(float degrees) {
+    auto& c = g.corridor;
+    const float d = std::clamp(degrees, 0.0f, 60.0f);
+    if (d != c.spreadDeg)
+        simqvfr::logf("lmu mvr: corridor: widening %.0f degrees either side with distance", d);
+    c.spreadDeg = d;
+}
+
+void mvr_corridor_car(float metres) {
+    auto& c = g.corridor;
+    const float m = (std::max)(0.0f, metres);
+    if (m != c.carM)
+        simqvfr::logf("lmu mvr: corridor: the car kept sharp: %s", m > 0 ? ("whatever lies within " +
+                      std::to_string(static_cast<int>(m * 100)) + " cm").c_str() : "no, from the eye's image");
+    c.carM = m;
+}
+
 void mvr_glass_depth(int mode) {
     if (!g.context)  // before the install only: its hooks are chosen there
         g.glass.mode = mode > 0 ? 1 : 0;
@@ -531,7 +597,7 @@ void mvr_glass_read(bool read) { g.glass.read = read; }
 
 void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
     auto& m = g.mask;
-    const bool shape = area.outline() || area.radius > 0;
+    const bool shape = area.outline() || area.radius > 0 || area.clipped();
     if (m.on != (on && shape) || m.margin != marginTexels) {  // (a new shape logs its mesh as it's made)
         if (on && shape)
             simqvfr::logf("lmu mvr: focus mask on: the focus views' texels %u past the focus shape skip the scene%s",

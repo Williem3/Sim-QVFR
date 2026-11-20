@@ -1501,6 +1501,92 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "[dlss_nr]: the menu's values read what the page wrote");
         DeleteFileW(ini.c_str());
     }
+    {  // Road focus ([quad] focus_corridor): the Foveation page's switch for a game with it, fixed foveation only
+        SettingsMenu r;
+        r.launch = {true, 50, 39, 39};
+        r.values.eyeTracking = false;
+        go(r, MenuPage::Foveation);
+        check(!has(r, MenuItem::FocusCorridor), "road focus: not on the Foveation page of a game without it");
+        r.launch.focusCorridor = true;
+        check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
+                  at(r, MenuItem::FocusCorridorWidth) + 1 == at(r, MenuItem::FocusCorridorHeight) &&
+                  at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::Outline) &&
+                  line_of(r, MenuItem::FocusCorridorHeight).label == L"Road height" &&
+                  line_of(r, MenuItem::FocusCorridorHeight).value == L"3.5 m" &&
+                  line_of(r, MenuItem::FocusCorridor).label == L"Road focus" &&
+                  line_of(r, MenuItem::FocusCorridor).value == L"On" &&
+                  line_of(r, MenuItem::FocusCorridorWidth).label == L"Road width" &&
+                  line_of(r, MenuItem::FocusCorridorWidth).value == L"10 m",
+              "road focus: on by default, its width (10 m) and height (3.5 m) under it, before the outline");
+        r.launch.ownDlss = true;
+        r.values.dlss.on = true;
+        check(at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::Outline),
+              "road focus: no DLSS band line, with Sim-QVFR's DLSS on too");
+        r.values.eyeTracking = true;
+        check(!has(r, MenuItem::FocusCorridor) && !has(r, MenuItem::FocusCorridorWidth),
+              "road focus: hidden while the focus follows the eyes");
+        r.values.eyeTracking = false;
+        pick(r, MenuItem::FocusCorridorWidth);
+        for (int i = 0; i < 20; ++i)
+            menu_key(r, MenuKey::Right);
+        check(r.values.focusCorridorWidth == 20 && !menu_key(r, MenuKey::Right), "road width: up to 20 m, a metre a step");
+        for (int i = 0; i < 20; ++i)
+            menu_key(r, MenuKey::Left);
+        check(r.values.focusCorridorWidth == 5, "road width: down to 5 m");
+        pick(r, MenuItem::FocusCorridorHeight);
+        menu_key(r, MenuKey::Right);
+        check(r.values.focusCorridorHeight == 40 && line_of(r, MenuItem::FocusCorridorHeight).value == L"4.0 m",
+              "road height: half a metre a step");
+        for (int i = 0; i < 20; ++i)
+            menu_key(r, MenuKey::Left);
+        check(r.values.focusCorridorHeight == 20, "road height: down to 2 m");
+        pick(r, MenuItem::FocusCorridor);
+        check(menu_key(r, MenuKey::Right) && !r.values.focusCorridor && !has(r, MenuItem::FocusCorridorWidth) &&
+                  !has(r, MenuItem::FocusCorridorHeight),
+              "road focus: off, its width and height hidden");
+        {  // On: the cockpit's shape and size, the player's kept; off: theirs back.
+            const FocusShape own = focus_shape_of({{-50, 40}, {50, 40}, {40, -50}, {-40, -50}});
+            r.values.shape = own;
+            r.values.width = 44;
+            r.values.height = 38;
+            pick(r, MenuItem::FocusCorridor);
+            menu_key(r, MenuKey::Right);
+            check(r.values.focusCorridor && r.values.shape == road_focus_cockpit_shape() &&
+                      r.values.width == kRoadFocusCockpitWidth && r.values.height == kRoadFocusCockpitHeight &&
+                      r.values.roadSaved.have && r.values.roadSaved.shape == own && r.values.roadSaved.width == 44,
+                  "road focus on: the cockpit shape at its size, the player's own kept");
+            const std::wstring savedIni = temp_path(L"simqvfr-menu-road-saved.ini");
+            DeleteFileW(savedIni.c_str());
+            write_menu_values(savedIni.c_str(), r.values, true, false, false, false, false, false, true);
+            check(read_menu_values(savedIni.c_str()).roadSaved == r.values.roadSaved,
+                  "road focus: the player's own shape and size kept in the ini");
+            DeleteFileW(savedIni.c_str());
+            pick(r, MenuItem::FocusCorridor);
+            menu_key(r, MenuKey::Right);
+            check(!r.values.focusCorridor && r.values.shape == own && r.values.width == 44 && r.values.height == 38 &&
+                      !r.values.roadSaved.have,
+                  "road focus off: the player's own shape and size back");
+            r.launch.runtimeFocusWidth = 46;  // native quad views: the runtime's focus region
+            r.launch.runtimeFocusHeight = 52;
+            pick(r, MenuItem::FocusCorridor);
+            menu_key(r, MenuKey::Right);
+            check(r.values.width == 46 && r.values.height == 52 && r.values.shape == road_focus_cockpit_shape(),
+                  "road focus on under native quad views: the cockpit shape no larger than the runtime's focus region");
+            pick(r, MenuItem::FocusCorridor);
+            menu_key(r, MenuKey::Right);
+        }
+        const std::wstring ini = temp_path(L"simqvfr-menu-corridor.ini");
+        DeleteFileW(ini.c_str());
+        write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, false);
+        check(GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == -1,
+              "road focus: not written for a game without it");
+        write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, true);
+        const MenuValues back = read_menu_values(ini.c_str());
+        check(!back.focusCorridor && back.focusCorridorWidth == 5 && back.focusCorridorHeight == 20 &&
+                  GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == 0,
+              "road focus: written for a game with it, and read back");
+        DeleteFileW(ini.c_str());
+    }
 
     return test_result();
 }

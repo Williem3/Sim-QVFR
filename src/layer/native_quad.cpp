@@ -72,6 +72,9 @@ void note_regions(XrTime time, const XrView (&four)[kQuadViews]) {
         wchar_t value[32];
         std::swprintf(value, std::size(value), L"%.0fx%.0f", share[0][0] * 100, share[0][1] * 100);
         runtime_info(L"quad_runtime_focus", value);
+        nativeQuad.regionShareX = share[0][0];
+        nativeQuad.regionShareY = share[0][1];
+        native_quad_focus_visible();  // the box past the region: never shown, the game's mask skips it
     }
 }
 
@@ -340,6 +343,24 @@ QuadOffer extension_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow, c
         if (std::strcmp(p.extensionName, name) == 0)
             return QuadOffer::Yes;
     return QuadOffer::No;
+}
+
+void native_quad_focus_visible() {
+    float visible[4] = {0, 0, 1, 1};
+    const float rx = nativeQuad.regionShareX, ry = nativeQuad.regionShareY;
+    // Fixed foveation: the box centred in the runtime's region (eye tracked, both move: not known here, all of it kept).
+    if (nativeQuad.active && !experiment.gaze && rx > 0 && ry > 0) {
+        const double bx = experiment.box_x(), by = experiment.box_y();
+        if (bx > rx) {
+            visible[0] = static_cast<float>(0.5 - rx / (2 * bx));
+            visible[2] = static_cast<float>(0.5 + rx / (2 * bx));
+        }
+        if (by > ry) {
+            visible[1] = static_cast<float>(0.5 - ry / (2 * by));
+            visible[3] = static_cast<float>(0.5 + ry / (2 * by));
+        }
+    }
+    game->qvfr_set_focus_visible(visible);
 }
 
 void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa) {

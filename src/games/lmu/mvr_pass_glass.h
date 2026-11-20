@@ -20,6 +20,10 @@ void glass_before_draw(ID3D11DeviceContext* context) {
         return;
     }
     ++g.stats.glassBlendedWriters;
+    // The focus corridor's copy of the eye's opaque depth and its road (once a pass); none on the A/B's side without the
+    // corridor (its whole cost left out), but for show mode, which never masks.
+    if (g.corridor.on && (!g.corridor.abOff || g.corridor.show) && gl.opaqueSince && gl.dsv)
+        corridor_copy(context, gl.dsv);
     if (g.pass == 0 && gl.opaqueSince && gl.dsv && !gl.copies && g.view.box.valid) {
         // The focus boxes' convergence reads the depth here too, before the glass (fixation.h), DLSS on or off.
         const bool was = g.replaying;

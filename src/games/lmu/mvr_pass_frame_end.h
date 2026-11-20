@@ -319,6 +319,30 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.focusMaskAbSkipped),
                           static_cast<unsigned long long>(s.focusMaskOtherTest),
                           static_cast<unsigned long long>(s.focusMaskEmpty));
+        if (g.corridor.on || s.corridorDraws || s.corridorCopies)
+            simqvfr::logf("lmu mvr: corridor: drawn in %llu eye passes, %llu copies of the eye's depth, left out of %llu "
+                          "for the A/B, %llu without its input (no copy yet, no depth terms or an unknown depth test), "
+                          "%llu with the world's up unknown (level), %llu tinted (show mode), %llu road passes, %llu "
+                          "fills (%llu refused)",
+                          static_cast<unsigned long long>(s.corridorDraws),
+                          static_cast<unsigned long long>(s.corridorCopies),
+                          static_cast<unsigned long long>(s.corridorAbSkipped),
+                          static_cast<unsigned long long>(s.corridorNoInput),
+                          static_cast<unsigned long long>(s.corridorLevelUp),
+                          static_cast<unsigned long long>(s.corridorTints),
+                          static_cast<unsigned long long>(s.corridorGrounds),
+                          static_cast<unsigned long long>(s.corridorFills),
+                          static_cast<unsigned long long>(s.corridorFillRefused));
+        if (g.corridor.bands) {
+            auto& c = g.corridor;
+            simqvfr::logf("lmu mvr: corridor DLSS band: %llu focus views over %d%% of their rows; the corridor's rows (with "
+                          "%d%% about them) %.0f%% of the view on average, taller than the band in %llu, none in view in %llu",
+                          static_cast<unsigned long long>(c.bands), c.bandPct, c.bandPadPct,
+                          c.bands > c.bandsNoRows ? 100.0 * c.bandNeeded / static_cast<double>(c.bands - c.bandsNoRows) : 0.0,
+                          static_cast<unsigned long long>(c.bandsClipped), static_cast<unsigned long long>(c.bandsNoRows));
+            c.bands = c.bandsClipped = c.bandsNoRows = 0;
+            c.bandNeeded = 0;
+        }
         if (s.maskDraws || s.maskDropped || s.maskAbDropped || s.panelReplays || s.uiMipFrames)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale, %llu on the "
                           "A/B's side without it; VR UI panel draws replayed at the menus' native size: %llu; frames whose "
@@ -377,6 +401,41 @@ void mvr_frame_end(unsigned long long frame) {
             for (int p = 0; p < 4; ++p) {
                 g.sceneMs[m][p] = g.postMs[m][p] = 0;
                 g.gpuCounts[m][p] = 0;
+            }
+            // The focus corridor's own work on this side, per eye pass (the scene's time above includes it).
+            const unsigned (&cn)[2][4] = g.corridorCounts[m];
+            if (cn[0][0] || cn[1][0] || cn[0][2] || cn[1][2]) {
+                const double (&cm)[2][4] = g.corridorMs[m];
+                const auto cavg = [&](int p, int k) { return cn[p][k] ? cm[p][k] / cn[p][k] : 0.0; };
+                simqvfr::logf("lmu mvr: corridor GPU%s: pass 0 depth copy %.3f, road pass %.3f, mask %.3f, fill %.3f ms; pass 1 "
+                              "%.3f, %.3f, %.3f, %.3f ms; %.3f ms a frame in all (%u / %u frames with the copy, %u / %u "
+                              "with the mask, %u / %u with the fill)",
+                              m ? " on the A/B's other side" : "", cavg(0, 0), cavg(0, 1), cavg(0, 2), cavg(0, 3),
+                              cavg(1, 0), cavg(1, 1), cavg(1, 2), cavg(1, 3),
+                              cavg(0, 0) + cavg(0, 1) + cavg(0, 2) + cavg(0, 3) + cavg(1, 0) + cavg(1, 1) + cavg(1, 2) +
+                                  cavg(1, 3),
+                              cn[0][0], cn[1][0], cn[0][2], cn[1][2], cn[0][3], cn[1][3]);
+                const unsigned (&fn)[2][5] = g.fillCounts[m];
+                const double (&fm)[2][5] = g.fillMs[m];
+                const auto favg = [&](int p, int k) { return fn[p][k] ? fm[p][k] / fn[p][k] : 0.0; };
+                if (fn[0][1] || fn[1][1])
+                    simqvfr::logf("lmu mvr: corridor fill GPU%s: pass 0 list entry %.3f, colour copy %.3f, outside draw "
+                                  "%.3f, edge draw %.3f, list exit %.3f ms; pass 1 %.3f, %.3f, %.3f, %.3f, %.3f ms (%u / %u "
+                                  "frames)",
+                                  m ? " on the A/B's other side" : "", favg(0, 0), favg(0, 1), favg(0, 2), favg(0, 3),
+                                  favg(0, 4), favg(1, 0), favg(1, 1), favg(1, 2), favg(1, 3), favg(1, 4), fn[0][1], fn[1][1]);
+                for (auto& pass : g.fillMs[m])
+                    for (double& v : pass)
+                        v = 0;
+                for (auto& pass : g.fillCounts[m])
+                    for (unsigned& v : pass)
+                        v = 0;
+                for (auto& pass : g.corridorMs[m])
+                    for (double& v : pass)
+                        v = 0;
+                for (auto& pass : g.corridorCounts[m])
+                    for (unsigned& v : pass)
+                        v = 0;
             }
         }
     }

@@ -486,6 +486,13 @@ target_compile_definitions(lmu_car_slot_test PRIVATE UNICODE _UNICODE WIN32_LEAN
 target_compile_options(lmu_car_slot_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_car_slot_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
+# The focus corridor's shaders (lmu_corridor_ab) on a WARP device (tests/lmu_corridor_test.cpp).
+sim_qvfr_test(lmu_corridor_test tests/lmu_corridor_test.cpp)
+target_include_directories(lmu_corridor_test PRIVATE src)
+target_compile_definitions(lmu_corridor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_corridor_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_corridor_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
 # The car slots in the eye passes on a WARP device (tests/lmu_car_slots_pass_test.cpp): target, twins, blend states.
 sim_qvfr_test(lmu_car_slots_pass_test tests/lmu_car_slots_pass_test.cpp)
 target_include_directories(lmu_car_slots_pass_test PRIVATE src)

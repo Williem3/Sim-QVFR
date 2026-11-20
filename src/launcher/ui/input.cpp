@@ -370,6 +370,19 @@ void activate(Ctl id, int option) {
     case kCheekyMotionFix: app.s.cheeky.motionFix = !app.s.cheeky.motionFix; changed(); return;
     case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
     case kOutline: app.s.outline = !app.s.outline; changed(); return;
+    case kCorridorOn:
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+            // On: the cockpit's shape and size (the player's kept); off: the player's back (road_focus_shape.h).
+            // Under native quad views (the last session's), no larger than the runtime's focus region (rounded, a
+            // point under it: inside it).
+            const RuntimeInfo& rt = app.runtime;
+            const bool region = rt.quadViewsUsed && rt.quadFocusWidth > 1 && rt.quadFocusHeight > 1;
+            road_focus_switched(!app.s.corridor, app.s.shape, app.s.width, app.s.height, app.s.roadSaved,
+                                region ? rt.quadFocusWidth - 1 : 0, region ? rt.quadFocusHeight - 1 : 0);
+            app.s.corridor = !app.s.corridor;
+            changed();
+        }
+        return;
     case kGradeOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
@@ -501,6 +514,7 @@ bool space_control(Ctl id) {
     case kMethod:
     case kMode:
     case kOutline:
+    case kCorridorOn:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:

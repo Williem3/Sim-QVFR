@@ -62,6 +62,11 @@ public:
                                                                    simqvfr::ini_int(s.ini, simqvfr::kCornerRadiusPercent));
             qvfr_set_focus_mask_now(simqvfr::ini_flag(s.ini, simqvfr::kFocusMask), area,
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusMaskMargin));
+            // Road focus at launch, fixed foveation only (live from then on: qvfr_set_focus_corridor).
+            qvfr_frame_set_corridor(simqvfr::ini_flag(s.ini, simqvfr::kFocusCorridor) &&
+                                        !simqvfr::ini_flag(s.ini, simqvfr::kGaze),
+                                    simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorWidth),
+                                    simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorHeight));
         }
         // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (qvfr_frame.h).
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
@@ -122,6 +127,30 @@ public:
                 run.maskAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mask_ab", 0,
                                                                                     s.ini)));
                 run.mvrTiming = run.mvrTiming || run.maskAb > 0;
+                // lmu_corridor_ab=N: N frames with the focus views kept to a corridor ahead, N without (qvfr_frame.h).
+                const auto key = [&s](const wchar_t* name, int def) {
+                    return !s.ini ? def : static_cast<int>(GetPrivateProfileIntW(L"experiment", name, def, s.ini));
+                };
+                run.corridorAb = (std::max)(0, key(L"lmu_corridor_ab", 0));
+                // Missing: the player's [quad] focus_corridor_width (live).
+                const int halfCm = key(L"lmu_corridor_half_cm", -1);
+                run.corridorHalfM = halfCm < 0 ? 0.0f : (std::max)(50, halfCm) / 100.0f;
+                // Missing: the player's [quad] focus_corridor_height (live).
+                const int tallCm = key(L"lmu_corridor_tall_cm", -1);
+                run.corridorTallM = tallCm < 0 ? 0.0f : (std::max)(50, tallCm) / 100.0f;
+                run.corridorStartM = (std::max)(0, key(L"lmu_corridor_start_cm", 300)) / 100.0f;
+                run.corridorFarM = static_cast<float>((std::max)(0, key(L"lmu_corridor_far_m", 0)));
+                run.corridorEyeHeightM = (std::max)(30, key(L"lmu_corridor_eye_height_cm", 130)) / 100.0f;
+                run.corridorShow = key(L"lmu_corridor_show", 0) != 0;
+                run.corridorOn = key(L"lmu_corridor", 0) != 0;
+                run.corridorFeatherM = (std::max)(0, key(L"lmu_corridor_feather_cm", 100)) / 100.0f;
+                run.corridorBandPct = std::clamp(key(L"lmu_corridor_dlss_band_pct", -1), -1, 100);
+                run.corridorBandPadPct = std::clamp(key(L"lmu_corridor_dlss_band_pad_pct", 6), 0, 50);
+                run.corridorCarCm = std::clamp(key(L"lmu_corridor_car_cm", -1), -1, 1000);
+                run.corridorSpreadDeg = std::clamp(key(L"lmu_corridor_spread_deg", 15), 0, 60);
+                run.corridorSlopeDeg = static_cast<float>(std::clamp(key(L"lmu_corridor_road_slope_deg", 35), 5, 75));
+                run.corridorCentreM = (std::max)(0, key(L"lmu_corridor_centre_cm", 600)) / 100.0f;
+                run.mvrTiming = run.mvrTiming || run.corridorAb > 0;
                 // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
                 run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
                                                                                   s.ini)));
@@ -238,6 +267,14 @@ public:
     void qvfr_set_focus_mask(bool on, const simqvfr::FocusArea& area, int marginTexels) override {
         if (qvfr_)
             qvfr_set_focus_mask_now(on, area, marginTexels);
+    }
+    void qvfr_set_focus_visible(const float (&visible)[4]) override {
+        if (qvfr_)
+            qvfr_frame_set_focus_visible(visible);
+    }
+    void qvfr_set_focus_corridor(bool on, int widthM, int heightDm) override {
+        if (qvfr_)
+            qvfr_frame_set_corridor(on, widthM, heightDm);
     }
     static void qvfr_set_focus_mask_now(bool on, const simqvfr::FocusArea& area, int marginTexels) {
         qvfr_frame_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);

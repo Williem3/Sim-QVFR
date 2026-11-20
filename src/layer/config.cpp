@@ -88,6 +88,11 @@ LiveSettings read_live(const wchar_t* ini) {
     l.focusQuadDistance = read_focus_quad_distance(ini);
     l.focusMask = ini_flag(ini, kFocusMask);
     l.focusMaskMargin = ini_int(ini, kFocusMaskMargin);
+    if (features.focusCorridor) {
+        l.focusCorridor = ini_flag(ini, kFocusCorridor);
+        l.focusCorridorWidth = ini_int(ini, kFocusCorridorWidth);
+        l.focusCorridorHeight = ini_int(ini, kFocusCorridorHeight);
+    }
     return l;
 }
 
@@ -367,6 +372,8 @@ void load_experiment() {
     // the focus mask at launch (live from then on: live_apply); a game that starts later keeps it until then
     game->qvfr_set_focus_mask(settings.focusMask, focus_area_from(focus_shape_words(settings.shape), settings.cornerRadius),
                               settings.focusMaskMargin);
+    game->qvfr_set_focus_corridor(settings.focusCorridor && !settings.gaze,  // road focus, likewise (fixed foveation)
+                                  settings.focusCorridorWidth, settings.focusCorridorHeight);
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));

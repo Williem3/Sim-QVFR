@@ -25,7 +25,11 @@ struct FocusArea {
     int points = 0;
     float radius = 0;
     float aspect = 1;
+    // The part of the box the headset shows (shares of the box: left, top, right, bottom): under native quad views the
+    // runtime's own focus region, where a box larger than it hangs past (its texels never seen); else all of it.
+    float visible[4] = {0, 0, 1, 1};
     bool outline() const { return points >= kFocusPointsMin; }
+    bool clipped() const { return visible[0] > 0 || visible[1] > 0 || visible[2] < 1 || visible[3] < 1; }
     bool operator==(const FocusArea&) const = default;
 };
 
@@ -181,15 +185,20 @@ inline FocusArea focus_area_of(const FocusShape& shape, int cornerRadiusPercent)
 // The share (0..1) of a width x height focus view the mask skips: its texels more than `marginTexels` outside the shape
 // (what the mesh covers; sampled on a grid). The aspect is the view's (square texels). 0 for the plain box.
 inline double focus_mask_share(FocusArea area, unsigned width, unsigned height, unsigned marginTexels) {
-    if (!width || !height || (!area.outline() && area.radius <= 0))
+    if (!width || !height || (!area.outline() && area.radius <= 0 && !area.clipped()))
         return 0;
     area.aspect = static_cast<float>(width) / static_cast<float>(height);
     const double margin = focus_mask_margin(marginTexels, width, height);
     constexpr int kGrid = 64;
     int masked = 0;
+    const bool shape = area.outline() || area.radius > 0;
     for (int y = 0; y < kGrid; ++y)
-        for (int x = 0; x < kGrid; ++x)
-            masked += focus_area_inside(area, (x + 0.5) / kGrid, (y + 0.5) / kGrid) < -margin ? 1 : 0;
+        for (int x = 0; x < kGrid; ++x) {
+            const double fx = (x + 0.5) / kGrid, fy = (y + 0.5) / kGrid;
+            const bool unseen = fx < area.visible[0] - margin || fy < area.visible[1] - margin ||
+                                fx > area.visible[2] + margin || fy > area.visible[3] + margin;
+            masked += unseen || (shape && focus_area_inside(area, fx, fy) < -margin) ? 1 : 0;
+        }
     return static_cast<double>(masked) / (kGrid * kGrid);
 }
 
@@ -205,6 +214,19 @@ inline std::vector<float> focus_mask_mesh(const FocusArea& area, double margin) 
         ok = focus_mask_detail::rounded_mesh(area, margin, ndc);
     if (!ok)
         ndc.clear();
+    if (area.clipped()) {  // what the runtime never shows, `margin` out from it, past the box (the viewport clips)
+        using focus_mask_detail::P;
+        const double l = area.visible[0] - margin, t = area.visible[1] - margin;
+        const double r = area.visible[2] + margin, b = area.visible[3] + margin;
+        if (l > 0)
+            focus_mask_detail::push_quad(ndc, P{-1, -1}, P{l, -1}, P{l, 2}, P{-1, 2});
+        if (r < 1)
+            focus_mask_detail::push_quad(ndc, P{r, -1}, P{2, -1}, P{2, 2}, P{r, 2});
+        if (t > 0)
+            focus_mask_detail::push_quad(ndc, P{l, -1}, P{r, -1}, P{r, t}, P{l, t});
+        if (b < 1)
+            focus_mask_detail::push_quad(ndc, P{l, b}, P{r, b}, P{r, 2}, P{l, 2});
+    }
     return ndc;
 }
 

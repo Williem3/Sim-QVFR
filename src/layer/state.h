@@ -268,6 +268,10 @@ struct LiveSettings {
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
+    // [quad] focus_corridor (a game with GameFeatures::focusCorridor): road focus (applied with fixed foveation only).
+    bool focusCorridor = kFocusCorridor.def != 0;
+    int focusCorridorWidth = kFocusCorridorWidth.def;  // [quad] focus_corridor_width, metres either side
+    int focusCorridorHeight = kFocusCorridorHeight.def;  // [quad] focus_corridor_height, tenths of a metre
     // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames
     // a side), else [cpu] isolate_main_thread (1 on, 0 off).
     int cpuIsolate = 0;
@@ -871,6 +875,8 @@ struct NativeQuad {
     std::atomic<bool> extension = false;  // XR_VARJO_quad_views enabled on the game's instance
     std::atomic<bool> foveated = false;   // XR_VARJO_foveated_rendering too: the runtime moves views 2-3 with the eyes
     std::atomic<bool> active = false;     // this session was begun as PRIMARY_QUAD_VARJO
+    // The runtime's focus region's share of the left eye's tangent span, across and up/down (0: not located yet).
+    std::atomic<float> regionShareX = 0, regionShareY = 0;
     // The gaze as the runtime's foveated rendering has it (foveated): the direction through the middle of its views 2-3
     // in the space and at the time of the last quad xrLocateViews, a fallback for the eye gaze extension (on Pimax's
     // runtime it can give no samples while the runtime's own foveation tracks: 2026-11-09). Under gazeMutex.
