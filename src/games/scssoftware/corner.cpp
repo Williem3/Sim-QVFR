@@ -15,6 +15,7 @@
 #include "../../probe/aftermath.h"
 #include "../../probe/hang_watch.h"
 #include "corner_rules.h"
+#include "fixation.h"
 #include "pass_probe.h"
 
 namespace scs {
@@ -50,6 +51,7 @@ void take_frame_end() {
     g.frameDraw = 0;
     ++g.stats.frames;
     mirror_diag_frame_end();
+    fixation_frame_end();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
@@ -244,6 +246,10 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
                 shoot(g.gbufferTex.Get(), 0, 0, false, false, tag);
             }
             g.gbufferTex.Reset();
+            // The focus boxes' convergence: the left eye's depth read at its box centre before the right eye's pass
+            // clears it (fixation.h).
+            const float centre[2] = {g.box[0][0] + beta_x() / 2, g.box[0][1] + beta_y() / 2};
+            fixation_gbuffer_end(g.context.Get(), centre, g.fx, g.fy, g.eyeW, g.eyeH);
         }
     }
     if (eyeGbuffer && !g.gbufferTex && g.focusPercent) {
@@ -253,6 +259,8 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         ++g.gbufferPasses;
         g.postPhase = false;
         scene_eye();
+        fixation_start(g.device.Get());  // (once a session)
+        fixation_gbuffer_begin(current_eye() == 0 ? dsv : nullptr);
     }
     g.boundMarked = false;
     g.boundSwapchain = false;
@@ -340,6 +348,8 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
             mark(kMarkDraw, (g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));
+        if (g.depthBound && g.fullSize)
+            fixation_scene_draw(g.context.Get());  // now and then its matrix, for the convergence's depth terms
         if (focusDraw) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
@@ -621,6 +631,7 @@ bool session_ending() {
 void release_all() {
     if (g.context)
         two_views(false);
+    fixation_stop();
     gpu_times_reset();
     simqvfr::aftermath::detach();
     if (g.gameVs) {
