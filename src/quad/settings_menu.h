@@ -160,6 +160,8 @@ struct MenuLaunch {
     bool fgPage = true;  // Cheeky's frame generation page (GameFeatures::frameGeneration)
     // The Focus shape page and the optimizer: off for a game whose path has neither (ATS).
     bool shapePage = true, optimize = true;
+    // The sizes follow the corner path's rule (quad/corner_fit.h: the SCS games), not the four views' fit.
+    bool cornerFit = false;
     // Object detail on the settings page (GameFeatures::objectDetail): off unless the layer says the game has it, so
     // no other game ever shows it.
     bool objectDetail = false;
@@ -282,6 +284,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, 
 struct MenuFit {
     bool peripheryCapped = false, focusCapped = false;
     bool peripheryByRoom = false;  // the periphery is held because the focus views use the width
+    bool peripheryRaised = false;  // asked below the path's least periphery (cornerFit): raised to it
     double periphery = 0, focusWidth = 0, focusHeight = 0;  // in effect
     double densityX = 0, densityY = 0;                      // in effect, percent of native
     double wantFocusWidth = 0, wantFocusHeight = 0;         // density x box
