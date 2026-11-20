@@ -282,6 +282,7 @@ void load_experiment() {
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
         experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", api, ini.c_str()) != 0;
         experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
+        experiment.replayFixation = GetPrivateProfileIntW(L"experiment", L"replay_fixation", 1, ini.c_str()) != 0;
         experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
         experiment.replayDiag = experiment.replayDiagMode == 1;
         experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", api, ini.c_str()) != 0;
@@ -380,7 +381,7 @@ void load_experiment() {
         GetPrivateProfileStringW(L"quad", L"converge_m", L"0", text, 32, ini.c_str());
         experiment.convergeM = std::clamp(_wtof(text), 0.0, 1000.0);
     }
-    if (experiment.views4)
+    if (experiment.views4 || experiment.replayCompose || game->wants_gaze())
         logf("experiment: the focus boxes converge %s%s", experiment.views4Converge ? "at the game's fixation distance" : "",
              experiment.convergeM > 0
                  ? (std::string(experiment.views4Converge ? ", else at " : "at ") + std::to_string(experiment.convergeM) +

@@ -66,6 +66,8 @@ public:
         area.radius = area.corners() ? 0.0f : static_cast<float>(cornerRadius);
         simqvfr::replay_probe_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);
     }
+    // How far the eyes look on the API path (replay_fixation.cpp): the layer converges both eyes' focus boxes there.
+    double qvfr_fixation_m() const override { return simqvfr::replay_probe_fixation_m(); }
     bool qvfr_dlss_held() override { return simqvfr::views4_dlss_held(); }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override { simqvfr::views4_target_sizes(render, output); }
     bool qvfr_take_frame(Views4Frame& frame) override { return simqvfr::views4_take_frame(frame); }

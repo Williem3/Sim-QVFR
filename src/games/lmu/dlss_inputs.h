@@ -7,6 +7,9 @@ namespace lmu {
 
 // The engine's matrices callback set to LMU's (simqvfr::dlss_set_matrices), before simqvfr::dlss_start.
 void dlss_use_lmu_inputs();
+// The eye pass's projection as DLSS takes it (the renderer's on a known build, the pass's draws' on any other; the
+// ordinary depth convention, depth terms included), for the focus boxes' convergence (fixation.h). During the pass.
+bool lmu_pass_projection(int eye, float (&projection)[16]);
 
 // Eye pass `eye`'s camera for night car lighting: its view and view x projection (row vectors, reversed depth: as the
 // draws upload them and the depth target holds it, not the eye slot's ordinary projection). A known build: the

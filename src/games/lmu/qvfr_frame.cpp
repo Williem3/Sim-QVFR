@@ -28,6 +28,7 @@
 #include "../../engine/dlss_views.h"
 #include "../../engine/ngx_dlss.h"
 #include "../../engine/nvapi_gpus.h"
+#include "fixation.h"
 #include "focus_math.h"
 #include "game.h"
 #include "mvr_pass.h"
@@ -1462,6 +1463,8 @@ void qvfr_frame_frame_end() {
         simqvfr::FramePartTimer part(simqvfr::FramePart::dlssEnd);
         simqvfr::dlss_frame_end(frames);
     }
+    if (!offThread)
+        fixation_frame_end();  // the convergence's depth read, back
     if (cfg.mvr) {
         if (!offThread) {  // (skipped: the next frame end on the render thread ends the tracker's frame)
             simqvfr::FramePartTimer part(simqvfr::FramePart::mvrEnd);

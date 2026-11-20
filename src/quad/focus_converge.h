@@ -57,6 +57,35 @@ inline XrQuaternionf eyes_middle(const XrQuaternionf (&eyeOri)[2]) {
 // that eye's forward axis, at tangents (tx, ty): the distance along the ray.
 inline double ray_distance(double viewZ, double tx, double ty) { return viewZ * std::sqrt(1 + tx * tx + ty * ty); }
 
+// A scene depth turned into a view-space distance (metres) through the projection's depth terms, depth = a + b / z
+// (z the view distance along the eye's forward axis): z = b / (depth - a). UE's reversed infinite depth (ACC) is a = 0,
+// b = the near plane; LMU's reversed finite one has both. Negative: no distance (the far plane, the sky, past 10 km).
+inline double depth_view_z(double depth, double a, double b) {
+    const double z = depth != a ? b / (depth - a) : -1;
+    return std::isfinite(z) && z > 0 && z <= 1e4 ? z : -1;
+}
+
+// A few depths read round one ray (tangents tx, ty of the eye) turned into the fixation distance along that ray: the
+// median, the sky at 10 km, kept 0.2 m - 10 km. `sky`: how many were the sky.
+inline double fixation_from_depths(const float* values, int n, double tx, double ty, double a, double b, int& sky) {
+    double metres[16];
+    n = n < 16 ? n : 16;
+    sky = 0;
+    for (int i = 0; i < n; ++i) {
+        const double z = depth_view_z(values[i], a, b);
+        sky += z < 0 ? 1 : 0;
+        metres[i] = z < 0 ? 1e4 : ray_distance(z, tx, ty);
+    }
+    for (int i = 1; i < n; ++i)  // insertion sort: a handful
+        for (int j = i; j > 0 && metres[j] < metres[j - 1]; --j) {
+            const double t = metres[j];
+            metres[j] = metres[j - 1];
+            metres[j - 1] = t;
+        }
+    const double median = n ? metres[n / 2] : 1e4;
+    return median < 0.2 ? 0.2 : median > 1e4 ? 1e4 : median;
+}
+
 // Smoothing a fixation distance: in log space (the vergence angle goes as 1 / distance), a time constant of `tau`
 // seconds, and the value handed on only when it moved by more than `band` (a share) from the last one handed on, so a
 // steady gaze keeps the boxes still.

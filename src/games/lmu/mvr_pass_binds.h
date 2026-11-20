@@ -620,6 +620,12 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
             update();
         }
     }
+    if (g.pass == 0 && g.view.box.valid) {  // the convergence's depth read, unless taken before the glass already
+        const bool was = g.replaying;
+        g.replaying = true;
+        fixation_pass(scene_depth(drawn), g.view.box, g.view.eyeW, g.view.eyeH, true);
+        g.replaying = was;
+    }
     if (g.keepFocus && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0) {
         g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
         g.stats.keptRegions += g.keptOk[eye] ? 1 : 0;
