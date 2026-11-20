@@ -285,9 +285,11 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     dc->PSSetShader(c.colourMs ? c.copyColourMs.Get() : c.copyColourSs.Get(), nullptr, 0);
     dc->PSSetShaderResources(0, 1, colourView.GetAddressOf());
     dc->Draw(3, 0);
-    // 2. Outside the corridor and where the mask skipped: the eye's colour and depth, written as they are.
+    // 2. Outside the corridor and where the mask skipped: the eye's colour and depth, written as they are. Our colour copy
+    // unbound as a target first: bound for reading while still a target, d3d11 drops the view (the fill read black).
     ID3D11ShaderResourceView* unbind[1] = {};
     dc->PSSetShaderResources(0, 1, unbind);
+    dc->OMSetRenderTargets(0, nullptr, nullptr);
     ID3D11ShaderResourceView* srvs[6] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get(), nullptr, t.stampsSrv.Get(),
                                          t.colourSrv.Get()};
     dc->PSSetShaderResources(0, 6, srvs);
