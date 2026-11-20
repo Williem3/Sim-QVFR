@@ -1,0 +1,355 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 2298" width="1120" height="2298" role="img" aria-labelledby="title">
+<title id="title">LMU with Sim-QVFR: everything in a frame</title>
+<style>
+:root { --window-bg:#f2f2f5; --group-bg:#ffffff; --control-bg:#e9e9ee; --control-border:#c2c2c9; --separator:#dcdce2;
+ --label:#1d1d1f; --label-secondary:#55555c; --label-muted:#6e6e75; --success:#1f7a34; --success-bg:#e3f4e7;
+ --overlay-teal:#0e8a9e; --teal-bg:#e2f3f6; --overlay-magenta:#c026b8; --magenta-bg:#f9e6f7; --dlss:#6a4fd6;
+ --dlss-bg:#efebfc; --cars:#b25e00; --cars-bg:#fcefdd; }
+@media (prefers-color-scheme: dark) { :root { --window-bg:#1c1c1e; --group-bg:#232326; --control-bg:#333338;
+ --control-border:#4a4a50; --separator:#2e2e31; --label:#f2f2f4; --label-secondary:#a1a1aa; --label-muted:#8e8e93;
+ --success:#4cd964; --success-bg:#1b3522; --overlay-teal:#40c8e0; --teal-bg:#16343a; --overlay-magenta:#f272e6;
+ --magenta-bg:#3a1c37; --dlss:#a995ff; --dlss-bg:#2a2440; --cars:#f5a524; --cars-bg:#3a2a12; } }
+text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+.h1 { fill:var(--label); font-size:22px; font-weight:700; }
+.sub { fill:var(--label-secondary); font-size:13px; }
+.t { fill:var(--label); font-size:13px; font-weight:600; }
+.s { fill:var(--label-secondary); font-size:12px; }
+.m, .ms { font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.m { fill:var(--label); font-size:11.5px; }
+.ms { fill:var(--label-secondary); font-size:11px; }
+.hdr { fill:var(--label-secondary); font-size:11px; font-weight:600; }
+.lab { font-size:11px; font-weight:500; paint-order:stroke; stroke:var(--window-bg); stroke-width:5px; stroke-linejoin:round; }
+.bt { font-size:10.5px; font-weight:600; }
+.foot { fill:var(--label-secondary); font-size:11.5px; }
+</style>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+<rect width="1120" height="2298" fill="var(--window-bg)"/>
+<text class="h1" x="20" y="40">LMU with Sim-QVFR: everything in a frame</text>
+<text class="sub" x="20" y="66">Every step Sim-QVFR adds to a Le Mans Ultimate frame, in the order it runs. LMU runs its own two eye passes as shipped;</text>
+<text class="sub" x="20" y="84">its code isn’t changed, hooked or called, and nothing is written into its memory. Details: the three diagrams named at the foot.</text>
+<circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
+<text class="s" x="36" y="116">LMU, unchanged</text>
+<circle cx="156" cy="112" r="5" fill="var(--overlay-teal)"/>
+<text class="s" x="167" y="116">OpenXR layer</text>
+<circle cx="274" cy="112" r="5" fill="var(--overlay-magenta)"/>
+<text class="s" x="285" y="116">Detours in Microsoft’s d3d11.dll</text>
+<circle cx="520" cy="112" r="5" fill="var(--dlss)"/>
+<text class="s" x="531" y="116">DLSS, DLSS-NR, FSR</text>
+<circle cx="677" cy="112" r="5" fill="var(--cars)"/>
+<text class="s" x="688" y="116">Night cars</text>
+<circle cx="783" cy="112" r="5" fill="var(--label-secondary)"/>
+<text class="s" x="794" y="116">Read</text>
+<g transform="translate(20,160)">
+<text class="hdr" x="0" y="-14">LMU.exe</text>
+<text class="hdr" x="400" y="-14">Sim-QVFR, loaded as an OpenXR API layer</text>
+<text class="hdr" x="780" y="-14">Runtime and graphics card</text>
+<rect x="0" y="0" width="320" height="372" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="16" y="26">Game code</text>
+<rect x="216" y="12" width="88" height="20" rx="10" fill="var(--success-bg)"/>
+<text class="bt" x="260" y="26" text-anchor="middle" fill="var(--success)">Unchanged</text>
+<text class="s" x="16" y="48">No bytes changed, nothing hooked, no</text>
+<text class="s" x="16" y="64">function called, nothing written.</text>
+<text class="m" x="16" y="92">VR eye loop: its own two passes</text>
+<text class="m" x="16" y="110">Scene, lens mask, sun shadows</text>
+<text class="m" x="16" y="128">Resolve, YEBIS post</text>
+<text class="m" x="16" y="146">Final blit, driver tags, VR UI</text>
+<text class="m" x="16" y="164">Submit: CopySubresourceRegion</text>
+<line x1="16" y1="186" x2="304" y2="186" stroke="var(--separator)"/>
+<text class="t" x="16" y="210">Game data: plain reads</text>
+<circle cx="26" cy="238" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="26" y="242" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="s" x="44" y="234">Render scale, recommended size, FSR on</text>
+<text class="ms" x="44" y="250">live resolution, upscaler</text>
+<circle cx="26" cy="278" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="26" y="282" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="s" x="44" y="274">Eye projections, eye being drawn</text>
+<text class="ms" x="44" y="290">focus maths, DLSS</text>
+<circle cx="26" cy="318" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="26" y="322" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="s" x="44" y="314">The pass’s camera</text>
+<text class="ms" x="44" y="330">DLSS, night cars</text>
+<text class="ms" x="16" y="352">Another build: from OpenXR and the draws</text>
+<rect x="400" y="0" width="320" height="160" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
+<text class="t" x="416" y="26">OpenXR layer</text>
+<text class="m" x="416" y="52">xrEnumerateViewConfigurationViews</text>
+<text class="s" x="416" y="68">room beside each eye</text>
+<text class="m" x="416" y="88">xrLocateViews</text>
+<text class="s" x="416" y="104">FOV crop, gaze, focus boxes, jitter</text>
+<text class="m" x="416" y="124">xrEndFrame</text>
+<text class="s" x="416" y="140">compose, menu, overlay, clock</text>
+<rect x="400" y="180" width="320" height="192" rx="12" fill="var(--group-bg)" stroke="var(--overlay-magenta)" stroke-width="1.5"/>
+<text class="t" x="416" y="206">Direct3D 11</text>
+<text class="s" x="416" y="224">On Microsoft’s d3d11.dll objects, not LMU’s</text>
+<text class="m" x="416" y="252">Device: Create*Shader, CreateInputLayout</text>
+<text class="m" x="416" y="271">OMSetRenderTargets, RSSet*, *SetShader</text>
+<text class="m" x="416" y="290">Draw*, ExecuteCommandList</text>
+<text class="m" x="416" y="309">Map, Unmap, VSSetConstantBuffers</text>
+<text class="m" x="416" y="328">ResolveSubresource, CopySubresourceRegion</text>
+<text class="ms" x="416" y="358">Context functions detoured (MinHook)</text>
+<rect x="780" y="0" width="300" height="160" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="26">OpenXR runtime and headset</text>
+<text class="s" x="796" y="52">SteamVR, Pimax, Varjo, Virtual Desktop.</text>
+<text class="s" x="796" y="68">Gets an ordinary stereo frame, or on</text>
+<text class="s" x="796" y="84">Pimax and Varjo the four views as quad</text>
+<text class="s" x="796" y="100">views. You install nothing else.</text>
+<rect x="780" y="180" width="300" height="192" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="206">Graphics card</text>
+<text class="m" x="796" y="230">NVAPI</text>
+<text class="s" x="796" y="247">multi-view, RTX 20 series and newer</text>
+<text class="m" x="796" y="268">Direct3D 11.3</text>
+<text class="s" x="796" y="285">Sim-QVFR’s own, by instancing, any card</text>
+<text class="m" x="796" y="306">NGX</text>
+<text class="s" x="796" y="323">DLSS; DLSS-NR from the player’s DLL</text>
+<text class="m" x="796" y="344">D3D12 of Sim-QVFR’s</text>
+<text class="s" x="796" y="361">AMD FSR, DLSS-NR: shared textures</text>
+<path d="M304,110 L398,80" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="86" text-anchor="middle" fill="var(--label-secondary)">OpenXR</text>
+<path d="M304,150 C354,150 352,270 398,270" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="214" text-anchor="middle" fill="var(--label-secondary)">D3D11 calls</text>
+<path d="M400,320 C356,320 350,276 306,276" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="306" text-anchor="middle" fill="var(--label-secondary)">Reads</text>
+<path d="M720,80 L778,80" stroke="var(--overlay-teal)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="72" text-anchor="middle" fill="var(--overlay-teal)">Frame</text>
+<path d="M720,276 L778,276" stroke="var(--overlay-magenta)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="268" text-anchor="middle" fill="var(--overlay-magenta)">GPU</text>
+</g>
+<g transform="translate(20,0)">
+<text class="hdr" x="0" y="584">One frame, in order</text>
+<text class="hdr" x="278" y="584">What Sim-QVFR does</text>
+<text class="hdr" x="826" y="584">Setting (sim-qvfr.ini; most live)</text>
+<rect x="0" y="614" width="1080" height="86" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="614" width="262" height="86" rx="8" fill="var(--teal-bg)"/>
+<rect x="0" y="614" width="5" height="86" rx="2" fill="var(--overlay-teal)"/>
+<circle cx="24" cy="630" r="10" fill="var(--overlay-teal)"/>
+<text class="bt" x="24" y="634" text-anchor="middle" fill="var(--group-bg)">1</text>
+<text class="t" x="42" y="634">Session start</text>
+<text class="ms" x="42" y="652">xrEnumerateViewConfigurationViews</text>
+<text class="s" x="278" y="634">A larger recommended size, so LMU makes eye targets with room beside each eye for</text>
+<text class="s" x="278" y="650">its focus view. The graphics card checked once: NVIDIA RTX 20 series and newer use</text>
+<text class="s" x="278" y="666">NVIDIA’s multi-view rendering, any other Direct3D 11.3 card Sim-QVFR’s own</text>
+<text class="s" x="278" y="682">(instancing).</text>
+<text class="ms" x="826" y="634">Launcher: multi-view (on)</text>
+<path d="M24,700 L24,707" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="708" width="1080" height="102" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="708" width="262" height="102" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="708" width="5" height="102" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="724" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="728" text-anchor="middle" fill="var(--group-bg)">2</text>
+<text class="t" x="42" y="728">Shaders made</text>
+<text class="ms" x="42" y="746">CreateVertexShader,</text>
+<text class="ms" x="42" y="762">CreatePixelShader,</text>
+<text class="ms" x="42" y="778">CreateInputLayout</text>
+<text class="s" x="278" y="728">Every vertex shader gets twins that draw a second view: NVIDIA’s (through NVAPI) and</text>
+<text class="s" x="278" y="744">the instanced one; input layouts with per-instance data get one with doubled step</text>
+<text class="s" x="278" y="760">rates. Pixel shaders known by checksum: YEBIS’s copy and composite, the final blit;</text>
+<text class="s" x="278" y="776">car paint and the light buffers tagged for night cars; mip-bias twins for texture</text>
+<text class="s" x="278" y="792">sharpening.</text>
+<text class="ms" x="826" y="728">[dlss] texture_sharpening, [quad]</text>
+<text class="ms" x="826" y="744">car_light (at launch)</text>
+<path d="M24,810 L24,817" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="818" width="1080" height="86" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="818" width="262" height="86" rx="8" fill="var(--teal-bg)"/>
+<rect x="0" y="818" width="5" height="86" rx="2" fill="var(--overlay-teal)"/>
+<circle cx="24" cy="834" r="10" fill="var(--overlay-teal)"/>
+<text class="bt" x="24" y="838" text-anchor="middle" fill="var(--group-bg)">3</text>
+<text class="t" x="42" y="838">Views located</text>
+<text class="ms" x="42" y="856">xrLocateViews, gaze thread (250</text>
+<text class="ms" x="42" y="872">Hz)</text>
+<text class="s" x="278" y="838">The FOV crop taken off each eye before LMU sees it. Eye tracking (or the head)</text>
+<text class="s" x="278" y="854">places each eye’s focus box: a dead-zone against tracker noise, both boxes aimed at</text>
+<text class="s" x="278" y="870">one point, its shape and size. With DLSS or FSR the FOV moves by this frame’s</text>
+<text class="s" x="278" y="886">sub-pixel jitter (Halton 2, 3), and the eye poses are kept for the motion vectors.</text>
+<text class="ms" x="826" y="838">[crop], [quad] gaze, gaze_deadzone,</text>
+<text class="ms" x="826" y="854">focus_shape, corner_radius_percent</text>
+<path d="M24,904 L24,911" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="912" width="1080" height="86" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="912" width="262" height="86" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="912" width="5" height="86" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="928" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="932" text-anchor="middle" fill="var(--group-bg)">4</text>
+<text class="t" x="42" y="932">Eye pass begins</text>
+<text class="ms" x="42" y="950">OMSetRenderTargets,</text>
+<text class="ms" x="42" y="966">RSSetViewports, RSSetScissorRects</text>
+<text class="s" x="278" y="932">The pass tracker finds LMU’s two eye passes by their target binds. Live resolution:</text>
+<text class="s" x="278" y="948">the eye’s viewports and scissors cut to the periphery’s size inside LMU’s target,</text>
+<text class="s" x="278" y="964">and a second viewport beside it for the focus view (smaller under DLSS super</text>
+<text class="s" x="278" y="980">resolution). One eye off: that eye’s scene draws are skipped.</text>
+<text class="ms" x="826" y="932">Periphery, focus density (live),</text>
+<text class="ms" x="826" y="948">[quad] eye_off</text>
+<path d="M24,998 L24,1005" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1006" width="1080" height="70" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1006" width="262" height="70" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="1006" width="5" height="70" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="1022" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="1026" text-anchor="middle" fill="var(--group-bg)">5</text>
+<text class="t" x="42" y="1026">Focus mask</text>
+<text class="ms" x="42" y="1044">Draw (Sim-QVFR’s, before the</text>
+<text class="ms" x="42" y="1060">scene)</text>
+<text class="s" x="278" y="1026">What lies outside the focus shape is drawn into the focus view’s depth first, so</text>
+<text class="s" x="278" y="1042">LMU’s scene skips those pixels (early depth), with a margin for what DLSS and</text>
+<text class="s" x="278" y="1058">sharpening read next to it.</text>
+<text class="ms" x="826" y="1026">[quad] focus_mask (on)</text>
+<path d="M24,1076 L24,1083" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1084" width="1080" height="102" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1084" width="262" height="102" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="1084" width="5" height="102" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="1100" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="1104" text-anchor="middle" fill="var(--group-bg)">6</text>
+<text class="t" x="42" y="1104">Scene, two views a draw</text>
+<text class="ms" x="42" y="1122">VSSetShader, Draw*,</text>
+<text class="ms" x="42" y="1138">ExecuteCommandList</text>
+<text class="s" x="278" y="1104">Every draw with a depth target runs its twin: NVIDIA’s multi-view rasterises it into</text>
+<text class="s" x="278" y="1120">both viewports, or Sim-QVFR’s draws twice the instances, odd ones into the focus</text>
+<text class="s" x="278" y="1136">view. The focus view’s clip space is the eye’s remapped (cb13). The lens mask is</text>
+<text class="s" x="278" y="1152">drawn in both; LMU’s sun-shadow command lists go through the same detours; DrawAuto</text>
+<text class="s" x="278" y="1168">and indirect draws stay eye only.</text>
+<text class="ms" x="826" y="1104">Overlay badge: MVR, SMVR or Fallback</text>
+<path d="M24,1186 L24,1193" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1194" width="1080" height="86" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1194" width="262" height="86" rx="8" fill="var(--cars-bg)"/>
+<rect x="0" y="1194" width="5" height="86" rx="2" fill="var(--cars)"/>
+<circle cx="24" cy="1210" r="10" fill="var(--cars)"/>
+<text class="bt" x="24" y="1214" text-anchor="middle" fill="var(--group-bg)">7</text>
+<text class="t" x="42" y="1214">Cars followed</text>
+<text class="ms" x="42" y="1232">Map, Unmap, VSSetConstantBuffers</text>
+<text class="s" x="278" y="1214">Each car part’s world matrix read from the per-draw buffer as LMU writes it, this</text>
+<text class="s" x="278" y="1230">frame and last: the other cars’ motion vectors. For night cars, the floodlights and</text>
+<text class="s" x="278" y="1246">headlights LMU hands each draw are copied at Unmap, and car parts also write a slot</text>
+<text class="s" x="278" y="1262">target: the part, the game’s normals, its baked occlusion and bent normals.</text>
+<text class="ms" x="826" y="1214">[dlss] car_vectors (on), [quad]</text>
+<text class="ms" x="826" y="1230">car_light</text>
+<path d="M24,1280 L24,1287" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1288" width="1080" height="54" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1288" width="262" height="54" rx="8" fill="var(--dlss-bg)"/>
+<rect x="0" y="1288" width="5" height="54" rx="2" fill="var(--dlss)"/>
+<circle cx="24" cy="1304" r="10" fill="var(--dlss)"/>
+<text class="bt" x="24" y="1308" text-anchor="middle" fill="var(--group-bg)">8</text>
+<text class="t" x="42" y="1308">Glass</text>
+<text class="ms" x="42" y="1326">Draw* (first transparent)</text>
+<text class="s" x="278" y="1308">Before the first transparent draw that writes depth (the car’s glass), the depth is</text>
+<text class="s" x="278" y="1324">copied for DLSS, so its vectors see what lies behind the windscreen.</text>
+<text class="ms" x="826" y="1308">[experiment] lmu_dlss_glass_depth (on)</text>
+<path d="M24,1342 L24,1349" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1350" width="1080" height="102" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1350" width="262" height="102" rx="8" fill="var(--cars-bg)"/>
+<rect x="0" y="1350" width="5" height="102" rx="2" fill="var(--cars)"/>
+<circle cx="24" cy="1366" r="10" fill="var(--cars)"/>
+<text class="bt" x="24" y="1370" text-anchor="middle" fill="var(--group-bg)">9</text>
+<text class="t" x="42" y="1370">Night cars relit</text>
+<text class="ms" x="42" y="1388">ResolveSubresource, or YEBIS’s</text>
+<text class="ms" x="42" y="1404">copy</text>
+<text class="s" x="278" y="1370">One full-screen pass over each eye and its focus view relights every car pixel</text>
+<text class="s" x="278" y="1386">before the post: ambient occlusion, lacquer highlights per floodlight, paint detail,</text>
+<text class="s" x="278" y="1402">floodlight and ground shadows, reflections only where both eyes see them,</text>
+<text class="s" x="278" y="1418">headlights, optional night vision; a fill scale tames LMU’s flat light. Quality Low,</text>
+<text class="s" x="278" y="1434">Medium or High; the periphery one tier below the focus.</text>
+<text class="ms" x="826" y="1370">[quad] car_light, car_light_quality,</text>
+<text class="ms" x="826" y="1386">car_light_* (live)</text>
+<path d="M24,1452 L24,1459" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1460" width="1080" height="118" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1460" width="262" height="118" rx="8" fill="var(--dlss-bg)"/>
+<rect x="0" y="1460" width="5" height="118" rx="2" fill="var(--dlss)"/>
+<circle cx="24" cy="1476" r="10" fill="var(--dlss)"/>
+<text class="bt" x="24" y="1480" text-anchor="middle" fill="var(--group-bg)">10</text>
+<text class="t" x="42" y="1480">DLSS, DLSS-NR or FSR</text>
+<text class="ms" x="42" y="1498">ResolveSubresource, or YEBIS’s</text>
+<text class="ms" x="42" y="1514">copy</text>
+<text class="s" x="278" y="1480">Per view, on the HDR scene before YEBIS: depth, motion vectors from depth (the</text>
+<text class="s" x="278" y="1496">cockpit by the head pose, cars by their matrices), then NGX: DLAA on the eyes, DLAA</text>
+<text class="s" x="278" y="1512">or super resolution on the focus views, the result back into the scene. DLSS-NR (the</text>
+<text class="s" x="278" y="1528">player’s own NVIDIA DLL) on the focus views, the periphery optional, before or after</text>
+<text class="s" x="278" y="1544">DLSS. AMD FSR in DLSS’s place without an RTX card. NR and FSR run on a D3D12 device</text>
+<text class="s" x="278" y="1560">of Sim-QVFR’s that shares textures and a fence with LMU’s.</text>
+<text class="ms" x="826" y="1480">[dlss] on, focus_scale, eye_preset,</text>
+<text class="ms" x="826" y="1496">focus_preset, upscaler; [dlss_nr] on,</text>
+<text class="ms" x="826" y="1512">periphery, before_dlss</text>
+<path d="M24,1578 L24,1585" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1586" width="1080" height="86" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1586" width="262" height="86" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="1586" width="5" height="86" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="1602" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="1606" text-anchor="middle" fill="var(--group-bg)">11</text>
+<text class="t" x="42" y="1606">YEBIS post, focus too</text>
+<text class="ms" x="42" y="1624">Draw* (YEBIS’s copy, composite)</text>
+<text class="s" x="278" y="1606">LMU’s YEBIS post runs on the eye as shipped. Right after it, its copy and composite</text>
+<text class="s" x="278" y="1622">run once more on the focus view, with the game’s own shaders and constants, the</text>
+<text class="s" x="278" y="1638">eye’s glare resampled through the focus box and its exposure: the focus view matches</text>
+<text class="s" x="278" y="1654">its eye.</text>
+<text class="ms" x="826" y="1606">Always on</text>
+<path d="M24,1672 L24,1679" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1680" width="1080" height="70" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1680" width="262" height="70" rx="8" fill="var(--magenta-bg)"/>
+<rect x="0" y="1680" width="5" height="70" rx="2" fill="var(--overlay-magenta)"/>
+<circle cx="24" cy="1696" r="10" fill="var(--overlay-magenta)"/>
+<text class="bt" x="24" y="1700" text-anchor="middle" fill="var(--group-bg)">12</text>
+<text class="t" x="42" y="1700">Final blit, overlays</text>
+<text class="ms" x="42" y="1718">Draw* (blit, driver tags, VR UI)</text>
+<text class="s" x="278" y="1700">The game’s final blit replayed for the focus view beside the eye. The driver tags’</text>
+<text class="s" x="278" y="1716">viewport cut to the rendered size; the VR UI panel (HUD, menus, MFD) drawn into both</text>
+<text class="s" x="278" y="1732">views from a mipmapped copy of its canvas; overlays moved back by the jitter.</text>
+<text class="ms" x="826" y="1700">[experiment] lmu_ui_mips (on)</text>
+<path d="M24,1750 L24,1757" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1758" width="1080" height="70" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1758" width="262" height="70" rx="8" fill="var(--control-bg)"/>
+<rect x="0" y="1758" width="5" height="70" rx="2" fill="var(--label-muted)"/>
+<circle cx="24" cy="1774" r="10" fill="var(--label-muted)"/>
+<text class="bt" x="24" y="1778" text-anchor="middle" fill="var(--group-bg)">13</text>
+<text class="t" x="42" y="1778">Submit</text>
+<text class="ms" x="42" y="1796">CopySubresourceRegion</text>
+<text class="s" x="278" y="1778">LMU copies each eye’s final into its swapchain; Sim-QVFR takes the eye and its focus</text>
+<text class="s" x="278" y="1794">view from that image. Frames without the race (main menu, loading) are scaled up to</text>
+<text class="s" x="278" y="1810">the native eye size before LMU draws its UI.</text>
+<text class="ms" x="826" y="1778">[experiment] lmu_menu_native (on)</text>
+<path d="M24,1828 L24,1835" stroke="var(--label-muted)" stroke-width="1.5" fill="none"/>
+<rect x="0" y="1836" width="1080" height="102" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<rect x="0" y="1836" width="262" height="102" rx="8" fill="var(--teal-bg)"/>
+<rect x="0" y="1836" width="5" height="102" rx="2" fill="var(--overlay-teal)"/>
+<circle cx="24" cy="1852" r="10" fill="var(--overlay-teal)"/>
+<text class="bt" x="24" y="1856" text-anchor="middle" fill="var(--group-bg)">14</text>
+<text class="t" x="42" y="1856">Compose, submit</text>
+<text class="ms" x="42" y="1874">xrEndFrame</text>
+<text class="s" x="278" y="1856">The periphery upscaled over each eye with the focus view blended in (feather,</text>
+<text class="s" x="278" y="1872">shape); CAS sharpening on the focus only; colour correction over all of it; the</text>
+<text class="s" x="278" y="1888">helmet, lit by the frame. Composed at the focus views’ density, or on Pimax and</text>
+<text class="s" x="278" y="1904">Varjo handed to the runtime as four quad views. Quad layers on top: the headset</text>
+<text class="s" x="278" y="1920">menu, the performance overlay, the clock. One eye off: black in that eye.</text>
+<text class="ms" x="826" y="1856">[quad] feather_percent,</text>
+<text class="ms" x="826" y="1872">sharpen_percent, color_correction,</text>
+<text class="ms" x="826" y="1888">output_density_max; [helmet];</text>
+<text class="ms" x="826" y="1904">native_quad_views; [menu], [osd],</text>
+<text class="ms" x="826" y="1920">[clock]</text>
+<text class="hdr" x="0" y="1974">Beside the frame</text>
+<rect x="0" y="1986" width="347" height="190" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
+<text class="t" x="16" y="2012">Live control</text>
+<text class="s" x="16" y="2036">The launcher writes sim-qvfr.ini; the layer</text>
+<text class="s" x="16" y="2052">reloads it while LMU runs and the frame</text>
+<text class="s" x="16" y="2068">takes each change between frames.</text>
+<text class="s" x="16" y="2084">The headset menu changes the same settings</text>
+<text class="s" x="16" y="2100">in VR; Optimize finds the periphery, focus</text>
+<text class="s" x="16" y="2116">density and box that fit the frame budget.</text>
+<text class="s" x="16" y="2132">Moving the CPU: LMU’s main thread on a core</text>
+<text class="s" x="16" y="2148">of its own ([cpu] isolate_main_thread).</text>
+<rect x="367" y="1986" width="347" height="190" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
+<text class="t" x="383" y="2012">Measured</text>
+<text class="s" x="383" y="2036">The overlay: frame rate and pacing, CPU and</text>
+<text class="s" x="383" y="2052">GPU against the budget, GPU time by LMU,</text>
+<text class="s" x="383" y="2068">Sim-QVFR and the rest, the busiest thread,</text>
+<text class="s" x="383" y="2084">VRAM, eye tracking, the multi-view badge and</text>
+<text class="s" x="383" y="2100">the night cars’ cost. The log: the passes’</text>
+<text class="s" x="383" y="2116">CPU and GPU costs every 900 frames, the</text>
+<text class="s" x="383" y="2132">settings; the launcher’s report bundle.</text>
+<rect x="733" y="1986" width="347" height="190" rx="12" fill="var(--group-bg)" stroke="var(--overlay-magenta)" stroke-width="1.5"/>
+<text class="t" x="749" y="2012">Kept right</text>
+<text class="s" x="749" y="2036">NVIDIA’s multi-view refused mid-session:</text>
+<text class="s" x="749" y="2052">instancing takes over. No focus views for a</text>
+<text class="s" x="749" y="2068">while: the eyes at full resolution, tried</text>
+<text class="s" x="749" y="2084">again with a growing wait. Another LMU</text>
+<text class="s" x="749" y="2100">build: the values from OpenXR and the draws’</text>
+<text class="s" x="749" y="2116">constants instead of the reads. If nothing</text>
+<text class="s" x="749" y="2132">fits, LMU renders as shipped.</text>
+</g>
+<text class="foot" x="20" y="2212">Grey arrows are calls LMU makes anyway; the dashed one is Sim-QVFR reading values in LMU’s data. No arrow points into LMU’s code.</text>
+<text class="foot" x="20" y="2229">Most settings change live from the launcher or the headset menu; the shader twins for night cars and texture sharpening are made at launch.</text>
+<text class="foot" x="20" y="2246">Details: LMU-MVR-ARCHITECTURE.svg (NVIDIA’s multi-view), LMU-NEUTRAL-MVR-ARCHITECTURE.svg (Sim-QVFR’s own), LMU-DLSS-ARCHITECTURE.svg (DLSS, FSR).</text>
+<text class="foot" x="20" y="2263">From src/games/lmu/, src/engine/, src/quad/ and src/layer/ on development (04a374e, 2026-11-19).</text>
+</svg>
