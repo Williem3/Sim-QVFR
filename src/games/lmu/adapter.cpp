@@ -122,6 +122,22 @@ public:
                 run.maskAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mask_ab", 0,
                                                                                     s.ini)));
                 run.mvrTiming = run.mvrTiming || run.maskAb > 0;
+                // lmu_corridor_ab=N: N frames with the focus views kept to a corridor ahead, N without (qvfr_frame.h).
+                const auto key = [&s](const wchar_t* name, int def) {
+                    return !s.ini ? def : static_cast<int>(GetPrivateProfileIntW(L"experiment", name, def, s.ini));
+                };
+                run.corridorAb = (std::max)(0, key(L"lmu_corridor_ab", 0));
+                run.corridorHalfM = (std::max)(50, key(L"lmu_corridor_half_cm", 1000)) / 100.0f;
+                run.corridorTallM = (std::max)(50, key(L"lmu_corridor_tall_cm", 350)) / 100.0f;
+                run.corridorStartM = (std::max)(0, key(L"lmu_corridor_start_cm", 300)) / 100.0f;
+                run.corridorFarM = static_cast<float>((std::max)(0, key(L"lmu_corridor_far_m", 0)));
+                run.corridorEyeHeightM = (std::max)(30, key(L"lmu_corridor_eye_height_cm", 130)) / 100.0f;
+                run.corridorShow = key(L"lmu_corridor_show", 0) != 0;
+                run.corridorOn = key(L"lmu_corridor", 0) != 0;
+                run.corridorFeatherM = (std::max)(0, key(L"lmu_corridor_feather_cm", 100)) / 100.0f;
+                run.corridorSlopeDeg = static_cast<float>(std::clamp(key(L"lmu_corridor_road_slope_deg", 35), 5, 75));
+                run.corridorCentreM = (std::max)(0, key(L"lmu_corridor_centre_cm", 600)) / 100.0f;
+                run.mvrTiming = run.mvrTiming || run.corridorAb > 0;
                 // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
                 run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
                                                                                   s.ini)));

@@ -138,6 +138,8 @@ extern bool backendAbOk, backendAbLogged;
 extern int carSide;
 extern bool carAbLogged, carsOn;
 extern int maskSide;
+extern int corridorSide;
+extern bool corridorAbLogged;
 extern bool maskAbLogged;
 bool car_ab_on();
 extern std::atomic<bool> carsWanted;

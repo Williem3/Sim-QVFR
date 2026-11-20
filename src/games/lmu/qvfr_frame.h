@@ -86,6 +86,17 @@ struct QvfrFrameRun {
     // What the lens mask saves ([experiment] lmu_mask_ab=N, a measurement; with views4_test_hidden_mask=2 the mask is the
     // focus box's cut corners): N frames with the game's mask draw, N without, in turn; GPU per pass by mvr_pass's modes.
     int maskAb = 0;
+    // The focus corridor's cost ([experiment] lmu_corridor_ab=N, a measurement; mvr_pass.h mvr_corridor): N frames with
+    // the focus views kept to a corridor ahead, N without, in turn; GPU per pass by mvr_pass's modes. Its shape:
+    // lmu_corridor_half_cm, _tall_cm, _start_cm, _far_m (0 none), _eye_height_cm.
+    int corridorAb = 0;
+    bool corridorShow = false;  // lmu_corridor_show=1: what lies outside the corridor tinted in the focus views
+    // lmu_corridor=1: the corridor every frame (the focus views kept to it, the periphery composed into the rest);
+    // lmu_corridor_feather_cm its blend at the edge.
+    bool corridorOn = false;
+    float corridorFeatherM = 1;
+    float corridorHalfM = 10, corridorTallM = 3.5f, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
+    float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
     // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
     bool buildFree = false;

@@ -32,6 +32,7 @@
 #include "../../probe/d3d11_capture.h"
 #include "../../engine/dlss_views.h"
 #include "car_motion.h"
+#include "corridor_shader.h"
 #include "dlss_inputs.h"
 #include "fixation.h"
 #include "focus_post.h"
@@ -158,6 +159,8 @@ namespace {
 #include "mvr_pass_post_roles.h"
 
 #include "mvr_pass_focus_mask.h"
+
+#include "mvr_pass_corridor.h"
 
 #include "mvr_pass_glass.h"
 

@@ -129,6 +129,19 @@ void mvr_glass_read(bool read);
 // GREATER, or LESS), so the scene's draws skip them. Into the focus viewport alone, with its own state from a command
 // list that restores the game's (NVIDIA's single-pass stereo off around it). The eyes are never masked. Between frames.
 void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
+// The focus corridor ([experiment] lmu_corridor_ab, a measurement; mvr_pass_corridor.h): in eye passes 0-1 drawing their
+// focus view, at the focus mask's moment, the focus viewport's texels whose point (by the eye's depth over the box last
+// frame) lies outside a corridor ahead get the nearest depth, so the scene skips them. `halfM` its half width, `tallM`
+// its height above the road, `startM`-`farM` (0: no end) its reach ahead along the head's level heading, `eyeHeightM`
+// the eye's height above the road. `off`: the A/B's side without it this frame (no copy, no road pass either). `show` (lmu_corridor_show): what lies
+// outside it tinted blue in the focus views instead, by this frame's depth (with `off`, nothing masked). The corridor
+// follows the terrain (corridor_shader.h): its height above the road beneath each point (surfaces up to `roadSlopeDeg`
+// from level are road), its centre across moved to the road's, at most `centreReachM`. With the mask on (not `off`, not
+// `show`), the eye's colour and depth fill the focus view outside it, blended over `featherM` inside its edge, at the
+// pass's first transparent draw (mvr_pass_corridor.h corridor_fill): the periphery composed in the game's own frame.
+// Between frames.
+void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, float farM, float eyeHeightM,
+                  bool show = false, float roadSlopeDeg = 35, float centreReachM = 6, float featherM = 1);
 // R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
 // right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
 // elsewhere with mvr_redraw_panel. Null: none.
@@ -331,6 +344,10 @@ struct MvrPassStats {
     // The focus mask (mvr_focus_mask): eye passes it was drawn in; its command list recorded (again); passes it was left
     // out of for the A/B, for a depth test it doesn't know, or for a shape with nothing to mask at that size.
     uint64_t focusMaskDraws = 0, focusMaskRecords = 0, focusMaskAbSkipped = 0, focusMaskOtherTest = 0, focusMaskEmpty = 0;
+    // The focus corridor's measurement (mvr_corridor): masks drawn, copies of the eye's depth, passes left out for the
+    // A/B, passes without what it needs (no copy yet, no depth terms, an unknown depth test), with a level up.
+    uint64_t corridorDraws = 0, corridorCopies = 0, corridorAbSkipped = 0, corridorNoInput = 0, corridorLevelUp = 0,
+             corridorTints = 0, corridorGrounds = 0, corridorFills = 0, corridorFillRefused = 0;
     // Instancing: the game's draws made with twice their instances; those with a per-instance layout's twin bound around
     // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double); draws into the eye
     // alone for their input layout (per-instance data without its twin, or a layout the probe didn't see made).

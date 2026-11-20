@@ -284,6 +284,17 @@ void stamp(int pass, int which) {
     f.stamped[pass][which] = true;
 }
 
+// The focus corridor's timestamp `which` (GpuFrame::corridor) in eye pass `pass`, once a frame.
+void corridor_stamp(int pass, int which) {
+    if (g.gpuSlot < 0 || pass < 0 || pass > 1)
+        return;
+    GpuFrame& f = g.gpu[g.gpuSlot];
+    if (f.corridorStamped[pass][which] || !f.corridor[pass][which])
+        return;
+    g.context->End(f.corridor[pass][which].Get());
+    f.corridorStamped[pass][which] = true;
+}
+
 // Frames whose timestamps are in: their scene and post times added up.
 void gpu_collect() {
     for (GpuFrame& f : g.gpu) {
@@ -306,5 +317,21 @@ void gpu_collect() {
             g.postMs[f.mode][p] += 1000.0 * static_cast<double>(t[2] - t[1]) / static_cast<double>(dj.Frequency);
             ++g.gpuCounts[f.mode][p];
         }
+        // The corridor's spans: the copy (0-1), the road pass (1-2), the mask (3-4), the fill (5-6), each where both ends
+        // were stamped.
+        static constexpr int kSpan[4][2] = {{0, 1}, {1, 2}, {3, 4}, {5, 6}};
+        for (int p = 0; p < 2; ++p)
+            for (int k = 0; k < 4; ++k) {
+                const int a = kSpan[k][0], b = kSpan[k][1];
+                if (!f.corridorStamped[p][a] || !f.corridorStamped[p][b])
+                    continue;
+                UINT64 ta = 0, tb = 0;
+                if (g.context->GetData(f.corridor[p][a].Get(), &ta, sizeof(ta), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+                    g.context->GetData(f.corridor[p][b].Get(), &tb, sizeof(tb), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+                    tb < ta)
+                    continue;
+                g.corridorMs[f.mode][p][k] += 1000.0 * static_cast<double>(tb - ta) / static_cast<double>(dj.Frequency);
+                ++g.corridorCounts[f.mode][p][k];
+            }
     }
 }

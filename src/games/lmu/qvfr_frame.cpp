@@ -758,6 +758,26 @@ void mvr_before_pass(int p) {
                 mvr_mask_ab_drop(maskSide == 1);
                 mvr_frame_mode(maskSide);
             }
+            if (cfg.corridorShow && cfg.corridorAb <= 0)  // show mode alone: tinted, never masked
+                mvr_corridor(true, true, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
+                             cfg.corridorEyeHeightM, true, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
+            else if (cfg.corridorOn && cfg.corridorAb <= 0)  // on every frame: masked, the periphery composed in
+                mvr_corridor(true, false, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
+                             cfg.corridorEyeHeightM, false, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
+            if (cfg.corridorAb > 0) {  // the focus corridor this frame or not (between frames)
+                if (!corridorAbLogged) {
+                    corridorAbLogged = true;
+                    simqvfr::logf("lmu mvr: corridor A/B: %d frames with the focus views kept to the corridor, then %d "
+                                  "with the corridor off entirely (no depth copy, no road pass), in turn (lmu_corridor_ab; "
+                                  "GPU per pass by side below)",
+                                  cfg.corridorAb, cfg.corridorAb);
+                }
+                corridorSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.corridorAb)) % 2);
+                mvr_corridor(true, corridorSide == 1, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM,
+                             cfg.corridorFarM, cfg.corridorEyeHeightM, cfg.corridorShow, cfg.corridorSlopeDeg,
+                             cfg.corridorCentreM, cfg.corridorFeatherM);
+                mvr_frame_mode(corridorSide);
+            }
             {  // the focus mask as last set (live)
                 std::lock_guard guard(liveMutex);
                 mvr_focus_mask(focusMaskOn, focusMaskArea, focusMaskMargin);
