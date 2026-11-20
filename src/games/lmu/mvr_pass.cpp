@@ -33,6 +33,7 @@
 #include "../../engine/dlss_views.h"
 #include "car_motion.h"
 #include "dlss_inputs.h"
+#include "fixation.h"
 #include "focus_post.h"
 #include "glare_math.h"
 #include "mvr_probe.h"

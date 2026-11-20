@@ -54,6 +54,25 @@ int SIM_QVFR_TEST_MAIN() {
 
     check(std::fabs(ray_distance(1.0, 0.75, 0) - 1.25) < 1e-9, "a ray's distance from its view depth and tangents");
 
+    // Depth into distance: depth = a + b / z.
+    check(std::fabs(depth_view_z(0.1 / 2.0, 0, 0.1) - 2.0) < 1e-9, "UE's reversed infinite depth (a 0, b the near plane)");
+    check(depth_view_z(0, 0, 0.1) < 0, "reversed infinite: depth 0 is the sky (no distance)");
+    {  // a reversed finite depth, near 0.05 m, far 2000 m: depth 1 at the near plane, 0 at the far one
+        const double n = 0.05, fr = 2000, a = -n / (fr - n), b = n * fr / (fr - n);
+        check(std::fabs(depth_view_z(1.0, a, b) - n) < 1e-9 && std::fabs(depth_view_z(a + b / 0.8, a, b) - 0.8) < 1e-9,
+              "a reversed finite depth: the near plane, and a dash 0.8 m away");
+        check(depth_view_z(0.0, a, b) < 0 || depth_view_z(0.0, a, b) > 1999, "a reversed finite depth: far is far");
+    }
+    {
+        const float dash = static_cast<float>(0.1 / 0.8);  // 0.8 m on UE's reversed infinite depth, near 0.1 m
+        const float values[9] = {dash, dash, dash, dash, dash, 0, 0, 0, 0};
+        int sky = 0;
+        const double m = fixation_from_depths(values, 9, 0.75, 0, 0, 0.1, sky);
+        check(std::fabs(m - 1.0) < 1e-6 && sky == 4, "five texels on the dash, four on the sky: the dash, along the ray");
+        const float sky9[9] = {};
+        check(fixation_from_depths(sky9, 9, 0, 0, 0, 0.1, sky) == 1e4 && sky == 9, "all sky: 10 km");
+    }
+
     FixationFilter f;
     const double first = f.update(1.0, 0.011);
     const double held = f.update(1.03, 0.011);

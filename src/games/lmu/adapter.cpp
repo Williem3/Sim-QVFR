@@ -14,6 +14,7 @@
 #include "../../engine/nr_views.h"
 #include "../../quad/qvfr_settings.h"
 #include "dlss_inputs.h"
+#include "fixation.h"
 #include "qvfr_frame.h"
 #include "game.h"
 #include "mvr_pass.h"
@@ -162,6 +163,9 @@ public:
             dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
             dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;
             dlss.depthReversed = key(L"lmu_dlss_depth_reversed", 1) != 0;
+            // lmu_fixation=0: no depth read for the focus boxes' convergence (fixation.h): they stay parallel.
+            fixation_ = key(L"lmu_fixation", 1) != 0;
+            depthReversed_ = dlss.depthReversed;
             // lmu_dlss_car=0: the cockpit treated as the world. lmu_dlss_car_box_cm: the car's box about the head, in
             // centimetres to the left, right, down, up, front and back (engine/dlss_views.h).
             dlss.car = key(L"lmu_dlss_car", 1) != 0;
@@ -223,6 +227,8 @@ public:
             set_scales(simqvfr::views4_live_one_size(s.layout, s.layout.outer, s.layout.focus, s.layout.focusHeight));
         return qvfr_;
     }
+    // How far the eyes look (fixation.h): the layer converges both eyes' focus boxes there.
+    double qvfr_fixation_m() const override { return qvfr_ ? fixation_m() : 0.0; }
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
         if (qvfr_)
             qvfr_frame_set_gaze(tan, valid);
@@ -263,6 +269,7 @@ public:
     }
     void session_destroyed() override {
         IdentityAdapter::session_destroyed();
+        fixation_stop();
         simqvfr::dlss_shutdown();  // its features and NGX belong to the session's device
     }
     // DLAA's jitter (engine/dlss_views.h): the last thing done to the FOV the game locates.
@@ -355,6 +362,8 @@ public:
         if (mvrProbe_)
             mvr_probe_device(device);
         qvfr_frame_device(device);
+        if (qvfr_ && fixation_)
+            fixation_start(device, depthReversed_);
     }
     void frame_end() override {
         if (mvrProbe_)
@@ -373,6 +382,8 @@ private:
     bool viewProbe_ = false;
     bool mvrProbe_ = false;
     bool qvfr_ = false;
+    bool fixation_ = true;       // [experiment] lmu_fixation
+    bool depthReversed_ = true;  // lmu_dlss_depth_reversed
     // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
     simqvfr::DlssSettings dlssSettings_;
     bool fsrAllowed_ = false;  // [experiment] lmu_fsr: AMD FSR may run the views

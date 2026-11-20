@@ -15,13 +15,13 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 ComPtr<ID3D11Texture2D> depth_texture(ID3D11Device* device, DXGI_FORMAT typeless, DXGI_FORMAT dsvFormat, bool readable,
-                                      ID3D11DeviceContext* ctx, float clear) {
-    D3D11_TEXTURE2D_DESC d{64, 48, 1, 1, typeless, {1, 0}, D3D11_USAGE_DEFAULT,
+                                      ID3D11DeviceContext* ctx, float clear, UINT samples = 1) {
+    D3D11_TEXTURE2D_DESC d{64, 48, 1, 1, typeless, {samples, 0}, D3D11_USAGE_DEFAULT,
                            D3D11_BIND_DEPTH_STENCIL | (readable ? D3D11_BIND_SHADER_RESOURCE : 0u)};
     ComPtr<ID3D11Texture2D> t;
     if (FAILED(device->CreateTexture2D(&d, nullptr, &t)))
         return nullptr;
-    D3D11_DEPTH_STENCIL_VIEW_DESC v{dsvFormat, D3D11_DSV_DIMENSION_TEXTURE2D};
+    D3D11_DEPTH_STENCIL_VIEW_DESC v{dsvFormat, samples > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D};
     ComPtr<ID3D11DepthStencilView> dsv;
     if (FAILED(device->CreateDepthStencilView(t.Get(), &v, &dsv)))
         return nullptr;
@@ -73,6 +73,15 @@ int SIM_QVFR_TEST_MAIN() {
     for (float v : values)
         all32 &= v == 0.0078125f;
     check(all32, "a 32-bit float depth: exact");
+
+    // LMU with MSAA on: its scene depth is multisampled (sample 0 read).
+    auto ms = depth_texture(device.Get(), DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_D32_FLOAT, true, ctx.Get(), 0.375f, 4);
+    const bool queuedMs = ms && probe.request(ms.Get(), points);
+    const bool cameMs = queuedMs && read_back(probe, ctx.Get(), values, age);
+    bool allMs = cameMs;
+    for (float v : values)
+        allMs &= v == 0.375f;
+    check(allMs, "a 4x multisample 32-bit depth: its sample 0, exact");
 
     float none[simqvfr::D3D11DepthProbe::kPoints];
     int noAge = 0;
