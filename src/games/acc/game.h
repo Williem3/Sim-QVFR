@@ -24,6 +24,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     kBuilds, std::size(kBuilds),
     false,
     L"AC2\\Saved\\Crashes",  // UE4CC-Windows-<id>_0000\: UE4Minidump.dmp, CrashContext.runtime-xml, AC2.log
+    nullptr, nullptr, {}, false,  // no anti-cheat, the launcher's default sizes, its builds only
+    simqvfr::games::QvfrImage::EyeColumns,  // adapter.cpp qvfr_eye_columns
 };
 
 }  // namespace acc

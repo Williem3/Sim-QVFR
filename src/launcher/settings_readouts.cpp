@@ -2,6 +2,7 @@
 
 #include "../games/game.h"
 #include "../quad/focus_mask.h"
+#include "../quad/views4_layout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -65,10 +66,33 @@ std::wstring session_summary_text(const RuntimeInfo& r) {
 }
 
 Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
-    return readouts(s, runtime, games::launcher_game().features.focusMask);
+    const games::GameInfo& game = games::launcher_game();
+    return readouts(s, runtime, game.features.focusMask, game.qvfrImage, game.features.multiView);
 }
 
-Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksFocus) {
+// The image the layer offers the game per eye, in native eye widths and heights, and whether two of them share one
+// double-wide image (layer/session.cpp layerEnumerateViewConfigurationViews, the same Views4Layout).
+struct OfferedEye {
+    double width = 0, height = 0;
+    bool doubleWide = true;
+};
+
+static OfferedEye offered_eye(const Settings& s, games::QvfrImage image, bool multiView) {
+    using games::QvfrImage;
+    Views4Layout l = views4_layout(s.outer / 100.0, s.inner / 100.0 * s.width / 100.0, s.inner / 100.0 * s.height / 100.0,
+                                   s.crop_width(), s.crop_height());
+    switch (image) {
+    case QvfrImage::EyeColumns: return {l.column_eye_width(), l.column_eye_height(), true};
+    case QvfrImage::OneViewSize: return {l.layer_width(), 2 * l.layer_height(), true};
+    case QvfrImage::SeparateViews:
+        l.secondViewRoom = l.secondViewBeside = multiView;  // multi_view on (lmu_mvr_beside's default)
+        return {l.layer_width(), l.layer_height(), false};
+    default: return {l.eye_width(), l.eye_height(), true};
+    }
+}
+
+Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksFocus, games::QvfrImage image,
+                  bool multiView) {
     Readouts r;
     const auto scaled = [](int base, double fraction) { return static_cast<int>(std::lround(base * fraction)); };
     const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
@@ -86,12 +110,21 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksF
         r.target = {2 * r.outer.width, r.outer.height};
         r.focusDensity = static_cast<double>(s.outer) / s.width;
     }
-    // ACE's double-wide target must fit the runtime's maximum width, so each eye gets half.
-    const int eyeWidth = r.target.width / 2;
-    const int maxEyeWidth = runtime.maxWidth > 0 ? std::max(64, runtime.maxWidth / 2) : 0;
+    // The eye image the layer offers must fit the runtime's maximum: half its width each in a double-wide target (ACE,
+    // ACC, X-Plane, Two-loop), all of it where each view is an image of its own (LMU). Measured as the layer does:
+    // recommended x the layout's scale, truncated.
+    int eyeWidth = r.target.width / 2, eyeHeight = r.target.height;
+    bool doubleWide = true;
+    if (s.mode == RenderMode::Qvfr) {
+        const OfferedEye eye = offered_eye(s, image, multiView);
+        eyeWidth = static_cast<int>(runtime.width * eye.width);
+        eyeHeight = static_cast<int>(runtime.height * eye.height);
+        doubleWide = eye.doubleWide;
+    }
+    const int maxEyeWidth = runtime.maxWidth > 0 ? std::max(64, runtime.maxWidth / (doubleWide ? 2 : 1)) : 0;
     const int maxEyeHeight = runtime.maxHeight > 0 ? std::max(64, runtime.maxHeight) : 0;
     const double sx = maxEyeWidth > 0 && eyeWidth > maxEyeWidth ? static_cast<double>(maxEyeWidth) / eyeWidth : 1.0;
-    const double sy = maxEyeHeight > 0 && r.target.height > maxEyeHeight ? static_cast<double>(maxEyeHeight) / r.target.height : 1.0;
+    const double sy = maxEyeHeight > 0 && eyeHeight > maxEyeHeight ? static_cast<double>(maxEyeHeight) / eyeHeight : 1.0;
     r.overRuntimeLimit = sx < 1.0 || sy < 1.0;
     if (r.overRuntimeLimit) {
         // The layer clamps the offered eye to the maximum and every view keeps its share of it, so all

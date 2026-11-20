@@ -509,6 +509,39 @@ int SIM_QVFR_TEST_MAIN() {
                                              static_cast<double>(w.focus.width) * w.focus.height)) < 1 &&
                   w.saved < 0,
               "readouts: views shrink with the clamped eye; more pixels than the runtime shows as negative saved");
+        // A Varjo XR-4 (2026-11-19 report): the maximum is the native width, 4148. ACE's double-wide target halves it, so
+        // a 30% periphery and a 20% box at 100% fill it exactly and anything more is too large; LMU offers each view as an
+        // image of its own (the focus view beside its eye), so the same settings leave room up to about a 50% periphery.
+        {
+            RuntimeInfo varjo = rt;
+            varjo.width = 4148;
+            varjo.height = 3556;
+            varjo.maxWidth = varjo.maxHeight = 4148;
+            Settings at;
+            at.outer = 30;
+            at.inner = 100;
+            at.width = at.height = 20;
+            at.crop = false;
+            Settings more = at;
+            more.outer = 40;
+            Settings nearHalf = at;
+            nearHalf.outer = 49;
+            Settings over = at;
+            over.outer = 60;
+            using games::QvfrImage;
+            check(!readouts(at, varjo, false).overRuntimeLimit && readouts(more, varjo, false).overRuntimeLimit,
+                  "readouts: Varjo, ACE's double-wide target: 30% + 20% fits, 40% is too large");
+            check(!readouts(at, varjo, true, QvfrImage::SeparateViews, true).overRuntimeLimit &&
+                      !readouts(more, varjo, true, QvfrImage::SeparateViews, true).overRuntimeLimit &&
+                      !readouts(nearHalf, varjo, true, QvfrImage::SeparateViews, true).overRuntimeLimit &&
+                      readouts(over, varjo, true, QvfrImage::SeparateViews, true).overRuntimeLimit,
+                  "readouts: Varjo, LMU's separate views with the focus beside the eye: 30-49% fit, 60% is too large");
+            Settings tall = at;
+            tall.outer = 100;
+            check(readouts(tall, varjo, false, QvfrImage::EyeColumns).overRuntimeLimit &&
+                      !readouts(at, varjo, false, QvfrImage::EyeColumns).overRuntimeLimit,
+                  "readouts: ACC's eye columns: the wider view against half the maximum");
+        }
         // FOV crop: the outer views keep their density over the kept share; the focus views are unchanged.
         Settings cropped;
         cropped.crop = true;
