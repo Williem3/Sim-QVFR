@@ -40,6 +40,17 @@ inline bool projection_of_pair(const float (&view)[16], const float (&viewProj)[
     return true;
 }
 
+// projection_of_pair's inverse: the viewProj the draws upload (reversed depth, as the depth target holds it) from a view
+// and a projection in the eye slot's convention (ordinary depth: what projection_of_pair and the renderer's eye slot
+// give). Night car lighting unprojects the depth target with it: the ordinary product read every surface as at the
+// near plane (2026-11-19: lights off the cars, the car's own panels doubled, in whichever eye took this camera).
+inline void view_proj_of_pair(const float (&view)[16], const float (&projection)[16], float (&viewProj)[16]) {
+    namespace dlss = simqvfr::dlss;
+    const dlss::M4 m = dlss::mul(dlss::from_floats(view), dlss::reversed_depth(dlss::from_floats(projection)));
+    for (int i = 0; i < 16; ++i)
+        viewProj[i] = static_cast<float>(m[i]);
+}
+
 // `projection` is the eye's (`eye`: the FOV the game was handed, focus_math.h projection_from_tangents): its scale
 // terms (m0, m5: the FOV's width and height, which DLSS's jitter doesn't move) to 0.1%, its offsets (m8, m9) within
 // 0.01: DLSS's jitter moves those by up to a pixel (2 / width in NDC) and the FOV located last may be a frame on from

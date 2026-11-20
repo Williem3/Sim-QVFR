@@ -50,6 +50,30 @@ inline constexpr IniInt kColorExposure{L"quad", L"color_exposure", 0, -30, 30, 1
 inline constexpr IniInt kColorBrightness{L"quad", L"color_brightness", 0, -50, 50, 2};
 inline constexpr IniInt kColorContrast{L"quad", L"color_contrast", 0, -50, 50, 2};
 inline constexpr IniInt kColorSaturation{L"quad", L"color_saturation", 0, -100, 100, 5};
+// Night car lighting (quad/car_lighting.h; a game with GameFeatures::carLighting, LMU): the switch (its hooks at
+// launch: turned on later, the next launch), then the game's light kept on the cars, ambient occlusion's strength, the
+// floodlights' highlights and the lacquer's gloss, in percent. Live once on at launch.
+inline constexpr IniInt kCarLight{L"quad", L"car_light", 0, 0, 1, 1};
+inline constexpr IniInt kCarLightFill{L"quad", L"car_light_fill", 80, 30, 100, 5};
+inline constexpr IniInt kCarLightOcclusion{L"quad", L"car_light_occlusion", 70, 0, 100, 5};
+inline constexpr IniInt kCarLightHighlights{L"quad", L"car_light_highlights", 100, 0, 200, 10};
+inline constexpr IniInt kCarLightGloss{L"quad", L"car_light_gloss", 70, 0, 100, 5};
+// The width the cars' surface directions are smoothed over, cm (0: pixel to pixel, the triangles' facets show).
+inline constexpr IniInt kCarLightSmooth{L"quad", L"car_light_smooth", 15, 0, 50, 1};
+// The floodlights' shadows (the depth searched toward each light: a wing on the deck, a car on the next) and the paint's
+// fine detail (the game's normal maps: orange peel, carbon weave), each on or off.
+inline constexpr IniInt kCarLightShadows{L"quad", L"car_light_shadows", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightDetail{L"quad", L"car_light_detail", 1, 0, 1, 1};
+// The lacquer's reflections of what the eye sees (screen-space: the grandstands' lights, other cars), on or off.
+inline constexpr IniInt kCarLightReflections{L"quad", L"car_light_reflections", 1, 0, 1, 1};
+// The headlights as the floodlights (their highlights on the paint), the cars' shadows on the ground (the floodlights'
+// and the cars' own occlusion), and night vision's colour (the dark loses its colour, a little blue), each on or off.
+inline constexpr IniInt kCarLightHeadlights{L"quad", L"car_light_headlights", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightGround{L"quad", L"car_light_ground", 1, 0, 1, 1};
+inline constexpr IniInt kCarLightNightVision{L"quad", L"car_light_night_vision", 0, 0, 1, 1};
+// Night car lighting's quality: each effect's samples and steps (0 Low, 1 Medium, 2 High; the periphery a tier below
+// the focus view). The switches stay as they are.
+inline constexpr IniInt kCarLightQuality{L"quad", L"car_light_quality", 2, 0, 2, 1};
 // The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};

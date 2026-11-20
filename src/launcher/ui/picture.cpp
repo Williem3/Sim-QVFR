@@ -223,6 +223,56 @@ Card color_card() {
     return c;
 }
 
+// ---- Night cars ---------------------------------------------------------------------------------
+
+// Night car lighting (quad/car_lighting.h): LMU's cars relit at night; the headset menu's Color page, Night cars, holds
+// the same. The switch takes effect at the next launch (it hooks the game's shaders as they're made); the rest changes
+// while you drive.
+Card night_cars_card() {
+    Card c{Tab::Picture, tr(L"Night cars"), Applies::Live};
+    c.body = [](Body& b) {
+        if (!qvfr()) {
+            b.note(tr(L"Night car lighting is available in Quad View Foveated Rendering."));
+            return;
+        }
+        const CarLighting& l = app.s.carLight;
+        b.toggle(kNightOn, tr(L"Night car lighting"), l.on,
+                 l.on ? tr(L"Relights the cars at night: highlights from the floodlights and headlights, shading in the "
+                           L"creases.")
+                      : tr(L"Off"));
+        b.reveal(kNightOn, l.on, tr(L"Night car lighting"),
+                 {tr(L"Quality"), tr(L"Fill light"), tr(L"Ambient occlusion"), tr(L"Highlights"), tr(L"Paint gloss"),
+                  tr(L"Smoothing"), tr(L"Floodlight shadows"), tr(L"Paint detail"), tr(L"Lacquer reflections"),
+                  tr(L"Headlight highlights"), tr(L"Shadows on the ground"), tr(L"Night vision color")},
+                 [](Body& r) {
+            const CarLighting& cl = app.s.carLight;
+            std::vector<std::wstring> items;
+            const int selected = choice_items(kNightQuality, items);
+            r.segments(kNightQuality, tr(L"Quality"), items, selected);
+            r.sliders({kNightFill, tr(L"Fill light"), cl.fill, L"%"}, {kNightOcclusion, tr(L"Ambient occlusion"), cl.occlusion, L"%"});
+            r.sliders({kNightHighlights, tr(L"Highlights"), cl.highlights, L"%"}, {kNightGloss, tr(L"Paint gloss"), cl.gloss, L"%"});
+            r.slider({kNightSmooth, tr(L"Smoothing"), cl.smooth, L" cm", cl.smooth == 0 ? tr(L"Off") : L""});
+            r.toggle(kNightShadows, tr(L"Floodlight shadows"), cl.shadows,
+                     tr(L"Parts of a car hidden from a floodlight lose its light and highlight."));
+            r.toggle(kNightDetail, tr(L"Paint detail"), cl.detail,
+                     tr(L"The paint’s orange peel and the carbon’s weave in the highlights."));
+            r.toggle(kNightReflections, tr(L"Lacquer reflections"), cl.reflections,
+                     tr(L"What’s around the car mirrored in its paint, where both eyes can see it."));
+            r.toggle(kNightHeadlights, tr(L"Headlight highlights"), cl.headlights,
+                     tr(L"Other cars’ headlights shine on the paint as the floodlights do."));
+            r.toggle(kNightGround, tr(L"Shadows on the ground"), cl.ground,
+                     tr(L"The cars’ shadows on the track and walls around them."));
+            r.toggle(kNightVision, tr(L"Night vision color"), cl.nightVision,
+                     tr(L"The dark loses its colour and turns a little blue, as eyes see at night."));
+            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low takes about a third "
+                      L"less GPU time than High. Night car lighting itself starts at the next launch; everything else "
+                      L"changes while you drive."));
+        });
+    };
+    c.reset = [](Settings& s) { s.carLight = Settings{}.carLight; };
+    return c;
+}
+
 // ---- Foveation ---------------------------------------------------------------------------------
 
 void outline_color_row(Body& b) {
@@ -761,6 +811,8 @@ std::vector<Card> picture_cards() {
     std::vector<Card> cards = {resolution_card(), foveation_card(), preview_card()};
     if (game_has(&games::GameFeatures::sharpening))  // every game whose compositor runs; after Foveation, as in the headset
         cards.push_back(color_card());
+    if (game_has(&games::GameFeatures::carLighting))  // LMU: after Color, as in the headset menu's Color page
+        cards.push_back(night_cars_card());
     if (game_has(&games::GameFeatures::fovCrop) || game_has(&games::GameFeatures::helmet))
         cards.push_back(view_card());
     if (rendering_shown())

@@ -50,7 +50,8 @@ bool backendAbOk = false, backendAbLogged = false;
 int carSide = 0;
 bool carAbLogged = false, carsOn = false;
 std::atomic<bool> carsWanted{true};  // qvfr_frame_cars_wanted
-bool carsPaused = false;             // the tracking paused by it (logged when it changes)
+bool carsPaused = false;
+bool carLightLogged = false, carLightSaid = false;  // night car lighting's switch as last logged             // the tracking paused by it (logged when it changes)
 bool car_ab_on() { return cfg.carAb > 0 && carsOn; }
 // lmu_mask_ab's: 0 with the lens mask's and the focus mask's draws, 1 without.
 int maskSide = 0;

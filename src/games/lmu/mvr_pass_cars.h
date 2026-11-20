@@ -72,6 +72,24 @@ inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Reso
         ++g.time.carCalls;
     if (resource == g.worldRes && resource && context == g.context && SUCCEEDED(hr) && mapped)
         g.worldMapped = mapped->pData;
+    // Night car lighting: the floodlights' buffer, rewritten whole before each draw (WRITE_DISCARD), is written into
+    // our copy, which goes to the driver's memory at the Unmap: the lights read from ordinary memory, not the driver's
+    // write-combined memory (slow to read).
+    if (resource == g.omniRes && resource && SUCCEEDED(hr) && mapped && mapped->pData && type == D3D11_MAP_WRITE_DISCARD &&
+        sub == 0 && g.omniShadow.size() >= g.omniBytes && g.omniBytes) {
+        g.omniReal = mapped->pData;
+        mapped->pData = g.omniShadow.data();
+    } else if (resource == g.omniRes && resource) {
+        g.omniValid = false;  // written another way: our copy no longer what the draws read
+    }
+    // Night car lighting's headlights: the spotlights' buffer likewise (written once a frame, 32 KB).
+    if (resource == g.spotRes && resource && SUCCEEDED(hr) && mapped && mapped->pData && type == D3D11_MAP_WRITE_DISCARD &&
+        sub == 0 && g.spotShadow.size() >= g.spotBytes && g.spotBytes) {
+        g.spotReal = mapped->pData;
+        mapped->pData = g.spotShadow.data();
+    } else if (resource == g.spotRes && resource) {
+        g.spotValid = false;
+    }
     return hr;
 }
 
@@ -93,9 +111,29 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
             std::memcpy(g.viewPair + 16, data + g.viewProjCbOffset, 64);
             g.viewPairRead = true;
         }
+        // Night car lighting's headlights: the bytes around the draw's spotlights, beside its matrix in the same buffer
+        // (read at the record with the draw's own shader's offsets; this write's only: a draw after one not copied
+        // has none).
+        g.drawSpotsRead = false;
+        if (g.carLightOn && g.spotLo < g.spotHi && g.spotHi <= g.worldBytes) {
+            g.drawSpotBytes.resize(g.spotHi - g.spotLo);
+            std::memcpy(g.drawSpotBytes.data(), data + g.spotLo, g.spotHi - g.spotLo);
+            g.drawSpotsRead = true;
+        }
         g.worldMapped = nullptr;
         g.carMatrix = true;
         ++g.stats.carMatrixReads;
+    }
+    if (resource == g.spotRes && g.spotReal && resource) {  // the headlights: our copy to the driver's memory
+        std::memcpy(g.spotReal, g.spotShadow.data(), g.spotBytes);
+        g.spotReal = nullptr;
+        g.spotValid = true;
+    }
+    if (resource == g.omniRes && g.omniReal && resource) {  // night car lighting: our copy to the driver's memory
+        std::memcpy(g.omniReal, g.omniShadow.data(), g.omniBytes);
+        g.omniReal = nullptr;
+        ++g.omniWrites;
+        g.omniValid = true;
     }
     real(context, resource, sub);
 }
@@ -151,6 +189,10 @@ D3D11_BLEND_DESC blend_twin_desc(const D3D11_BLEND_DESC& game, bool write) {
     t.IndependentBlendEnable = TRUE;
     t.RenderTarget[1] = {FALSE, D3D11_BLEND_ONE, D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE, D3D11_BLEND_ZERO,
                          D3D11_BLEND_OP_ADD, static_cast<UINT8>(write ? D3D11_COLOR_WRITE_ENABLE_RED : 0)};
+    // Night car lighting's normals (target 2, bound only with it): written where the slot is.
+    t.RenderTarget[2] = {FALSE, D3D11_BLEND_ONE, D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE, D3D11_BLEND_ZERO,
+                         D3D11_BLEND_OP_ADD, static_cast<UINT8>(write ? D3D11_COLOR_WRITE_ENABLE_ALL : 0)};
+    t.RenderTarget[3] = t.RenderTarget[2];  // the bent normals likewise
     return t;
 }
 
@@ -355,6 +397,51 @@ bool ensure_slot_target() {
     g.slotSamples = samples;
     g.slotQuality = quality;
     simqvfr::logf("lmu mvr: car slots: slot target %ux%u x%u (R16_UINT, %.0f MB)", w, h, samples, w * 2.0 * h * samples / 1048576.0);
+    // Night car lighting: the game's normals beside it, at the same size and samples (render targets bound together
+    // share both).
+    g.normalTex.Reset();
+    g.normalRtv.Reset();
+    g.normalSrv.Reset();
+    g.normalsOn = false;
+    if (g.carLight) {
+        UINT normalLevels = 1;
+        const D3D11_TEXTURE2D_DESC nt = {w, h, 1, 1, DXGI_FORMAT_R16G16B16A16_UNORM, {samples, quality}, D3D11_USAGE_DEFAULT,
+                                         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+        g.normalsOn = (samples == 1 || (SUCCEEDED(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R16G16B16A16_UNORM, samples,
+                                                                                      &normalLevels)) &&
+                                        quality < normalLevels)) &&
+                      SUCCEEDED(device->CreateTexture2D(&nt, nullptr, &g.normalTex)) &&
+                      SUCCEEDED(device->CreateRenderTargetView(g.normalTex.Get(), nullptr, &g.normalRtv)) &&
+                      SUCCEEDED(device->CreateShaderResourceView(g.normalTex.Get(), nullptr, &g.normalSrv));
+        if (!g.normalsOn) {
+            g.normalTex.Reset();
+            g.normalRtv.Reset();
+            g.normalSrv.Reset();
+        }
+        g.detailTex.Reset();
+        g.detailRtv.Reset();
+        g.detailSrv.Reset();
+        UINT detailLevels = 1;
+        const D3D11_TEXTURE2D_DESC dt = {w, h, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {samples, quality}, D3D11_USAGE_DEFAULT,
+                                         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+        g.detailOn = g.normalsOn &&
+                     (samples == 1 || (SUCCEEDED(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R16G16B16A16_FLOAT, samples,
+                                                                                      &detailLevels)) &&
+                                       quality < detailLevels)) &&
+                     SUCCEEDED(device->CreateTexture2D(&dt, nullptr, &g.detailTex)) &&
+                     SUCCEEDED(device->CreateRenderTargetView(g.detailTex.Get(), nullptr, &g.detailRtv)) &&
+                     SUCCEEDED(device->CreateShaderResourceView(g.detailTex.Get(), nullptr, &g.detailSrv));
+        if (!g.detailOn) {
+            g.detailTex.Reset();
+            g.detailRtv.Reset();
+            g.detailSrv.Reset();
+        }
+        simqvfr::logf("lmu car light: the bent normals' target %s (RGBA16F, %.0f MB)",
+                      g.detailOn ? "made" : "COULDN'T be made: no paint detail", w * 8.0 * h * samples / 1048576.0);
+        simqvfr::logf("lmu car light: the game's normals and occlusion %s (%ux%u x%u RGBA16, %.0f MB)",
+                      g.normalsOn ? "target made" : "target COULDN'T be made: the depth's directions everywhere", w, h,
+                      samples, w * 8.0 * h * samples / 1048576.0);
+    }
     return true;
 }
 
@@ -392,12 +479,16 @@ void slot_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilVi
                                           static_cast<LONG>(fh)}};
             const FLOAT zero[4] = {};
             g.context1->ClearView(g.slotRtv.Get(), zero, rects, g.drawFocus && fw && fh ? 2 : 1);
+            if (g.normalsOn)
+                g.context1->ClearView(g.normalRtv.Get(), zero, rects, g.drawFocus && fw && fh ? 2 : 1);
+            if (g.detailOn)
+                g.context1->ClearView(g.detailRtv.Get(), zero, rects, g.drawFocus && fw && fh ? 2 : 1);
             g.slotsCleared = true;
             ++g.stats.slotPasses;
         }
         if (g.slotsCleared) {
-            ID3D11RenderTargetView* two[2] = {rtvs[0], g.slotRtv.Get()};
-            realOMSetRenderTargets(g.context, 2, two, dsv);
+            ID3D11RenderTargetView* targets[4] = {rtvs[0], g.slotRtv.Get(), g.normalRtv.Get(), g.detailRtv.Get()};
+            realOMSetRenderTargets(g.context, g.detailOn ? 4 : g.normalsOn ? 3 : 2, targets, dsv);
             g.slotsBound = true;
             ++g.stats.slotBinds;
         }
@@ -416,9 +507,9 @@ void slot_unbind() {
     if (!g.slotsBound)
         return;
     Timed timed(g.time.slotState);
-    ID3D11RenderTargetView* rtvs[2] = {};
+    ID3D11RenderTargetView* rtvs[4] = {};
     ID3D11DepthStencilView* dsv = nullptr;
-    g.context->OMGetRenderTargets(2, rtvs, &dsv);
+    g.context->OMGetRenderTargets(4, rtvs, &dsv);
     realOMSetRenderTargets(g.context, 1, rtvs, dsv);
     for (ID3D11RenderTargetView* r : rtvs)
         if (r)
@@ -480,7 +571,142 @@ void keep_view_pair() {
     p.next = (at + 1) % State::kViewPairs;
     std::memcpy(p.pair[at], g.viewPair, sizeof(g.viewPair));
     p.worldDraws[at] = world;
+    p.carDraws[at] = 0;
     p.last = at;
+}
+
+// Night car lighting (car_light.h): the floodlights this car part's draw was handed, kept for its slot; the
+// floodlights' buffer learned from the first such draw (its next write is the first read).
+uint32_t carLightSampleCounter = 0;
+void car_light_record(unsigned slot) {
+    if (g.vsOmniSlot < 0 || !g.vsOmniCount)
+        return;
+    if (g.pass >= 0 && g.pass < 2) {  // the camera this car part was drawn with (keep_view_pair, this draw's)
+        State::PassPairs& pp = g.passPairs[g.pass];
+        if (pp.frame == g.carFrame && pp.last >= 0 && pp.last < pp.count &&
+            std::memcmp(pp.pair[pp.last], g.viewPair, sizeof(g.viewPair)) == 0)
+            ++pp.carDraws[pp.last];
+    }
+    const bool timed = (++carLightSampleCounter & 15) == 0;
+    const uint64_t t0 = timed ? __rdtsc() : 0;
+    ID3D11Buffer* cb = g.vsCb[g.vsOmniSlot];
+    if (cb && cb != g.omniRes) {
+        D3D11_BUFFER_DESC d{};
+        cb->GetDesc(&d);
+        const UINT need = (std::max)(g.vsOmniPos, g.vsOmniColour) + 16 * g.vsOmniCount;
+        if (d.Usage == D3D11_USAGE_DYNAMIC && d.ByteWidth >= need && d.ByteWidth <= 65536) {
+            g.omniHeld = cb;
+            g.omniRes = cb;
+            g.omniBytes = d.ByteWidth;
+            g.omniShadow.assign(d.ByteWidth, 0);
+            g.omniValid = false;
+            g.omniReal = nullptr;
+            simqvfr::logf("lmu car light: the floodlights' buffer learned (%u bytes, %u lights at %u and %u)", d.ByteWidth,
+                          g.vsOmniCount, g.vsOmniPos, g.vsOmniColour);
+        }
+    }
+    if (cb == g.omniRes && g.omniValid) {
+        const float origin[3] = {g.matrix[12], g.matrix[13], g.matrix[14]};
+        const OmniLayout layout{g.vsOmniPos, g.vsOmniColour, g.vsOmniCount};
+        const PsTwinEntry* pe = g.gamePs ? &ps_entry(g.gamePs) : nullptr;
+        const bool paint = pe && pe->paint;
+        // The game's normal is in target 2 where the vertex shader hands it on and the pixel shader's twin writes it.
+        const bool normal = g.normalsOn && g.vsGameNormal && pe && pe->slotNormal;
+        const bool ao = normal && pe->slotAo;  // the w: its baked occlusion (else 1, written with the normal)
+        const bool detail = normal && g.detailOn && pe->slotDetail;  // target 3: the normal its normal maps bent
+        g.carLights.draw(slot, origin, g.omniShadow.data(), g.omniShadow.size(), layout, g.omniWrites, paint, normal, ao,
+                         detail);
+        // The headlights: the spotlights' buffer learned from the first draw whose shader reads them; the draw's own
+        // spotlights (its indices, read with its matrix) kept for the frame.
+        if (pe && pe->spotSlot >= 0) {
+            // The buffer this draw has bound, checked when the pixel shader changes (and each frame): a draw with
+            // another buffer is given no headlights (its indices are into that one). A new frame whose checks never
+            // found ours, 30 frames in a row: LMU made a new one (a session's change), learned again (never between
+            // the game's Map and Unmap of it: its write is in our copy until then).
+            if (g.spotCheckedFrame != g.carFrame) {
+                if (g.spotFrameChecked && !g.spotFrameMatched)
+                    ++g.spotOtherFrames;
+                else if (g.spotFrameChecked)
+                    g.spotOtherFrames = 0;
+                g.spotFrameChecked = g.spotFrameMatched = false;
+                g.spotCheckedFrame = g.carFrame;
+                g.spotCheckedPs = nullptr;
+                if (g.spotRes && g.spotOtherFrames >= 30 && !g.spotReal) {
+                    g.spotOtherFrames = 0;
+                    if (++g.spotRelearned <= 3)
+                        simqvfr::logf("lmu car light: the spotlights' buffer changed: learned again (%u)", g.spotRelearned);
+                    g.spotRes = nullptr;
+                    g.spotHeld.Reset();
+                    g.spotValid = false;
+                }
+            }
+            if (g.gamePs != g.spotCheckedPs) {
+                g.spotCheckedPs = g.gamePs;
+                ID3D11Buffer* b = nullptr;
+                g.context->PSGetConstantBuffers(static_cast<UINT>(pe->spotSlot), 1, &b);
+                if (!g.spotRes && b && g.spotLearnFrame != g.carFrame) {  // learning: once a frame at most
+                    g.spotLearnFrame = g.carFrame;
+                    D3D11_BUFFER_DESC bd{};
+                    b->GetDesc(&bd);
+                    if (bd.Usage == D3D11_USAGE_DYNAMIC && bd.ByteWidth >= pe->spotCapacity * 64 && bd.ByteWidth <= 262144) {
+                        g.spotHeld = b;
+                        g.spotRes = b;
+                        g.spotBytes = bd.ByteWidth;
+                        g.spotShadow.assign(bd.ByteWidth, 0);
+                        g.spotValid = false;
+                        g.spotCapacity = pe->spotCapacity;
+                        simqvfr::logf("lmu car light: the spotlights' buffer learned (%u bytes, %u spotlights; the draw's "
+                                      "count at %u, indices at %u)",
+                                      bd.ByteWidth, pe->spotCapacity, pe->spotCountOffset, pe->spotIndexOffset);
+                    } else if (!g.spotRefusalSaid) {
+                        g.spotRefusalSaid = true;
+                        simqvfr::logf("lmu car light: the spotlights' buffer not taken (usage %d, %u bytes for %u "
+                                      "spotlights): no headlight highlights until one is",
+                                      static_cast<int>(bd.Usage), bd.ByteWidth, pe->spotCapacity);
+                    }
+                }
+                g.spotBoundOk = b && b == g.spotRes;
+                ID3D11Buffer* drawCb = nullptr;
+                if (pe->spotDrawSlot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+                    g.context->PSGetConstantBuffers(pe->spotDrawSlot, 1, &drawCb);
+                g.spotDrawOk = drawCb && drawCb == g.worldCb;
+                if (drawCb)
+                    drawCb->Release();
+                g.spotFrameChecked = true;
+                g.spotFrameMatched = g.spotFrameMatched || g.spotBoundOk;
+                if (b)
+                    b->Release();
+            }
+            // The draw's count and indices, at its shader's offsets, from the per-draw buffer's last write: only where
+            // its shader's count sits in the buffer the matrix is read from (its worldMatrix at the same offset).
+            const UINT lo = pe->spotCountOffset < pe->spotIndexOffset ? pe->spotCountOffset : pe->spotIndexOffset;
+            const UINT hi = (std::max)(pe->spotCountOffset + 4, pe->spotIndexOffset + 40);
+            const bool sameBuffer = g.spotDrawOk;
+            ++g.spotWhy.seen;
+            g.spotWhy.notBound += g.spotBoundOk ? 0 : 1;
+            g.spotWhy.otherLayout += sameBuffer ? 0 : 1;
+            g.spotWhy.notValid += g.spotValid ? 0 : 1;
+            g.spotWhy.notRead += g.drawSpotsRead ? 0 : 1;
+            if (sameBuffer && hi <= g.worldBytes && (lo < g.spotLo || hi > g.spotHi)) {  // from the next write
+                g.spotLo = (std::min)(g.spotLo, lo);
+                g.spotHi = (std::max)(g.spotHi, hi);
+            } else if (sameBuffer && g.spotBoundOk && g.spotValid && g.drawSpotsRead && lo >= g.spotLo && hi <= g.spotHi &&
+                       g.drawSpotBytes.size() >= g.spotHi - g.spotLo) {
+                uint32_t count = 0, packed[10] = {};
+                std::memcpy(&count, g.drawSpotBytes.data() + (pe->spotCountOffset - g.spotLo), 4);
+                std::memcpy(packed, g.drawSpotBytes.data() + (pe->spotIndexOffset - g.spotLo), 40);
+                ++g.spotWhy.given;
+                g.spotWhy.listed += count <= 20 ? count : 0;
+                g.carLights.add_spots(slot, count, packed, g.spotCapacity, origin, g.spotShadow.data(),
+                                      g.spotShadow.size());
+            }
+        }
+        ++g.carLightRecords;
+    } else {
+        ++g.carLightMisses;
+    }
+    if (timed)
+        g.carLightTicks += (__rdtsc() - t0) * 16;
 }
 
 int car_draw(UINT count, UINT start, INT base) {
@@ -497,6 +723,7 @@ int car_draw(UINT count, UINT start, INT base) {
             return -1;
         }
         g.worldCbHeld = cb;  // held: its address never another resource's while it's the one compared
+        g.worldBytes = d.ByteWidth;
         g.worldCb = cb;
         g.worldRes = cb;
         g.worldCbOffset = g.vsWorldOffset;
@@ -538,5 +765,7 @@ int car_draw(UINT count, UINT start, INT base) {
     }
     bool moved = false;
     const int slot = g.cars.draw(key, g.matrix, moved);
+    if (moved && g.carLightOn)
+        car_light_record(static_cast<unsigned>(slot));
     return moved ? slot : -1;  // the slot to bind (car slots): a part with a frame before
 }

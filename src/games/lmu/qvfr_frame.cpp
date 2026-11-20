@@ -20,8 +20,10 @@
 #include "../../probe/d3d11_capture.h"
 #include "../../probe/frame_parts.h"
 #include "../../quad/eye_off.h"
+#include "../../dev_build.h"
 #include "../../sha256_file.h"
 #include "abi.h"
+#include "car_light.h"
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
 #include "../../engine/ngx_dlss.h"
@@ -633,12 +635,15 @@ bool install_mvr(ID3D11Device* device) {
                        cfg.trackerDrives);
     // Other cars' motion: the player's where DLSS can run (as texture sharpening's), the diagnostics' as they say; their
     // hooks only when on (the tracking before the slots: they need it).
-    const bool cars = cfg.carTrack && (cfg.carForced || (simqvfr::ngx::built_in() &&
-                                                         simqvfr::nvapi::two_views_gpu() != nullptr && cfg.trackerDrives));
+    // Night car lighting: on any GPU the tracker drives (its slots need no DLSS).
+    const bool cars = cfg.carTrack && (cfg.carForced || (cfg.carLight && cfg.trackerDrives) ||
+                                       (simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
+                                        cfg.trackerDrives));
     mvr_car_track(cars);
-    mvr_car_slots(cars ? cfg.carSlots : 0);
+    mvr_car_slots(cars ? cfg.carSlots : 0);  // (at least 1 with the lighting: its slots)
     mvr_car_slot_images(cars && cfg.carForced);  // a freeze each: never the player's
-    carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
+    mvr_car_light(cars && cfg.carLight);
+    carsOn = cars && (cfg.carSlots >= 2 || cfg.carLight);  // the A/B measures what players get (DLSS taking the motion)
     // FSR seen at the d3d11 level: build-free runs take it from there, a known build compares it with the game's setting.
     mvr_fsr_watch(cfg.trackerDrives);
     // DLSS's camera from the per-draw buffer (view_pair.h): where it is the source (build-free), and where the cars'
@@ -676,6 +681,11 @@ bool install_mvr(ID3D11Device* device) {
 }
 
 // Before eye pass p: its focus view's size, this frame's remap (frozen at pass 0) and the room check.
+// Night car lighting's comparison (dev builds' Ctrl+Alt+L; below, with the frame capture).
+void compare_frame_begin(simqvfr::CarLighting& light);
+void compare_views();
+void ab_frame_begin(simqvfr::CarLighting& light);
+
 void mvr_before_pass(int p) {
     if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: qvfr_frame_frame_end)
         return;
@@ -703,6 +713,17 @@ void mvr_before_pass(int p) {
                     mvr_frame_mode(backendSide);
                 }
             }
+            if (cfg.carLight) {  // night car lighting: its live settings (between frames)
+                simqvfr::CarLighting light = simqvfr::car_lighting();
+                ab_frame_begin(light);       // dev builds' Ctrl+Alt+N: each switch off in turn, costs paired
+                compare_frame_begin(light);  // dev builds' Ctrl+Alt+L: off, then on, whatever the menu says
+                mvr_car_light_frame(light);
+                if (light.on != carLightLogged || !carLightSaid) {
+                    carLightSaid = true;
+                    carLightLogged = light.on;
+                    simqvfr::logf("lmu qvfr: night car lighting %s", simqvfr::car_lighting_log(light).c_str());
+                }
+            }
             if (car_ab_on()) {  // the other cars' motion this frame or not (between frames)
                 if (!carAbLogged) {
                     carAbLogged = true;
@@ -714,7 +735,9 @@ void mvr_before_pass(int p) {
                 mvr_car_active(carSide == 0);
                 mvr_frame_mode(carSide);
             } else if (carsOn) {  // DLSS or the cars' motion turned off while the game runs: no tracking for nothing
-                const bool pause = !carsWanted.load(std::memory_order_relaxed);
+                // (night car lighting on keeps them: it reads the slots)
+                const bool pause = !carsWanted.load(std::memory_order_relaxed) &&
+                                   !(cfg.carLight && simqvfr::car_lighting().on);
                 if (pause != carsPaused) {
                     carsPaused = pause;
                     mvr_car_active(!pause);
@@ -1020,6 +1043,256 @@ void pass_end(int p) {
 }
 
 const char* tag() { return "lmu qvfr"; }
+
+// ---- Night car lighting's comparison (dev builds: Ctrl+Alt+L) ----
+// The same view with the relight and without, for before/after images: the frame's four views with it on copied on
+// the GPU (at once when it was on already: settled; else after kCompareSettle frames on), then kCompareSettle frames
+// with it off (DLSS's history lets go of the lit cars in a few frames: it clamps to what the frame shows) and that
+// frame's views copied; both read back and saved (eye 0 and focus view 0: before, after and a labelled side by side)
+// into the captures folder. The copies are kCompareSettle frames apart (~65 ms): hold the head still. Run 1 of it
+// (24 frames each way, ~270 ms apart) caught the head turning. The focus view follows the gaze: its pair is left out
+// when the focus box moved between the two copies.
+constexpr int kCompareSettle = 6;
+int compareState = 0;  // 0 idle; 1 settling on (it was off); 2 the "after" this frame; 3 off, the "before" to come
+int compareFrames = 0;
+bool compareKeyHeld = false;
+ID3D11Texture2D* compareCopies[2] = {};  // the atlas off [0] and on [1] (held)
+unsigned compareW[2][4] = {}, compareH[2][4] = {};
+std::uint64_t compareFrame[2] = {};
+double compareBox[2][4] = {};  // focus box 0 at each copy (normalised in its eye)
+unsigned long long carLightOnFrames = 0;  // frames in a row the relight has been on (settled from kCompareSettle)
+
+void compare_poll() {
+    if constexpr (simqvfr::kDevBuild) {  // a diagnostic hotkey: never in a player's build (dev_build.h)
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                          (GetAsyncKeyState('L') & 0x8000);
+        if (down && !compareKeyHeld && compareState == 0 && cfg.carLight) {
+            const bool settled = carLightOnFrames >= kCompareSettle;
+            compareState = settled ? 2 : 1;  // on and settled: this frame's views are the "after"
+            compareFrames = 0;
+            simqvfr::logf("lmu car light: Ctrl+Alt+L: comparison: with the relight%s, then %d frames without (hold still)",
+                          settled ? " (this frame)" : "", kCompareSettle);
+        }
+        compareKeyHeld = down;
+    }
+}
+
+// ---- Night car lighting's automatic A/B (dev builds: Ctrl+Alt+N) ----
+// Each switch that's on, turned off for a second in turn between seconds of the menu's settings (CarLightAb), while
+// the player drives: the switch's cost from the blocks either side, logged every 4 rounds and at the end (Ctrl+Alt+N
+// again, or ~5 minutes). The switches flip on screen as it goes: what changes each second is that switch.
+CarLightAb carAb;
+bool abKeyHeld = false;
+unsigned abRoundsLogged = 0;
+int abKindLogged = -2;
+
+void ab_report(const char* when) {
+    simqvfr::logf("lmu car light A/B: %s, %u rounds (%u frames); each switch's cost is your settings minus it off:",
+                  when, carAb.rounds(), carAb.frames());
+    for (const std::string& line : carAb.report())
+        simqvfr::logf("lmu car light A/B:   %s", line.c_str());
+}
+
+void ab_frame_begin(simqvfr::CarLighting& light) {
+    if constexpr (simqvfr::kDevBuild) {  // a diagnostic hotkey: never in a player's build (dev_build.h)
+        const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                          (GetAsyncKeyState('N') & 0x8000);
+        if (down && !abKeyHeld) {
+            if (carAb.active()) {
+                carAb.stop();
+                ab_report("stopped (Ctrl+Alt+N)");
+            } else if (carAb.start(light)) {
+                abRoundsLogged = 0;
+                abKindLogged = -2;
+                std::string names;
+                for (int v = 0; v < carAb.variants(); ++v)
+                    names += std::string(v ? ", " : "") + carAb.variant_name(v);
+                simqvfr::logf("lmu car light A/B: Ctrl+Alt+N: started: %u frames of your settings, then %u with one "
+                              "off, in turn: %s (%s); Ctrl+Alt+N again stops it, else it stops after %u frames",
+                              CarLightAb::kFrames, CarLightAb::kFrames, names.c_str(),
+                              simqvfr::car_lighting_log(light).c_str(), CarLightAb::kMaxFrames);
+            } else {
+                simqvfr::log_line("lmu car light A/B: Ctrl+Alt+N: nothing to vary (night car lighting or every switch "
+                                  "off)");
+            }
+        }
+        abKeyHeld = down;
+        // Ctrl+Alt+K: the debug view (car_light.h car_light_set_debug_view).
+        static bool debugKeyHeld = false;
+        const bool debugDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                               (GetAsyncKeyState('K') & 0x8000);
+        if (debugDown && !debugKeyHeld) {
+            car_light_set_debug_view(!car_light_debug_view());
+            simqvfr::logf("lmu car light: Ctrl+Alt+K: the debug view %s (red: lacquer, green: floodlights, blue: the "
+                          "game's normal, white: headlights; the rest dimmed)",
+                          car_light_debug_view() ? "on" : "off");
+        }
+        debugKeyHeld = debugDown;
+        // Ctrl+Alt+J: the reflections' check against the other eye (car_light.h car_light_set_both_eyes).
+        static bool bothKeyHeld = false;
+        const bool bothDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                              (GetAsyncKeyState('J') & 0x8000);
+        if (bothDown && !bothKeyHeld) {
+            car_light_set_both_eyes(!car_light_both_eyes());
+            simqvfr::logf("lmu car light: Ctrl+Alt+J: lacquer reflections %s",
+                          car_light_both_eyes() ? "only where both eyes see the reflected point"
+                                                : "as each eye finds them (no check against the other eye)");
+        }
+        bothKeyHeld = bothDown;
+        if (!carAb.active()) {
+            mvr_car_light_block(0);
+            car_light_ab_both_eyes_off(false);
+            return;
+        }
+        unsigned ended = 0;
+        const unsigned serial = carAb.frame(light, ended);
+        if (ended) {
+            CarLightBlock b;
+            if (mvr_car_light_block_cost(ended, b))
+                carAb.add(b);
+        }
+        mvr_car_light_block(serial);
+        car_light_ab_both_eyes_off(carAb.both_eyes_off_now());
+        if (carAb.kind() != abKindLogged && carAb.rounds() == 0) {  // the first round: what each second is
+            abKindLogged = carAb.kind();
+            simqvfr::logf("lmu car light A/B: frame %llu: %s%s", static_cast<unsigned long long>(frames),
+                          carAb.kind() < 0 ? "" : "off: ", carAb.variant_name(carAb.kind()));
+        }
+        if (!carAb.active()) {
+            mvr_car_light_block(0);
+            ab_report("done");
+        } else if (carAb.rounds() != abRoundsLogged && carAb.rounds() % 4 == 0) {
+            abRoundsLogged = carAb.rounds();
+            ab_report("so far");
+        }
+    }
+}
+
+// Before pass 0: the frame's relight as the comparison wants it.
+void compare_frame_begin(simqvfr::CarLighting& light) {
+    compare_poll();
+    if (compareState != 0)
+        carAb.taint();
+    if (compareState == 1 || compareState == 2)
+        light.on = true;
+    else if (compareState == 3)
+        light.on = false;
+    carLightOnFrames = light.on ? carLightOnFrames + 1 : 0;
+}
+
+bool compare_copy(int side) {
+    if (!atlas)
+        return false;
+    D3D11_TEXTURE2D_DESC d{};
+    atlas->GetDesc(&d);
+    ID3D11Texture2D*& copy = compareCopies[side];
+    if (copy) {
+        D3D11_TEXTURE2D_DESC c{};
+        copy->GetDesc(&c);
+        if (c.Width != d.Width || c.Height != d.Height || c.Format != d.Format) {
+            copy->Release();
+            copy = nullptr;
+        }
+    }
+    ID3D11Device* device = nullptr;
+    atlas->GetDevice(&device);
+    if (!device)
+        return false;
+    if (!copy) {
+        D3D11_TEXTURE2D_DESC c = d;
+        c.Usage = D3D11_USAGE_DEFAULT;
+        c.BindFlags = 0;
+        c.CPUAccessFlags = 0;
+        c.MiscFlags = 0;
+        if (FAILED(device->CreateTexture2D(&c, nullptr, &copy))) {
+            copy = nullptr;
+            device->Release();
+            return false;
+        }
+    }
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    context->CopyResource(copy, atlas);
+    context->Release();
+    device->Release();
+    for (int v = 0; v < 4; ++v) {
+        compareW[side][v] = std::clamp(passW[v], 1u, viewW);
+        compareH[side][v] = std::clamp(passH[v], 1u, viewH);
+    }
+    compareFrame[side] = frames;
+    std::memcpy(compareBox[side], boxes[0].rect, sizeof(compareBox[side]));
+    return true;
+}
+
+// One view of a read-back atlas (BGRA, aw wide), its top-left w x h.
+std::vector<std::uint8_t> compare_view(const std::vector<std::uint8_t>& px, unsigned aw, int v, unsigned w, unsigned h) {
+    const unsigned x0 = (v % 2) * viewW, y0 = (v / 2) * viewH;
+    std::vector<std::uint8_t> out(static_cast<std::size_t>(w) * h * 4);
+    for (unsigned y = 0; y < h; ++y)
+        std::memcpy(out.data() + static_cast<std::size_t>(y) * w * 4,
+                    px.data() + (static_cast<std::size_t>(y0 + y) * aw + x0) * 4, static_cast<std::size_t>(w) * 4);
+    return out;
+}
+
+void compare_save() {
+    std::vector<std::uint8_t> px[2];
+    unsigned w[2] = {}, h[2] = {};
+    for (int s = 0; s < 2; ++s)
+        if (!simqvfr::d3d11_read_bgra8(compareCopies[s], px[s], w[s], h[s])) {
+            simqvfr::log_line("lmu car light: comparison: the views couldn't be read back (not 8-bit?)");
+            return;
+        }
+    const std::wstring dir = simqvfr::captures_directory();
+    const struct {
+        int view;
+        const wchar_t* name;
+    } shots[2] = {{0, L"eye0"}, {2, L"focus0"}};
+    double boxMoved = 0;
+    for (int k = 0; k < 4; ++k)
+        boxMoved = (std::max)(boxMoved, std::fabs(compareBox[0][k] - compareBox[1][k]));
+    for (const auto& shot : shots) {
+        if (shot.view == 2 && boxMoved > 0.002) {  // the gaze moved the focus box: not the same view
+            simqvfr::logf("lmu car light: comparison %llu: the focus box moved %.1f%% of the eye between the two (the "
+                          "gaze): focus view not saved, the eye's only",
+                          compareFrame[0], boxMoved * 100);
+            continue;
+        }
+        // Both at the smaller of the two sizes (live resolution may differ between them).
+        const unsigned cw = (std::min)(compareW[0][shot.view], compareW[1][shot.view]);
+        const unsigned ch = (std::min)(compareH[0][shot.view], compareH[1][shot.view]);
+        const std::vector<std::uint8_t> before = compare_view(px[0], w[0], shot.view, cw, ch);
+        const std::vector<std::uint8_t> after = compare_view(px[1], w[1], shot.view, cw, ch);
+        wchar_t name[96];
+        swprintf_s(name, L"lmu-car-light-frame%llu-%ls-before.png", compareFrame[0], shot.name);
+        simqvfr::write_png_bgra((std::filesystem::path(dir) / name).wstring(), before, cw, ch);
+        swprintf_s(name, L"lmu-car-light-frame%llu-%ls-after.png", compareFrame[0], shot.name);
+        simqvfr::write_png_bgra((std::filesystem::path(dir) / name).wstring(), after, cw, ch);
+        swprintf_s(name, L"lmu-car-light-frame%llu-%ls-compare.png", compareFrame[0], shot.name);
+        const std::wstring path = (std::filesystem::path(dir) / name).wstring();
+        const bool ok = car_light_side_by_side(path, before, after, cw, ch, L"Before: LMU night lighting",
+                                               L"After: Sim-QVFR night car lighting");
+        simqvfr::logf("lmu car light: comparison %ls %ls (frames %llu off, %llu on)", ok ? L"saved:" : L"NOT saved:",
+                      path.c_str(), compareFrame[0], compareFrame[1]);
+    }
+}
+
+// After the frame's views are in the atlas: the comparison's copies ("after" first, then "before"), then its save.
+void compare_views() {
+    if (compareState == 0)
+        return;
+    if (compareState == 1 && ++compareFrames < kCompareSettle)  // it was off: on until settled
+        return;
+    if (compareState == 1 || compareState == 2) {  // this frame, on and settled: the "after"
+        compareState = compare_copy(1) ? 3 : 0;
+        compareFrames = 0;
+        return;
+    }
+    if (++compareFrames < kCompareSettle)  // off: the kCompareSettle-th such frame is the "before"
+        return;
+    if (compare_copy(0))
+        compare_save();
+    compareState = 0;
+}
 
 // ---- QVFR: the four views at the frame capture hotkey ----
 // [experiment] d3d11_capture_hotkey=1: each press saves the swapchains' images (probe/d3d11_capture.h); the next composed
@@ -1520,6 +1793,7 @@ ID3D11Texture2D* qvfr_frame_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)
                       passH[0], passW[2], passH[2], viewW, viewH, live ? " (live resolution)" : " (the launch size)");
     }
     capture_views();
+    compare_views();
     return atlas;
 }
 

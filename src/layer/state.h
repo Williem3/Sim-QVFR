@@ -24,6 +24,7 @@
 #include "games/adapter.h"
 #include "input/hotkeys.h"
 #include "probe/cpu_load.h"
+#include "quad/car_lighting.h"
 #include "quad/color_grade.h"
 #include "quad/compositor.h"
 #include "quad/d3d11_compositor.h"
@@ -149,6 +150,7 @@ struct Experiment {
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
+    bool carLightAtLaunch = false;  // [quad] car_light on at launch (a game with it): its hooks made, its values live
     bool textureSharpeningAtLaunch = false;  // [dlss] texture_sharpening on at launch: its hook made (LMU), its settings live
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
@@ -260,6 +262,7 @@ struct LiveSettings {
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
     ColorGrade color;        // [quad] color_correction and its values (a game with GameFeatures::sharpening)
+    CarLighting carLight;    // [quad] car_light and its values (a game with GameFeatures::carLighting)
     int outputDensityMax = 400;  // [quad] output_density_max, percent of the native eye (100: composed at native size)
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)

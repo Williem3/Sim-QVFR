@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "../../log.h"
+#include "../../quad/car_lighting.h"
 #include "../identity_adapter.h"
 #include "../diag_switches.h"
 #include "../multi_view.h"
@@ -92,8 +93,11 @@ public:
                 const int slots =
                     s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, s.ini)) : 0;
                 run.carForced = track > 0 || slots > 0;
-                run.carTrack = track > 0 || slots > 0 || playerCars;
-                run.carSlots = slots > 0 ? slots : playerCars ? 2 : 0;
+                // Night car lighting on at launch: the tracking and the slots for it too (they say which pixels are
+                // cars'), DLSS's motion or not.
+                run.carLight = s.ini && simqvfr::read_car_lighting(s.ini).on;
+                run.carTrack = track > 0 || slots > 0 || playerCars || run.carLight;
+                run.carSlots = slots > 0 ? slots : playerCars ? 2 : run.carLight ? 1 : 0;
                 // lmu_car_vectors_ab=N (with them, a measurement): N frames with the cars' motion, N without, in turn.
                 run.carAb = s.ini ? (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment",
                                                                                          L"lmu_car_vectors_ab", 0, s.ini)))
@@ -310,6 +314,9 @@ public:
             qvfr_frame_mask_taken(viewIndex);
     }
     bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && qvfr_frame_record(frame); }
+    bool qvfr_car_light_costs(double& gpuMs, double& cpuMs) const override {
+        return mvr_car_light_costs(gpuMs, cpuMs);
+    }
     simqvfr::games::QvfrMultiView qvfr_multi_view() const override {
         return qvfr_ ? qvfr_frame_multi_view() : simqvfr::games::QvfrMultiView::none;
     }

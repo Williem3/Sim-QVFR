@@ -1,6 +1,8 @@
 // LMU's inputs to the engine's DLAA (dlss_inputs.h).
 #include "dlss_inputs.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -55,7 +57,7 @@ int choiceSaid = 0;  // passes with more than one pair of the eye's FOV said (th
 // eye's FOV, the one most of the static world's draws (identity worldMatrix) used: the world's camera, not another
 // space's drawn with the same FOV (the cockpit, the sky). Any build. `why` (when false): none drawn yet, or none of
 // them the eye's.
-bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const char** why = nullptr) {
+bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const char** why = nullptr, bool strict = false) {
     float pairs[16][32];
     unsigned world[16] = {};
     const int n = mvr_view_pairs(eye, pairs, world, 16);
@@ -84,7 +86,13 @@ bool drawn_matrices(int eye, float (&view)[16], float (&projection)[16], const c
             *why = "none of the pass's pairs is the eye's";
         return false;
     }
-    if (matching > 1 && choiceSaid < 3) {  // which spaces share the eye's FOV (the log)
+    if (strict && matching > 1 && world[best] == 0) {  // night car lighting's: several with the eye's FOV, none the
+                                                       // world's: no telling which (DLSS keeps its own choice)
+        if (why)
+            *why = "several pairs with the eye's FOV, none with static-world draws";
+        return false;
+    }
+    if (matching > 1 && !strict && choiceSaid < 3) {  // which spaces share the eye's FOV (the log: DLSS's calls only)
         ++choiceSaid;
         char text[768];
         int len = std::snprintf(text, sizeof(text), "lmu dlss: build-free camera: pass %d: %d cameras with the eye's FOV, "
@@ -229,6 +237,88 @@ bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
 }
 
 }  // namespace
+
+namespace {
+// lmu_pass_camera's: the last camera found per eye and when (ms, GetTickCount64), the source this frame's first eye
+// took (the second takes the same), the renderer's eye mismatches.
+float camLastView[2][16], camLastViewProj[2][16];
+unsigned long long camFoundAt[2] = {}, camOtherEye = 0, camSourceMixed = 0, camDecidedAt = 0;
+bool camHave[2] = {};
+int camOtherEyeSaid = 0, camMixedSaid = 0;
+bool camFrameRenderer = false;  // eye 0 took the renderer's this frame
+
+// The renderer's view and projection while its view params are this eye's (a known build). False: not (another eye's
+// or view's params, or none).
+bool renderer_camera(int eye, float (&view)[16], float (&projection)[16]) {
+    if (qvfr_frame_build_free() || !qvfr_frame_known_build())
+        return false;
+    const std::uintptr_t base = simqvfr::module_base();
+    const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer);
+    if (!renderer)
+        return false;
+    const int paramsEye = *reinterpret_cast<const int*>(renderer + kRendererViewEye + kParamsEye);
+    if (paramsEye != eye) {
+        ++camOtherEye;
+        if (camOtherEyeSaid < 3) {
+            ++camOtherEyeSaid;
+            simqvfr::logf("lmu car light: pass %d: the renderer's view params are eye %d's: the drawn camera taken (%llu "
+                          "such passes)",
+                          eye, paramsEye, camOtherEye);
+        }
+        return false;
+    }
+    bool fromSlot = false;
+    return renderer_matrices(eye, view, projection, fromSlot) && dlss::rigid(dlss::from_floats(view)) &&
+           dlss::projection(dlss::from_floats(projection));
+}
+}  // namespace
+
+bool lmu_pass_camera(int eye, float (&view)[16], float (&viewProj)[16]) {
+    const int e = eye & 1;
+    float projection[16];
+    // Both eyes of a frame from one source: the renderer's where the first eye had it, else the drawn pairs' for both
+    // (the two can differ a little: one eye from each would reconstruct depth and place lights differently).
+    bool found = false;
+    const unsigned long long now = GetTickCount64();
+    // The second eye follows the first only when the first decided this frame (within 20 ms): with the first eye off,
+    // or not relit, it decides for itself.
+    const bool followFirst = e == 1 && camDecidedAt && now - camDecidedAt <= 20;
+    if (e == 0 || !followFirst) {
+        camFrameRenderer = renderer_camera(eye, view, projection);
+        found = camFrameRenderer;
+        if (e == 0)
+            camDecidedAt = now;
+    } else if (camFrameRenderer) {
+        found = renderer_camera(eye, view, projection);
+        if (!found) {
+            ++camSourceMixed;
+            if (camMixedSaid < 3) {
+                ++camMixedSaid;
+                simqvfr::logf("lmu car light: the second eye without the renderer's camera the first had: the drawn one "
+                              "(%llu such frames)",
+                              camSourceMixed);
+            }
+        }
+    }
+    if (!found)
+        found = drawn_matrices(eye, view, projection, nullptr, true);
+    if (found) {
+        view_proj_of_pair(view, projection, viewProj);  // as the draws upload it: reversed depth (view_pair.h)
+        std::memcpy(camLastView[e], view, sizeof(view));
+        std::memcpy(camLastViewProj[e], viewProj, sizeof(viewProj));
+        camFoundAt[e] = now;
+        camHave[e] = true;
+        return true;
+    }
+    // None this pass: the eye's last within 50 ms (~4 frames: a head turn in that time moves its lights a little; a
+    // pause, the garage or a session change in between is longer, and an old pose isn't taken).
+    if (camHave[e] && now - camFoundAt[e] <= 50) {
+        std::memcpy(view, camLastView[e], sizeof(view));
+        std::memcpy(viewProj, camLastViewProj[e], sizeof(viewProj));
+        return true;
+    }
+    return false;
+}
 
 void dlss_use_lmu_inputs() {
     logged = drawnLogged = false;

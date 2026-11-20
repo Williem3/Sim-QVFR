@@ -380,6 +380,14 @@ OsdInput osd_input(int64_t now) {
         in.cpuBusiestName = threads.busiestName;
         in.cpuBusiestIsRender = threads.busiestThread == osd.thread;
     }
+    // Night car lighting's cost (LMU), while it runs.
+    if (game) {
+        double lightGpu = 0, lightCpu = 0;
+        if (game->qvfr_car_light_costs(lightGpu, lightCpu)) {
+            in.carLightGpuMs = lightGpu;
+            in.carLightCpuMs = lightCpu;
+        }
+    }
     // The game's way of drawing its focus views (LMU: NVIDIA's multi-view rendering, the software one, or the fallback).
     if (game) {
         switch (game->qvfr_multi_view()) {

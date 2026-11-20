@@ -188,6 +188,13 @@ public:
     virtual void qvfr_frame_end() = 0;
     // How the focus views were drawn as of the last frame (the overlay's badge). Any thread.
     virtual QvfrMultiView qvfr_multi_view() const { return QvfrMultiView::none; }
+    // Night car lighting's cost per frame (GameFeatures::carLighting; the overlay): GPU and CPU ms, averaged over a short
+    // window. False: not running, or no average yet. Any thread.
+    virtual bool qvfr_car_light_costs(double& gpuMs, double& cpuMs) const {
+        (void)gpuMs;
+        (void)cpuMs;
+        return false;
+    }
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
     // The layer was loaded at the game's first vkCreateInstance (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain,

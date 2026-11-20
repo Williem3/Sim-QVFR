@@ -58,6 +58,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.sharpen = ini_int(ini, kSharpenPercent);
     if (features.sharpening)  // every game whose compositor runs (as sharpening)
         l.color = read_color_grade(ini);
+    if (features.carLighting)  // night car lighting (the game reads it each frame: quad/car_lighting.h)
+        l.carLight = read_car_lighting(ini);
     l.outputDensityMax = ini_int(ini, kOutputDensityMax);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
@@ -335,6 +337,7 @@ void load_experiment() {
         100.0;
     experiment.uavBarriers = GetPrivateProfileIntW(L"experiment", L"pass_census_uav_barriers", 0, ini.c_str()) != 0;
     experiment.views4DlssLive = GetPrivateProfileIntW(L"experiment", L"views4_dlss_live", 1, ini.c_str()) != 0;
+    experiment.carLightAtLaunch = game_features().carLighting && read_car_lighting(ini.c_str()).on;
     experiment.textureSharpeningAtLaunch = simqvfr::read_dlss_settings(ini.c_str()).textureSharpening != 0;
     {
         wchar_t watch[512] = {};
@@ -391,6 +394,7 @@ void load_experiment() {
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
     experiment.colorGrade = color_grade_bits(settings.color);
+    set_car_lighting(settings.carLight);
     experiment.outputDensityMax = settings.outputDensityMax;
     set_eye_off(settings.eyeOff);
     // Applied on the render thread at its next xrEndFrame; nothing in a baseline or a log-only run.

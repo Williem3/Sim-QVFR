@@ -41,6 +41,10 @@ struct GameFeatures {
     // The focus mask ([quad] focus_mask, live; quad/focus_mask.h): the focus views skip rendering their pixels outside the
     // focus shape (pulled-in corners, rounding), so the launcher's and the headset menu's pixel counts leave them out.
     bool focusMask = false;
+    // Night car lighting ([quad] car_light, quad/car_lighting.h; LMU's games/lmu/car_light.h): the cars relit after the
+    // game's scene (lacquer highlights from the floodlights, ambient occlusion, the game's flat light scaled), switched on
+    // at launch, its values live. Offered in the headset menu only with this.
+    bool carLighting = false;
 };
 
 struct GameInfo {

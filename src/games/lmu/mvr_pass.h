@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../../quad/focus_mask.h"
+#include "../../quad/car_lighting.h"
 #include "car_motion.h"
 #include "focus_math.h"
 
@@ -30,6 +31,8 @@ struct ID3D11Resource;
 struct ID3D11Texture2D;
 
 namespace lmu {
+
+struct CarLightBlock;  // car_light.h
 
 struct MvrPassView {
     int eye = 0;
@@ -206,6 +209,9 @@ void mvr_viewport_reads(int mode);
 // viewProj), up to `max`, and per pair its draws with an identity worldMatrix (the static world's; may be null); how
 // many.
 int mvr_view_pairs(int pass, float (*pairs)[32], unsigned* worldDraws, int max);
+// Night car lighting's fallback camera: the pair this frame's pass drew the most recorded car parts with (used when the
+// world's camera isn't found: mvr_pass_binds.h car_light_camera). False: none recorded with a pair yet.
+bool mvr_car_view_pair(int pass, float (&view)[16], float (&viewProj)[16]);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
@@ -239,6 +245,19 @@ void mvr_car_slot_images(bool on);
 // The cars' motion this frame or not (an A/B of its cost, QvfrFrameRun::carAb; between frames): off, no tracking work,
 // no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
 void mvr_car_active(bool on);
+// Night car lighting ([quad] car_light; car_light.h): before the install, with the car slots (they say which pixels
+// are cars'): the floodlights LMU hands each car part's draw are read as it writes them, and after each eye pass's
+// scene the cars are relit (a lacquer highlight per floodlight, ambient occlusion, the game's flat light scaled) before
+// DLSS and the post read it.
+void mvr_car_light(bool on);
+// Between frames: the player's settings (live); off pauses the pass and the light reads (the hooks stay in).
+void mvr_car_light_frame(const simqvfr::CarLighting& settings);
+// Its cost per frame, averaged over 90 frames (any thread): GPU and CPU ms. False: not installed, or no average yet.
+bool mvr_car_light_costs(double& gpuMs, double& cpuMs);
+// The automatic A/B's blocks (dev builds): the relight's costs from now on count to block `serial` (0: none); a past
+// block's sums (false: not one of the last 32, or no pass).
+void mvr_car_light_block(unsigned serial);
+bool mvr_car_light_block_cost(unsigned serial, CarLightBlock& out);
 // One eye off ([quad] eye_off; qvfr_frame.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
 // view's upscale: it draws none). Between frames.
 void mvr_eye_off(int eye);

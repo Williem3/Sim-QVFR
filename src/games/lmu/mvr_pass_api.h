@@ -208,7 +208,16 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         ++g.carFrame;
         if (g.carTrack)
             g.cars.frame_begin(g.carFrame);
+        if (g.carLightOn)  // night car lighting: this frame's floodlights per car slot
+            g.carLights.begin_frame();
+        g.carLightsBegun = true;
         g.vbChecked = nullptr;  // a buffer freed since can't pass for one checked before at its address
+    }
+    if (pass == 1) {  // night car lighting: a frame whose first pass went unseen starts its table here (not on the
+                      // frame before's lists and spotlights, the spotlights' buffer rewritten since)
+        if (!g.carLightsBegun && g.carLightOn)
+            g.carLights.begin_frame();
+        g.carLightsBegun = false;
     }
     if (g.carTrack) {  // the pass's draws matched by pass 0's order first (car_motion.h)
         Timed carTimed(g.time.cars);
@@ -443,6 +452,23 @@ void mvr_viewport_reads(int mode) {
 void mvr_view_track(bool on) {
     if (!g.context)  // before the install only: its hooks are chosen there
         g.viewTrack = on;
+}
+
+bool mvr_car_view_pair(int pass, float (&view)[16], float (&viewProj)[16]) {
+    if (pass < 0 || pass > 1)
+        return false;
+    const State::PassPairs& p = g.passPairs[pass];
+    if (p.frame != g.carFrame)
+        return false;
+    int best = -1;
+    for (int i = 0; i < p.count; ++i)
+        if (p.carDraws[i] && (best < 0 || p.carDraws[i] > p.carDraws[best]))
+            best = i;
+    if (best < 0)
+        return false;
+    std::memcpy(view, p.pair[best], sizeof(view));
+    std::memcpy(viewProj, p.pair[best] + 16, sizeof(viewProj));
+    return true;
 }
 
 int mvr_view_pairs(int pass, float (*pairs)[32], unsigned* worldDraws, int max) {

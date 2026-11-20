@@ -49,6 +49,19 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
                 e.viewOffset = views[0];
                 e.viewProjOffset = views[1];
             }
+            UINT omni[4] = {};
+            size = sizeof(omni);
+            if (g.carLight && SUCCEEDED(vs->GetPrivateData(kVsOmniLightsGuid, &size, omni)) && size == sizeof(omni) &&
+                omni[0] < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
+                e.omniSlot = static_cast<int>(omni[0]);
+                e.omniPos = omni[1];
+                e.omniColour = omni[2];
+                e.omniCount = omni[3];
+            }
+            UINT normal = 0;
+            size = sizeof(normal);
+            e.gameNormal = g.carLight && SUCCEEDED(vs->GetPrivateData(kVsGameNormalGuid, &size, &normal)) &&
+                           size == sizeof(normal) && normal;
         }
     }
     return e;
@@ -116,6 +129,31 @@ const PsTwinEntry& ps_entry(ID3D11PixelShader* ps) {
     set.entry[k] = {ps, g.biasHooks ? twin_under(kMvrMipBiasTwinGuid) : nullptr,
                     g.slotsOn ? twin_under(kMvrSlotTwinGuid) : nullptr,
                     g.slotsOn && g.biasHooks ? twin_under(kMvrSlotBiasTwinGuid) : nullptr, g.psEpoch};
+    if (g.carLight) {  // night car lighting: a car body's lacquer
+        UINT paint = 0, size = sizeof(paint);
+        set.entry[k].paint = SUCCEEDED(ps->GetPrivateData(kPsPaintGuid, &size, &paint)) && size == sizeof(paint) && paint;
+        UINT normal = 0;
+        size = sizeof(normal);
+        set.entry[k].slotNormal =
+            SUCCEEDED(ps->GetPrivateData(kPsSlotNormalGuid, &size, &normal)) && size == sizeof(normal) && normal;
+        UINT ao = 0;
+        size = sizeof(ao);
+        set.entry[k].slotAo = SUCCEEDED(ps->GetPrivateData(kPsSlotAoGuid, &size, &ao)) && size == sizeof(ao) && ao;
+        UINT detail = 0;
+        size = sizeof(detail);
+        set.entry[k].slotDetail =
+            SUCCEEDED(ps->GetPrivateData(kPsSlotDetailGuid, &size, &detail)) && size == sizeof(detail) && detail;
+        UINT spots[5] = {};
+        size = sizeof(spots);
+        if (SUCCEEDED(ps->GetPrivateData(kPsSpotsGuid, &size, spots)) && size == sizeof(spots) &&
+            spots[0] < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
+            set.entry[k].spotSlot = static_cast<int>(spots[0]);
+            set.entry[k].spotCapacity = spots[1];
+            set.entry[k].spotCountOffset = spots[2];
+            set.entry[k].spotIndexOffset = spots[3];
+            set.entry[k].spotDrawSlot = spots[4];
+        }
+    }
     return set.entry[k];
 }
 

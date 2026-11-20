@@ -23,6 +23,7 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../../engine/object_vtable.h"
 #include "../../log.h"
+#include "../../quad/car_lighting.h"
 #include "MinHook.h"
 #include "yebis_shaders.h"
 
@@ -68,6 +69,7 @@ bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as 
 bool makeBiasTwins = false;  // texture sharpening on at launch ([dlss] texture_sharpening): pixel shaders' mip bias twins
 bool markWorldMatrix = false;  // [experiment] lmu_car_track=1: each vertex shader's worldMatrix slot (kVsWorldMatrixGuid)
 bool makeSlotTwins = false;    // [experiment] lmu_car_vectors >= 1 (with lmu_car_track): pixel shaders' slot twins
+bool makeSlotNormals = false;  // night car lighting on at launch: the slot twins write the game's normal too (RT2)
 bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 bool forceInstanced = false;  // [experiment] multi_view_software=1: instancing even where NVIDIA's is there
@@ -121,8 +123,145 @@ std::atomic<uint64_t> pixelGeneration{0};
 struct WorldPlace {
     UINT slot = ~0u, offset = 0;
     UINT view = ~0u, viewProj = ~0u;
+    UINT omni[4] = {~0u, 0, 0, 0};  // night car lighting: the floodlights' slot, offsets and length (kVsOmniLightsGuid)
+    bool normalRows = false;        // night car lighting: the normal in TEXCOORD2-4's z (kVsGameNormalGuid)
 };
 std::unordered_map<uint64_t, WorldPlace> worldSlots;
+std::unordered_map<uint64_t, bool> paintShaders;  // night car lighting: a car body's lacquer shader, by bytecode
+std::unordered_map<uint64_t, bool> slotNormals;   // night car lighting: the slot twin writes the game's normal
+std::unordered_map<uint64_t, bool> slotAos;       // and its baked ambient occlusion
+std::unordered_map<uint64_t, bool> slotDetails;   // and the normal its normal maps bent
+
+// Night car lighting: the texture register of the shader's ambient cube map (irradDiffuse), which it looks up with the
+// normal its normal maps bent (the paint's orange peel, the carbon's weave). ~0u: none.
+UINT texture_register(const void* code, size_t size, const char* name, D3D_SRV_DIMENSION dimension);  // below
+// Night car lighting's headlights: the spotlights' place (kPsSpotsGuid): their buffer's slot, their count, the draw's
+// count's and indices' offsets, and the worldMatrix's offset in the buffer holding those (the per-draw buffer the
+// layer reads beside the matrix: the record takes them only where it's at the vertex shader's; ~0u: not in it).
+// False: the shader reads none.
+bool spots_place(const void* code, size_t size, UINT (&out)[5]) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    ID3D11ShaderReflectionVariable* spots = r->GetVariableByName("spotLightGlobals");
+    ID3D11ShaderReflectionVariable* count = r->GetVariableByName("f_spotCount");
+    ID3D11ShaderReflectionVariable* index = r->GetVariableByName("f_packedSpotLightIndex_0");
+    D3D11_SHADER_VARIABLE_DESC sd{}, cd{}, id{};
+    if (!spots || !count || !index || FAILED(spots->GetDesc(&sd)) || FAILED(count->GetDesc(&cd)) || FAILED(index->GetDesc(&id)))
+        return false;
+    ID3D11ShaderReflectionConstantBuffer* cb = spots->GetBuffer();
+    D3D11_SHADER_BUFFER_DESC bd{};
+    if (!cb || FAILED(cb->GetDesc(&bd)))
+        return false;
+    // The array at its buffer's start (the readers index it from 0, 64 bytes each): anything before it, none taken.
+    if (sd.StartOffset != 0)
+        return false;
+    // The count's and the indices' buffer: its slot (the record checks the buffer bound there is the per-draw one the
+    // matrix is read from; a pixel shader's reflection lists only the members it declares, worldMatrix not among them:
+    // a check by name refused every headlight, 2026-11-19).
+    out[4] = ~0u;
+    D3D11_SHADER_DESC desc{};
+    if (FAILED(r->GetDesc(&desc)))
+        return false;
+    ID3D11ShaderReflectionConstantBuffer* drawCb = count->GetBuffer();
+    D3D11_SHADER_BUFFER_DESC dbd{};
+    if (drawCb && index->GetBuffer() == drawCb && SUCCEEDED(drawCb->GetDesc(&dbd)) && dbd.Name) {
+        for (UINT i = 0; i < desc.BoundResources; ++i) {
+            D3D11_SHADER_INPUT_BIND_DESC bind{};
+            if (SUCCEEDED(r->GetResourceBindingDesc(i, &bind)) && bind.Type == D3D_SIT_CBUFFER && bind.Name &&
+                std::strcmp(bind.Name, dbd.Name) == 0)
+                out[4] = bind.BindPoint;
+        }
+    }
+    // The buffer's slot: every binding looked at (a sampler may share a name; constant buffers here don't, but alike).
+    for (UINT i = 0; i < desc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (SUCCEEDED(r->GetResourceBindingDesc(i, &bind)) && bind.Type == D3D_SIT_CBUFFER && bind.Name &&
+            std::strcmp(bind.Name, bd.Name) == 0) {
+            out[0] = bind.BindPoint;
+            out[1] = sd.Size / 64;
+            out[2] = cd.StartOffset;
+            out[3] = id.StartOffset;
+            return out[1] > 0;
+        }
+    }
+    return false;
+}
+
+UINT detail_texture_register(const void* code, size_t size) {
+    return texture_register(code, size, "irradDiffuse", D3D_SRV_DIMENSION_TEXTURECUBE);
+}
+
+// Night car lighting: the texture register of the shader's baked ambient occlusion (LMU's car shaders name it
+// aoSpecularMap, the body's aoSpecMask; its .y multiplies the ambient light in 54 of 55 captured shaders). ~0u: none.
+// The texture register of the shader's texture named `name` of dimension `dimension` (~0u: none). Every binding looked
+// at: LMU's samplers carry their textures' names (irradDiffuse is s13 and t8), and a lookup by name finds one of them.
+UINT texture_register(const void* code, size_t size, const char* name, D3D_SRV_DIMENSION dimension) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    D3D11_SHADER_DESC desc{};
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))) || FAILED(r->GetDesc(&desc)))
+        return ~0u;
+    for (UINT i = 0; i < desc.BoundResources; ++i) {
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (SUCCEEDED(r->GetResourceBindingDesc(i, &bind)) && bind.Type == D3D_SIT_TEXTURE && bind.Dimension == dimension &&
+            bind.Name && std::strcmp(bind.Name, name) == 0)
+            return bind.BindPoint;
+    }
+    return ~0u;
+}
+
+UINT ao_texture_register(const void* code, size_t size) {
+    for (const char* name : {"aoSpecularMap", "aoSpecMask"})
+        if (const UINT reg = texture_register(code, size, name, D3D_SRV_DIMENSION_TEXTURE2D); reg != ~0u)
+            return reg;
+    return ~0u;
+}
+
+// Night car lighting (car_light.h): where the shader reads its floodlights, GlobalCBFloats_OmniLights' omniPosRad and
+// omniRGBDelta (float4 arrays of the same length in one buffer). False: it reads none.
+bool omni_lights_place(const void* code, size_t size, UINT (&out)[4]) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    UINT slot[2] = {}, offset[2] = {}, count[2] = {};
+    const char* names[2] = {"omniPosRad", "omniRGBDelta"};
+    for (int i = 0; i < 2; ++i) {
+        ID3D11ShaderReflectionVariable* v = r->GetVariableByName(names[i]);
+        D3D11_SHADER_VARIABLE_DESC vd{};
+        if (!v || FAILED(v->GetDesc(&vd)) || vd.Size < 16)
+            return false;
+        ID3D11ShaderReflectionConstantBuffer* cb = v->GetBuffer();
+        D3D11_SHADER_BUFFER_DESC bd{};
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (!cb || FAILED(cb->GetDesc(&bd)) || FAILED(r->GetResourceBindingDescByName(bd.Name, &bind)))
+            return false;
+        slot[i] = bind.BindPoint;
+        offset[i] = vd.StartOffset;
+        count[i] = vd.Size / 16;
+    }
+    if (slot[0] != slot[1] || count[0] != count[1] || slot[0] >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+        return false;
+    out[0] = slot[0];
+    out[1] = offset[0];
+    out[2] = offset[1];
+    out[3] = count[0];
+    return true;
+}
+
+// A car body's lacquer: its reflection names the lacquer's thickness or the clear coat's strength (LMU's car body
+// shaders, cbMaterialExt and their own constants).
+bool paint_shader(const void* code, size_t size) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    for (const char* name : {"lacquerThickness", "clearCoatStrength"}) {
+        ID3D11ShaderReflectionVariable* v = r->GetVariableByName(name);
+        D3D11_SHADER_VARIABLE_DESC vd{};
+        if (v && SUCCEEDED(v->GetDesc(&vd)))
+            return true;
+    }
+    return false;
+}
 
 // The constant buffer slot and byte offset of the shader's `worldMatrix` (its reflection: LMU's shaders keep their
 // names, GlobalCBFloats_Draw_0 at offset 0). False: it has none.
@@ -396,7 +535,11 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                     at.view = view;
                     at.viewProj = viewProj;
                 }
+                UINT omni[4];
+                if (omni_lights_place(code, size, omni))
+                    std::memcpy(at.omni, omni, sizeof(omni));
             }
+            at.normalRows = dxbc::vertex_normal_rows(static_cast<const uint8_t*>(code), size);
             std::lock_guard guard(twinMutex);
             worldSlots[id] = at;
         }
@@ -407,6 +550,12 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                 const UINT views[2] = {at.view, at.viewProj};
                 (*shader)->SetPrivateData(kVsViewMatricesGuid, sizeof(views), views);
             }
+            if (at.omni[0] != ~0u)
+                (*shader)->SetPrivateData(kVsOmniLightsGuid, sizeof(at.omni), at.omni);
+        }
+        if (at.normalRows) {
+            const UINT one = 1;
+            (*shader)->SetPrivateData(kVsGameNormalGuid, sizeof(one), &one);
         }
     }
     // The SCS games' focus replays: a full-screen pass's shader that turns its vertex into screen pixels gets its twin
@@ -513,6 +662,27 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         if (dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(code), size, 0, rows))
             (*shader)->SetPrivateData(kCb0StaticRowsGuid, sizeof(rows), rows);
     }
+    // Night car lighting (car_light.h): a car body's lacquer shader marked (once per distinct bytecode).
+    if (attach && makeSlotTwins && !inProbe && role == YebisRole::none && code && size) {
+        const uint64_t id = id_of(static_cast<const uint8_t*>(code), size);
+        bool paint = false, seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = paintShaders.find(id); it != paintShaders.end()) {
+                paint = it->second;
+                seen = true;
+            }
+        }
+        if (!seen) {
+            paint = paint_shader(code, size);
+            std::lock_guard guard(twinMutex);
+            paintShaders[id] = paint;
+        }
+        if (paint) {
+            const UINT one = 1;
+            (*shader)->SetPrivateData(kPsPaintGuid, sizeof(one), &one);
+        }
+    }
     // Every pixel shader too (the SCS games' GPU hang: an Aftermath dump names the hung shader by its bytecode's hash).
     if (dump && code)
         save(static_cast<const uint8_t*>(code), size, "PS");
@@ -566,22 +736,58 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         }
         std::string refusedWhy;
         int failed = 0;
+        bool normal = false, ao = false, detail = false;
         if (!seen) {
-            const dxbc::SlotOutput s = dxbc::add_slot_output(bytes, size);
+            dxbc::SlotOutputOptions options;
+            if (makeSlotNormals) {
+                options.normalReg = 2;  // night car lighting: the game's normal beside the slot
+                options.aoResource = ao_texture_register(code, size);  // and its baked occlusion in the w
+                options.aoComponent = 1;
+                options.detailReg = 3;  // and the normal its normal maps bent
+                options.detailResource = detail_texture_register(code, size);
+            }
+            const dxbc::SlotOutput s = dxbc::add_slot_output(bytes, size, options);
             if (s.bytecode.empty())
                 refusedWhy = s.error;
             else if (FAILED(currentHook->pixel(device, s.bytecode.data(), s.bytecode.size(), nullptr, &pair.first)))
                 ++failed;
+            normal = s.normal && pair.first;
+            ao = normal && s.ao;
+            detail = normal && s.detail;
             if (makeBiasTwins) {
                 const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(bytes, size);
-                const dxbc::SlotOutput sb = b.bytecode.empty() ? dxbc::SlotOutput{}
-                                                               : dxbc::add_slot_output(b.bytecode.data(), b.bytecode.size());
+                const dxbc::SlotOutput sb = b.bytecode.empty()
+                                                ? dxbc::SlotOutput{}
+                                                : dxbc::add_slot_output(b.bytecode.data(), b.bytecode.size(), options);
                 if (!sb.bytecode.empty() &&
                     FAILED(currentHook->pixel(device, sb.bytecode.data(), sb.bytecode.size(), nullptr, &pair.second)))
                     ++failed;
+                normal = normal && (sb.bytecode.empty() || sb.normal);
+                ao = ao && normal && (sb.bytecode.empty() || sb.ao);
+                detail = detail && normal && (sb.bytecode.empty() || sb.detail);
             }
             std::lock_guard guard(twinMutex);
             slotTwins[id] = pair;
+            slotNormals[id] = normal;
+            slotAos[id] = ao;
+            slotDetails[id] = detail;
+        } else {
+            std::lock_guard guard(twinMutex);
+            normal = slotNormals[id];
+            ao = slotAos[id];
+            detail = slotDetails[id];
+        }
+        const UINT one = 1;
+        if (normal)
+            (*shader)->SetPrivateData(kPsSlotNormalGuid, sizeof(one), &one);
+        if (ao)
+            (*shader)->SetPrivateData(kPsSlotAoGuid, sizeof(one), &one);
+        if (detail)
+            (*shader)->SetPrivateData(kPsSlotDetailGuid, sizeof(one), &one);
+        if (makeSlotNormals) {  // night car lighting's headlights: where it reads its spotlights
+            UINT spots[5];
+            if (spots_place(code, size, spots))
+                (*shader)->SetPrivateData(kPsSpotsGuid, sizeof(spots), spots);
         }
         if (pair.first)
             (*shader)->SetPrivateDataInterface(kMvrSlotTwinGuid, pair.first.Get());
@@ -591,6 +797,9 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         stats.slotTwinned += pair.first ? 1 : 0;
         stats.slotBiasTwinned += pair.second ? 1 : 0;
         stats.slotFailed += static_cast<uint64_t>(failed);
+        stats.slotNormals += normal ? 1 : 0;
+        stats.slotAos += ao ? 1 : 0;
+        stats.slotDetails += detail ? 1 : 0;
         if (!refusedWhy.empty())
             ++stats.slotRefused[refusedWhy];
     }
@@ -712,7 +921,10 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
         // game build comes from the same buffer (view_pair.h), and DLSS can be turned on live (one reflection per distinct
         // bytecode, ~70 in a session).
         markWorldMatrix = attach;
-        makeSlotTwins = attach && ini && (slots > 0 || playerCars);
+        // Night car lighting on at launch needs the slots too (car_light.h): they say which pixels are cars'.
+        const bool carLight = ini && simqvfr::read_car_lighting(ini).on;
+        makeSlotTwins = attach && ini && (slots > 0 || playerCars || carLight);
+        makeSlotNormals = makeSlotTwins && carLight;
         (void)track;
     }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
@@ -832,10 +1044,13 @@ void mvr_probe_frame_end() {
         for (const auto& [why, count] : stats.slotRefused)
             slotWhy += (slotWhy.empty() ? "" : ", ") + why + " x" + std::to_string(count);
         simqvfr::logf("lmu mvr probe: car slots: %llu pixel shaders given a slot twin, %llu a slot twin of their mip bias "
-                      "twin%s%s%s, %llu not created",
+                      "twin%s%s%s, %llu not created; %llu of the twins write the game's normal, %llu its baked occlusion "
+                      "too, %llu its bent normal (night car lighting)",
                       static_cast<unsigned long long>(stats.slotTwinned),
                       static_cast<unsigned long long>(stats.slotBiasTwinned), slotWhy.empty() ? "" : " (refused: ",
-                      slotWhy.c_str(), slotWhy.empty() ? "" : ")", static_cast<unsigned long long>(stats.slotFailed));
+                      slotWhy.c_str(), slotWhy.empty() ? "" : ")", static_cast<unsigned long long>(stats.slotFailed),
+                      static_cast<unsigned long long>(stats.slotNormals), static_cast<unsigned long long>(stats.slotAos),
+                      static_cast<unsigned long long>(stats.slotDetails));
     }
 }
 

@@ -159,6 +159,9 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     } else if (owner == kEyeOff) {
         items = {tr(L"None"), tr(L"Left"), tr(L"Right")};  // [quad] eye_off's 0, 1, 2
         selected = std::clamp(app.s.eyeOff, 0, 2);
+    } else if (owner == kNightQuality) {  // car_lighting.h's presets: the switches they set (Custom: none selected)
+        items = {tr(L"Low"), tr(L"Medium"), tr(L"High")};
+        selected = car_lighting_preset_of(app.s.carLight);
     } else if (owner == kLayerProfile) {
         add_all(kLayerProfileNames);
         selected = app.layerProfile;
@@ -183,6 +186,7 @@ bool segmented_ctl(Ctl id) {
     case kVisor:
     case kHelmetDetail:
     case kEyeOff:
+    case kNightQuality:
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kNrOrder:
@@ -389,6 +393,8 @@ void choose(Ctl owner, int option) {
         app.s.helmet.detail = option == 1;
     else if (owner == kEyeOff)
         app.s.eyeOff = std::clamp(option, 0, 2);
+    else if (owner == kNightQuality)
+        car_lighting_preset(app.s.carLight, std::clamp(option, 0, kCarLightPresets - 1));
     else if (owner == kShape)
         app.s.shape.corners = option == 1;
     else if (owner == kLayerProfile) {

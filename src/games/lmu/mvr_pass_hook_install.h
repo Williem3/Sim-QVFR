@@ -282,6 +282,11 @@ void read_bindings() {
         g.vsWorldOffset = e ? e->worldOffset : 0;
         g.vsViewOffset = e ? e->viewOffset : ~0u;
         g.vsViewProjOffset = e ? e->viewProjOffset : ~0u;
+        g.vsOmniSlot = e ? e->omniSlot : -1;  // night car lighting: where it reads its floodlights
+        g.vsOmniPos = e ? e->omniPos : 0;
+        g.vsOmniColour = e ? e->omniColour : 0;
+        g.vsOmniCount = e ? e->omniCount : 0;
+        g.vsGameNormal = e && e->gameNormal;
         keep_game_entry(vs, e);
     }
     if (cb_track()) {  // car tracking: the vertex shader's constant buffers and the input assembler's buffers as bound

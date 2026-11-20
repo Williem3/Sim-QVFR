@@ -39,6 +39,7 @@
 
 #include "../../engine/d3d11_state.h"
 #include "../../quad/focus_mask.h"
+#include "car_light.h"
 #include "car_motion.h"
 #include "focus_post.h"
 #include "mvr_pass.h"
@@ -76,6 +77,11 @@ struct TwinEntry {
     int worldSlot = -1;          // where it reads its worldMatrix (car tracking; mvr_probe.h kVsWorldMatrixGuid)
     UINT worldOffset = 0;
     UINT viewOffset = ~0u, viewProjOffset = ~0u;  // its viewMatrix and viewProjMatrix there (kVsViewMatricesGuid)
+    // Night car lighting: where it reads its floodlights (kVsOmniLightsGuid): slot (-1 none), the two arrays' offsets
+    // and their length.
+    int omniSlot = -1;
+    UINT omniPos = 0, omniColour = 0, omniCount = 0;
+    bool gameNormal = false;  // it hands on the normal in TEXCOORD2-4's z (kVsGameNormalGuid)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -90,6 +96,15 @@ struct PsTwinEntry {
     ID3D11PixelShader* slot = nullptr;  // its slot twin, and the slot twin of its mip bias twin (car slots)
     ID3D11PixelShader* slotBias = nullptr;
     uint32_t epoch = 0;
+    bool paint = false;       // night car lighting: a car body's lacquer shader (kPsPaintGuid)
+    bool slotNormal = false;  // its slot twin writes the game's normal to target 2 (kPsSlotNormalGuid)
+    bool slotAo = false;      // and its baked ambient occlusion in that target's w (kPsSlotAoGuid)
+    bool slotDetail = false;  // and the normal its normal maps bent to target 3 (kPsSlotDetailGuid)
+    // Its spotlights (kPsSpotsGuid): their slot (-1 none), their count in the array, and in the per-draw buffer the
+    // draw's count's and indices' offsets.
+    int spotSlot = -1;
+    UINT spotCapacity = 0, spotCountOffset = 0, spotIndexOffset = 0;
+    UINT spotDrawSlot = ~0u;  // the slot of the buffer holding the draw's count and indices (~0u: unknown)
 };
 struct PsTwinSet {
     PsTwinEntry entry[2];
@@ -229,6 +244,7 @@ struct State {
     ID3D11Buffer* worldCb = nullptr;
     ID3D11Resource* worldRes = nullptr;  // the same, as Map and Unmap name it (compared with every one of theirs)
     ComPtr<ID3D11Buffer> worldCbHeld;
+    UINT worldBytes = 0;  // its size (what a read beside the matrix may reach)
     UINT worldCbOffset = 0;
     ID3D11Buffer* vbChecked = nullptr;  // the vertex buffer last checked for dynamic usage (reset each frame)
     bool vbDynamic = false;
@@ -240,6 +256,74 @@ struct State {
     std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
     float matrix[16] = {};
+    // Night car lighting (mvr_car_light; car_light.h): installed (on at launch), on this frame (the live switch), its
+    // settings this frame. The bound vertex shader's floodlights' place; the floodlights' buffer (learned from a car
+    // part's draw), our copy the game writes into while it's mapped (handed out at its Map: the driver's memory is
+    // write-combined, slow to read), the driver's memory then, the writes so far; the frame's lights per car slot, the
+    // pass, the collection's ticks (1 in 16 timed).
+    bool carLight = false, carLightOn = false;
+    simqvfr::CarLighting carLightSettings{};
+    int vsOmniSlot = -1;
+    UINT vsOmniPos = 0, vsOmniColour = 0, vsOmniCount = 0;
+    bool vsGameNormal = false;  // the bound vertex shader hands on the normal the slot twins write (kVsGameNormalGuid)
+    // The game's normals beside the slots (render target 2, RGBA16 UNORM: xyz * 0.5 + 0.5, w the baked occlusion), the
+    // scene target's size and
+    // samples; made with the slot target while night car lighting is installed. False: none (the depth's directions).
+    bool normalsOn = false;
+    ComPtr<ID3D11Texture2D> normalTex;
+    ComPtr<ID3D11RenderTargetView> normalRtv;
+    ComPtr<ID3D11ShaderResourceView> normalSrv;
+    // The bent normals (render target 3, RGBA16F: the normal maps' detail as the shader looked its cube map up with
+    // it, any length), made with the normals.
+    bool detailOn = false;
+    ComPtr<ID3D11Texture2D> detailTex;
+    ComPtr<ID3D11RenderTargetView> detailRtv;
+    ComPtr<ID3D11ShaderResourceView> detailSrv;
+    // The headlights: the spotlights' buffer (learned from a car part's draw, PSGetConstantBuffers), our copy of it
+    // the game writes into (handed out at its Map, as the floodlights'), whether it holds this frame's write; the
+    // per-draw buffer's spotlight count and indices as last written (read with the matrix at its Unmap).
+    ID3D11Resource* spotRes = nullptr;
+    ComPtr<ID3D11Buffer> spotHeld;
+    UINT spotBytes = 0;
+    std::vector<uint8_t> spotShadow;
+    void* spotReal = nullptr;
+    bool spotValid = false;
+    UINT spotCapacity = 0;
+    // The per-draw buffer's bytes [spotLo, spotHi) as last written (copied at its Unmap, with the matrix): the draw's
+    // spotlight count and indices are read from it at the record with the draw's own shader's offsets. The range
+    // covers every offset a shader has asked for so far (a new one widens it from the next write). drawSpotsRead: the
+    // last write was copied (none while the relight was off then).
+    UINT spotLo = ~0u, spotHi = 0;
+    std::vector<uint8_t> drawSpotBytes;
+    bool drawSpotsRead = false;
+    bool carLightsBegun = false;  // the table began this frame at pass 0 (pass 1 begins it otherwise)
+    unsigned long long spotCheckedFrame = 0;  // the frame the spotlights' buffer was last checked to be still the one bound
+    unsigned spotOtherFrames = 0;             // frames in a row no check found ours bound (30: learned again)
+    ID3D11PixelShader* spotCheckedPs = nullptr;  // the pixel shader the bound buffer was last checked for (compared only)
+    bool spotBoundOk = false;                 // that check found ours bound
+    bool spotDrawOk = false;                  // and the draw's count's buffer is the per-draw one the matrix is read from
+    bool spotFrameChecked = false, spotFrameMatched = false;  // this frame: a check made, one found ours
+    unsigned long long spotLearnFrame = 0;    // the frame a buffer was last tried for learning (once a frame)
+    bool spotRefusalSaid = false;
+    struct SpotWhy {  // the headlights' reads since the last log line (diagnostics)
+        unsigned long long seen = 0, notBound = 0, otherLayout = 0, notValid = 0, notRead = 0, given = 0, listed = 0;
+    } spotWhy;
+    unsigned spotRelearned = 0;               // times learned again (the log: the first few)
+    ID3D11Resource* omniRes = nullptr;  // raw, compared only (held by omniHeld)
+    ComPtr<ID3D11Buffer> omniHeld;
+    UINT omniBytes = 0;
+    std::vector<uint8_t> omniShadow;
+    void* omniReal = nullptr;
+    uint64_t omniWrites = 0;
+    bool omniValid = false;  // our copy holds the buffer's content (a write since it was learned)
+    CarLightTable carLights{kCarSlots};
+    CarLightPass carLightPass;
+    uint64_t carLightTicks = 0;
+    uint32_t carLightSample = 0;
+    uint64_t carLightRuns = 0, carLightRecords = 0, carLightMisses = 0;
+    double tscPerMs = 0;  // the time-stamp counter's rate (calibrated against QPC at frame ends)
+    uint64_t tscMark = 0;
+    LARGE_INTEGER qpcMark{};
     // View tracking (mvr_view_track; DLSS's camera on any build, view_pair.h): car tracking's buffer reads without its
     // table. The bound shader's viewMatrix and viewProjMatrix places, the learned buffer's (from the draw that taught
     // it), the pair last written into it, and each eye pass's distinct pairs as drawn (the eye's own among the mirrors').
@@ -255,6 +339,9 @@ struct State {
         // Per pair, its draws with an identity worldMatrix (the static world's: its camera is the world's; the cockpit
         // and the sky may be drawn with the same FOV from another space).
         uint32_t worldDraws[kViewPairs] = {};
+        // Per pair, the car part draws night car lighting recorded with it: the cars' own camera, the relight's fallback
+        // when the world's camera isn't found (mvr_pass_binds.h car_light_camera).
+        uint32_t carDraws[kViewPairs] = {};
         int count = 0, next = 0, last = -1;  // pairs held, the one to replace when full, the one kept last
         uint64_t frame = 0;                  // carFrame they were drawn in
     } passPairs[2];
