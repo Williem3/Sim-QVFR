@@ -264,8 +264,8 @@ Card night_cars_card() {
                      tr(L"The cars’ shadows on the track and walls around them."));
             r.toggle(kNightVision, tr(L"Night vision color"), cl.nightVision,
                      tr(L"The dark loses its colour and turns a little blue, as eyes see at night."));
-            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low costs about half "
-                      L"the GPU time of High. Night car lighting itself starts at the next launch; everything else "
+            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low takes about a third "
+                      L"less GPU time than High. Night car lighting itself starts at the next launch; everything else "
                       L"changes while you drive."));
         });
     };

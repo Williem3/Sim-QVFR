@@ -120,7 +120,8 @@ inline void set_car_lighting(const CarLighting& c) {
 // For the log: "off", or "fill 80%, occlusion 70%, highlights 100%, gloss 70%, smoothing 15 cm, shadows on, detail on".
 // Quality presets: the effects' tier (car_light_quality); the switches stay as the player set them. The A/B of
 // 2026-11-19 (race traffic, everything on, High): 2.70 ms GPU, the base relight ~1.0, ground shadows 0.56, floodlight
-// shadows 0.50, reflections 0.15, paint detail 0.10, headlights 0.05, night vision 0.03.
+// shadows 0.50, reflections 0.15, paint detail 0.10, headlights 0.05, night vision 0.03. The tiers in a race (the overlay,
+// 2026-11-19, everything on): High 1.35-1.55 ms, Medium 1.10-1.30, Low 1.00-1.10 (the periphery a tier below each).
 inline constexpr int kCarLightPresets = 3;
 inline void car_lighting_preset(CarLighting& c, int preset) { c.quality = kCarLightQuality.clamp(preset); }
 // The preset in use (every quality is one).
