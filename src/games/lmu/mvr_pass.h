@@ -345,6 +345,8 @@ struct MvrPassStats {
     // tracked draws from a dynamic vertex buffer (the game's ring: keyed without their base vertex and offset).
     uint64_t carMatrixReads = 0, carBufferLearned = 0, carNoMatrix = 0, carOtherOffset = 0, carDynamicVb = 0;
     uint64_t carVbAsked = 0;  // vertex buffers' usage asked of D3D (once a frame per buffer)
+    // The per-draw buffer's writes made through our copy (read there, then copied to the driver's memory at the Unmap).
+    uint64_t carShadowWrites = 0;
     // Car slots: passes with the slot target bound, its binds, slot views bound, slot twin binds, binds of shaders
     // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
     uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;

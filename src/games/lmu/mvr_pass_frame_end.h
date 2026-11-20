@@ -229,7 +229,7 @@ void mvr_frame_end(unsigned long long frame) {
             simqvfr::logf("lmu mvr: car tracking: %llu frames; per frame %.1f draws with a world matrix (%.1f the identity, "
                           "%.1f of objects: %.1f matched to the frame before, %.1f first seen or after a gap, %.2f without "
                           "a free slot); %llu keys held, %.1f freed per frame; per frame the per-draw buffer learned %.2f "
-                          "times, matrices read %.1f, draws without one %.2f, at another offset %.2f, from a dynamic vertex "
+                          "times, matrices read %.1f (%.1f through our copy), draws without one %.2f, at another offset %.2f, from a dynamic vertex "
                           "buffer %.1f (keyed without their base vertex); vertex buffers' usage asked %.1f; part draws "
                           "matched by pass 0's order %.1f%% (looked up %.1f out of order, %.1f without an order)",
                           static_cast<unsigned long long>(c.frames - b.frames), pf(c.draws, b.draws),
@@ -237,6 +237,7 @@ void mvr_frame_end(unsigned long long frame) {
                           pf(c.newKeys, b.newKeys), pf(c.full, b.full), static_cast<unsigned long long>(c.live),
                           pf(c.evicted, b.evicted), pf(s.carBufferLearned, g.carStatsLogged.carBufferLearned),
                           pf(s.carMatrixReads, g.carStatsLogged.carMatrixReads),
+                          pf(s.carShadowWrites, g.carStatsLogged.carShadowWrites),
                           pf(s.carNoMatrix, g.carStatsLogged.carNoMatrix),
                           pf(s.carOtherOffset, g.carStatsLogged.carOtherOffset),
                           pf(s.carDynamicVb, g.carStatsLogged.carDynamicVb),

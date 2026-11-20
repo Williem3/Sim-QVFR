@@ -255,6 +255,14 @@ struct State {
     };
     std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
+    // The per-draw buffer's writes go into our copy (ordinary, cached memory) and on to the driver's at the Unmap,
+    // so its matrix and the bytes beside it are read from ours: the driver's memory for a discarded map is
+    // write-combined on some drivers (AMD's), where reading it back took ~77% of the main thread (a tester's CPU
+    // capture, 2026-11-20). worldShadowRes: the buffer the pending write is for (the Unmap it ends may come after
+    // another buffer was learned); worldReal: the driver's memory, until that Unmap.
+    std::vector<uint8_t> worldShadow;
+    ID3D11Resource* worldShadowRes = nullptr;
+    void* worldReal = nullptr;
     float matrix[16] = {};
     // Night car lighting (mvr_car_light; car_light.h): installed (on at launch), on this frame (the live switch), its
     // settings this frame. The bound vertex shader's floodlights' place; the floodlights' buffer (learned from a car

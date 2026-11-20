@@ -61,6 +61,9 @@ inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, U
         real(context, 13, 1, g.remapCb.GetAddressOf());
 }
 
+// The largest per-draw buffer whose writes go through our copy (worldShadow).
+inline constexpr UINT kWorldShadowMaxBytes = 4096;
+
 // Map and Unmap: any resource but the per-draw buffer passes with one comparison.
 inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Resource* resource, UINT sub, D3D11_MAP type,
                             UINT flags, D3D11_MAPPED_SUBRESOURCE* mapped) {
@@ -70,8 +73,17 @@ inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Reso
     const HRESULT hr = real(context, resource, sub, type, flags, mapped);
     if (timeHooks)
         ++g.time.carCalls;
-    if (resource == g.worldRes && resource && context == g.context && SUCCEEDED(hr) && mapped)
+    if (resource == g.worldRes && resource && context == g.context && SUCCEEDED(hr) && mapped) {
         g.worldMapped = mapped->pData;
+        // While its bytes are read at the Unmap: a whole-buffer discard written into our copy (see worldShadow).
+        if ((g.carActive || g.viewTrack) && mapped->pData && type == D3D11_MAP_WRITE_DISCARD && sub == 0 &&
+            !g.worldReal && g.worldBytes && g.worldShadow.size() >= g.worldBytes) {
+            g.worldReal = mapped->pData;
+            g.worldShadowRes = resource;
+            mapped->pData = g.worldShadow.data();
+            g.worldMapped = mapped->pData;
+        }
+    }
     // Night car lighting: the floodlights' buffer, rewritten whole before each draw (WRITE_DISCARD), is written into
     // our copy, which goes to the driver's memory at the Unmap: the lights read from ordinary memory, not the driver's
     // write-combined memory (slow to read).
@@ -123,6 +135,13 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
         g.worldMapped = nullptr;
         g.carMatrix = true;
         ++g.stats.carMatrixReads;
+    }
+    if (resource == g.worldShadowRes && g.worldReal && resource) {  // our copy to the driver's memory (writes only)
+        std::memcpy(g.worldReal, g.worldShadow.data(), g.worldBytes);
+        g.worldReal = nullptr;
+        g.worldShadowRes = nullptr;
+        g.worldMapped = nullptr;
+        ++g.stats.carShadowWrites;
     }
     if (resource == g.spotRes && g.spotReal && resource) {  // the headlights: our copy to the driver's memory
         std::memcpy(g.spotReal, g.spotShadow.data(), g.spotBytes);
@@ -716,6 +735,8 @@ int car_draw(UINT count, UINT start, INT base) {
     if (!cb)
         return -1;
     if (cb != g.worldCb) {
+        if (g.worldReal)  // a write into our copy still pending (its Unmap not yet seen): learn at a later draw
+            return -1;
         D3D11_BUFFER_DESC d{};
         cb->GetDesc(&d);
         if (d.ByteWidth < g.vsWorldOffset + sizeof(g.matrix)) {  // the matrix wouldn't fit in it: never read past its end
@@ -724,6 +745,19 @@ int car_draw(UINT count, UINT start, INT base) {
         }
         g.worldCbHeld = cb;  // held: its address never another resource's while it's the one compared
         g.worldBytes = d.ByteWidth;
+        // Our copy for its writes, only for a small buffer (a per-draw one; ~256 bytes in LMU): a large one copied
+        // whole at each Unmap would cost more than the reads it saves.
+        if (d.ByteWidth <= kWorldShadowMaxBytes)
+            g.worldShadow.assign(d.ByteWidth, 0);
+        else
+            g.worldShadow.clear();
+        static int learnedLogged = 0;
+        if (learnedLogged < 4) {
+            ++learnedLogged;
+            simqvfr::logf("lmu car tracking: the per-draw buffer learned (%u bytes, matrix at %u; %s)", d.ByteWidth,
+                          g.vsWorldOffset,
+                          d.ByteWidth <= kWorldShadowMaxBytes ? "its writes through our copy" : "read in place (too large)");
+        }
         g.worldCb = cb;
         g.worldRes = cb;
         g.worldCbOffset = g.vsWorldOffset;

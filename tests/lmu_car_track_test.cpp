@@ -266,6 +266,30 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               c.newKeys == 2 && c.matched == 0 && c.frames == 1 && s.carOtherOffset == 0 && s.carNoMatrix == 0 &&
               s.carDynamicVb == 2,
           what);
+    // The per-draw buffer's writes after it was learned went through our copy (the driver's memory, write-combined on
+    // some drivers, never read back) and reached the buffer whole.
+    std::snprintf(what, sizeof(what), "frame 1: the 7 writes after the buffer was learned made through our copy (%llu)",
+                  static_cast<unsigned long long>(s.carShadowWrites));
+    check(s.carShadowWrites == 7, what);
+    {  // the frame's last write (the static world's: PerDraw as it starts), as the GPU reads it
+        D3D11_BUFFER_DESC sd = {sizeof(PerDraw), D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> staging;
+        device->CreateBuffer(&sd, nullptr, &staging);
+        PerDraw got{};
+        got.pad[0] = 0;
+        const PerDraw want{};
+        D3D11_MAPPED_SUBRESOURCE m{};
+        bool same = false;
+        if (staging) {
+            context->CopyResource(staging.Get(), perDraw.Get());
+            if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                std::memcpy(&got, m.pData, sizeof(got));
+                context->Unmap(staging.Get(), 0);
+                same = std::memcmp(&got, &want, sizeof(got)) == 0;
+            }
+        }
+        check(same, "a write through our copy: the buffer the GPU reads holds the game's bytes");
+    }
 
     frame(moved7, 4);  // the ring refilled: its part 4 vertices further on
     s = lmu::mvr_pass_stats();
