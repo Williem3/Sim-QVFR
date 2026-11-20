@@ -94,23 +94,16 @@ void settings_checks() {
 // Quality presets: each sets the costly switches and is recognised again; a switch flipped is Custom; steps clamp.
 void preset_checks() {
     simqvfr::CarLighting c;
-    c.nightVision = true;
-    bool ok = true;
-    for (int p = 0; p < simqvfr::kCarLightPresets; ++p) {
-        simqvfr::car_lighting_preset(c, p);
-        ok &= simqvfr::car_lighting_preset_of(c) == p && c.nightVision;
-    }
-    check(ok, "presets: Low .. High recognised, night vision left alone");
-    check(c.shadows && c.reflections && c.ground && c.detail && c.headlights, "presets: High is every switch");
+    check(c.quality == 2 && simqvfr::car_lighting_preset_of(c) == 2, "presets: High by default");
+    const simqvfr::CarLighting before = c;
     simqvfr::car_lighting_preset(c, 0);
-    check(!c.shadows && c.reflections && !c.ground && c.detail && c.headlights,
-          "presets: Low is detail, reflections and headlights");
-    c.shadows = true;  // Low + floodlight shadows: Custom; one step up from it is High (one costly one on, then the step)
-    check(simqvfr::car_lighting_preset_of(c) == -1 && simqvfr::car_lighting_preset_step(c, 1) == 2,
-          "presets: a flipped switch is Custom, and Right goes on from the nearest");
-    simqvfr::car_lighting_preset(c, 2);
-    check(simqvfr::car_lighting_preset_step(c, 1) == 2 && simqvfr::car_lighting_preset_step(c, -1) == 1,
-          "presets: Right on High stays, Left goes to Medium");
+    check(c.quality == 0 && c.shadows == before.shadows && c.ground == before.ground && c.reflections == before.reflections &&
+              c.detail == before.detail && c.headlights == before.headlights && c.nightVision == before.nightVision,
+          "presets: Low sets the quality, the switches untouched");
+    check(simqvfr::car_lighting_preset_step(c, -1) == 0 && simqvfr::car_lighting_preset_step(c, 1) == 1,
+          "presets: Left on Low stays, Right goes to Medium");
+    c.quality = 1;
+    check(simqvfr::car_lighting_from_bits(simqvfr::car_lighting_bits(c)).quality == 1, "presets: the quality in the live word");
 }
 
 // The automatic A/B: the blocks alternate the menu's settings and one switch off; a pair's cost is the mean of the A
@@ -832,6 +825,25 @@ void pass_checks(bool hardware) {
                           "%.3f, 3.3 m %.3f, 3.7 m %.3f; lit 0.200, hidden 0.067)",
                           r19, r20, r21, r22);
             check(r19 < 0.08f && r20 >= r19 - 1e-3f && r21 > r20 + 0.005f && r22 > r21 && r22 < 0.2f, text);
+            // Low quality (one ray, five steps): the same shadow, a little coarser.
+            f.quality = 0;
+            context->UpdateSubresource(scene.Get(), 0, nullptr, roomPx.data(), kW * 8, 0);
+            pass.run(context.Get(), scene.Get(), depth.Get(), slotView.Get(), false, lamp, view, f, 0);
+            const std::vector<float> low = read();
+            const auto lowRow = [&](UINT y) {
+                float sum = 0;
+                for (UINT x = 8; x + 8 < kW; ++x)
+                    sum += low[size_t{y} * kW + x];
+                return sum / (kW - 16);
+            };
+            const float l19 = lowRow(19), l20 = lowRow(20), l21 = lowRow(21), l22 = lowRow(22);
+            std::snprintf(text, sizeof(text),
+                          "ground: at Low the same shadow (1.4 m %.3f, 2.8 m %.3f, 3.3 m %.3f, 3.7 m %.3f; High %.3f %.3f "
+                          "%.3f %.3f)",
+                          l19, l20, l21, l22, r19, r20, r21, r22);
+            check(std::fabs(l19 - r19) < 0.02f && std::fabs(l20 - r20) < 0.02f && std::fabs(l21 - r21) < 0.03f &&
+                      std::fabs(l22 - r22) < 0.03f,
+                  text);
             context->UpdateSubresource(depth.Get(), 0, nullptr, roomDepth.data(), kW * 4, 0);
         }
         context->UpdateSubresource(slots.Get(), 0, nullptr, slotPx.data(), kW * 2, 0);

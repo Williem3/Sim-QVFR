@@ -249,8 +249,6 @@ Card night_cars_card() {
             std::vector<std::wstring> items;
             const int selected = choice_items(kNightQuality, items);
             r.segments(kNightQuality, tr(L"Quality"), items, selected);
-            if (selected < 0)
-                r.note(tr(L"Custom: the switches below don’t match a preset."));
             r.sliders({kNightFill, tr(L"Fill light"), cl.fill, L"%"}, {kNightOcclusion, tr(L"Ambient occlusion"), cl.occlusion, L"%"});
             r.sliders({kNightHighlights, tr(L"Highlights"), cl.highlights, L"%"}, {kNightGloss, tr(L"Paint gloss"), cl.gloss, L"%"});
             r.slider({kNightSmooth, tr(L"Smoothing"), cl.smooth, L" cm", cl.smooth == 0 ? tr(L"Off") : L""});
@@ -266,8 +264,9 @@ Card night_cars_card() {
                      tr(L"The cars’ shadows on the track and walls around them."));
             r.toggle(kNightVision, tr(L"Night vision color"), cl.nightVision,
                      tr(L"The dark loses its colour and turns a little blue, as eyes see at night."));
-            r.note(tr(L"Low, Medium and High set the switches by their GPU cost; night vision is left as you set it. "
-                      L"Night car lighting itself starts at the next launch; everything else changes while you drive."));
+            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low costs about half "
+                      L"the GPU time of High. Night car lighting itself starts at the next launch; everything else "
+                      L"changes while you drive."));
         });
     };
     c.reset = [](Settings& s) { s.carLight = Settings{}.carLight; };

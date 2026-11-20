@@ -51,9 +51,9 @@ constexpr Help kHelp[] = {
      L"The rest of the scene is untouched. It costs about 0.5 to 1 ms of GPU time with everything on. The switch takes "
      L"effect at the next launch; the values and effects change while you drive.")},
     {I18N(L"Quality"),
-     I18N(L"Sets the switches below by their GPU cost: Low keeps paint detail, lacquer reflections and headlight "
-     L"highlights, Medium adds shadows on the ground, High adds floodlight shadows. Night vision color isn't part of it. "
-     L"Changing any switch yourself shows no preset selected.")},
+     I18N(L"How finely the effects are worked out: fewer samples and steps for the shadows, occlusion and smoothing "
+     L"at Low, all of them at High. The switches below stay as you set them. Low costs about half the GPU time of High "
+     L"and looks a little grainier; the periphery always runs one step below the focus area, where it's least seen.")},
     {I18N(L"Fill light"),
      I18N(L"How much of the game's flat floodlight wash stays on the cars. Lower makes the shading and highlights stand "
      L"out more; 100% keeps the game's brightness.")},

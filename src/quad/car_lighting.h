@@ -26,6 +26,7 @@ struct CarLighting {
     bool headlights = kCarLightHeadlights.def != 0;    // the headlights' highlights on the paint
     bool ground = kCarLightGround.def != 0;            // the cars' shadows on the ground
     bool nightVision = kCarLightNightVision.def != 0;  // night vision's colour
+    int quality = kCarLightQuality.def;                // each effect's samples and steps: 0 Low, 1 Medium, 2 High
     bool operator==(const CarLighting&) const = default;
 };
 
@@ -35,6 +36,7 @@ inline CarLighting clamped(CarLighting c) {
     c.highlights = kCarLightHighlights.clamp(c.highlights);
     c.gloss = kCarLightGloss.clamp(c.gloss);
     c.smooth = kCarLightSmooth.clamp(c.smooth);
+    c.quality = kCarLightQuality.clamp(c.quality);
     return c;
 }
 
@@ -52,6 +54,7 @@ inline CarLighting read_car_lighting(const wchar_t* ini) {
     c.headlights = ini_flag(ini, kCarLightHeadlights);
     c.ground = ini_flag(ini, kCarLightGround);
     c.nightVision = ini_flag(ini, kCarLightNightVision);
+    c.quality = ini_int(ini, kCarLightQuality);
     return c;
 }
 
@@ -69,11 +72,13 @@ inline bool write_car_lighting(const wchar_t* ini, const CarLighting& in) {
     ok &= ini_put(ini, kCarLightHeadlights.section, kCarLightHeadlights.key, c.headlights ? 1 : 0);
     ok &= ini_put(ini, kCarLightGround.section, kCarLightGround.key, c.ground ? 1 : 0);
     ok &= ini_put(ini, kCarLightNightVision.section, kCarLightNightVision.key, c.nightVision ? 1 : 0);
+    ok &= ini_put(ini, kCarLightQuality.section, kCarLightQuality.key, c.quality);
     return ok;
 }
 
 // Packed into one word for the live atomic: bit 0 on, then a byte each (fill, occlusion, highlights, gloss, smooth),
-// then bit 48 the shadows, bit 49 the detail, bit 50 the reflections, bits 51-53 the headlights, the ground, night vision.
+// then bit 48 the shadows, bit 49 the detail, bit 50 the reflections, bits 51-53 the headlights, the ground, night vision,
+// bits 56-57 the quality.
 inline uint64_t car_lighting_bits(const CarLighting& in) {
     const CarLighting c = clamped(in);
     const auto byte = [](int v) { return static_cast<uint64_t>(v) & 0xff; };
@@ -81,7 +86,7 @@ inline uint64_t car_lighting_bits(const CarLighting& in) {
            byte(c.gloss) << 32 | byte(c.smooth) << 40 | uint64_t{c.shadows ? 1u : 0u} << 48 |
            uint64_t{c.detail ? 1u : 0u} << 49 | uint64_t{c.reflections ? 1u : 0u} << 50 |
            uint64_t{c.headlights ? 1u : 0u} << 51 | uint64_t{c.ground ? 1u : 0u} << 52 |
-           uint64_t{c.nightVision ? 1u : 0u} << 53;
+           uint64_t{c.nightVision ? 1u : 0u} << 53 | (static_cast<uint64_t>(c.quality) & 3) << 56;
 }
 inline CarLighting car_lighting_from_bits(uint64_t bits) {
     const auto value = [bits](int shift) { return static_cast<int>((bits >> shift) & 0xff); };
@@ -98,6 +103,7 @@ inline CarLighting car_lighting_from_bits(uint64_t bits) {
     c.headlights = (bits >> 51) & 1;
     c.ground = (bits >> 52) & 1;
     c.nightVision = (bits >> 53) & 1;
+    c.quality = static_cast<int>((bits >> 56) & 3);
     return clamped(c);
 }
 
@@ -112,47 +118,27 @@ inline void set_car_lighting(const CarLighting& c) {
 }
 
 // For the log: "off", or "fill 80%, occlusion 70%, highlights 100%, gloss 70%, smoothing 15 cm, shadows on, detail on".
-// Quality presets: which of the switches that cost GPU time are on (night vision is taste, not quality, and the
-// values stay as they are). Ordered by their cost in the A/B of 2026-11-19 run 5 (traffic, everything on 0.96 ms GPU,
-// the base 0.51): headlight highlights 0.04 (per-part lists), lacquer reflections 0.01, paint detail ~0, shadows on
-// the ground 0.17, floodlight shadows 0.21. 0 Low: paint detail, reflections, headlights; 1 Medium: + shadows on the
-// ground; 2 High: + floodlight shadows (every one).
+// Quality presets: the effects' tier (car_light_quality); the switches stay as the player set them. The A/B of
+// 2026-11-19 (race traffic, everything on, High): 2.70 ms GPU, the base relight ~1.0, ground shadows 0.56, floodlight
+// shadows 0.50, reflections 0.15, paint detail 0.10, headlights 0.05, night vision 0.03.
 inline constexpr int kCarLightPresets = 3;
-inline void car_lighting_preset(CarLighting& c, int preset) {
-    c.detail = true;
-    c.reflections = true;
-    c.headlights = true;
-    c.ground = preset >= 1;
-    c.shadows = preset >= 2;
-}
-// The preset the switches match (-1: none, "Custom").
-inline int car_lighting_preset_of(const CarLighting& c) {
-    for (int p = 0; p < kCarLightPresets; ++p) {
-        CarLighting t = c;
-        car_lighting_preset(t, p);
-        if (t.detail == c.detail && t.headlights == c.headlights && t.shadows == c.shadows &&
-            t.reflections == c.reflections && t.ground == c.ground)
-            return p;
-    }
-    return -1;
-}
-// A step from the switches as they are (Left -1, Right +1): from Custom, the preset with as many of the costly
-// two (ground, floodlight shadows) on, then the step.
+inline void car_lighting_preset(CarLighting& c, int preset) { c.quality = kCarLightQuality.clamp(preset); }
+// The preset in use (every quality is one).
+inline int car_lighting_preset_of(const CarLighting& c) { return kCarLightQuality.clamp(c.quality); }
+// A step (Left -1, Right +1), held at Low and High.
 inline int car_lighting_preset_step(const CarLighting& c, int step) {
-    int now = car_lighting_preset_of(c);
-    if (now < 0)
-        now = (c.ground ? 1 : 0) + (c.shadows ? 1 : 0);
-    const int next = now + step;
-    return next < 0 ? 0 : next >= kCarLightPresets ? kCarLightPresets - 1 : next;
+    return kCarLightQuality.clamp(car_lighting_preset_of(c) + step);
 }
 
 inline std::string car_lighting_log(const CarLighting& c) {
     if (!c.on)
         return "off";
     char text[256];
-    snprintf(text, sizeof(text), "fill %d%%, occlusion %d%%, highlights %d%%, gloss %d%%, smoothing %d cm, shadows %s, "
-             "detail %s, reflections %s, headlights %s, ground %s, night vision %s", c.fill, c.occlusion, c.highlights,
-             c.gloss, c.smooth, c.shadows ? "on" : "off", c.detail ? "on" : "off", c.reflections ? "on" : "off",
+    static const char* const kQuality[3] = {"low", "medium", "high"};
+    snprintf(text, sizeof(text), "quality %s, fill %d%%, occlusion %d%%, highlights %d%%, gloss %d%%, smoothing %d cm, "
+             "shadows %s, detail %s, reflections %s, headlights %s, ground %s, night vision %s",
+             kQuality[kCarLightQuality.clamp(c.quality)], c.fill, c.occlusion, c.highlights, c.gloss, c.smooth,
+             c.shadows ? "on" : "off", c.detail ? "on" : "off", c.reflections ? "on" : "off",
              c.headlights ? "on" : "off", c.ground ? "on" : "off", c.nightVision ? "on" : "off");
     return text;
 }

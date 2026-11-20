@@ -71,6 +71,9 @@ inline constexpr IniInt kCarLightReflections{L"quad", L"car_light_reflections", 
 inline constexpr IniInt kCarLightHeadlights{L"quad", L"car_light_headlights", 1, 0, 1, 1};
 inline constexpr IniInt kCarLightGround{L"quad", L"car_light_ground", 1, 0, 1, 1};
 inline constexpr IniInt kCarLightNightVision{L"quad", L"car_light_night_vision", 0, 0, 1, 1};
+// Night car lighting's quality: each effect's samples and steps (0 Low, 1 Medium, 2 High; the periphery a tier below
+// the focus view). The switches stay as they are.
+inline constexpr IniInt kCarLightQuality{L"quad", L"car_light_quality", 2, 0, 2, 1};
 // The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};

@@ -369,7 +369,7 @@ cbuffer CarLightPass : register(b0) {
     row_major float4x4 otherClip;     // this eye's view space -> the other eye's clip (its eye region)
     row_major float4x4 otherInvProj;  // the other eye's clip -> its view space
     float4 otherEye;             // the other eye's place in this eye's view space; w: 1 with its depth (0: none)
-    float4 otherSize;            // its depth's width and height
+    float4 otherSize;            // its depth's width and height; z, w the quality tier of the focus view, the periphery
 };
 cbuffer CarLightSpots : register(b2) {
     float4 spotData[128];  // the headlights: per spotlight its position and range, direction and outer cone, attenuation
@@ -560,6 +560,16 @@ float3 neighbour(int2 q, int r, float2 origin, float2 size, float3 none) {
 // point kept when it is the same part and on the same surface (its distance from the camera within a slope's reach);
 // the fan of triangles between consecutive kept points summed (each by its area) into one direction. Too few kept: the
 // pixel's own.
+// Quality tiers (otherSize.z: the focus view's, otherSize.w: the periphery's; 0 Low, 1 Medium, 2 High): how many
+// samples and steps the occlusion, smoothing and shadow searches take (the reflections take all theirs in every tier). The periphery runs a tier below the focus view (seen at a lower resolution, in
+// side vision): the same averages, a little more noise.
+static const int kAoTaps[3] = {4, 6, 8};
+static const int kSmoothRings[3] = {1, 2, 2};
+static const int kShadowSteps[3] = {5, 7, 10};
+static const int kGroundRays[3] = {1, 2, 2};
+static const int kGroundSteps[3] = {5, 6, 8};
+int tier_of(int r) { return clamp((int)(r == 1 || region.z <= 0 ? otherSize.z : otherSize.w), 0, 2); }
+
 static const float2 kRing[8] = {float2(1, 0), float2(0.7071, 0.7071), float2(0, 1), float2(-0.7071, 0.7071),
                                 float2(-1, 0), float2(-0.7071, -0.7071), float2(0, -1), float2(0.7071, -0.7071)};
 float3 smooth_normal(int2 p, float3 P, float3 own, float3 V, uint s, int r, float2 origin, float2 size, float pixelMetres,
@@ -570,7 +580,8 @@ float3 smooth_normal(int2 p, float3 P, float3 own, float3 V, uint s, int r, floa
     float lp = length(P);
     float3 sum = 0;
     int kept = 0;
-    [unroll] for (int ring = 0; ring < 2; ++ring) {
+    const int rings = kSmoothRings[tier_of(r)];
+    [loop] for (int ring = 0; ring < rings; ++ring) {
         float reach = px * (ring == 0 ? 1.0 : 0.5);
         float3 pts[8];
         bool ok[8];
@@ -669,7 +680,9 @@ float ground_shade(float4 pos, int2 p, int r, float2 origin, float2 size, float 
     float angle = noise * 6.2831853;
     float3 t2 = t * cos(angle) + b * sin(angle), b2 = b * cos(angle) - t * sin(angle);
     float occluded = 0;
-    [unroll] for (int k2 = 0; k2 < 8; ++k2) {
+    const int tier = tier_of(r);
+    const int taps = kAoTaps[tier];
+    [loop] for (int k2 = 0; k2 < taps; ++k2) {
         float3 kk = kKernel[k2];
         float3 S = P + (t2 * kk.x + b2 * kk.y + N * kk.z) * 1.0;
         if (sample_world(S, lq, sl) <= 0 || sl == 0)
@@ -677,7 +690,7 @@ float ground_shade(float4 pos, int2 p, int r, float2 origin, float2 size, float 
         float range = saturate(1.0 / max(abs(lp - lq), 1e-3));
         occluded += (length(S) - lq > 0.02) ? range : 0;
     }
-    float ao = 1 - occluded / 8;
+    float ao = 1 - occluded / taps;
     float lit = 0, litSeen = 0;
     [unroll] for (int g = 0; g < 4; ++g) {
         int idx = (int)ground[g];
@@ -701,11 +714,13 @@ float ground_shade(float4 pos, int2 p, int r, float2 origin, float2 size, float 
         float3 spread = (lt * cos(turn) + lb * sin(turn)) * 0.12;
         float seen = 0;
         float span = min(dist, 4.0);
-        [unroll] for (int ray = 0; ray < 2; ++ray) {
+        // One ray (Low): toward one side of the light, the side turned per pixel (a dithered penumbra).
+        const int rays = kGroundRays[tier], steps = kGroundSteps[tier];
+        [loop] for (int ray = 0; ray < rays; ++ray) {
             float3 Lr = normalize(L + (ray == 0 ? spread : -spread));
             float vis = 1;
-            [loop] for (int k3 = 1; k3 <= 8; ++k3) {
-                float h = span * (k3 - 0.5 + noise) / 8;
+            [loop] for (int k3 = 1; k3 <= steps; ++k3) {
+                float h = span * (k3 - 0.5 + noise) / steps;
                 float3 S = P + N * 0.03 + Lr * h;
                 int found = sample_world(S, lq, sl);
                 if (found < 0)
@@ -718,7 +733,7 @@ float ground_shade(float4 pos, int2 p, int r, float2 origin, float2 size, float 
                     break;
                 }
             }
-            seen += 0.5 * vis;
+            seen += vis / rays;
         }
         lit += diffuse;
         litSeen += diffuse * seen;
@@ -814,7 +829,9 @@ Out ps_main(float4 pos : SV_Position) {
     float ca = cos(angle), sa = sin(angle);
     float3 t2 = t * ca + b * sa, b2 = b * ca - t * sa;
     float occluded = 0;
-    [unroll] for (int k = 0; k < 8; ++k) {
+    const int tier = tier_of(r);
+    const int taps = kAoTaps[tier];
+    [loop] for (int k = 0; k < taps; ++k) {
         float3 kk = kKernel[k];
         float3 S = P + (t2 * kk.x + b2 * kk.y + N * kk.z) * extra.x;
         float lq;
@@ -826,7 +843,7 @@ Out ps_main(float4 pos : SV_Position) {
     }
     // The screen's occlusion (between parts and objects: under the car, the wheels in their arches) times the model's
     // own baked one (panel gaps, vents, the inside of the arches: what the screen can't see).
-    float ao = (1 - occluded / 8) * baked;
+    float ao = (1 - occluded / taps) * baked;
 
     // The highlights' normal: with the paint's detail, the one the game's normal maps bent (orange peel, the carbon's
     // weave; its ambient cube map's lookup); the shading and the shadows keep the smooth one (the maps' detail would
@@ -867,8 +884,9 @@ Out ps_main(float4 pos : SV_Position) {
         float seen = 1;
         if (mode.x > 0 && diffuse > 0) {
             float reach = min(dist, 1.2);
-            [loop] for (int k = 1; k <= 10; ++k) {
-                float3 S = P + N * 0.02 + L * (reach * (k - 0.5 + noise) / 10);
+            const int steps = kShadowSteps[tier];
+            [loop] for (int k = 1; k <= steps; ++k) {
+                float3 S = P + N * 0.02 + L * (reach * (k - 0.5 + noise) / steps);
                 float lq;
                 uint sq;
                 int found = sample_world(S, lq, sq);
@@ -967,6 +985,8 @@ Out ps_main(float4 pos : SV_Position) {
             // the asking view's pixels it was fewer metres at the focus density).
             float2 start;
             bool startSeen = pixel_ahead(O, 0, float2(0, 0), region.xy, start);
+            // Every tier and both views alike: fewer steps lost a fifth of the hits, a seam at the focus box's edge
+            // (and the reflections cost ~0.15 ms).
             [loop] for (int k = 1; k <= 16; ++k) {
                 float t = 0.08 * pow(1.4, k);
                 float2 own;
@@ -1593,6 +1613,8 @@ bool CarLightPass::run(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D
         rest[20] = static_cast<float>(spots);
         rest[21] = s.ground ? 1.0f : 0.0f;
         rest[22] = s.nightVision && copied ? 1.0f : 0.0f;
+        rest[66] = static_cast<float>(s.quality);                        // the focus view's tier
+        rest[67] = static_cast<float>(s.quality > 0 ? s.quality - 1 : 0);  // the periphery a tier below
         rest[23] = relight ? 0.0f : 1.0f;  // night vision's colour alone
         int top[4] = {-1, -1, -1, -1};
         if (relight)  // (night vision's colour alone doesn't fix the frame's choice: none of its parts were drawn yet)
