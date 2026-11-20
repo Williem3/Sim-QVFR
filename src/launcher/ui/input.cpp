@@ -370,6 +370,18 @@ void activate(Ctl id, int option) {
     case kCheekyMotionFix: app.s.cheeky.motionFix = !app.s.cheeky.motionFix; changed(); return;
     case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
     case kOutline: app.s.outline = !app.s.outline; changed(); return;
+    case kCorridorOn:
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+            app.s.corridor = !app.s.corridor;
+            changed();
+        }
+        return;
+    case kCorridorBand:
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+            app.s.corridorBand = !app.s.corridorBand;
+            changed();
+        }
+        return;
     case kGradeOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
@@ -501,6 +513,8 @@ bool space_control(Ctl id) {
     case kMethod:
     case kMode:
     case kOutline:
+    case kCorridorOn:
+    case kCorridorBand:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:

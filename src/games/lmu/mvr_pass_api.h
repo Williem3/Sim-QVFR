@@ -187,6 +187,7 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         g.corridor.done[pass] = false;  // the focus corridor: its mask and its copy once each this pass
         g.corridor.copiedThisPass[pass] = false;
         g.corridor.maskedThisPass[pass] = false;
+        g.corridor.filledThisPass[pass] = false;
         // DLSS's depth before the transparents: none copied yet; the scene's depth as bound now.
         auto& gl = g.glass;
         gl.copies = 0;
@@ -537,6 +538,8 @@ void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, flo
     if (show && !c.show)
         simqvfr::log_line("lmu mvr: corridor show mode: what lies outside the corridor tinted blue in the focus views");
     c.show = show;
+    if (!on && c.on)
+        simqvfr::log_line("lmu mvr: corridor off: the focus views render all of their box");
     if (on && !c.on)
         simqvfr::logf("lmu mvr: corridor on: the focus views render only what lies within %.1f m either side of the road's "
                       "centre, up to %.1f m above the road beneath it, %.1f m%s ahead (the eye %.2f m above the road); the "
@@ -554,6 +557,18 @@ void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, flo
     c.roadSlopeDeg = roadSlopeDeg;
     c.centreReachM = centreReachM;
     c.featherM = featherM;
+}
+
+void mvr_corridor_band(int pct, int padPct) {
+    auto& c = g.corridor;
+    if (pct > 0 && c.bandPct <= 0)
+        simqvfr::logf("lmu mvr: corridor DLSS band: DLAA on %d%% of each focus view's rows, over the corridor's (%d%% kept "
+                      "about them); the other rows the eye's image",
+                      pct, padPct);
+    if (pct <= 0 && c.bandPct > 0)
+        simqvfr::log_line("lmu mvr: corridor DLSS band off: DLAA over the whole focus view");
+    c.bandPct = std::clamp(pct, 0, 100);
+    c.bandPadPct = std::clamp(padPct, 0, 50);
 }
 
 void mvr_glass_depth(int mode) {

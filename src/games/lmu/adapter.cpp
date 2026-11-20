@@ -62,6 +62,9 @@ public:
                                                                    simqvfr::ini_int(s.ini, simqvfr::kCornerRadiusPercent));
             qvfr_set_focus_mask_now(simqvfr::ini_flag(s.ini, simqvfr::kFocusMask), area,
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusMaskMargin));
+            // Road focus at launch (live from then on: qvfr_set_focus_corridor).
+            qvfr_frame_set_corridor(simqvfr::ini_flag(s.ini, simqvfr::kFocusCorridor),
+                                    simqvfr::ini_flag(s.ini, simqvfr::kFocusCorridorBand));
         }
         // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (qvfr_frame.h).
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
@@ -135,6 +138,8 @@ public:
                 run.corridorShow = key(L"lmu_corridor_show", 0) != 0;
                 run.corridorOn = key(L"lmu_corridor", 0) != 0;
                 run.corridorFeatherM = (std::max)(0, key(L"lmu_corridor_feather_cm", 100)) / 100.0f;
+                run.corridorBandPct = std::clamp(key(L"lmu_corridor_dlss_band_pct", -1), -1, 100);
+                run.corridorBandPadPct = std::clamp(key(L"lmu_corridor_dlss_band_pad_pct", 6), 0, 50);
                 run.corridorSlopeDeg = static_cast<float>(std::clamp(key(L"lmu_corridor_road_slope_deg", 35), 5, 75));
                 run.corridorCentreM = (std::max)(0, key(L"lmu_corridor_centre_cm", 600)) / 100.0f;
                 run.mvrTiming = run.mvrTiming || run.corridorAb > 0;
@@ -254,6 +259,10 @@ public:
     void qvfr_set_focus_mask(bool on, const simqvfr::FocusArea& area, int marginTexels) override {
         if (qvfr_)
             qvfr_set_focus_mask_now(on, area, marginTexels);
+    }
+    void qvfr_set_focus_corridor(bool on, bool dlssBand) override {
+        if (qvfr_)
+            qvfr_frame_set_corridor(on, dlssBand);
     }
     static void qvfr_set_focus_mask_now(bool on, const simqvfr::FocusArea& area, int marginTexels) {
         qvfr_frame_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);

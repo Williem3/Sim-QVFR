@@ -38,6 +38,11 @@ inline constexpr IniInt kDebugBorder{L"quad", L"debug_border", 0, 0, 1, 1};
 // The focus mask (quad/focus_mask.h; a game with it, LMU): the focus views skip rendering their texels outside the focus
 // shape (pulled-in corners or rounding). 0: they render the whole box, as before. Live.
 inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
+// Road focus (a game with GameFeatures::focusCorridor, LMU: games/lmu/mvr_pass_corridor.h): the focus views render only
+// a corridor along the road ahead, the periphery's image everywhere else in them; with Sim-QVFR's DLSS on, its DLAA on
+// the focus views runs only over the rows the road covers (focus_corridor_dlss_band). Both live; on by default.
+inline constexpr IniInt kFocusCorridor{L"quad", L"focus_corridor", 1, 0, 1, 1};
+inline constexpr IniInt kFocusCorridorBand{L"quad", L"focus_corridor_dlss_band", 1, 0, 1, 1};
 // Diagnostics: the mask's margin past the shape, focus view texels (what DLSS, sharpening and screen-space effects read
 // beside the shown texels). Live.
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};

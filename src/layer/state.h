@@ -268,6 +268,8 @@ struct LiveSettings {
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
+    // [quad] focus_corridor, focus_corridor_dlss_band (a game with GameFeatures::focusCorridor): road focus.
+    bool focusCorridor = kFocusCorridor.def != 0, focusCorridorBand = kFocusCorridorBand.def != 0;
     // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames
     // a side), else [cpu] isolate_main_thread (1 on, 0 off).
     int cpuIsolate = 0;

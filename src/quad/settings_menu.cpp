@@ -68,6 +68,8 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Feather, I18N(L"Feather"), kFeatherPercent),
     spec_of(MenuItem::Corners, I18N(L"Corner radius"), kCornerRadiusPercent),
     spec_of(MenuItem::Outline, I18N(L"Show focus outline"), kDebugBorder),
+    spec_of(MenuItem::FocusCorridor, I18N(L"Road focus"), kFocusCorridor),
+    spec_of(MenuItem::FocusCorridorBand, I18N(L"DLAA on the road only"), kFocusCorridorBand),
     spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
     {MenuItem::FocusOffset, I18N(L"Gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::FocusOffsetX, I18N(L"Horizontal gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
@@ -358,6 +360,11 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             items.push_back(MenuItem::GazeDeadzone);
         if (l.qvfr && l.focusQuads)  // focus_layer=2's test
             items.push_back(MenuItem::FocusQuadDistance);
+        if (l.qvfr && l.focusCorridor) {  // road focus, and with Sim-QVFR's DLSS on its band
+            items.push_back(MenuItem::FocusCorridor);
+            if (v.focusCorridor && (l.ownDlss || l.apiDlss) && v.dlss.on)
+                items.push_back(MenuItem::FocusCorridorBand);
+        }
         items.push_back(MenuItem::Outline);
     } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
         if (!menu.profiles.empty())
@@ -638,8 +645,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain ||
         item == MenuItem::ColorOn || item == MenuItem::CarLightOn || item == MenuItem::CarLightShadows ||
         item == MenuItem::CarLightDetail || item == MenuItem::CarLightReflections ||
-        item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision) {
+        item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision ||
+        item == MenuItem::FocusCorridor || item == MenuItem::FocusCorridorBand) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
+                     : item == MenuItem::FocusCorridor ? menu.values.focusCorridor
+                     : item == MenuItem::FocusCorridorBand ? menu.values.focusCorridorBand
                      : item == MenuItem::ColorOn     ? menu.values.color.on
                      : item == MenuItem::CarLightOn  ? menu.values.carLight.on
                      : item == MenuItem::CarLightShadows ? menu.values.carLight.shadows
@@ -686,6 +696,8 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.shape = read_focus_shape(ini);
     v.focusMask = ini_flag(ini, kFocusMask);
     v.focusMaskMargin = ini_int(ini, kFocusMaskMargin);
+    v.focusCorridor = ini_flag(ini, kFocusCorridor);
+    v.focusCorridorBand = ini_flag(ini, kFocusCorridorBand);
     v.overlay = read_osd_placement(ini);
     v.clock = read_clock_placement(ini);
     v.placement = read_menu_placement(ini);
@@ -709,8 +721,12 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening, bool eyeOff, bool carLighting) {
+                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor) {
     bool ok = true;
+    if (qvfr && focusCorridor) {
+        ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
+        ok &= write(ini, kFocusCorridorBand, v.focusCorridorBand ? 1 : 0);
+    }
     if (qvfr && carLighting)
         ok &= write_car_lighting(ini, v.carLight);
     if (eyeOff)  // QVFR or not: the layer shows the eye black either way
@@ -1117,6 +1133,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = std::to_wstring(c.nrPasses);
         else if (items[i] == MenuItem::Outline)
             line.value = on_off(v.outline);
+        else if (items[i] == MenuItem::FocusCorridor)
+            line.value = on_off(v.focusCorridor);
+        else if (items[i] == MenuItem::FocusCorridorBand)
+            line.value = on_off(v.focusCorridorBand);
         else if (items[i] == MenuItem::Shape)
             line.value = w.t(v.shape.custom ? I18N(L"Custom shape") : I18N(L"Rectangle"));
         else if (items[i] == MenuItem::ShapePoint)  // "Whole shape", "Point 2 of 5"

@@ -27,7 +27,7 @@ bool corridor_resources(ID3D11DeviceContext* context) {
         return SUCCEEDED(D3DCompile(kCorridorShaders, sizeof(kCorridorShaders) - 1, "corridor", nullptr, nullptr, entry,
                                     target, 0, 0, &code, &errors));
     };
-    ComPtr<ID3DBlob> vs, ms, ss, mask, tint, classify, columns, centre, colourMs, colourSs, fillOutside, fillEdge;
+    ComPtr<ID3DBlob> vs, ms, ss, mask, tint, classify, columns, centre, colourMs, colourSs, fillOutside, fillEdge, margin;
     D3D11_DEPTH_STENCIL_DESC ds{};
     ds.DepthEnable = TRUE;
     ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
@@ -66,7 +66,7 @@ bool corridor_resources(ID3D11DeviceContext* context) {
     const bool ok = device && compile("vs_main", "vs_5_0", vs) && compile("copy_ms", "ps_5_0", ms) &&
                     compile("copy_ss", "ps_5_0", ss) && compile("mask_main", "ps_5_0", mask) &&
                     compile("show_main", "ps_5_0", tint) && compile("columns_main", "cs_5_0", columns) &&
-                    compile("classify_main", "cs_5_0", classify) &&
+                    compile("classify_main", "cs_5_0", classify) && compile("margin_main", "cs_5_0", margin) &&
                     compile("copy_colour_ms", "ps_5_0", colourMs) && compile("copy_colour_ss", "ps_5_0", colourSs) &&
                     compile("fill_outside_main", "ps_5_0", fillOutside) && compile("fill_edge_main", "ps_5_0", fillEdge) &&
                     compile("centre_main", "cs_5_0", centre) &&
@@ -80,6 +80,8 @@ bool corridor_resources(ID3D11DeviceContext* context) {
                                                           &c.columns)) &&
                     SUCCEEDED(device->CreateComputeShader(classify->GetBufferPointer(), classify->GetBufferSize(),
                                                           nullptr, &c.classify)) &&
+                    SUCCEEDED(device->CreateComputeShader(margin->GetBufferPointer(), margin->GetBufferSize(), nullptr,
+                                                          &c.margin)) &&
                     SUCCEEDED(device->CreatePixelShader(colourMs->GetBufferPointer(), colourMs->GetBufferSize(), nullptr,
                                                         &c.copyColourMs)) &&
                     SUCCEEDED(device->CreatePixelShader(colourSs->GetBufferPointer(), colourSs->GetBufferSize(), nullptr,
@@ -271,6 +273,7 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     }
     const D3D11_VIEWPORT fvp = g.appliedVps[1];
     ID3D11DeviceContext* dc = c.deferred.Get();
+    corridor_stamp_in(dc, p, 7);  // the list's start (after its entry)
     dc->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     dc->IASetInputLayout(nullptr);
     dc->VSSetShader(c.vs.Get(), nullptr, 0);
@@ -285,14 +288,15 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     dc->PSSetShader(c.colourMs ? c.copyColourMs.Get() : c.copyColourSs.Get(), nullptr, 0);
     dc->PSSetShaderResources(0, 1, colourView.GetAddressOf());
     dc->Draw(3, 0);
+    corridor_stamp_in(dc, p, 8);
     // 2. Outside the corridor and where the mask skipped: the eye's colour and depth, written as they are. Our colour copy
     // unbound as a target first: bound for reading while still a target, d3d11 drops the view (the fill read black).
     ID3D11ShaderResourceView* unbind[1] = {};
     dc->PSSetShaderResources(0, 1, unbind);
     dc->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* srvs[6] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get(), nullptr, t.stampsSrv.Get(),
-                                         t.colourSrv.Get()};
-    dc->PSSetShaderResources(0, 6, srvs);
+    ID3D11ShaderResourceView* srvs[7] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get(), nullptr, t.stampsSrv.Get(),
+                                         t.colourSrv.Get(), t.marginSrv.Get()};
+    dc->PSSetShaderResources(0, 7, srvs);
     dc->PSSetSamplers(0, 1, c.linear.GetAddressOf());
     dc->RSSetViewports(1, &fvp);
     dc->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv);
@@ -300,12 +304,14 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     dc->OMSetBlendState(c.fillOpaque.Get(), nullptr, 0xffffffff);
     dc->PSSetShader(c.fillOutside.Get(), nullptr, 0);
     dc->Draw(3, 0);
+    corridor_stamp_in(dc, p, 9);
     // 3. Within the feather of the corridor's edge: the eye's colour blended over the focus view.
     dc->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
     dc->OMSetDepthStencilState(c.noDepth.Get(), 0);
     dc->OMSetBlendState(c.fillBlend.Get(), nullptr, 0xffffffff);
     dc->PSSetShader(c.fillEdge.Get(), nullptr, 0);
     dc->Draw(3, 0);
+    corridor_stamp_in(dc, p, 10);
     ComPtr<ID3D11CommandList> list;
     if (FAILED(dc->FinishCommandList(FALSE, &list))) {
         ++g.stats.corridorFillRefused;
@@ -318,6 +324,27 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     }
     corridor_stamp(p, 6);
     ++g.stats.corridorFills;
+    c.filledThisPass[p] = true;
+    std::memcpy(&c.fillStamp[p], &k[30], sizeof(c.fillStamp[p]));
+}
+
+// What DLSS keeps of this pass's focus view (DlssPass::focusKeep): with the fill run this pass, the margin map (above 0
+// inside the corridor, blended over the feather) and the mask's stamps; after DLSS the rest takes the eye's finished
+// image, as the fill took its raw one. False: nothing to say (no fill this pass).
+bool corridor_keep(int p, simqvfr::DlssPass& dp) {
+    auto& c = g.corridor;
+    if (p < 0 || p > 1 || !c.filledThisPass[p])
+        return false;
+    auto& t = c.copy[p];
+    if (!t.marginSrv || !t.stampsSrv || !t.w || !t.h)
+        return false;
+    dp.focusKeep = t.marginSrv.Get();
+    dp.focusKeepWidth = t.w;
+    dp.focusKeepHeight = t.h;
+    dp.focusKeepFeather = c.featherM;
+    dp.focusStamps = t.stampsSrv.Get();
+    dp.focusStamp = c.fillStamp[p];
+    return true;
 }
 
 // The eye's depth over the focus box, as the opaque scene left it (at the pass's first transparent draw writing depth:
@@ -384,6 +411,8 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
         const unsigned gw = (w + 1) / 2, gh = (h + 1) / 2;
         const D3D11_TEXTURE2D_DESC rd = {gw, gh, 1, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                          D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+        const D3D11_TEXTURE2D_DESC md = {w, h, 1, 1, DXGI_FORMAT_R16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+                                         D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
         const D3D11_TEXTURE2D_DESC gd = {gw, gh, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                          D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
         const D3D11_BUFFER_DESC sd = {gw * 2 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
@@ -398,6 +427,9 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
             FAILED(device->CreateTexture2D(&rd, nullptr, &t.road)) ||
             FAILED(device->CreateUnorderedAccessView(t.road.Get(), nullptr, &t.roadUav)) ||
             FAILED(device->CreateShaderResourceView(t.road.Get(), nullptr, &t.roadSrv)) ||
+            FAILED(device->CreateTexture2D(&md, nullptr, &t.marginMap)) ||
+            FAILED(device->CreateUnorderedAccessView(t.marginMap.Get(), nullptr, &t.marginUav)) ||
+            FAILED(device->CreateShaderResourceView(t.marginMap.Get(), nullptr, &t.marginSrv)) ||
             FAILED(device->CreateShaderResourceView(t.ground.Get(), nullptr, &t.groundSrv)) ||
             FAILED(device->CreateBuffer(&sd, nullptr, &t.sums)) ||
             FAILED(device->CreateUnorderedAccessView(t.sums.Get(), nullptr, &t.sumsUav)) ||
@@ -406,6 +438,25 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
             FAILED(device->CreateShaderResourceView(t.centre.Get(), nullptr, &t.centreSrv))) {
             t = {};
             return;
+        }
+        // The corridor's rows (two uints, raw) and their staging ring.
+        const D3D11_BUFFER_DESC rowsDesc = {8, D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
+                                            D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+        D3D11_UNORDERED_ACCESS_VIEW_DESC rowsView{};
+        rowsView.Format = DXGI_FORMAT_R32_TYPELESS;
+        rowsView.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        rowsView.Buffer.NumElements = 2;
+        rowsView.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        const D3D11_BUFFER_DESC readDesc = {8, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        bool rowsOk = SUCCEEDED(device->CreateBuffer(&rowsDesc, nullptr, &t.rows)) &&
+                      SUCCEEDED(device->CreateUnorderedAccessView(t.rows.Get(), &rowsView, &t.rowsUav));
+        for (auto& rb : t.rowsRead)
+            rowsOk = rowsOk && SUCCEEDED(device->CreateBuffer(&readDesc, nullptr, &rb));
+        if (!rowsOk) {  // no band (the corridor itself goes on)
+            t.rows.Reset();
+            t.rowsUav.Reset();
+            for (auto& rb : t.rowsRead)
+                rb.Reset();
         }
         t.w = w;
         t.h = h;
@@ -464,11 +515,33 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
         dc->Dispatch((t.gw + 63) / 64, 1, 1);
         dc->CSSetShader(c.centre.Get(), nullptr, 0);
         dc->Dispatch(1, 1, 1);
+        // The margin map: the road's and the centre's results read now (their views unbound as UAVs first).
+        ID3D11UnorderedAccessView* noUavs[3] = {};
+        dc->CSSetUnorderedAccessViews(0, 3, noUavs, nullptr);
+        ID3D11ShaderResourceView* marginIn[3] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get()};
+        dc->CSSetShaderResources(0, 3, marginIn);
+        // With the corridor's rows (for DLSS's band) where it has them: cleared, gathered, copied out to the ring.
+        const bool rows = t.rowsUav && c.bandPct > 0;
+        if (rows) {
+            const UINT zero[4] = {};
+            dc->ClearUnorderedAccessViewUint(t.rowsUav.Get(), zero);
+        }
+        ID3D11UnorderedAccessView* marginUavs[2] = {t.marginUav.Get(), rows ? t.rowsUav.Get() : nullptr};
+        dc->CSSetUnorderedAccessViews(4, 2, marginUavs, nullptr);
+        dc->CSSetShader(c.margin.Get(), nullptr, 0);
+        dc->Dispatch((t.w + 7) / 8, (t.h + 7) / 8, 1);
+        int rowsSlot = -1;
+        if (rows) {
+            rowsSlot = static_cast<int>(t.rowsSerial % 3);
+            dc->CopyResource(t.rowsRead[rowsSlot].Get(), t.rows.Get());
+        }
         ComPtr<ID3D11CommandList> groundList;
         if (FAILED(dc->FinishCommandList(FALSE, &groundList)) ||
             !corridor_execute(context, groundList.Get(), "before the corridor's road"))
             return;
         corridor_stamp(p, 2);
+        if (rowsSlot >= 0)
+            t.rowsWritten[rowsSlot] = ++t.rowsSerial;
         t.groundValid = true;
         ++g.stats.corridorGrounds;
     }
@@ -489,8 +562,10 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
     dc->VSSetShader(c.vs.Get(), nullptr, 0);
     dc->PSSetShader(c.tint.Get(), nullptr, 0);
     dc->PSSetConstantBuffers(0, 1, c.cb.GetAddressOf());
-    ID3D11ShaderResourceView* tintSrvs[3] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get()};
-    dc->PSSetShaderResources(0, 3, tintSrvs);
+    ID3D11ShaderResourceView* tintSrvs[7] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get(), nullptr, nullptr,
+                                             nullptr, t.marginSrv.Get()};
+    dc->PSSetShaderResources(0, 7, tintSrvs);
+    dc->PSSetSamplers(0, 1, c.linear.GetAddressOf());
     dc->RSSetState(c.raster.Get());
     dc->RSSetViewports(1, &fvp);
     dc->OMSetDepthStencilState(c.noDepth.Get(), 0);
@@ -501,6 +576,67 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
     if (SUCCEEDED(dc->FinishCommandList(FALSE, &tintList)) &&
         corridor_execute(context, tintList.Get(), "before the corridor's tint"))
         ++g.stats.corridorTints;
+}
+
+// DLSS's band for this pass's focus view (fh rows; DlssPass::focusBandTop): the corridor's rows as last read back (the
+// newest copy that has arrived, never waited for), `bandPct` of the view's height over them with `bandPadPct` kept
+// either side; taller than the band, from their top (the far road). False: no band (off, the A/B's side without the
+// corridor, show mode, or nothing read back yet: DLAA over the whole view).
+bool corridor_band(ID3D11DeviceContext* context, int p, unsigned fh, unsigned& top, unsigned& height) {
+    auto& c = g.corridor;
+    if (p < 0 || p > 1 || c.bandPct <= 0 || c.bandPct >= 100 || !c.on || c.abOff || c.show || !fh)
+        return false;
+    auto& t = c.copy[p];
+    if (!t.valid || !t.rows || !t.h)
+        return false;
+    // The newest copy that has arrived; it and those older are done with.
+    for (uint64_t back = 0; back < 3; ++back) {
+        if (t.rowsSerial < back + 1)
+            break;
+        const uint64_t serial = t.rowsSerial - back;
+        const int slot = static_cast<int>((serial - 1) % 3);
+        if (t.rowsWritten[slot] != serial)
+            continue;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (context->Map(t.rowsRead[slot].Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m) != S_OK)
+            continue;
+        const uint32_t* v = static_cast<const uint32_t*>(m.pData);
+        const uint32_t up = v[0], down = v[1];
+        context->Unmap(t.rowsRead[slot].Get(), 0);
+        for (uint64_t& w : t.rowsWritten)
+            if (w && w <= serial)
+                w = 0;
+        t.rowsHave = true;
+        t.rowsTop = down && up <= t.h ? t.h - up : 0;
+        t.rowsBottom = down ? (std::min)(down, t.h) : 0;
+        break;
+    }
+    if (!t.rowsHave)
+        return false;
+    height = (std::max)(2u, (static_cast<unsigned>(fh * c.bandPct / 100.0) + 1) & ~1u);
+    if (height >= fh)
+        return false;
+    ++c.bands;
+    if (t.rowsBottom <= t.rowsTop) {  // no corridor in view: the band where it was
+        ++c.bandsNoRows;
+        top = c.bandPlaced[p] ? (std::min)(c.bandTop[p], fh - height) : (fh - height) / 2;
+    } else {
+        const double scale = static_cast<double>(fh) / t.h, pad = fh * c.bandPadPct / 100.0;
+        const double need0 = (std::max)(0.0, t.rowsTop * scale - pad);
+        const double need1 = (std::min)(static_cast<double>(fh), t.rowsBottom * scale + pad);
+        c.bandNeeded += (need1 - need0) / fh;
+        double at;
+        if (need1 - need0 <= height) {
+            at = 0.5 * (need0 + need1) - 0.5 * height;
+        } else {
+            at = need0;
+            ++c.bandsClipped;
+        }
+        top = static_cast<unsigned>(std::clamp(at, 0.0, static_cast<double>(fh - height)));
+    }
+    c.bandTop[p] = top;
+    c.bandPlaced[p] = true;
+    return true;
 }
 
 // In an eye pass drawing its focus view, at the pass's first draw testing the scene's depth (the focus mask's moment):
@@ -578,6 +714,8 @@ void corridor_before_draw(ID3D11DeviceContext* context) {
     dc->PSSetConstantBuffers(0, 1, c.cb.GetAddressOf());
     ID3D11ShaderResourceView* maskSrvs[3] = {t.srv.Get(), t.groundSrv.Get(), t.centreSrv.Get()};
     dc->PSSetShaderResources(0, 3, maskSrvs);
+    dc->PSSetShaderResources(6, 1, t.marginSrv.GetAddressOf());
+    dc->PSSetSamplers(0, 1, c.linear.GetAddressOf());
     dc->RSSetState(c.raster.Get());
     dc->RSSetViewports(1, &vp);
     dc->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, dsv.Get(), 0, 1, t.stampsUav.GetAddressOf(), nullptr);

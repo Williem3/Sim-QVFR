@@ -139,6 +139,12 @@ public:
         (void)area;
         (void)marginTexels;
     }
+    // Road focus ([quad] focus_corridor, focus_corridor_dlss_band; GameFeatures::focusCorridor), at launch and live: the
+    // focus views kept to a corridor along the road, and their DLSS over its rows alone.
+    virtual void qvfr_set_focus_corridor(bool on, bool dlssBand) {
+        (void)on;
+        (void)dlssBand;
+    }
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
     // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
     virtual void qvfr_set_object_detail(int percent) { (void)percent; }

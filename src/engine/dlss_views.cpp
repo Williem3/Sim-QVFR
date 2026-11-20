@@ -38,6 +38,7 @@ namespace ngx = simqvfr::ngx;
 struct Constants {
     float r[16], r2[16], js[4], origin[4], extra[4], t[16], head[4], boxMin[4], boxMax[4];
     float inv[16], before[16], objects[4];  // moving objects (DlssPass::objectSlots)
+    float band[4];  // a band of the view's rows: its top, the view's height (0: none), its move since the frame before
 };
 
 // The car's box for a view this frame (dlss_math.h in_car_box): off without the eye's pose.
@@ -53,7 +54,7 @@ struct Jitter {
     double cx = 0, cy = 0;  // the clip shift for it
 };
 
-struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
+struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1; focus 0 and 1 over a band of their rows (DlssPass::focusBandTop)
     unsigned width = 0, height = 0;        // what it's drawn at (its inputs)
     unsigned outWidth = 0, outHeight = 0;  // what DLSS makes of it (the same: DLAA)
     int preset = 0;                        // NGX's render preset it was made with (DlssRun::preset, eyePreset)
@@ -76,6 +77,7 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
     double beforeShift[2] = {};  // the frame before's clip shift as rendered (its jitter): where its colour sits
     unsigned long long beforeFrame = 0;
     bool haveBefore = false;
+    unsigned beforeBandTop = 0;  // a band's top row in the frame before (its vectors carry the move)
     unsigned long long runs = 0;  // frames this view went through DLAA at this size
     // A live size change waiting to settle (ensure): the size asked and since when (GetTickCount64), and whether this
     // frame's view was left as drawn for it (not a failure).
@@ -100,7 +102,7 @@ struct State {
     unsigned long long frame = 1;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch;
+    ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch, bandOutside;
     // The vectors with our single-sample depth copy beside multisample object slots; the copy's and the measurement's.
     ComPtr<ID3D11PixelShader> vectorsCopyMs, depthCopyMs, depthCopySs, measureMs, measureSs, keepFarMs, keepFarSs;
     ComPtr<ID3D11Buffer> constants;
@@ -144,7 +146,7 @@ struct State {
         int nextEye = 0;
         unsigned long long used = 0, measured = 0;  // passes whose vectors read the copy; only measured it
     } copy;
-    Slot slots[4];
+    Slot slots[6];
     int createFailures = 0;
     bool firstLogged = false;
     bool dllNamed = false;  // the nvngx_dlss.dll NGX loaded has been logged
@@ -158,6 +160,19 @@ struct State {
     unsigned stretchSize[4] = {};
     DXGI_FORMAT stretchFormat = DXGI_FORMAT_UNKNOWN;
     bool stretchRefusedLogged = false;
+    // A focus view's rows outside its DLAA band (band_outside): the eye's region under it copied in, the rows drawn
+    // into the focus view's size, copied back; at these sizes. Since the last log line: bands run, their rows' share.
+    ComPtr<ID3D11Texture2D> bandIn, bandOut;
+    ComPtr<ID3D11ShaderResourceView> bandSrv;
+    ComPtr<ID3D11RenderTargetView> bandRtv;
+    unsigned bandSize[4] = {};
+    DXGI_FORMAT bandFormat = DXGI_FORMAT_UNKNOWN;
+    bool bandRefusedLogged = false;
+    unsigned long long bands = 0, bandFallbacks = 0, bandDirect = 0, composed = 0;
+    ComPtr<ID3D11BlendState> bandBlend;    // the eye's colour by its share (alpha), the target's alpha kept
+    ID3D11Resource* bandScene = nullptr;   // the scene texture bandSceneRtv views (raw, compared only)
+    ComPtr<ID3D11RenderTargetView> bandSceneRtv;
+    double bandShare = 0;
     // Jitter (the mutex: xrLocateViews may run on another thread than the passes).
     std::mutex mutex;
     unsigned phase = 0;
@@ -243,6 +258,7 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto psSs = compile(kVectorsShader, "ps", "ps_5_0", nullptr);
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
     const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
+    const auto bandOutside = compile(kBandOutsideShader, "ps", "ps_5_0", nullptr);
     const D3D_SHADER_MACRO bothMs[] = {{"MS", "1"}, {"DEPTH_MS", "1"}, {nullptr, nullptr}};
     const auto psBoth = compile(kVectorsShader, "ps", "ps_5_0", bothMs);
     const auto copyMs = compile(kDepthCopyShader, "ps", "ps_5_0", ms);
@@ -256,7 +272,7 @@ bool initialize(ID3D11DeviceContext* context) {
     };
     if (!made(psMs, d.vectorsCopyMs) || !made(copyMs, d.depthCopyMs) || !made(copySs, d.depthCopySs) ||
         !made(measureMs, d.measureMs) || !made(measureSs, d.measureSs) || !made(keepFarMs, d.keepFarMs) ||
-        !made(keepFarSs, d.keepFarSs)) {
+        !made(keepFarSs, d.keepFarSs) || !made(bandOutside, d.bandOutside)) {
         give_up("its shaders couldn't be made");
         return false;
     }
@@ -271,6 +287,19 @@ bool initialize(ID3D11DeviceContext* context) {
     }
     bool ok = make_constant_buffer(d.device.Get(), sizeof(Constants), d.constants) &&
               make_linear_clamp_sampler(d.device.Get(), d.linearClamp);
+    {  // band_outside's blend: the eye's colour by its share, the target's alpha left as it was
+        D3D11_BLEND_DESC bd{};
+        auto& t = bd.RenderTarget[0];
+        t.BlendEnable = TRUE;
+        t.SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        t.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        t.BlendOp = D3D11_BLEND_OP_ADD;
+        t.SrcBlendAlpha = D3D11_BLEND_ZERO;
+        t.DestBlendAlpha = D3D11_BLEND_ONE;
+        t.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        t.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
+        ok = ok && SUCCEEDED(d.device->CreateBlendState(&bd, &d.bandBlend));
+    }
     D3D11_TEXTURE2D_DESC td{};
     td.Width = td.Height = 64;
     td.MipLevels = td.ArraySize = 1;
@@ -716,7 +745,7 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
 bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
               unsigned w, unsigned h, unsigned ow, unsigned oh, const M4 rendered[2], const M4 unjittered[2],
               const Jitter& jitter, double shiftX, double shiftY, bool inverted, const double depthTerms[2], CarTest car,
-              const DlssPass& pass, const Camera& camera) {
+              const DlssPass& pass, const Camera& camera, unsigned bandHeightOfView = 0) {
     Slot& s = d.slots[index];
     if (!ensure(context, s, index, w, h, ow, oh, format, inverted)) {
         if (!s.waiting)  // a size settling isn't a failure (counted as resizeWaits)
@@ -764,6 +793,13 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     to_floats(inv, c.inv);
     to_floats(objects ? s.beforeUnjittered[use] : dlss::identity(), c.before);
     c.objects[0] = objects ? static_cast<float>(pass.objectCount) : 0.0f;
+    // A band of the view's rows (y its top): the pixels' place in the whole view, and the band's move since the frame
+    // before (the frame before's pixel sits that many rows lower in its band).
+    if (bandHeightOfView) {
+        c.band[0] = static_cast<float>(y);
+        c.band[1] = static_cast<float>(bandHeightOfView);
+        c.band[2] = history ? static_cast<float>(static_cast<int>(y) - static_cast<int>(s.beforeBandTop)) : 0.0f;
+    }
     if (objects)
         ++d.objectViews;
     context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
@@ -872,6 +908,7 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     s.beforeShift[1] = jitter.on ? shiftY : 0;
     s.beforeFrame = d.frame;
     s.haveBefore = true;
+    s.beforeBandTop = y;
     return done;
 }
 
@@ -932,6 +969,115 @@ void stretch_focus(ID3D11DeviceContext* context, ID3D11Resource* resolved, unsig
     context->CopySubresourceRegion(resolved, 0, x, 0, 0, d.stretchOut.Get(), 0, nullptr);
     ++d.stretched;
     ++d.stretchedTotal;
+}
+
+// A focus view (fw x fh at (x, 0)) after DLSS, where the game drew only part of it at full quality (DlssPass::focusKeep,
+// focusBandTop): what isn't kept takes the eye's image (the top-left eyeW x eyeH, DLSS's output) through the focus view's
+// clip remap without jitter (remap: a, b, c, d), blended in by the eye's share. Drawn into the scene itself where it
+// takes a render target view, else through a copy of the focus view. Inside dlss_after_resolve's state guard. False:
+// not drawn (the focus view as DLSS left it).
+bool band_outside(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, unsigned eyeW, unsigned eyeH,
+                  unsigned x, unsigned fw, unsigned fh, unsigned top, unsigned bandH, const double remap[4],
+                  const DlssPass& pass) {
+    if (!d.bandOutside || !d.bandBlend || std::fabs(remap[0]) < 1e-9 || std::fabs(remap[2]) < 1e-9)
+        return false;
+    // The eye's region under the focus view: its corners through the remap's inverse, 2 pixels wider, in the eye.
+    const double ex0 = (-1 - remap[1]) / remap[0], ex1 = (1 - remap[1]) / remap[0];
+    const double ey0 = (-1 - remap[3]) / remap[2], ey1 = (1 - remap[3]) / remap[2];
+    const auto px = [&](double e) { return (e + 1) * 0.5 * eyeW; };
+    const auto py = [&](double e) { return (1 - e) * 0.5 * eyeH; };
+    const int left = (std::max)(0, static_cast<int>(std::floor((std::min)(px(ex0), px(ex1)))) - 2);
+    const int right = (std::min)(static_cast<int>(eyeW), static_cast<int>(std::ceil((std::max)(px(ex0), px(ex1)))) + 2);
+    const int upper = (std::max)(0, static_cast<int>(std::floor((std::min)(py(ey0), py(ey1)))) - 2);
+    const int lower = (std::min)(static_cast<int>(eyeH), static_cast<int>(std::ceil((std::max)(py(ey0), py(ey1)))) + 2);
+    if (right <= left || lower <= upper)
+        return false;
+    const unsigned rw = static_cast<unsigned>(right - left), rh = static_cast<unsigned>(lower - upper);
+    // The scene as a render target, where it is one (made once per scene texture).
+    if (resolved != d.bandScene) {
+        d.bandScene = resolved;
+        d.bandSceneRtv.Reset();
+        ComPtr<ID3D11Texture2D> scene;
+        D3D11_TEXTURE2D_DESC sd{};
+        if (SUCCEEDED(resolved->QueryInterface(IID_PPV_ARGS(&scene))))
+            scene->GetDesc(&sd);
+        if (scene && (sd.BindFlags & D3D11_BIND_RENDER_TARGET) && sd.SampleDesc.Count == 1 &&
+            FAILED(d.device->CreateRenderTargetView(resolved, nullptr, &d.bandSceneRtv)))
+            d.bandSceneRtv.Reset();
+    }
+    const bool direct = d.bandSceneRtv != nullptr;
+    const unsigned size[4] = {rw, rh, direct ? 0u : fw, direct ? 0u : fh};
+    if (std::memcmp(size, d.bandSize, sizeof(size)) != 0 || d.bandFormat != format) {
+        std::memcpy(d.bandSize, size, sizeof(size));
+        d.bandFormat = format;
+        d.bandSrv.Reset();
+        d.bandRtv.Reset();
+        d.bandOut.Reset();
+        if (!make(d.bandIn, rw, rh, format, D3D11_BIND_SHADER_RESOURCE) ||
+            FAILED(d.device->CreateShaderResourceView(d.bandIn.Get(), nullptr, &d.bandSrv)) ||
+            (!direct && (!make(d.bandOut, fw, fh, format, D3D11_BIND_RENDER_TARGET) ||
+                         FAILED(d.device->CreateRenderTargetView(d.bandOut.Get(), nullptr, &d.bandRtv))))) {
+            d.bandSrv.Reset();
+            d.bandRtv.Reset();
+            if (!d.bandRefusedLogged)
+                say("a focus view's composition after DLSS (%ux%u from the eye's %ux%u, format %d) couldn't be made", fw,
+                    fh, rw, rh, static_cast<int>(format));
+            d.bandRefusedLogged = true;
+        }
+    }
+    if (!d.bandSrv || (!direct && !d.bandRtv))
+        return false;
+    const D3D11_BOX box{static_cast<UINT>(left), static_cast<UINT>(upper), 0, static_cast<UINT>(right),
+                        static_cast<UINT>(lower), 1};
+    context->CopySubresourceRegion(d.bandIn.Get(), 0, 0, 0, 0, resolved, 0, &box);
+    if (!direct) {  // the focus view as DLSS left it, blended over in our copy
+        const D3D11_BOX focusBox{x, 0, 0, x + fw, fh, 1};
+        context->CopySubresourceRegion(d.bandOut.Get(), 0, 0, 0, 0, resolved, 0, &focusBox);
+    }
+    Constants c{};
+    c.r[0] = direct ? static_cast<float>(x) : 0.0f;
+    c.r[1] = static_cast<float>(top);
+    c.r[2] = static_cast<float>(bandH);
+    c.r[3] = pass.focusKeepFeather;
+    const bool keep = pass.focusKeep && pass.focusKeepWidth && pass.focusKeepHeight;
+    c.r[4] = static_cast<float>(pass.focusKeepWidth);
+    c.r[5] = static_cast<float>(pass.focusKeepHeight);
+    c.r[6] = keep ? 1.0f : 0.0f;
+    c.r[7] = pass.focusStamps ? 1.0f : 0.0f;
+    std::memcpy(&c.r[8], &pass.focusStamp, sizeof(pass.focusStamp));
+    c.js[0] = static_cast<float>(eyeW);
+    c.js[1] = static_cast<float>(eyeH);
+    c.js[2] = static_cast<float>(fw);
+    c.js[3] = static_cast<float>(fh);
+    c.origin[0] = static_cast<float>(left);
+    c.origin[1] = static_cast<float>(upper);
+    c.origin[2] = static_cast<float>(rw);
+    c.origin[3] = static_cast<float>(rh);
+    for (int i = 0; i < 4; ++i)
+        c.extra[i] = static_cast<float>(remap[i]);
+    context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
+    ID3D11RenderTargetView* target = direct ? d.bandSceneRtv.Get() : d.bandRtv.Get();
+    context->OMSetRenderTargets(1, &target, nullptr);
+    ID3D11ShaderResourceView* inputs[3] = {d.bandSrv.Get(), keep ? pass.focusKeep : nullptr, pass.focusStamps};
+    context->PSSetShaderResources(0, 3, inputs);
+    context->PSSetSamplers(0, 1, d.linearClamp.GetAddressOf());
+    context->OMSetBlendState(d.bandBlend.Get(), nullptr, 0xffffffff);
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(d.vs.Get(), nullptr, 0);
+    context->PSSetShader(d.bandOutside.Get(), nullptr, 0);
+    context->PSSetConstantBuffers(0, 1, d.constants.GetAddressOf());
+    const D3D11_VIEWPORT vp{direct ? static_cast<float>(x) : 0.0f, 0, static_cast<float>(fw), static_cast<float>(fh), 0, 1};
+    context->RSSetViewports(1, &vp);
+    context->Draw(3, 0);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11ShaderResourceView* none[3] = {};
+    context->PSSetShaderResources(0, 3, none);
+    if (!direct)
+        context->CopySubresourceRegion(resolved, 0, x, 0, 0, d.bandOut.Get(), 0, nullptr);
+    d.bandDirect += direct ? 1 : 0;
+    return true;
 }
 
 // Runs `f` on the way out of a scope.
@@ -1374,9 +1520,44 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
                                                  pass.remap[2], pass.remap[3] - (focusJitter.on ? focusJitter.cy : 0));
         const M4 rendered[2] = {dlss::mul(vp[0], remap), dlss::mul(vp[1], remap)};
         const M4 unjittered[2] = {dlss::mul(vp[0], plain), dlss::mul(vp[1], plain)};
-        focusDone = run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered,
-                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car, pass,
-                             focusCamera);
+        // A band of its rows (DlssPass::focusBandTop): DLAA (not super resolution), NGX, a band smaller than the view.
+        const unsigned bandH = pass.focusBandHeight;
+        const bool band = bandH && bandH < fh && rw == fw && rh == fh && d.backend == 0;
+        if (band) {
+            const unsigned top = (std::min)(pass.focusBandTop, fh - bandH);
+            focusDone = run_view(context, resolved, sd.Format, 4 + pass.eye, pass.eyeWidth, top, fw, bandH, fw, bandH,
+                                 rendered, unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms,
+                                 car, pass, focusCamera, fh);
+            // The other rows: the eye's image as DLSS made it (both unjittered: the focus view's clip from the eye's
+            // as rendered is the remap with the eye's jitter and without its own).
+            const double plainRemap[4] = {
+                pass.remap[0], pass.remap[0] * (eyeJitter.on ? eyeJitter.cx : 0) + pass.remap[1] - (focusJitter.on ? focusJitter.cx : 0),
+                pass.remap[2], pass.remap[2] * (eyeJitter.on ? eyeJitter.cy : 0) + pass.remap[3] - (focusJitter.on ? focusJitter.cy : 0)};
+            if (focusDone && eyeDone &&
+                band_outside(context, resolved, sd.Format, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth, fw, fh, top, bandH,
+                             plainRemap, pass)) {
+                ++d.bands;
+                d.bandShare += static_cast<double>(bandH) / fh;
+                d.composed += pass.focusKeep ? 1 : 0;
+            } else {
+                ++d.bandFallbacks;
+            }
+        } else {
+            focusDone = run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered,
+                                 unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car, pass,
+                                 focusCamera);
+            // What the game didn't draw at full quality: the eye's image as DLSS made it (DLAA, NGX: as the band).
+            if (pass.focusKeep && focusDone && eyeDone && rw == fw && rh == fh && d.backend == 0) {
+                const double plainRemap[4] = {
+                    pass.remap[0], pass.remap[0] * (eyeJitter.on ? eyeJitter.cx : 0) + pass.remap[1] - (focusJitter.on ? focusJitter.cx : 0),
+                    pass.remap[2], pass.remap[2] * (eyeJitter.on ? eyeJitter.cy : 0) + pass.remap[3] - (focusJitter.on ? focusJitter.cy : 0)};
+                if (band_outside(context, resolved, sd.Format, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth, fw, fh, 0, 0,
+                                 plainRemap, pass))
+                    ++d.composed;
+                else
+                    ++d.bandFallbacks;
+            }
+        }
         if (focusDone)
             focusLeft = false;
     }
@@ -1473,6 +1654,15 @@ void dlss_shutdown() {
     d.vectorsSs.Reset();
     d.check.Reset();
     d.stretch.Reset();
+    d.bandOutside.Reset();
+    d.bandBlend.Reset();
+    d.bandScene = nullptr;
+    d.bandSceneRtv.Reset();
+    d.bandIn.Reset();
+    d.bandOut.Reset();
+    d.bandSrv.Reset();
+    d.bandRtv.Reset();
+    std::memset(d.bandSize, 0, sizeof(d.bandSize));
     d.stretchIn.Reset();
     d.stretchOut.Reset();
     d.stretchSrv.Reset();
@@ -1708,6 +1898,14 @@ void dlss_frame_end(unsigned long long frame) {
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+            if (d.bands || d.bandFallbacks || d.composed)
+                say("focus views over a band of their rows: %llu (%.0f%% of their rows each); %llu whose rest took the eye's "
+                    "image after DLSS (%llu drawn into the scene itself), %llu that kept the pass's own (the band or the eye "
+                    "not evaluated); band features %ux%u %ux%u since the last line",
+                    d.bands, d.bands ? 100.0 * d.bandShare / d.bands : 0.0, d.composed, d.bandDirect, d.bandFallbacks,
+                    d.slots[4].width, d.slots[4].height, d.slots[5].width, d.slots[5].height);
+            d.bands = d.bandFallbacks = d.composed = d.bandDirect = 0;
+            d.bandShare = 0;
             if (d.copy.used || d.copy.measured)
                 say("depth before the transparents: %llu passes read it, %llu only measured it (the A/B's other side) "
                     "since the last line",

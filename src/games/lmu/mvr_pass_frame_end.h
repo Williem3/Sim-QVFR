@@ -333,6 +333,16 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.corridorGrounds),
                           static_cast<unsigned long long>(s.corridorFills),
                           static_cast<unsigned long long>(s.corridorFillRefused));
+        if (g.corridor.bands) {
+            auto& c = g.corridor;
+            simqvfr::logf("lmu mvr: corridor DLSS band: %llu focus views over %d%% of their rows; the corridor's rows (with "
+                          "%d%% about them) %.0f%% of the view on average, taller than the band in %llu, none in view in %llu",
+                          static_cast<unsigned long long>(c.bands), c.bandPct, c.bandPadPct,
+                          c.bands > c.bandsNoRows ? 100.0 * c.bandNeeded / static_cast<double>(c.bands - c.bandsNoRows) : 0.0,
+                          static_cast<unsigned long long>(c.bandsClipped), static_cast<unsigned long long>(c.bandsNoRows));
+            c.bands = c.bandsClipped = c.bandsNoRows = 0;
+            c.bandNeeded = 0;
+        }
         if (s.maskDraws || s.maskDropped || s.maskAbDropped || s.panelReplays || s.uiMipFrames)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale, %llu on the "
                           "A/B's side without it; VR UI panel draws replayed at the menus' native size: %llu; frames whose "
@@ -405,6 +415,21 @@ void mvr_frame_end(unsigned long long frame) {
                               cavg(0, 0) + cavg(0, 1) + cavg(0, 2) + cavg(0, 3) + cavg(1, 0) + cavg(1, 1) + cavg(1, 2) +
                                   cavg(1, 3),
                               cn[0][0], cn[1][0], cn[0][2], cn[1][2], cn[0][3], cn[1][3]);
+                const unsigned (&fn)[2][5] = g.fillCounts[m];
+                const double (&fm)[2][5] = g.fillMs[m];
+                const auto favg = [&](int p, int k) { return fn[p][k] ? fm[p][k] / fn[p][k] : 0.0; };
+                if (fn[0][1] || fn[1][1])
+                    simqvfr::logf("lmu mvr: corridor fill GPU%s: pass 0 list entry %.3f, colour copy %.3f, outside draw "
+                                  "%.3f, edge draw %.3f, list exit %.3f ms; pass 1 %.3f, %.3f, %.3f, %.3f, %.3f ms (%u / %u "
+                                  "frames)",
+                                  m ? " on the A/B's other side" : "", favg(0, 0), favg(0, 1), favg(0, 2), favg(0, 3),
+                                  favg(0, 4), favg(1, 0), favg(1, 1), favg(1, 2), favg(1, 3), favg(1, 4), fn[0][1], fn[1][1]);
+                for (auto& pass : g.fillMs[m])
+                    for (double& v : pass)
+                        v = 0;
+                for (auto& pass : g.fillCounts[m])
+                    for (unsigned& v : pass)
+                        v = 0;
                 for (auto& pass : g.corridorMs[m])
                     for (double& v : pass)
                         v = 0;

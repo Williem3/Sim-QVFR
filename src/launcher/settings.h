@@ -65,6 +65,10 @@ struct Settings {
     // the focus views skip their pixels outside the shape; the readouts leave them out. Read only (the ini's own).
     bool focusMask = kFocusMask.def != 0;
     int focusMaskMargin = kFocusMaskMargin.def;
+    // [quad] focus_corridor, focus_corridor_dlss_band (a game with GameFeatures::focusCorridor: LMU): road focus, and
+    // with Sim-QVFR's DLSS its DLAA over the road's rows alone. Live.
+    bool corridor = kFocusCorridor.def != 0;
+    bool corridorBand = kFocusCorridorBand.def != 0;
     FocusOffset offset;       // [quad] fixed/gaze_offset_y, _x: the focus region's offset, degrees up and right
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees

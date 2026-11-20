@@ -142,6 +142,10 @@ void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexe
 // Between frames.
 void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, float farM, float eyeHeightM,
                   bool show = false, float roadSlopeDeg = 35, float centreReachM = 6, float featherM = 1);
+// DLSS on the focus view over a band of its rows (simqvfr::DlssPass::focusBandTop) with the corridor on: `pct` of the
+// view's height (0: off), placed over the corridor's rows as last read back with `padPct` of the height either side;
+// the rows outside it take the eye's image. Between frames.
+void mvr_corridor_band(int pct, int padPct);
 // R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
 // right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
 // elsewhere with mvr_redraw_panel. Null: none.

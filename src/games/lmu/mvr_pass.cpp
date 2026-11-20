@@ -90,6 +90,11 @@ namespace {
 
 #include "mvr_pass_two_views.h"
 
+// DLSS's band over the corridor's rows (mvr_pass_corridor.h), read at the pass's resolve (mvr_pass_binds.h).
+bool corridor_band(ID3D11DeviceContext* context, int p, unsigned fh, unsigned& top, unsigned& height);
+// What DLSS keeps of the focus view (mvr_pass_corridor.h corridor_keep): the rest from the eye's finished image.
+bool corridor_keep(int p, simqvfr::DlssPass& dp);
+
 #include "mvr_pass_binds.h"
 
 }  // namespace

@@ -58,6 +58,12 @@ double focusFractionY = 0;
 bool focusMaskOn = false;
 simqvfr::FocusArea focusMaskArea{};
 unsigned focusMaskMargin = 16;
+// Road focus as last set (qvfr_frame_set_corridor; the player's [quad] focus_corridor and focus_corridor_dlss_band), and
+// as last logged. The band: this share of the focus view's rows (measured on Spa 2026-11-20: the road's rows with their
+// margin 41-44% of a 50% box; 60% leaves room for climbs).
+std::atomic<bool> corridorLive{simqvfr::kFocusCorridor.def != 0}, corridorBandLive{simqvfr::kFocusCorridorBand.def != 0};
+int corridorLogged = -1;
+constexpr int kCorridorBandPct = 60, kCorridorBandPadPct = 6;
 float gazeTan[2][2] = {};
 bool gazeValid[2] = {};
 
@@ -758,11 +764,21 @@ void mvr_before_pass(int p) {
                 mvr_mask_ab_drop(maskSide == 1);
                 mvr_frame_mode(maskSide);
             }
+            // Road focus: the player's switches, unless the [experiment] keys say otherwise (on, an A/B, show mode).
+            const bool roadOn = cfg.corridorOn || corridorLive.load(std::memory_order_relaxed);
+            const bool roadBand = corridorBandLive.load(std::memory_order_relaxed);
+            if (const int said = (roadOn ? 1 : 0) | (roadBand ? 2 : 0); said != corridorLogged) {
+                corridorLogged = said;
+                simqvfr::logf("lmu qvfr: road focus %s%s", roadOn ? "on" : "off",
+                              roadOn ? (roadBand ? ", DLSS over the road's rows" : ", DLSS over the whole focus view") : "");
+            }
+            mvr_corridor_band(cfg.corridorBandPct >= 0 ? cfg.corridorBandPct : roadBand ? kCorridorBandPct : 0,
+                              cfg.corridorBandPct >= 0 ? cfg.corridorBandPadPct : kCorridorBandPadPct);
             if (cfg.corridorShow && cfg.corridorAb <= 0)  // show mode alone: tinted, never masked
                 mvr_corridor(true, true, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
                              cfg.corridorEyeHeightM, true, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
-            else if (cfg.corridorOn && cfg.corridorAb <= 0)  // on every frame: masked, the periphery composed in
-                mvr_corridor(true, false, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
+            else if (cfg.corridorAb <= 0)  // on every frame (masked, the periphery composed in), or off
+                mvr_corridor(roadOn, false, cfg.corridorHalfM, cfg.corridorTallM, cfg.corridorStartM, cfg.corridorFarM,
                              cfg.corridorEyeHeightM, false, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
             if (cfg.corridorAb > 0) {  // the focus corridor this frame or not (between frames)
                 if (!corridorAbLogged) {
@@ -1722,6 +1738,11 @@ void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned
     focusMaskOn = on;
     focusMaskArea = area;
     focusMaskMargin = marginTexels;
+}
+
+void qvfr_frame_set_corridor(bool on, bool dlssBand) {
+    corridorLive.store(on, std::memory_order_relaxed);
+    corridorBandLive.store(dlssBand, std::memory_order_relaxed);
 }
 
 simqvfr::games::QvfrMultiView qvfr_frame_multi_view() {

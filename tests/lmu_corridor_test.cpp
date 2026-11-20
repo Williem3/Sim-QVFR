@@ -152,7 +152,7 @@ struct Gpu {
     ComPtr<ID3D11PixelShader> copyPs, maskPs, fillOutsidePs, fillEdgePs;
     ComPtr<ID3D11BlendState> fillBlend, fillOpaque;
     ComPtr<ID3D11SamplerState> linear;
-    ComPtr<ID3D11ComputeShader> classify, columns, centre;
+    ComPtr<ID3D11ComputeShader> classify, columns, centre, margin;
     ComPtr<ID3D11Buffer> cb;
     ComPtr<ID3D11RasterizerState> raster;
     ComPtr<ID3D11DepthStencilState> always;
@@ -165,6 +165,12 @@ struct Filled {
 
 // The scene through the pipeline: the road pass (centre smoothing 1: at once) on its depth as the copy, then the mask,
 // then with `filled` the fill. Out: each focus texel masked or kept, what it shows, and the road's centre.
+// The corridor's rows as margin_main gathered them (the band DLSS takes) and as the margin map holds them: [top, bottom).
+struct Rows {
+    unsigned gpuTop = 0, gpuBottom = 0, mapTop = 0, mapBottom = 0;
+    bool read = false;
+} lastRows;
+
 bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& centre, std::vector<Hit>& hits,
                Filled* filled = nullptr) {
     std::vector<float> copy(kCW * kCH);
@@ -180,7 +186,11 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
     const D3D11_SUBRESOURCE_DATA copyData = {copy.data(), kCW * sizeof(float), 0};
     ComPtr<ID3D11Texture2D> copyTex, ground, road;
     ComPtr<ID3D11ShaderResourceView> copySrv, groundSrv, centreSrv, roadSrv;
-    ComPtr<ID3D11UnorderedAccessView> groundUav, sumsUav, centreUav, roadUav;
+    ComPtr<ID3D11UnorderedAccessView> groundUav, sumsUav, centreUav, roadUav, marginUav;
+    ComPtr<ID3D11Texture2D> marginTex;
+    ComPtr<ID3D11ShaderResourceView> marginSrv;
+    const D3D11_TEXTURE2D_DESC md = {kCW, kCH, 1, 1, DXGI_FORMAT_R16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+                                     D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
     ComPtr<ID3D11Buffer> sums, centreBuf;
     const D3D11_TEXTURE2D_DESC gd = {kGW, kGH, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
@@ -200,6 +210,9 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
         FAILED(d->CreateShaderResourceView(ground.Get(), nullptr, &groundSrv)) ||
         FAILED(d->CreateTexture2D(&rd, nullptr, &road)) || FAILED(d->CreateUnorderedAccessView(road.Get(), nullptr, &roadUav)) ||
         FAILED(d->CreateShaderResourceView(road.Get(), nullptr, &roadSrv)) ||
+        FAILED(d->CreateTexture2D(&md, nullptr, &marginTex)) ||
+        FAILED(d->CreateUnorderedAccessView(marginTex.Get(), nullptr, &marginUav)) ||
+        FAILED(d->CreateShaderResourceView(marginTex.Get(), nullptr, &marginSrv)) ||
         FAILED(d->CreateBuffer(&sd, nullptr, &sums)) || FAILED(d->CreateUnorderedAccessView(sums.Get(), nullptr, &sumsUav)) ||
         FAILED(d->CreateBuffer(&cd, &zeroData, &centreBuf)) ||
         FAILED(d->CreateUnorderedAccessView(centreBuf.Get(), nullptr, &centreUav)) ||
@@ -226,6 +239,53 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
     c->Dispatch((kGW + 63) / 64, 1, 1);
     c->CSSetShader(g.centre.Get(), nullptr, 0);
     c->Dispatch(1, 1, 1);
+    // The margin map, from the road's and the centre's results.
+    ID3D11UnorderedAccessView* noUavs3[3] = {};
+    c->CSSetUnorderedAccessViews(0, 3, noUavs3, nullptr);
+    ID3D11ShaderResourceView* marginIn[3] = {copySrv.Get(), groundSrv.Get(), centreSrv.Get()};
+    c->CSSetShaderResources(0, 3, marginIn);
+    // With the rows' buffer (raw, cleared to 0).
+    const D3D11_BUFFER_DESC rowsDesc = {8, D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
+                                        D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+    D3D11_UNORDERED_ACCESS_VIEW_DESC rowsView{};
+    rowsView.Format = DXGI_FORMAT_R32_TYPELESS;
+    rowsView.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    rowsView.Buffer.NumElements = 2;
+    rowsView.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    ComPtr<ID3D11Buffer> rowsBuf;
+    ComPtr<ID3D11UnorderedAccessView> rowsUav;
+    if (FAILED(d->CreateBuffer(&rowsDesc, nullptr, &rowsBuf)) ||
+        FAILED(d->CreateUnorderedAccessView(rowsBuf.Get(), &rowsView, &rowsUav)))
+        return false;
+    const UINT zero4[4] = {};
+    c->ClearUnorderedAccessViewUint(rowsUav.Get(), zero4);
+    ID3D11UnorderedAccessView* marginUavs[2] = {marginUav.Get(), rowsUav.Get()};
+    c->CSSetUnorderedAccessViews(4, 2, marginUavs, nullptr);
+    c->CSSetShader(g.margin.Get(), nullptr, 0);
+    c->Dispatch((kCW + 7) / 8, (kCH + 7) / 8, 1);
+    ID3D11UnorderedAccessView* noUav4[2] = {};
+    c->CSSetUnorderedAccessViews(4, 2, noUav4, nullptr);
+    {
+        std::vector<uint32_t> rowsOut;
+        std::vector<uint16_t> map;
+        lastRows = {};
+        if (readback(d, c, rowsBuf.Get(), rowsOut, 2, 2) && readback(d, c, marginTex.Get(), map, kCW * kCH, kCW)) {
+            lastRows.read = true;
+            lastRows.gpuTop = rowsOut[1] ? kCH - rowsOut[0] : 0;
+            lastRows.gpuBottom = rowsOut[1];
+            unsigned top = kCH, bottom = 0;
+            for (UINT y = 0; y < kCH; ++y)
+                for (UINT x = 0; x < kCW; ++x) {
+                    const uint16_t h = map[y * kCW + x];
+                    if (!(h & 0x8000) && (h & 0x7fff)) {  // above 0 (a half's sign and magnitude)
+                        top = (std::min)(top, static_cast<unsigned>(y));
+                        bottom = (std::max)(bottom, static_cast<unsigned>(y) + 1);
+                    }
+                }
+            lastRows.mapTop = bottom ? top : 0;
+            lastRows.mapBottom = bottom;
+        }
+    }
     ID3D11UnorderedAccessView* noUavs[3] = {};
     c->CSSetUnorderedAccessViews(0, 3, noUavs, nullptr);
     std::vector<float> centreOut;
@@ -260,8 +320,10 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
     c->VSSetShader(g.vs.Get(), nullptr, 0);
     c->PSSetShader(g.maskPs.Get(), nullptr, 0);
     c->PSSetConstantBuffers(0, 1, g.cb.GetAddressOf());
-    ID3D11ShaderResourceView* srvs[3] = {copySrv.Get(), groundSrv.Get(), centreSrv.Get()};
-    c->PSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[7] = {copySrv.Get(), groundSrv.Get(), centreSrv.Get(), nullptr, nullptr, nullptr,
+                                         marginSrv.Get()};
+    c->PSSetShaderResources(0, 7, srvs);
+    c->PSSetSamplers(0, 1, g.linear.GetAddressOf());
     c->RSSetState(g.raster.Get());
     c->RSSetViewports(1, &vp);
     c->Draw(3, 0);
@@ -296,9 +358,9 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
             FAILED(d->CreateTexture2D(&focusDesc, &focusData, &focusTex)) ||
             FAILED(d->CreateRenderTargetView(focusTex.Get(), nullptr, &focusRtv)))
             return false;
-        ID3D11ShaderResourceView* fillSrvs[6] = {copySrv.Get(), groundSrv.Get(), centreSrv.Get(), nullptr, stampSrv.Get(),
-                                                 eyeSrv.Get()};
-        c->PSSetShaderResources(0, 6, fillSrvs);
+        ID3D11ShaderResourceView* fillSrvs[7] = {copySrv.Get(), groundSrv.Get(), centreSrv.Get(), nullptr, stampSrv.Get(),
+                                                 eyeSrv.Get(), marginSrv.Get()};
+        c->PSSetShaderResources(0, 7, fillSrvs);
         c->PSSetSamplers(0, 1, g.linear.GetAddressOf());
         const D3D11_VIEWPORT fvp{0, 0, kFW, kFH, 0, 1};
         c->RSSetViewports(1, &fvp);
@@ -359,11 +421,12 @@ int SIM_QVFR_TEST_MAIN() {
         return SUCCEEDED(hr);
     };
     ComPtr<ID3DBlob> vsCode, copyCode, copyMsCode, maskCode, showCode, columnsCode, centreCode, classifyCode;
-    ComPtr<ID3DBlob> fillOutsideCode, fillEdgeCode, colourMsCode, colourSsCode;
+    ComPtr<ID3DBlob> fillOutsideCode, fillEdgeCode, colourMsCode, colourSsCode, marginCode;
     check(compile("vs_main", "vs_5_0", vsCode) && compile("copy_ss", "ps_5_0", copyCode) &&
               compile("copy_ms", "ps_5_0", copyMsCode) && compile("mask_main", "ps_5_0", maskCode) &&
               compile("show_main", "ps_5_0", showCode) && compile("columns_main", "cs_5_0", columnsCode) &&
               compile("centre_main", "cs_5_0", centreCode) && compile("classify_main", "cs_5_0", classifyCode) &&
+              compile("margin_main", "cs_5_0", marginCode) &&
               compile("fill_outside_main", "ps_5_0", fillOutsideCode) && compile("fill_edge_main", "ps_5_0", fillEdgeCode) &&
               compile("copy_colour_ms", "ps_5_0", colourMsCode) && compile("copy_colour_ss", "ps_5_0", colourSsCode),
           "the corridor's shaders compile");
@@ -398,6 +461,7 @@ int SIM_QVFR_TEST_MAIN() {
     }
     d->CreateComputeShader(columnsCode->GetBufferPointer(), columnsCode->GetBufferSize(), nullptr, &g.columns);
     d->CreateComputeShader(classifyCode->GetBufferPointer(), classifyCode->GetBufferSize(), nullptr, &g.classify);
+    d->CreateComputeShader(marginCode->GetBufferPointer(), marginCode->GetBufferSize(), nullptr, &g.margin);
     d->CreateComputeShader(centreCode->GetBufferPointer(), centreCode->GetBufferSize(), nullptr, &g.centre);
     const D3D11_BUFFER_DESC cbDesc = {32 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     d->CreateBuffer(&cbDesc, nullptr, &g.cb);
@@ -472,6 +536,11 @@ int SIM_QVFR_TEST_MAIN() {
                     sky, dash, centre);
         check(road > 0.97 && walls < 0.03 && sky == 0 && dash < 0.03 && std::fabs(centre) < 1,
               "flat road: the road kept, the walls' upper parts, the sky and the dash not; the centre on the head's line");
+        std::printf("     flat: the corridor's rows gathered %u-%u, in the margin map %u-%u (of %u)\n", lastRows.gpuTop,
+                    lastRows.gpuBottom, lastRows.mapTop, lastRows.mapBottom, kCH);
+        check(lastRows.read && lastRows.gpuBottom > lastRows.gpuTop && lastRows.gpuTop == lastRows.mapTop &&
+                  lastRows.gpuBottom == lastRows.mapBottom,
+              "flat road: the corridor's rows gathered for DLSS's band are the margin map's");
     }
     // 2. The road climbing 12 degrees from 40 m out, a wall across it at 150 m (20 m tall).
     {

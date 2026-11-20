@@ -19,6 +19,8 @@ cbuffer C : register(b0) {
     row_major float4x4 Inv;  // moving objects: this frame's clip (as rendered) -> the world
     row_major float4x4 B;    // the world -> the frame before's clip (without its jitter)
     float4 objects;          // x: how many object slots (0: none)
+    float4 band;             // a band of the view's rows (DlssPass::focusBandTop): x its top row, y the view's height
+                             // (0: no band), z the band's move since the frame before (rows, its vectors' y)
 };
 // DEPTH_MS: the depth multisample (its first sample read); MS: the object slots too. MS alone: the depth is our copy
 // (dlss_depth_copy_list, single-sample) while the scene and its slots are multisample.
@@ -62,7 +64,10 @@ Out ps(float4 pos : SV_Position) {
 #else
     float d = depthIn.Load(int3(p, 0));
 #endif
-    float2 ndc = float2(pos.x / js.z * 2 - 1, 1 - pos.y / js.w * 2);
+    // In a band of the view's rows: the pixel's place in the whole view (the reprojection's clip is the view's).
+    float2 size = band.y > 0 ? float2(js.z, band.y) : js.zw;
+    float2 at = pos.xy + float2(0, band.x);
+    float2 ndc = float2(at.x / size.x * 2 - 1, 1 - at.y / size.y * 2);
     bool car = in_car(ndc, d);
     float4 before = car ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
     if (!car && objects.x > 0) {  // a moving object's surface: its point moved back with it, then into the frame before
@@ -83,7 +88,9 @@ Out ps(float4 pos : SV_Position) {
     }
     Out o;
     o.depth = d;
-    o.motion = before.w > 1e-6 ? (before.xy / before.w - (ndc - js.xy)) * float2(0.5 * js.z, -0.5 * js.w) : float2(0, 0);
+    // Where it was, in the band as it was (its move added: the frame before's band rows start band.z rows higher).
+    o.motion = (before.w > 1e-6 ? (before.xy / before.w - (ndc - js.xy)) * float2(0.5 * size.x, -0.5 * size.y) : float2(0, 0)) +
+               float2(0, band.z);
     return o;
 }
 )";
@@ -224,6 +231,46 @@ cbuffer C : register(b0) {
 Texture2D<float4> src : register(t0);
 SamplerState linearClamp : register(s0);
 float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearClamp, pos.xy / js.zw, 0); }
+)";
+
+// The focus view after DLSS where the game drew only part of it (DlssPass::focusKeep, focusBandTop): what isn't kept
+// takes the eye's image as DLSS made it, through the focus view's clip remap (unjittered both), bilinear from our copy
+// of the eye's region under the focus view; alpha the eye's share (blended over the focus view), kept texels discarded.
+inline constexpr char kBandOutsideShader[] = R"(
+cbuffer C : register(b0) {
+    row_major float4x4 R;    // [0]: the focus view's left in the target, the band's top row, its height (0: none), the
+                             // feather; [1]: the keep texture's width, height, 1 with it, 1 with the stamps; [2].x: the
+                             // stamp (its bits)
+    row_major float4x4 R2;
+    float4 js;               // the eye's width, height; the focus view's width, height
+    float4 origin;           // the copied region's top-left in the eye (pixels); its width, height
+    float4 extra;            // the remap without jitter: focus clip x = a eye x + b, y = c eye y + d
+};
+Texture2D<float4> src : register(t0);
+Texture2D<float> keepIn : register(t1);
+Texture2D<uint> stampsIn : register(t2);
+SamplerState linearClamp : register(s0);
+float4 ps(float4 pos : SV_Position) : SV_Target {
+    float2 fp = pos.xy - float2(R[0].x, 0);  // the focus view's pixel
+    float keep = 1;
+    if (R[0].z > 0 && (fp.y < R[0].y || fp.y >= R[0].y + R[0].z)) {
+        keep = 0;  // outside the band DLAA ran over
+    } else {
+        if (R[1].z > 0) {
+            int2 at = min(int2(fp / js.zw * R[1].xy), int2(R[1].xy) - 1);
+            float m = keepIn.Load(int3(at, 0));
+            keep = R[0].w > 0 ? saturate(m / R[0].w) : (m > 0 ? 1 : 0);
+        }
+        if (R[1].w > 0 && stampsIn.Load(int3(int2(fp), 0)) == asuint(R[2].x))
+            keep = 0;
+    }
+    if (keep >= 1)
+        discard;
+    float2 f = float2(fp.x / js.z * 2 - 1, 1 - fp.y / js.w * 2);
+    float2 e = float2((f.x - extra.y) / extra.x, (f.y - extra.w) / extra.z);
+    float2 px = float2((e.x + 1) * 0.5 * js.x, (1 - e.y) * 0.5 * js.y);
+    return float4(src.SampleLevel(linearClamp, (px - origin.xy) / origin.zw, 0).rgb, 1 - keep);
+}
 )";
 
 // The scene's depth as it stands mid-pass (dlss_depth_copy_list), before transparents that write depth (a car's glass):

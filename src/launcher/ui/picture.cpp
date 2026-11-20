@@ -333,6 +333,18 @@ Card foveation_card() {
             b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"),
                      {tr(L"Gaze dead-zone"), tr(L"Gaze offset"), tr(L"Horizontal gaze offset")});
         }
+        if (qvfr() && game_has(&games::GameFeatures::focusCorridor)) {  // road focus (LMU)
+            b.divider();
+            b.toggle(kCorridorOn, tr(L"Road focus"), s.corridor,
+                     s.corridor ? tr(L"Full detail along the road ahead; the scenery beside and above it from the periphery.")
+                                : tr(L"Off"));
+            b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"), {tr(L"DLAA on the road only")}, [](Body& r) {
+                const bool band = app.s.corridorBand;
+                r.toggle(kCorridorBand, tr(L"DLAA on the road only"), band,
+                         band ? tr(L"With Sim-QVFR’s DLSS on: the focus area’s DLAA over the road’s rows alone.")
+                              : tr(L"Off"));
+            });
+        }
         b.divider();
         b.toggle(kOutline, tr(L"Show focus outline"), s.outline,
                  s.outline ? tr(L"Its edge in the headset, to see where it is.") : tr(L"Off"));
@@ -350,6 +362,8 @@ Card foveation_card() {
         s.gazeDeadzone = d.gazeDeadzone;
         s.outline = d.outline;
         s.color = d.color;
+        s.corridor = d.corridor;
+        s.corridorBand = d.corridorBand;
     };
     return c;
 }

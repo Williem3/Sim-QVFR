@@ -131,6 +131,16 @@ constexpr Help kHelp[] = {
     {I18N(L"Show a helmet"),
      I18N(L"Draws a helmet’s visor opening round the view, lit by the scene, in a layer of its own. It costs the headset a layer "
      L"to composite; nothing for the game.")},
+    {I18N(L"Road focus"),
+     I18N(L"The focus area renders in full detail only along the road ahead: about 10 m either side of the road and 3.5 m "
+     L"above it, following its hills and bends. Trees, grandstands, hills and the sky beside and above that come from the "
+     L"periphery’s image, as does the cockpit; where you look while you drive you shouldn’t see a difference. It saves "
+     L"GPU time, more with a larger focus area. Turn it off if something beside the road looks softer than you want. "
+     L"Changes while you drive.")},
+    {I18N(L"DLAA on the road only"),
+     I18N(L"With Road focus and Sim-QVFR’s DLSS on: the focus area’s DLAA runs only over the rows the road covers, the rest "
+     L"takes the periphery’s DLAA. It saves more GPU time. Turn it off if you see a soft strip above or below the road "
+     L"for a moment when you look up or down quickly. Changes while you drive.")},
     {I18N(L"Show focus outline"), I18N(L"Draws the focus area’s edge, to see where it is and how it follows your eyes. For setting up; "
                             L"turn it off to drive.")},
     {I18N(L"Use Cheeky Foveated DLSS"),

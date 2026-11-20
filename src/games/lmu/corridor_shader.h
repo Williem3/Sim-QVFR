@@ -3,13 +3,14 @@
 // R32F copy); the road pass on a grid of half the copy's size each way (the road's height changes slowly; the corridor's
 // own test stays at the copy's texels): classify_main (compute, a thread per grid texel: is it road, at what height, and
 // its share of the road's centre), columns_main (compute, a thread per grid column: carries the last road's height up
-// the column, sums the centre's shares), centre_main (compute, one thread: the road's centre, smoothed); mask_main
-// (over the focus viewport: discards the texels whose point lies in the corridor, so the rest get the viewport's single
-// depth, the nearest, and this pass's stamp in our own texture); show_main (the texels outside it tinted blue by multiplying, the same in
-// sunlight and shade); copy_colour_ms / copy_colour_ss (the eye's colour over the box), fill_outside_main and
-// fill_edge_main (the eye's colour and depth into the focus view outside the corridor, blended within the feather of its
-// edge: the periphery composed into the focus view in the game's own frame). Constant buffer b0, 32 floats (see the
-// source).
+// the column, sums the centre's shares), centre_main (compute, one thread: the road's centre, smoothed); margin_main
+// (compute, a thread per copy texel: how far inside the corridor its point lies, the map everything after reads);
+// mask_main (over the focus viewport: discards the texels whose point lies in the corridor, so the rest get the
+// viewport's single depth, the nearest, and this pass's stamp in our own texture); show_main (the texels outside it
+// tinted blue by multiplying, the same in sunlight and shade); copy_colour_ms / copy_colour_ss (the eye's colour over
+// the box), fill_outside_main and fill_edge_main (the eye's colour and depth into the focus view outside the corridor,
+// blended within the feather of its edge: the periphery composed into the focus view in the game's own frame).
+// Constant buffer b0, 32 floats (see the source).
 // Its own header so tests/lmu_corridor_test.cpp runs the same source on WARP.
 //
 // The corridor follows the terrain: a point is in it when it lies ahead of the start, within the half width of the
@@ -171,7 +172,43 @@ float corridor_margin(float2 uv) {
         m = min(m, extent.y - ahead);
     return m;
 }
-bool in_corridor(float2 uv) { return corridor_margin(uv) > 0; }
+// The margin map (margin_main, once a pass after the road pass): corridor_margin at every copy texel, held within
+// +-kMarginReach (the sky's -1e9 out of R16F's range); read by the mask, the fill
+// and show mode at the focus view's texels.
+static const float kMarginReach = 50;
+RWTexture2D<float> marginOut : register(u4);
+// The rows the corridor covers (for DLSS's band, mvr_pass_corridor.h corridor_band): the copy's height less its top row,
+// and its bottom row + 1, as maxima (cleared to 0: no row). Unbound (the test): no rows.
+RWByteAddressBuffer rowsOut : register(u5);
+groupshared uint gTop, gBottom;
+[numthreads(8, 8, 1)]
+void margin_main(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex) {
+    if (gi == 0) {
+        gTop = 0;
+        gBottom = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (all(id.xy < uint2(extent.zw))) {
+        const float m = clamp(corridor_margin((float2(id.xy) + 0.5) / extent.zw), -kMarginReach, kMarginReach);
+        marginOut[id.xy] = m;
+        if (m > 0) {
+            InterlockedMax(gTop, uint(extent.w) - id.y);
+            InterlockedMax(gBottom, id.y + 1);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (gi == 0 && gBottom > 0) {
+        uint was;
+        rowsOut.InterlockedMax(0, gTop, was);
+        rowsOut.InterlockedMax(4, gBottom, was);
+    }
+}
+Texture2D<float> marginIn : register(t6);
+SamplerState linearClamp : register(s0);
+// The nearest texel, as corridor_margin reads the copy: a filtered read blends the road with the wall or sky beside it
+// near the horizon (one texel spans metres there); the fill's feather smooths the edge in world space instead.
+float margin_at(float2 uv) { return marginIn.Load(int3(min(int2(uv * extent.zw), int2(extent.zw) - 1), 0)); }
+bool in_corridor(float2 uv) { return margin_at(uv) > 0; }
 // The mask: depth only (the viewport's single depth, the nearest), and each texel it covers stamped with this pass's
 // number in our own texture (the focus viewport's size), so the fill knows them without reading the depth back.
 RWTexture2D<uint> maskedOut : register(u0);
@@ -192,11 +229,10 @@ float4 show_main(V v) : SV_Target {
 // focus view (src x alpha + dest x (1 - alpha), alpha the eye's share). Deeper inside, the focus view as drawn.
 Texture2D<uint> maskedIn : register(t4);      // the mask's stamps (the focus viewport's size)
 Texture2D<float4> eyeColour : register(t5);   // the eye's colour over the box (the copy's size)
-SamplerState linearClamp : register(s0);
 bool masked_at(float4 pos) { return maskedIn.Load(int3(int2(pos.xy - focus.xy), 0)) == asuint(focus.z); }
 struct Filled { float4 colour : SV_Target; float depth : SV_Depth; };
 Filled fill_outside_main(V v) {
-    if (!masked_at(v.pos) && corridor_margin(v.uv) > 0)
+    if (!masked_at(v.pos) && margin_at(v.uv) > 0)
         discard;
     Filled f;
     f.colour = float4(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb, 1);
@@ -204,7 +240,7 @@ Filled fill_outside_main(V v) {
     return f;
 }
 float4 fill_edge_main(V v) : SV_Target {
-    const float margin = corridor_margin(v.uv);
+    const float margin = margin_at(v.uv);
     if (margin <= 0 || margin >= fill.y || masked_at(v.pos))
         discard;
     return float4(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb, 1 - margin / max(fill.y, 1e-3));

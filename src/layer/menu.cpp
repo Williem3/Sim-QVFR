@@ -228,6 +228,7 @@ void menu_open(int64_t now) {
         menu.model.launch.carLighting = features.carLighting && experiment.views4;  // night cars: QVFR's multi-view path
         menu.model.launch.carLightReady = menu.model.launch.carLighting && experiment.carLightAtLaunch;
         menu.model.launch.focusMask = features.focusMask;  // the pixels saved leave out what it skips (LMU)
+        menu.model.launch.focusCorridor = features.focusCorridor && experiment.views4;  // road focus: QVFR's (LMU)
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
         menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
         menu.model.launch.liveResolution = features.liveResolution;
@@ -320,8 +321,9 @@ void menu_press(MenuKey key, int64_t now) {
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
                      eyeOff = menu.model.launch.eyeOff, carLighting = menu.model.launch.carLighting,
+                     corridor = menu.model.launch.focusCorridor,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -330,7 +332,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)

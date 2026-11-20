@@ -295,6 +295,17 @@ void corridor_stamp(int pass, int which) {
     f.corridorStamped[pass][which] = true;
 }
 
+// The same, recorded into a deferred context's command list (it ends when the list runs).
+void corridor_stamp_in(ID3D11DeviceContext* dc, int pass, int which) {
+    if (g.gpuSlot < 0 || pass < 0 || pass > 1 || !dc)
+        return;
+    GpuFrame& f = g.gpu[g.gpuSlot];
+    if (f.corridorStamped[pass][which] || !f.corridor[pass][which])
+        return;
+    dc->End(f.corridor[pass][which].Get());
+    f.corridorStamped[pass][which] = true;
+}
+
 // Frames whose timestamps are in: their scene and post times added up.
 void gpu_collect() {
     for (GpuFrame& f : g.gpu) {
@@ -332,6 +343,21 @@ void gpu_collect() {
                     continue;
                 g.corridorMs[f.mode][p][k] += 1000.0 * static_cast<double>(tb - ta) / static_cast<double>(dj.Frequency);
                 ++g.corridorCounts[f.mode][p][k];
+            }
+        // The fill's parts: entry (5-7), colour copy (7-8), outside draw (8-9), edge draw (9-10), exit (10-6).
+        static constexpr int kFillSpan[5][2] = {{5, 7}, {7, 8}, {8, 9}, {9, 10}, {10, 6}};
+        for (int p = 0; p < 2; ++p)
+            for (int k = 0; k < 5; ++k) {
+                const int a = kFillSpan[k][0], b = kFillSpan[k][1];
+                if (!f.corridorStamped[p][a] || !f.corridorStamped[p][b])
+                    continue;
+                UINT64 ta = 0, tb = 0;
+                if (g.context->GetData(f.corridor[p][a].Get(), &ta, sizeof(ta), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+                    g.context->GetData(f.corridor[p][b].Get(), &tb, sizeof(tb), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+                    tb < ta)
+                    continue;
+                g.fillMs[f.mode][p][k] += 1000.0 * static_cast<double>(tb - ta) / static_cast<double>(dj.Frequency);
+                ++g.fillCounts[f.mode][p][k];
             }
     }
 }
