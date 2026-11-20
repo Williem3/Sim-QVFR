@@ -15,6 +15,7 @@
 #include "../identity_adapter.h"
 #include "../lmu/mvr_probe.h"
 #include "corner.h"
+#include "fixation.h"
 #include "ats/game.h"
 #include "ets2/game.h"
 #include "pass_probe.h"
@@ -74,6 +75,10 @@ public:
             passProbe_ = false;
         if (focusPercent_ > 0)
             read_diag(ini);
+        // scs_fixation=0: no depth read for the focus boxes' convergence (fixation.h); scs_fixation_converge=0: read,
+        // the boxes left parallel.
+        fixation_wanted(focusPercent_ > 0 && GetPrivateProfileIntW(L"experiment", L"scs_fixation", 1, ini) != 0,
+                        GetPrivateProfileIntW(L"experiment", L"scs_fixation_converge", 1, ini) != 0);
         simqvfr::logf("scs: QVFR at the D3D11 level %s (mode=%ls, scs_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
                       "shader %s",
                       cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
@@ -129,7 +134,11 @@ public:
             fov_[e][2] = std::tan(views[e].fov.angleDown);
             fov_[e][3] = std::tan(views[e].fov.angleUp);
         }
+        if (count >= 2)
+            fixation_note_fov(fov_);
     }
+    // How far the eyes look (fixation.h): the layer converges both eyes' focus boxes there.
+    double qvfr_fixation_m() const override { return focusPercent_ > 0 ? fixation_m() : 0.0; }
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
         float screen[2][2];
         for (int e = 0; e < 2; ++e) {

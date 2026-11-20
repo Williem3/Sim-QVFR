@@ -704,6 +704,13 @@ void atmo_source_region(List* l, bool eyeImage, bool output = false);
 // ---- replay_samples.cpp
 void focus_copy_sample();
 
+// ---- replay_fixation.cpp
+// In the focus tile list, the focus depth a shader resource behind `depthSrv` (both eyes side by side, fw x fh each):
+// once a frame, the left view's centre texels queued for reading.
+void focus_fixation_record(List* l, D3D12_GPU_DESCRIPTOR_HANDLE depthSrv, UINT fw, UINT fh, const float (&inverse)[16]);
+void focus_fixation_frame_end(uint64_t ended);
+double focus_fixation_m();
+
 // ---- replay_cull.cpp
 void focus_cull_record(List* gameList, const Stream& s);
 

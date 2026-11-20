@@ -20,6 +20,13 @@ void glass_before_draw(ID3D11DeviceContext* context) {
         return;
     }
     ++g.stats.glassBlendedWriters;
+    if (g.pass == 0 && gl.opaqueSince && gl.dsv && !gl.copies && g.view.box.valid) {
+        // The focus boxes' convergence reads the depth here too, before the glass (fixation.h), DLSS on or off.
+        const bool was = g.replaying;
+        g.replaying = true;
+        fixation_pass(gl.dsv, g.view.box, g.view.eyeW, g.view.eyeH, false);
+        g.replaying = was;
+    }
     if (!gl.opaqueSince || !gl.dsv || !simqvfr::dlss_wanted())
         return;  // the same run of transparents (or nothing to copy for)
     gl.opaqueSince = false;

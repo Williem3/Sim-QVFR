@@ -9,18 +9,30 @@
 namespace simqvfr {
 namespace {
 
-// One thread per point: the depth at its texel (clamped to the texture), into the output buffer.
+// One thread per point: the depth at its texel (clamped to the texture), into the output buffer. MS: a multisample
+// depth texture's sample 0.
 constexpr char kShader[] = R"(
+#ifdef MS
+Texture2DMS<float> depthTexture : register(t0);
+#define LOAD(p) depthTexture.Load(p, 0)
+#else
 Texture2D<float> depthTexture : register(t0);
+#define LOAD(p) depthTexture.Load(int3(p, 0))
+#endif
 RWBuffer<float> values : register(u0);
 cbuffer Points : register(b0) { int4 points[9]; };
 [numthreads(16, 1, 1)]
 void CS(uint i : SV_DispatchThreadID) {
     if (i >= 9) return;
     uint w, h;
+#ifdef MS
+    uint samples;
+    depthTexture.GetDimensions(w, h, samples);
+#else
     depthTexture.GetDimensions(w, h);
+#endif
     int2 p = clamp(points[i].xy, int2(0, 0), int2(int(w) - 1, int(h) - 1));
-    values[i] = depthTexture.Load(int3(p, 0));
+    values[i] = LOAD(p);
 }
 )";
 
@@ -50,8 +62,11 @@ bool D3D11DepthProbe::initialize(ID3D11Device* device) {
     shutdown();
     if (!device)
         return false;
-    Com<ID3DBlob> cs, errors;
+    Com<ID3DBlob> cs, csMs, errors;
+    const D3D_SHADER_MACRO ms[] = {{"MS", "1"}, {nullptr, nullptr}};
     if (FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "depth-probe", nullptr, nullptr, "CS", "cs_5_0", 0, 0, &cs,
+                          &errors)) ||
+        FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "depth-probe-ms", ms, nullptr, "CS", "cs_5_0", 0, 0, &csMs,
                           &errors))) {
         logf("depth probe: compile failed: %s", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
@@ -64,6 +79,7 @@ bool D3D11DepthProbe::initialize(ID3D11Device* device) {
     uav.Buffer.NumElements = 16;
     D3D11_BUFFER_DESC staging{16 * 4, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ};
     bool ok = SUCCEEDED(device->CreateComputeShader(cs->GetBufferPointer(), cs->GetBufferSize(), nullptr, &cs_)) &&
+              SUCCEEDED(device->CreateComputeShader(csMs->GetBufferPointer(), csMs->GetBufferSize(), nullptr, &csMs_)) &&
               SUCCEEDED(device->CreateBuffer(&cb, nullptr, &constants_)) &&
               SUCCEEDED(device->CreateBuffer(&out, nullptr, &output_)) &&
               SUCCEEDED(device->CreateUnorderedAccessView(output_.Get(), &uav, &outputView_)) &&
@@ -86,10 +102,11 @@ ID3D11ShaderResourceView* D3D11DepthProbe::view_of(ID3D11Texture2D* depth) {
         return view_.Get();
     view_.Reset();
     viewTexture_ = depth;
+    viewMs_ = false;
     D3D11_TEXTURE2D_DESC d;
     depth->GetDesc(&d);
     const DXGI_FORMAT f = depth_view_format(d.Format);
-    if (f == DXGI_FORMAT_UNKNOWN || d.SampleDesc.Count != 1 || !(d.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
+    if (f == DXGI_FORMAT_UNKNOWN || d.ArraySize != 1 || !(d.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
         if (!refusedLogged_)
             logf("depth probe: the depth texture (%ux%u, format %d, %u samples, bind 0x%x) can't be read by a shader",
                  d.Width, d.Height, static_cast<int>(d.Format), d.SampleDesc.Count, d.BindFlags);
@@ -98,7 +115,8 @@ ID3D11ShaderResourceView* D3D11DepthProbe::view_of(ID3D11Texture2D* depth) {
     }
     D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = f;
-    srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    viewMs_ = d.SampleDesc.Count > 1;
+    srv.ViewDimension = viewMs_ ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
     srv.Texture2D.MipLevels = 1;
     if (FAILED(device_->CreateShaderResourceView(depth, &srv, &view_))) {
         if (!refusedLogged_)
@@ -128,7 +146,7 @@ bool D3D11DepthProbe::request(ID3D11Texture2D* depth, const int (&points)[kPoint
     deferred_->Unmap(constants_.Get(), 0);
     ID3D11Buffer* cb = constants_.Get();
     ID3D11UnorderedAccessView* uav = outputView_.Get();
-    deferred_->CSSetShader(cs_.Get(), nullptr, 0);
+    deferred_->CSSetShader(viewMs_ ? csMs_.Get() : cs_.Get(), nullptr, 0);
     deferred_->CSSetConstantBuffers(0, 1, &cb);
     deferred_->CSSetShaderResources(0, 1, &srv);
     deferred_->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -170,12 +188,14 @@ void D3D11DepthProbe::shutdown() {
     ready_ = false;
     view_.Reset();
     viewTexture_ = nullptr;
+    viewMs_ = false;
     for (auto& s : staging_)
         s.Reset();
     outputView_.Reset();
     output_.Reset();
     constants_.Reset();
     cs_.Reset();
+    csMs_.Reset();
     deferred_.Reset();
     immediate_.Reset();
     device_.Reset();

@@ -191,6 +191,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 focusSettings.costAb = experiment.replayCostAb;
                 focusSettings.sky = experiment.replaySky;
                 focusSettings.tyres = experiment.replayTyres;
+                focusSettings.fixation = experiment.replayFixation;
                 focusSettings.gpuSteps = experiment.replayGpuSteps;
                 focusSettings.maskAb = experiment.replayMaskAb && experiment.replayGpuSteps;
                 focusSettings.recordTiming = experiment.replayRecordTiming;

@@ -246,6 +246,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
             for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
                 barrier(l, b, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     bool ok = true;
+    float leftInverse[16] = {};
     for (int e = 0; e < 2 && ok; ++e) {
         const Stream::TileDispatch& f = *fr[e];
         const Stream::TileDispatch& c = *cu[e];
@@ -269,6 +270,8 @@ void focus_tiles_record(List* gameList, const Stream& s) {
             ok = false;
             break;
         }
+        if (e == 0)
+            std::memcpy(leftInverse, focusInverse, sizeof(leftInverse));
         // 1. tiledCulling's constants with the focus fields, into our slot.
         uint32_t cullParams[22];
         std::memcpy(cullParams, focusInverse, sizeof(focusInverse));
@@ -313,6 +316,9 @@ void focus_tiles_record(List* gameList, const Stream& s) {
         barrier(l, focus.constants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         barrier(l, focus.frustums[e].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    // How far the eyes look: the left focus view's depth at its centre (the depth a shader resource here).
+    if (ok)
+        focus_fixation_record(l, game_gpu(focus.slotFirst + 12), fw, fh, leftInverse);
     for (int e = 0; e < 2; ++e)
         for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
             barrier(l, b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);

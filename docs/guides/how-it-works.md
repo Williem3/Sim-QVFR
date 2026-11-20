@@ -56,6 +56,7 @@ the same inputs.
 
 Diagrams of every part of LMU, Direct3D 11 and OpenXR involved:
 
+- [Everything in a frame, in order](../architecture/LMU-ARCHITECTURE.svg)
 - [Multi-view rendering with NVIDIA's MVR](../architecture/LMU-MVR-ARCHITECTURE.svg)
 - [Sim-QVFR's own multi-view rendering, on any graphics card](../architecture/LMU-NEUTRAL-MVR-ARCHITECTURE.svg)
 - [DLSS (and FSR)](../architecture/LMU-DLSS-ARCHITECTURE.svg)
