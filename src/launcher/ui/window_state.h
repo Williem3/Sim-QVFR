@@ -54,10 +54,12 @@ enum Ctl {
     // games::all_games).
     kNone, kPage, kGameTab, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
-    // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
-    // (FocusCorner's order, across then up or down).
-    kShape, kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown, kShapeBottomRightIn,
-    kShapeBottomRightUp, kShapeBottomLeftIn, kShapeBottomLeftUp,
+    // The focus area's shape ([quad] focus_shape, Foveation pane): box or custom, then the point to adjust (a pop-up,
+    // app.shapePoint) and its place, starting the shape again, removing the point; kShapeCanvas the preview's focus
+    // area with a custom shape (option: kShapeCanvasEye x the eye drawn + the point, kShapeCanvasBox for the area
+    // itself: a click there adds a point). kFocusOffsetX: the focus's horizontal place ([quad] fixed_offset_x,
+    // gaze_offset_x), as kFocusOffset its vertical.
+    kShape, kShapePointPick, kShapePointY, kShapePointX, kShapeReset, kShapeRemove, kShapeCanvas, kFocusOffsetX,
     // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
@@ -301,7 +303,9 @@ inline constexpr wchar_t kModeNames[2][16] = {I18N(L"Eye tracked"), I18N(L"Fixed
 
 inline constexpr wchar_t kColorNames[3][8] = {I18N(L"Teal"), I18N(L"Magenta"), I18N(L"Green")};
 
-inline constexpr wchar_t kShapeNames[2][16] = {I18N(L"Rectangle"), I18N(L"Custom corners")};
+inline constexpr wchar_t kShapeNames[2][16] = {I18N(L"Rectangle"), I18N(L"Custom shape")};
+// kShapeCanvas's option: eye * kShapeCanvasEye + the point, or + kShapeCanvasBox for the focus area itself.
+inline constexpr int kShapeCanvasEye = 16, kShapeCanvasBox = 15;
 
 inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, kDefaultHeight = 838;  // a 1280 x 800 page
 
@@ -361,6 +365,13 @@ struct App {
     Range dragRange{0, 100};
     Rect placeFrame;                   // the placement preview's reference view, as last drawn
     float grabYaw = 0, grabPitch = 0;  // dragging the panel: its centre less the pointer, degrees
+    // The custom focus shape's point picked (its sliders, the one dragged), and each previewed eye's focus box as last
+    // drawn (the left, the right) that its points are dragged in.
+    int shapePoint = kFocusWholeShape;  // kFocusWholeShape: the whole shape (its points moved together)
+    Rect shapeBox[2];
+    int shapeDragEye = 0;
+    FocusPoint shapeGrab;    // Shift+drag: where the whole shape was held, as a point
+    int shapeCentre[2] = {};  // the whole shape's middle as its Up/Down, Left/Right sliders show it (x, y)
     Popup popup;
     Status status = Status::Idle;
     Live live = Live::Off;
@@ -741,6 +752,13 @@ const Hit* hit_at(float x, float y);
 void set_slider_from_x(float x);
 std::pair<int*, int*> placement_of(Ctl id);
 void set_panel_from(float x, float y);
+// The custom focus shape in the preview (kShapeCanvas): pressed at (x, y) (on a point: it is picked to drag; on the
+// area: a point is added there, then dragged), dragged to (x, y), and a point's right click (removed).
+void shape_press(int option, float x, float y);
+void set_shape_point_from(float x, float y);
+void shape_remove(int option);
+// A slider of the whole shape (kShapePointY, kShapePointX with Whole shape picked) was set: its points follow.
+void shape_slider_set(Ctl id);
 void open_popup(Ctl owner);
 void open_profile_menu();
 void open_card_menu(int card);

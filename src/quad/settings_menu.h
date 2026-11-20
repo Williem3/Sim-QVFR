@@ -24,11 +24,12 @@ namespace simqvfr {
 enum class MenuKey { Up, Down, Left, Right };
 enum class MenuItem {
     Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking,
-    FocusOffset,  // the vertical offset of the mode in use (eye tracked or fixed; focus_offset.h)
+    FocusOffset,   // the vertical offset of the mode in use (eye tracked or fixed; focus_offset.h)
+    FocusOffsetX,  // the horizontal offset of the mode in use
     GazeDeadzone,  // how far the gaze moves before the focus box follows (gaze_deadzone.h)
-    // The Focus shape page (focus_shape.h): box or corners, then each corner's insets.
-    Shape, ShapeTopLeftIn, ShapeTopLeftDown, ShapeTopRightIn, ShapeTopRightDown, ShapeBottomLeftIn, ShapeBottomLeftUp,
-    ShapeBottomRightIn, ShapeBottomRightUp,
+    // The Focus shape (focus_shape.h): box or custom, then which of the outline's points to adjust
+    // (SettingsMenu::shapePoint) and that point's place, up/down and left/right in percent of the box from its centre.
+    Shape, ShapePoint, ShapePointY, ShapePointX,
     // The Headset page: the performance overlay ([osd], osd.h), the clock ([clock]; ClockWidth its size) and the
     // panels' places.
     Overlay, OverlayYaw, OverlayPitch, OverlayWidth, Clock, ClockYaw, ClockPitch, MenuYaw, MenuPitch, MenuWidth,
@@ -107,9 +108,9 @@ struct MenuValues {
     int corners = kCornerRadiusPercent.def;  // [quad] corner_radius_percent
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
-    FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
+    FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y, fixed_offset_x, gaze_offset_x
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone, tenths of a degree
-    FocusShape shape;         // [quad] focus_shape and its corners
+    FocusShape shape;         // [quad] focus_shape and shape_points
     bool focusMask = kFocusMask.def != 0;        // [quad] focus_mask (read only: the pixels saved)
     int focusMaskMargin = kFocusMaskMargin.def;  // [experiment] focus_mask_margin (likewise)
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
@@ -204,6 +205,9 @@ struct SettingsMenu {
     MenuCheeky cheeky;
     int page = 0;  // index into menu_pages
     int selected = 0;
+    // What Adjust point picks (ShapePoint): kFocusWholeShape (its points moved together), or a point; its place:
+    // ShapePointY, ShapePointX.
+    int shapePoint = kFocusWholeShape;
     int scroll = 0;  // the first line drawn after the page switch (menu_panel.h menu_first_visible), the panel's to keep
     std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)

@@ -326,8 +326,7 @@ int SIM_QVFR_TEST_MAIN() {
             eyeW = 320;
             eyeH = 240;
             // The focus mask from here on (quad/focus_mask.h): the top corners 30% in, a 1-texel margin.
-            simqvfr::FocusArea trapezoid;
-            trapezoid.inset[0] = trapezoid.inset[2] = 0.3f;
+            const simqvfr::FocusArea trapezoid = simqvfr::focus_area_points({{-20, 50}, {20, 50}, {50, -50}, {-50, -50}});
             simqvfr::replay_probe_set_focus_mask(true, trapezoid, 1);
             firstAgree = compare.agree;
             firstColour = compare.colourAgree;

@@ -60,12 +60,12 @@ struct Settings {
     OutlineColor color = OutlineColor::Green;  // [quad] debug_border_color
     int feather = kFeatherPercent.def;      // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
-    FocusShape shape;         // [quad] focus_shape: the box (rounded by corner), or each corner pulled in on its own
+    FocusShape shape;         // [quad] focus_shape, shape_points: the box (rounded by corner), or a free-form outline
     // [quad] focus_mask and [experiment] focus_mask_margin (quad/focus_mask.h; a game with GameFeatures::focusMask):
     // the focus views skip their pixels outside the shape; the readouts leave them out. Read only (the ini's own).
     bool focusMask = kFocusMask.def != 0;
     int focusMaskMargin = kFocusMaskMargin.def;
-    FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y: the focus region's vertical offset, degrees up
+    FocusOffset offset;       // [quad] fixed/gaze_offset_y, _x: the focus region's offset, degrees up and right
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
     // right and up of straight ahead, and the panel's width in degrees.
@@ -134,7 +134,7 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
     kCarHighlightsRange = range_of(kCarLightHighlights), kCarGlossRange = range_of(kCarLightGloss),
     kCarSmoothRange = range_of(kCarLightSmooth),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
-    kFocusCornerRange{0, kFocusCornerMax};
+    kFocusPointRange{-kFocusPointReach, kFocusPointReach};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its
 // 350 values span fewer pixels than that, so a plain drag skipped round values such as 100% (99, then 101).
 inline constexpr int kInnerDragStep = kFocusDensity.step;

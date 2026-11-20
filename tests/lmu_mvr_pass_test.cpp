@@ -794,8 +794,8 @@ O main(float4 p : POSITION, float4 c : COLOR0) {
             // black (the scene's draws failed the mask's depth: the default LESS test, so the nearest is 0), the rest
             // as before; the pass's state as the game left it after the mask.
             {
-                simqvfr::FocusArea trapezoid;
-                trapezoid.inset[0] = trapezoid.inset[2] = 0.3f;
+                const simqvfr::FocusArea trapezoid =
+                    simqvfr::focus_area_points({{-20, 50}, {20, 50}, {50, -50}, {-50, -50}});
                 lmu::mvr_focus_mask(true, trapezoid, 1);
                 ComPtr<ID3D11Texture2D> mkT;
                 ComPtr<ID3D11RenderTargetView> mkR;

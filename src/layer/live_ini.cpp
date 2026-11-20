@@ -88,12 +88,14 @@ void live_apply(const LiveSettings& l) {
     experiment.focusFractionY = l.focusFractionY;
     experiment.feather = l.feather;
     experiment.cornerRadius = l.cornerRadius;
-    experiment.focusShape = focus_shape_bits(l.shape);
+    experiment.focusShape.store(focus_shape_words(l.shape));
     std::memcpy(experiment.borderColor, l.borderColor, sizeof(experiment.borderColor));
     experiment.border = l.border;
     experiment.gaze = l.gaze;
     experiment.fixedOffsetY = l.offset.fixed;
     experiment.gazeOffsetY = l.offset.gaze;
+    experiment.fixedOffsetX = l.offset.fixedX;
+    experiment.gazeOffsetX = l.offset.gazeX;
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
@@ -130,9 +132,8 @@ void live_apply(const LiveSettings& l) {
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.composing());
     if (experiment.views4 && !experiment.views4EyeCamera) {  // the focus mask: the shape as the compositor has it
-        float inset[2 * kFocusCorners];
-        focus_shape_insets(focus_shape_bits(l.shape), inset);
-        game->qvfr_set_focus_mask(l.focusMask, inset, l.cornerRadius, l.focusMaskMargin);
+        game->qvfr_set_focus_mask(l.focusMask, focus_area_from(focus_shape_words(l.shape), l.cornerRadius),
+                                  l.focusMaskMargin);
     }
     if (game->shows_overlay()) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
@@ -149,9 +150,9 @@ void live_apply(const LiveSettings& l) {
         game->live_view(v);
     }
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
-         "gaze %d deg, gaze dead-zone %.1f deg",
+         "gaze %d deg, across fixed %d deg, gaze %d deg, gaze dead-zone %.1f deg",
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
-         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
+         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.offset.fixedX, l.offset.gazeX, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
     if (experiment.replayCompose) {
         // The API path: the focus views' pixels (focus density x box) and the box's size are live; ACE's eye size (the

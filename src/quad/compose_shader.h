@@ -37,18 +37,17 @@ inline void compose_constants(const EyeComposition& c, int eye, float (&constant
     constants[29] = c.border;
     constants[30] = c.cornerRadius;
     constants[31] = static_cast<float>(eye);
-    // The pulled-in corners, a byte each in percent (the shader's rot0.w, rot1.w).
-    for (int word = 0; word < 2; ++word) {
-        uint32_t packed = 0;
-        for (int i = 0; i < 4; ++i)
-            packed |= static_cast<uint32_t>(std::lround(std::clamp(c.cornerInset[word * 4 + i], 0.0f, 0.45f) * 100))
-                      << (8 * i);
-        std::memcpy(&constants[11 + 4 * word], &packed, sizeof(packed));
-    }
-    for (int i = 0; i < 4; ++i) {
-        constants[32 + i] = c.borderColor[i];
+    // The free-form outline's words (focus_shape.h): the shader's rot0.w, rot1.w and shapeWords (33-35).
+    const int slot[5] = {11, 15, 33, 34, 35};
+    for (int word = 0; word < 5; ++word)
+        std::memcpy(&constants[slot[word]], &c.shape.w[word], sizeof(uint32_t));
+    // The outline's colour, a byte per channel (RGBA, the shader's borderRgba).
+    uint32_t rgba = 0;
+    for (int i = 0; i < 4; ++i)
+        rgba |= static_cast<uint32_t>(std::lround(std::clamp(c.borderColor[i], 0.0f, 1.0f) * 255)) << (8 * i);
+    std::memcpy(&constants[32], &rgba, sizeof(rgba));
+    for (int i = 0; i < 4; ++i)
         constants[36 + i] = c.viewTan[i];
-    }
     for (int i = 0; i < 3; ++i)
         constants[60 + i] = c.color[i];
 }
@@ -123,14 +122,14 @@ inline constexpr char kComposeShader[] = R"(
 cbuffer Eye : register(b0) {
     float4 outerTan;  // left, right, up, down
     float4 focusTan;
-    // Rows, A eye frame -> B eye frame. rot0.w, rot1.w (as uints): the focus area's corners pulled in, a byte
-    // each in percent of the box: top left across and down, top right across and down; bottom right across
-    // and up, bottom left across and up (EyeComposition::cornerInset). All 0: the box. rot2.w: the sharpening
+    // Rows, A eye frame -> B eye frame. rot0.w, rot1.w (as uints): the focus area's free-form outline's words 0 and 1
+    // (focus_shape.h FocusShapeWords; shapeWords the other three). All 0: the box. rot2.w: the sharpening
     // (EyeComposition::sharpness; 0 off, cas_peak).
     float4 rot0, rot1, rot2;
     float4 outerSrc, focusSrc;
     float4 params;  // feather, border, corner radius
-    float4 borderColor;
+    uint borderRgba;   // the outline's colour, a byte per channel (border_color)
+    uint3 shapeWords;  // the outline's words 2-4
     float4 viewTan;        // the output's tangents (all 0: outerTan)
     float4 helmetOpening;  // the visor opening's tangents / looks 2 and 4: xy the eye's shift of the images' tangents (depth)
     // x: rim (tangents) / looks 2 and 4: the loaded pieces (1 visor, 2 bottom, 4 top, 8 the visor as a tint);
@@ -286,36 +285,43 @@ float4 footprint_sharpened(Texture2D t, float2 uv, float2 dx, float2 dy, float4 
     const float3 d = footprint(t, uv - dx, dx, dy, src, size).rgb, f = footprint(t, uv + dx, dx, dy, src, size).rgb;
     return float4(cas_cross(e.rgb, b, d, f, h, cas_peak(rot2.w, fade)), e.a);
 }
-// How far inside the quadrilateral of the pulled-in corners a point is, measured as the square box is
-// (in shares of each axis, so the corners all left in place give the box). Its edges never cross (each
-// corner stays in its quarter of the box); concave is fine. Negative outside.
-float inside_quad(float2 f, uint2 packed) {
-    float2 c[4];
-    [unroll] for (int i = 0; i < 4; ++i) {
-        const uint word = i < 2 ? packed.x : packed.y, shift = (i & 1) * 16;
-        const float2 pulled = float2((word >> shift) & 0xff, (word >> (shift + 8)) & 0xff) / 100;
-        c[i] = float2(i == 1 || i == 2 ? 1 - pulled.x : pulled.x, i >= 2 ? 1 - pulled.y : pulled.y);
+// The outline's colour (borderRgba, a byte per channel).
+float4 border_color() {
+    return float4(borderRgba & 0xff, (borderRgba >> 8) & 0xff, (borderRgba >> 16) & 0xff, borderRgba >> 24) / 255.0;
+}
+// How far inside the free-form outline (focus_shape.h FocusShapeWords: up to 10 points, two per word, 7 bits across
+// and 7 down in percent of the box, the count in word 0's top 4 bits) a point is, measured as the square box is (in
+// shares of each axis, so the box's own corners give the box). Concave is fine. Negative outside.
+float inside_poly(float2 f, uint w0, uint w1) {
+    const uint words[5] = {w0, w1, shapeWords.x, shapeWords.y, shapeWords.z};
+    const int n = min((int)(w0 >> 28), 10);
+    float2 c[10];
+    [unroll] for (int i = 0; i < 10; ++i) {
+        const uint p = (words[i / 2] >> (14 * (i & 1))) & 0x3fff;
+        c[i] = float2(p & 0x7f, p >> 7) / 100;
     }
     // The distance to the nearest edge, its sign from the crossings of a ray to the right (even: outside).
     float d = 1e9;
     bool outside = true;
-    [unroll] for (int j = 0; j < 4; ++j) {
-        const float2 a = c[j], e = c[(j + 1) & 3] - a, w = f - a;
-        const float2 b = w - e * saturate(dot(w, e) / dot(e, e));
-        d = min(d, dot(b, b));
-        if ((a.y > f.y) != (a.y + e.y > f.y) && f.x < a.x + e.x * (f.y - a.y) / e.y)
-            outside = !outside;
+    [unroll] for (int j = 0; j < 10; ++j) {
+        if (j < n) {
+            const float2 a = c[j], e = (j + 1 < n ? c[min(j + 1, 9)] : c[0]) - a, w = f - a;
+            const float2 b = w - e * saturate(dot(w, e) / max(dot(e, e), 1e-12));
+            d = min(d, dot(b, b));
+            if ((a.y > f.y) != (a.y + e.y > f.y) && f.x < a.x + e.x * (f.y - a.y) / e.y)
+                outside = !outside;
+        }
     }
     return outside ? -sqrt(d) : sqrt(d);
 }
 // How far inside the focus box a point is (f: 0..1 across it), as a share of the box. Square corners:
 // the nearer edge's share of its own axis. Rounded corners (params.z: the radius as a share of half
 // the shorter side): the distance to the rounded edge over the shorter side, measured in the box's
-// tangent proportions so the corners are circular. Pulled-in corners: inside_quad. Negative outside.
+// tangent proportions so the corners are circular. A free-form outline: inside_poly. Negative outside.
 float inside_box(float2 f) {
-    const uint2 corners = uint2(asuint(rot0.w), asuint(rot1.w));
-    if (any(corners))
-        return inside_quad(f, corners);
+    const uint2 words = uint2(asuint(rot0.w), asuint(rot1.w));
+    if (words.x >> 28)
+        return inside_poly(f, words.x, words.y);
     if (params.z <= 0) {
         const float2 e = min(f, 1 - f);
         return min(e.x, e.y);
@@ -431,7 +437,7 @@ float3 helmet_apply(float3 scene, float2 a, float2 p) {
         color = lerp(color, focus, w);
     }
     if (e >= 0 && e < params.y)
-        color = borderColor;
+        color = border_color();
     if (helmet.w > 0)
         color.rgb = helmet_apply(color.rgb, a.xy, v.uv);
     return color;
@@ -495,11 +501,11 @@ float4 FocusLayerPS(V v) : SV_Target {
             outer.rgb = color_grade(outer.rgb);  // as GradePS grades the periphery's copy
         color = lerp(outer, color, w);
         if (e >= viewTan.y && e < viewTan.y + params.y)
-            color = borderColor;
+            color = border_color();
         return float4(color.rgb, 1);
     }
     if (e < params.y) {
-        color = borderColor;
+        color = border_color();
         w = 1;
     }
     return float4(color.rgb * w, w);

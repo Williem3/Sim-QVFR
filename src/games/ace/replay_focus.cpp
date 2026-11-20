@@ -590,7 +590,7 @@ std::vector<MaskDraw> mask_draws(const MaskSnapshot& snap) {
     std::vector<MaskDraw> draws;
     focus.maskTwins = focus.maskVertices = 0;
     focus.maskShare = 0;
-    if (!snap.on || (!snap.area.corners() && snap.area.radius <= 0))
+    if (!snap.on || (!snap.area.outline() && snap.area.radius <= 0))
         return draws;
     std::vector<float> all;
     UINT widest = 0;

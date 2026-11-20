@@ -4,7 +4,7 @@
 // hooks call it); never include it anywhere else. No includes of its own: mvr_pass.cpp's.
 #pragma once
 
-constexpr UINT kMaskMaxVertices = 512;  // the meshes have at most 288 (rounding: 4 corners x 12 segments x 6)
+constexpr UINT kMaskMaxVertices = 8192;  // rounding: 288 (4 corners x 12 segments x 6); an outline: ~2300 for a trapezoid (192 rows x 2 runs x 6)
 
 // Its vertex shader, depth-only state and the deferred context it's recorded on; once. False: off for the session.
 bool mask_resources(ID3D11DeviceContext* context) {
@@ -64,11 +64,12 @@ bool mask_mesh(unsigned w, unsigned h) {
     // The share of the focus view masked, for the log (as the launcher and the headset menu count it).
     const double share = simqvfr::focus_mask_share(area, w, h, m.margin);
     char shape[160];
-    if (area.corners())
-        std::snprintf(shape, sizeof(shape), "corners %.0f/%.0f %.0f/%.0f %.0f/%.0f %.0f/%.0f", area.inset[0] * 100,
-                      area.inset[1] * 100, area.inset[2] * 100, area.inset[3] * 100, area.inset[4] * 100, area.inset[5] * 100,
-                      area.inset[6] * 100, area.inset[7] * 100);
-    else
+    if (area.outline()) {
+        int used = std::snprintf(shape, sizeof(shape), "outline of %d points", area.points);
+        for (int i = 0; i < area.points && used > 0 && used < static_cast<int>(sizeof(shape)); ++i)
+            used += std::snprintf(shape + used, sizeof(shape) - used, " %.0f,%.0f", area.point[2 * i] * 100,
+                                  area.point[2 * i + 1] * 100);
+    } else
         std::snprintf(shape, sizeof(shape), "rounded %.0f%%", area.radius * 100);
     if (m.vertices) {
         mesh.resize(kMaskMaxVertices * 2, 0.0f);

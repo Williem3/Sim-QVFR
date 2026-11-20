@@ -937,9 +937,9 @@ std::wstring issue_details(const IssueReport& r) {
     }
     b += L"- **Resolution:** " + res + L"\n";
     b += L"- **Focus area:** feather " + number(s.feather) + L"%, " +
-         (s.shape.corners ? std::wstring(L"corners") : L"corner radius " + number(s.corner) + L"%") +
+         (s.shape.custom ? focus_shape_text(s.shape) : L"corner radius " + number(s.corner) + L"%") +
          formatted(L", gaze dead-zone %.1f°", s.gazeDeadzone / 10.0) + L", offset " +
-         number(s.offset.for_mode(s.eyeTracking)) + L"°\n";
+         number(s.offset.for_mode(s.eyeTracking)) + L"° up, " + number(s.offset.for_mode_x(s.eyeTracking)) + L"° right\n";
     if (qvfr)
         b += L"- **FOV crop:** " + (s.crop ? crop_key(s) + L" % (top, bottom, outer, inner)" : std::wstring(L"off")) + L"\n";
     std::wstring dlss = s.cheeky.load ? L"on" : L"off";

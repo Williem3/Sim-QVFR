@@ -8,6 +8,7 @@
 
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
+#include "../quad/focus_mask.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -131,12 +132,11 @@ public:
     // Live focus box and focus cull, from the next frame the game fills on.
     virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
     // The focus mask ([quad] focus_mask; quad/focus_mask.h), live: the focus shape as the compositor composes it (the
-    // pulled-in corners' insets, focus_shape_insets' order; the corner radius, unused with corners) and the margin in
-    // focus view texels. A game that can mask its focus views skips their texels outside it.
-    virtual void qvfr_set_focus_mask(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) {
+    // free-form outline's points, or the box's corner radius; its aspect is the game's to set per view) and the margin
+    // in focus view texels. A game that can mask its focus views skips their texels outside it.
+    virtual void qvfr_set_focus_mask(bool on, const FocusArea& area, int marginTexels) {
         (void)on;
-        (void)inset;
-        (void)cornerRadius;
+        (void)area;
         (void)marginTexels;
     }
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and

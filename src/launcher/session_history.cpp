@@ -239,19 +239,21 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
     }
     values(L"Focus width", percent(a.width), percent(b.width));
     values(L"Focus height", percent(a.height), percent(b.height));
-    if (!a.shape.corners && !b.shape.corners)
+    if (!a.shape.custom && !b.shape.custom)
         values(L"Corner radius", percent(a.corner), percent(b.corner));
     values(L"Feather", percent(a.feather), percent(b.feather));
     if (a.eyeTracking && b.eyeTracking) {
         values(L"Gaze offset", degrees(a.offset.gaze), degrees(b.offset.gaze));
+        values(L"Horizontal gaze offset", degrees(a.offset.gazeX), degrees(b.offset.gazeX));
         values(L"Gaze dead-zone", gaze_deadzone_text(a.gazeDeadzone) + L"°", gaze_deadzone_text(b.gazeDeadzone) + L"°");
     } else if (!a.eyeTracking && !b.eyeTracking) {
         values(L"Vertical position", degrees(a.offset.fixed), degrees(b.offset.fixed));
+        values(L"Horizontal position", degrees(a.offset.fixedX), degrees(b.offset.fixedX));
     }
-    if (a.shape.corners != b.shape.corners)
-        values(L"Focus shape", a.shape.corners ? L"Custom corners" : L"Rectangle", b.shape.corners ? L"Custom corners" : L"Rectangle");
-    else if (a.shape.corners && !(a.shape == b.shape))
-        out.push_back(L"Focus shape corners");
+    if (a.shape.custom != b.shape.custom)
+        values(L"Focus shape", a.shape.custom ? L"Custom shape" : L"Rectangle", b.shape.custom ? L"Custom shape" : L"Rectangle");
+    else if (a.shape.custom && !(a.shape == b.shape))
+        out.push_back(L"Focus shape points");
     on_off(L"Focus outline", a.outline, b.outline);
     const CheekySettings &c = a.cheeky, &d = b.cheeky;
     on_off(L"Cheeky Foveated DLSS", c.load, d.load);

@@ -60,10 +60,7 @@ public:
         simqvfr::views4_set_live(focusFraction, focusFractionY, cullScale, gaze);
     }
     // The focus mask (quad/focus_mask.h) on the API path's focus views (replay_focus.cpp: drawn after their clear).
-    void qvfr_set_focus_mask(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) override {
-        simqvfr::FocusArea area;
-        std::copy(std::begin(inset), std::end(inset), area.inset);
-        area.radius = area.corners() ? 0.0f : static_cast<float>(cornerRadius);
+    void qvfr_set_focus_mask(bool on, const simqvfr::FocusArea& area, int marginTexels) override {
         simqvfr::replay_probe_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);
     }
     bool qvfr_dlss_held() override { return simqvfr::views4_dlss_held(); }

@@ -192,7 +192,7 @@ void replay_compose() {
         c.border = experiment.border ? 0.008f : 0.0f;
         std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
         c.cornerRadius = static_cast<float>(experiment.cornerRadius);
-        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
+        c.shape = experiment.focusShape.load();
         c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
         color_grade_constants(color_grade_from_bits(experiment.colorGrade.load(std::memory_order_relaxed)), c.color);
         quad.v4Extent[e] = extent;

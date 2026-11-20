@@ -302,29 +302,36 @@ Card foveation_card() {
                                  s.inner * s.height > launch.focusHeight * 100 + 50))
             b.note(tr(L"Larger than this launch allows at your Focus density: it renders less dense until the next "
                       L"launch."));
-        b.segments(kShape, tr(L"Shape"), items_of(kShape), s.shape.corners ? 1 : 0);
-        if (!s.shape.corners) {
+        b.segments(kShape, tr(L"Shape"), items_of(kShape), s.shape.custom ? 1 : 0);
+        if (!s.shape.custom) {
             b.slider({kCorner, tr(L"Corner radius"), s.corner});
-            b.hidden(tr(L"Shape"), tr(L"Custom corners"),
-                     {tr(L"Top left in"), tr(L"Top right in"), tr(L"Bottom left in"), tr(L"Bottom right in")});
-        } else {  // each corner's two insets, in the corners' order on the box
-            const auto corner = [](Ctl id, const wchar_t* label) { return SliderSpec{id, label, *slider_value(id)}; };
-            b.sliders(corner(kShapeTopLeftIn, tr(L"Top left in")), corner(kShapeTopLeftDown, tr(L"Top left down")));
-            b.sliders(corner(kShapeTopRightIn, tr(L"Top right in")), corner(kShapeTopRightDown, tr(L"Top right down")));
-            b.sliders(corner(kShapeBottomLeftIn, tr(L"Bottom left in")),
-                      corner(kShapeBottomLeftUp, tr(L"Bottom left up")));
-            b.sliders(corner(kShapeBottomRightIn, tr(L"Bottom right in")),
-                      corner(kShapeBottomRightUp, tr(L"Bottom right up")));
+            b.hidden(tr(L"Shape"), tr(L"Custom shape"), {tr(L"Adjust point"), tr(L"Up/Down"), tr(L"Left/Right")});
+        } else {  // the outline's points: drawn on the preview, the picked one's place here (as the headset menu)
+            b.note(trf(L"Click inside the focus area in the preview to add a point (up to {max}), drag a point to move "
+                       L"it, right-click it to remove it, Shift+drag to move the whole shape. Trace your windscreen, then "
+                       L"move it with Whole shape below, or the focus area with the position sliders.",
+                       {{L"max", std::to_wstring(kFocusPointsMax)}}));
+            std::vector<std::wstring> names;
+            const int picked = choice_items(kShapePointPick, names);
+            b.popup(kShapePointPick, tr(L"Adjust point"), names[static_cast<size_t>(picked)], names);
+            b.sliders({kShapePointY, tr(L"Up/Down"), *slider_value(kShapePointY), L""},
+                      {kShapePointX, tr(L"Left/Right"), *slider_value(kShapePointX), L""});
+            b.actions({{kShapeRemove, tr(L"Remove point")},
+                       {kShapeReset, tr(L"Start again")}});
             b.hidden(tr(L"Shape"), tr(L"Rectangle"), {tr(L"Corner radius")});
         }
         b.slider({kFeather, tr(L"Feather"), s.feather});
         b.note(tr(L"See the edge of the sharp area? Raise Feather, or make the focus larger."));
         if (s.eyeTracking) {
-            b.slider({kFocusOffset, tr(L"Gaze offset"), s.offset.gaze, L"°"});
+            b.sliders({kFocusOffset, tr(L"Gaze offset"), s.offset.gaze, L"°"},
+                      {kFocusOffsetX, tr(L"Horizontal gaze offset"), s.offset.gazeX, L"°"});
             b.slider({kGazeDeadzone, tr(L"Gaze dead-zone"), s.gazeDeadzone, L"°", L"", true});
+            b.hidden(tr(L"Foveated mode"), tr(L"Fixed"), {tr(L"Vertical position"), tr(L"Horizontal position")});
         } else {
-            b.slider({kFocusOffset, tr(L"Vertical position"), s.offset.fixed, L"°"});
-            b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"), {tr(L"Gaze dead-zone"), tr(L"Gaze offset")});
+            b.sliders({kFocusOffset, tr(L"Vertical position"), s.offset.fixed, L"°"},
+                      {kFocusOffsetX, tr(L"Horizontal position"), s.offset.fixedX, L"°"});
+            b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"),
+                     {tr(L"Gaze dead-zone"), tr(L"Gaze offset"), tr(L"Horizontal gaze offset")});
         }
         b.divider();
         b.toggle(kOutline, tr(L"Show focus outline"), s.outline,
