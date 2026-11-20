@@ -12,7 +12,7 @@
 #pragma once
 
 // The shaders: corridor_shader.h (kCorridorShaders); their constant buffer's floats.
-constexpr int kCorridorConstants = 32;
+constexpr int kCorridorConstants = 36;
 
 bool corridor_resources(ID3D11DeviceContext* context) {
     auto& c = g.corridor;
@@ -165,8 +165,10 @@ bool corridor_constants(int p, float (&k)[kCorridorConstants], float (&upV)[3]) 
                                           upV[0], upV[1], upV[2], c.eyeHeightM,
                                           c.halfM, c.farM, static_cast<float>(t.w), static_cast<float>(t.h),
                                           slopeCos, 0.1f, c.centreReachM, 0,
-                                          0, c.featherM, static_cast<float>(t.fw), static_cast<float>(t.fh),
-                                          g.appliedVps[1].TopLeftX, g.appliedVps[1].TopLeftY, 0, 0};
+                                          c.carM, c.featherM, static_cast<float>(t.fw), static_cast<float>(t.fh),
+                                          g.appliedVps[1].TopLeftX, g.appliedVps[1].TopLeftY, 0,
+                                          static_cast<float>(std::tan(std::clamp(c.spreadDeg, 0.0f, 60.0f) * 3.14159265 / 180)),
+                                          0, 0, 0, 0};
     std::memcpy(k, k2, sizeof(k2));
     // The stamp the fill looks for: this pass's if its mask ran, else one no texel holds yet (the next).
     const uint32_t stamp = c.maskedThisPass[p] ? c.stamp[p] : c.stamp[p] + 1;
@@ -260,8 +262,17 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
         ++g.stats.corridorFillRefused;
         return;
     }
+    // The eye's colour over the box at the box's own texels (the copy's depth may be finer: the focus view's).
+    const unsigned cw = static_cast<unsigned>(c.copyBox[p][2]), ch = static_cast<unsigned>(c.copyBox[p][3]);
+    if (t.colour && (t.colourW != cw || t.colourH != ch)) {
+        t.colour.Reset();
+        t.colourRtv.Reset();
+        t.colourSrv.Reset();
+    }
     if (!t.colour) {
-        const D3D11_TEXTURE2D_DESC cd = {t.w, t.h, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+        t.colourW = cw;
+        t.colourH = ch;
+        const D3D11_TEXTURE2D_DESC cd = {cw, ch, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                          D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
         if (FAILED(device->CreateTexture2D(&cd, nullptr, &t.colour)) ||
             FAILED(device->CreateRenderTargetView(t.colour.Get(), nullptr, &t.colourRtv)) ||
@@ -281,7 +292,7 @@ void corridor_fill(ID3D11DeviceContext* context, int p, const float (&k)[kCorrid
     dc->RSSetState(c.raster.Get());
     dc->UpdateSubresource(c.cb.Get(), 0, nullptr, k, 0, 0);
     // 1. The eye's colour over the box (its texels: the box constant as the depth copy has it).
-    const D3D11_VIEWPORT copyVp{0, 0, static_cast<float>(t.w), static_cast<float>(t.h), 0, 1};
+    const D3D11_VIEWPORT copyVp{0, 0, static_cast<float>(cw), static_cast<float>(ch), 0, 1};
     dc->RSSetViewports(1, &copyVp);
     dc->OMSetDepthStencilState(c.noDepth.Get(), 0);
     dc->OMSetRenderTargets(1, t.colourRtv.GetAddressOf(), nullptr);
@@ -394,7 +405,12 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
     const auto& b = g.view.box;
     const int x0 = static_cast<int>(eye.TopLeftX + b.rect[0] * eye.Width), y0 = static_cast<int>(eye.TopLeftY + b.rect[1] * eye.Height);
     const int x1 = static_cast<int>(eye.TopLeftX + b.rect[2] * eye.Width), y1 = static_cast<int>(eye.TopLeftY + b.rect[3] * eye.Height);
-    const unsigned w = static_cast<unsigned>((std::max)(1, x1 - x0)), h = static_cast<unsigned>((std::max)(1, y1 - y0));
+    const unsigned bw = static_cast<unsigned>((std::max)(1, x1 - x0)), bh = static_cast<unsigned>((std::max)(1, y1 - y0));
+    // The copy's size: half the focus view's each way (its depth read where it drew it: the road found at the focus
+    // view's resolution, not the periphery's), at least the box's own texels, at most 2048.
+    const D3D11_VIEWPORT& focusVp = g.appliedVps[1];
+    const unsigned fvw = static_cast<unsigned>(std::lround(focusVp.Width)), fvh = static_cast<unsigned>(std::lround(focusVp.Height));
+    const unsigned w = (std::max)(bw, (std::min)(2048u, fvw / 2)), h = (std::max)(bh, (std::min)(2048u, fvh / 2));
     auto& t = c.copy[p];
     if (!t.texture || t.w != w || t.h != h) {
         t = {};
@@ -463,13 +479,22 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
         t.gw = gw;
         t.gh = gh;
     }
-    // Its constants: only the box's corner (the mask's are set at the mask).
+    // Its constants: the box in the eye, the copy's size, the focus view's size and corner and this pass's mask stamp
+    // (the mask's own are set at the mask).
     c.copyBox[p][0] = static_cast<float>(x0);
     c.copyBox[p][1] = static_cast<float>(y0);
-    c.copyBox[p][2] = static_cast<float>(w);
-    c.copyBox[p][3] = static_cast<float>(h);
+    c.copyBox[p][2] = static_cast<float>(bw);
+    c.copyBox[p][3] = static_cast<float>(bh);
     float constants[kCorridorConstants] = {};
     std::memcpy(constants, c.copyBox[p], sizeof(c.copyBox[p]));
+    constants[18] = static_cast<float>(w);
+    constants[19] = static_cast<float>(h);
+    constants[26] = static_cast<float>(fvw);
+    constants[27] = static_cast<float>(fvh);
+    constants[28] = focusVp.TopLeftX;
+    constants[29] = focusVp.TopLeftY;
+    const uint32_t copyStamp = c.maskedThisPass[p] ? c.stamp[p] : c.stamp[p] + 1;  // no texel holds the next one yet
+    std::memcpy(&constants[30], &copyStamp, sizeof(copyStamp));
     ID3D11DeviceContext* dc = c.deferred.Get();
     dc->UpdateSubresource(c.cb.Get(), 0, nullptr, constants, 0, 0);
     const D3D11_VIEWPORT vp{0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
@@ -478,7 +503,8 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
     dc->VSSetShader(c.vs.Get(), nullptr, 0);
     dc->PSSetShader(c.depthMs ? c.copyMs.Get() : c.copySs.Get(), nullptr, 0);
     dc->PSSetConstantBuffers(0, 1, c.cb.GetAddressOf());
-    dc->PSSetShaderResources(0, 1, c.depthSrv.GetAddressOf());
+    ID3D11ShaderResourceView* copyIn[5] = {c.depthSrv.Get(), nullptr, nullptr, nullptr, t.stampsSrv.Get()};
+    dc->PSSetShaderResources(0, 5, copyIn);
     dc->RSSetState(c.raster.Get());
     dc->RSSetViewports(1, &vp);
     dc->OMSetDepthStencilState(c.noDepth.Get(), 0);
@@ -676,6 +702,21 @@ void corridor_before_draw(ID3D11DeviceContext* context) {
     if ((!greater && !less) || !t.valid || !t.groundValid || !g.view.box.valid || !corridor_constants(p, constants, upV)) {
         ++g.stats.corridorNoInput;
         return;
+    }
+    {  // the box now against the one the last pass's map was made over (the gaze moved it): where each texel lay then
+        const D3D11_VIEWPORT& eye = g.appliedVps[0];
+        const auto& b = g.view.box;
+        const float nx = static_cast<float>(eye.TopLeftX + b.rect[0] * eye.Width);
+        const float ny = static_cast<float>(eye.TopLeftY + b.rect[1] * eye.Height);
+        const float nw = static_cast<float>((b.rect[2] - b.rect[0]) * eye.Width);
+        const float nh = static_cast<float>((b.rect[3] - b.rect[1]) * eye.Height);
+        const float* was = c.copyBox[p];
+        if (was[2] > 0 && was[3] > 0 && nw > 0 && nh > 0) {
+            constants[32] = nw / was[2];
+            constants[33] = nh / was[3];
+            constants[34] = (nx - was[0]) / was[2];
+            constants[35] = (ny - was[1]) / was[3];
+        }
     }
     if (!corridor_resources(context))
         return;

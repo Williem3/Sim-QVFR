@@ -97,10 +97,14 @@ struct QvfrFrameRun {
     bool corridorOn = false;
     float corridorFeatherM = 1;
     // lmu_corridor_dlss_band_pct: DLSS on the focus views over that share of their rows, over the corridor's
-    // (lmu_corridor_dlss_band_pad_pct kept about them); 0 off; -1 (missing) the player's [quad] focus_corridor_dlss_band
-    // (kCorridorBandPct when on).
+    // (lmu_corridor_dlss_band_pad_pct kept about them); 0 or missing: off (an experiment: with the car kept the rows
+    // that need it nearly fill the box).
     int corridorBandPct = -1, corridorBandPadPct = 6;
-    float corridorHalfM = 0, corridorTallM = 3.5f, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
+    // lmu_corridor_car_cm: the car kept sharp, whatever lies nearer than that (0 none); -1 (missing) the corridor's start.
+    int corridorCarCm = -1;
+    // lmu_corridor_spread_deg: the corridor's widening with distance, degrees either side (bends stay inside).
+    int corridorSpreadDeg = 15;
+    float corridorHalfM = 0, corridorTallM = 0, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
     float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
     // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
@@ -145,10 +149,12 @@ void qvfr_frame_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
 void qvfr_frame_set_box(double fractionX, double fractionY);
 // The focus mask (mvr_pass.h mvr_focus_mask), from the next frame. Any thread.
 void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels);
-// Road focus ([quad] focus_corridor, focus_corridor_dlss_band), live: the focus views kept to the corridor along the
-// road (mvr_pass.h mvr_corridor), and their DLSS over its rows alone (mvr_corridor_band). The [experiment] lmu_corridor
-// keys (on, A/B, show mode, the band's share) win over it.
-void qvfr_frame_set_corridor(bool on, bool dlssBand, int widthM);
+// Road focus ([quad] focus_corridor, focus_corridor_width; off with eye tracking), live: the focus views kept to the
+// corridor along the road and the player's car (mvr_pass.h mvr_corridor). The [experiment] lmu_corridor keys (on, A/B,
+// show mode, the DLSS band) win over it.
+void qvfr_frame_set_corridor(bool on, int widthM, int heightDm);
+// The part of the focus box the headset shows (GameAdapter::qvfr_set_focus_visible), live: the focus mask skips the rest.
+void qvfr_frame_set_focus_visible(const float (&visible)[4]);
 // The latest composed frame's record (the eyes' and focus views' tangents, unturned); false before the first.
 bool qvfr_frame_record(simqvfr::Views4Frame& frame);
 // A frame with eye passes but no four views (the focus views didn't come): the part of each eye's image its pass

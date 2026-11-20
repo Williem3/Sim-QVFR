@@ -1,6 +1,7 @@
 // Each setting's help: the kHelp table, the ⓘ next to a label and the tip it shows under the pointer.
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 #include <string>
 
 #include <windows.h>
@@ -132,19 +133,20 @@ constexpr Help kHelp[] = {
      I18N(L"Draws a helmet’s visor opening round the view, lit by the scene, in a layer of its own. It costs the headset a layer "
      L"to composite; nothing for the game.")},
     {I18N(L"Road focus"),
-     I18N(L"The focus area renders in full detail only along the road ahead: about 10 m either side of the road and 3.5 m "
-     L"above it, following its hills and bends. Trees, grandstands, hills and the sky beside and above that come from the "
-     L"periphery’s image, as does the cockpit; where you look while you drive you shouldn’t see a difference. It saves "
-     L"GPU time, more with a larger focus area. Turn it off if something beside the road looks softer than you want. "
-     L"Changes while you drive.")},
+     I18N(L"For fixed foveation. The focus area renders in full detail only along the road ahead (Road width either side "
+     L"of it and 3.5 m above it, following its hills and bends) and in your own car: the wheel, dash, displays and "
+     L"mirrors inside the focus area stay sharp. Trees, grandstands, hills and the sky beside and above the road come "
+     L"from the periphery’s image; where you look while you drive you shouldn’t see a difference. It saves GPU time, "
+     L"more with a larger focus area. It’s off while the focus follows your eyes. Turn it off if something beside the "
+     L"road looks softer than you want. Changes while you drive.")},
     {I18N(L"Road width"),
      I18N(L"How far either side of the road’s centre stays in full detail with Road focus on. Lower keeps just the track "
      L"sharp and saves the most; higher brings the kerbs, run-off and barriers into the focus area and saves less. 10 m "
      L"suits most circuits. Changes while you drive.")},
-    {I18N(L"DLAA on the road only"),
-     I18N(L"With Road focus and Sim-QVFR’s DLSS on: the focus area’s DLAA runs only over the rows the road covers, the rest "
-     L"takes the periphery’s DLAA. It saves more GPU time. Turn it off if you see a soft strip above or below the road "
-     L"for a moment when you look up or down quickly. Changes while you drive.")},
+    {I18N(L"Road height"),
+     I18N(L"How high above the road stays in full detail with Road focus on. Lower keeps just the road and the cars sharp "
+     L"and saves the most; higher brings signs, gantries and the grandstands’ lower rows into the focus area and saves "
+     L"less. 3.5 m suits most circuits. Changes while you drive.")},
     {I18N(L"Show focus outline"), I18N(L"Draws the focus area’s edge, to see where it is and how it follows your eyes. For setting up; "
                             L"turn it off to drive.")},
     {I18N(L"Use Cheeky Foveated DLSS"),
@@ -398,6 +400,35 @@ void help_icon(const std::wstring& label, float x, float y) {
         app.tipAnchor = r;
 }
 
+// Road focus's picture in its tip (the help's text under it): the same driver's view with it off and on, the focus area
+// outlined; on, what inside the focus area comes from the periphery is tinted. Drawn (no image file): crisp at any DPI.
+constexpr float kRoadFigureH = 152;
+bool road_focus_tip(int tip) { return tip >= 0 && tip < static_cast<int>(std::size(kHelp)) && std::wcscmp(kHelp[tip].label, L"Road focus") == 0; }
+void road_focus_figure(const Rect& r) {
+    const float gap = 12, pw = (r.w - gap) / 2, ph = 92;
+    for (int i = 0; i < 2; ++i) {
+        const Rect p{r.x + i * (pw + gap), r.y + 20, pw, ph};
+        app.canvas.text(tr(i ? L"On" : L"Off"), t::kCallout, {p.x, r.y, pw, 18}, col(app.c->label_muted));
+        // The view in a 100 x 100 box: sky, hills, a grandstand left, trees right, the road to the horizon, the dash.
+        app.canvas.path("M0 0H100V42H0Z", p, 100, col(0x86b8ea), 0, true);
+        app.canvas.path("M0 42H100V100H0Z", p, 100, col(0x5f9a50), 0, true);
+        app.canvas.path("M0 42V30L12 24L26 32L32 42Z M62 42L70 27L84 22L100 30V42Z", p, 100, col(0x4f8a5e), 0, true);
+        app.canvas.path("M8 41V27L30 31V42Z", p, 100, col(0xa8a8b8), 0, true);
+        app.canvas.path("M64 44L68 30L72 44Z M71 45L76 28L81 45Z M80 47L86 26L92 47Z", p, 100, col(0x2f7a45), 0, true);
+        app.canvas.path("M48 40H52L100 86H0Z", p, 100, col(0x55565c), 0, true);
+        app.canvas.path("M50 46V50 M50 56V62 M50 70V78", p, 100, col(0xf0f0f0), 1.2f, false);
+        app.canvas.path("M45 50H55V56H45Z", p, 100, col(0x2a52c0), 0, true);                 // the car ahead
+        app.canvas.path("M0 82H100V100H0Z", p, 100, col(0x222226), 0, true);                 // the dash
+        app.canvas.path("M43 87H57V96H43Z M70 85H82V93H70Z", p, 100, col(0x2aa0c8), 0, true);  // its displays
+        if (i == 1)  // on: what's above the road inside the focus area, from the periphery
+            app.canvas.path("M20 14H80V64L52 40H48L20 64Z", p, 100, col(app.c->accent, 0.55f), 0, true);
+        app.canvas.path("M20 14H80V94H20Z", p, 100, col(0xffd228), 1.6f, false);           // the focus area
+    }
+    const float ly = r.y + 20 + ph + 8;
+    app.canvas.fill({r.x, ly + 3, 12, 12}, col(app.c->accent, 0.55f), 2);
+    app.canvas.text(tr(L"From the periphery"), t::kCallout, {r.x + 18, ly, r.w - 18, 18}, col(app.c->label_muted));
+}
+
 // The help under the pointer: a card under its ⓘ, kept inside the window, over everything but a pop-up menu.
 void help_tip() {
     const bool own = app.tip == kTipText;  // a hit's own tip (Hit::tip): the top bar's, the rail's
@@ -407,14 +438,18 @@ void help_tip() {
     const std::wstring text = own ? app.tipText : std::wstring(tr(kHelp[app.tip].text));
     const float w = own ? std::min(320.0f, std::ceil(app.canvas.measure(text, t::kCallout)) + 2 * pad + 2) : 320.0f;
     const float th = app.canvas.measure_height(text, t::kCallout, w - 2 * pad);
-    Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 8, w, th + 2 * pad};
+    const bool figure = !own && road_focus_tip(app.tip);  // a picture above the text
+    const float fh = figure ? kRoadFigureH : 0;
+    Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 8, w, th + 2 * pad + fh};
     card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);
     if (card.bottom() > app.canvas.height() - 8)  // no room under it: above
         card.y = app.tipAnchor.y - 8 - card.h;
     app.canvas.fill(card, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
     app.canvas.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
-    app.canvas.text(text, t::kCallout, {card.x + pad, card.y + pad, w - 2 * pad, th + 2}, col(app.c->label), Align::Leading, false,
-                    true);
+    if (figure)
+        road_focus_figure({card.x + pad, card.y + pad, w - 2 * pad, fh - pad});
+    app.canvas.text(text, t::kCallout, {card.x + pad, card.y + pad + fh, w - 2 * pad, th + 2}, col(app.c->label),
+                    Align::Leading, false, true);
 }
 
 }  // namespace simqvfr::launcher::ui::win

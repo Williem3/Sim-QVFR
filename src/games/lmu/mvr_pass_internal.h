@@ -561,6 +561,9 @@ struct State {
         float halfM = 10, tallM = 3.5f, startM = 3, farM = 0, eyeHeightM = 1.3f;
         float roadSlopeDeg = 35, centreReachM = 6;  // the steepest surface taken as road; how far the centre may move
         float featherM = 1;  // the fill's blend at the corridor's edge, metres inside it
+        float carM = 3;      // the car kept sharp: whatever lies nearer than this, metres (0: none; mvr_corridor_car)
+        // The corridor's widening with distance, degrees either side (mvr_corridor_spread; -1: not set yet, logged when set).
+        float spreadDeg = -1;
         // DLSS over a band of the focus view's rows (mvr_corridor_band): its height and the margin kept about the
         // corridor's rows, percent of the view's height (0: off); since the last log line: bands placed, those whose
         // corridor (with the margin) was taller than the band, its rows' share summed; each pass's band top as last set.
@@ -627,6 +630,7 @@ struct State {
             ComPtr<ID3D11ShaderResourceView> colourSrv, stampsSrv;
             ComPtr<ID3D11UnorderedAccessView> stampsUav;
             unsigned fw = 0, fh = 0;
+            unsigned colourW = 0, colourH = 0;  // the colour copy's size: the box's own texels in the eye
             unsigned gw = 0, gh = 0;       // the road grid: half the copy each way, rounded up
             ComPtr<ID3D11Buffer> sums, centre;
             bool groundValid = false;

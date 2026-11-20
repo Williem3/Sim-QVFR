@@ -231,6 +231,10 @@ void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
 void native_quad_plan(XrInstance instance, XrSystemId system);
 // At xrDestroySession: the session's counts logged, the state reset.
 void native_quad_session_ended();
+// The part of the focus box the headset shows, to the game (GameAdapter::qvfr_set_focus_visible): under native quad
+// views with fixed foveation, the runtime's focus region within a box larger than it; else all of it. At the region's
+// first locate and at every live change of the box.
+void native_quad_focus_visible();
 
 // eye_off.cpp (quad/eye_off.h): one eye off at the runtime's xrEndFrame. Installed into `next` before native quad
 // views' wrappers, so it is the last of the layer's before the runtime.

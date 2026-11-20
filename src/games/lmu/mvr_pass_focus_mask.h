@@ -63,14 +63,23 @@ bool mask_mesh(unsigned w, unsigned h) {
     ++m.epoch;
     // The share of the focus view masked, for the log (as the launcher and the headset menu count it).
     const double share = simqvfr::focus_mask_share(area, w, h, m.margin);
-    char shape[160];
+    char shape[288];
     if (area.outline()) {
         int used = std::snprintf(shape, sizeof(shape), "outline of %d points", area.points);
         for (int i = 0; i < area.points && used > 0 && used < static_cast<int>(sizeof(shape)); ++i)
             used += std::snprintf(shape + used, sizeof(shape) - used, " %.0f,%.0f", area.point[2 * i] * 100,
                                   area.point[2 * i + 1] * 100);
-    } else
+    } else if (area.radius > 0) {
         std::snprintf(shape, sizeof(shape), "rounded %.0f%%", area.radius * 100);
+    } else {
+        std::snprintf(shape, sizeof(shape), "the box");
+    }
+    if (area.clipped()) {  // under native quad views: what the runtime shows of the box
+        const size_t used = std::strlen(shape);
+        std::snprintf(shape + used, sizeof(shape) - used, ", shown only over %.0f-%.0f%% x %.0f-%.0f%% of it (the runtime's "
+                      "focus region)", area.visible[0] * 100, area.visible[2] * 100, area.visible[1] * 100,
+                      area.visible[3] * 100);
+    }
     if (m.vertices) {
         mesh.resize(kMaskMaxVertices * 2, 0.0f);
         g.context->UpdateSubresource(m.vb.Get(), 0, nullptr, mesh.data(), 0, 0);

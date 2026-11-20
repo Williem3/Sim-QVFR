@@ -39,13 +39,15 @@ inline constexpr IniInt kDebugBorder{L"quad", L"debug_border", 0, 0, 1, 1};
 // shape (pulled-in corners or rounding). 0: they render the whole box, as before. Live.
 inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
 // Road focus (a game with GameFeatures::focusCorridor, LMU: games/lmu/mvr_pass_corridor.h): the focus views render only
-// a corridor along the road ahead, the periphery's image everywhere else in them; with Sim-QVFR's DLSS on, its DLAA on
-// the focus views runs only over the rows the road covers (focus_corridor_dlss_band). Both live; on by default.
+// a corridor along the road ahead and the player's own car, the periphery's image everywhere else in them. Fixed
+// foveation only (off while eye tracking is on: the gaze leaves the road). Live; on by default.
 inline constexpr IniInt kFocusCorridor{L"quad", L"focus_corridor", 1, 0, 1, 1};
-inline constexpr IniInt kFocusCorridorBand{L"quad", L"focus_corridor_dlss_band", 1, 0, 1, 1};
 // Road width: metres either side of the road's centre kept sharp. 5 holds the track's surface on most circuits (the
 // centre follows the road); 20 takes in run-off and barriers, the corridor then a good part of the box (less saved).
 inline constexpr IniInt kFocusCorridorWidth{L"quad", L"focus_corridor_width", 10, 5, 20, 1};
+// Road height: how high above the road stays sharp, tenths of a metre (2 m: the road and the cars; 8 m: signs, gantries
+// and the grandstands' lower rows too, less saved).
+inline constexpr IniInt kFocusCorridorHeight{L"quad", L"focus_corridor_height", 35, 20, 80, 5};
 // Diagnostics: the mask's margin past the shape, focus view texels (what DLSS, sharpening and screen-space effects read
 // beside the shown texels). Live.
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};

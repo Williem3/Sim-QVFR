@@ -571,6 +571,23 @@ void mvr_corridor_band(int pct, int padPct) {
     c.bandPadPct = std::clamp(padPct, 0, 50);
 }
 
+void mvr_corridor_spread(float degrees) {
+    auto& c = g.corridor;
+    const float d = std::clamp(degrees, 0.0f, 60.0f);
+    if (d != c.spreadDeg)
+        simqvfr::logf("lmu mvr: corridor: widening %.0f degrees either side with distance", d);
+    c.spreadDeg = d;
+}
+
+void mvr_corridor_car(float metres) {
+    auto& c = g.corridor;
+    const float m = (std::max)(0.0f, metres);
+    if (m != c.carM)
+        simqvfr::logf("lmu mvr: corridor: the car kept sharp: %s", m > 0 ? ("whatever lies within " +
+                      std::to_string(static_cast<int>(m * 100)) + " cm").c_str() : "no, from the eye's image");
+    c.carM = m;
+}
+
 void mvr_glass_depth(int mode) {
     if (!g.context)  // before the install only: its hooks are chosen there
         g.glass.mode = mode > 0 ? 1 : 0;
@@ -580,7 +597,7 @@ void mvr_glass_read(bool read) { g.glass.read = read; }
 
 void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
     auto& m = g.mask;
-    const bool shape = area.outline() || area.radius > 0;
+    const bool shape = area.outline() || area.radius > 0 || area.clipped();
     if (m.on != (on && shape) || m.margin != marginTexels) {  // (a new shape logs its mesh as it's made)
         if (on && shape)
             simqvfr::logf("lmu mvr: focus mask on: the focus views' texels %u past the focus shape skip the scene%s",

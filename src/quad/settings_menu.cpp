@@ -69,8 +69,8 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Corners, I18N(L"Corner radius"), kCornerRadiusPercent),
     spec_of(MenuItem::Outline, I18N(L"Show focus outline"), kDebugBorder),
     spec_of(MenuItem::FocusCorridor, I18N(L"Road focus"), kFocusCorridor),
-    spec_of(MenuItem::FocusCorridorBand, I18N(L"DLAA on the road only"), kFocusCorridorBand),
     spec_of(MenuItem::FocusCorridorWidth, I18N(L"Road width"), kFocusCorridorWidth),
+    spec_of(MenuItem::FocusCorridorHeight, I18N(L"Road height"), kFocusCorridorHeight),
     spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
     {MenuItem::FocusOffset, I18N(L"Gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::FocusOffsetX, I18N(L"Horizontal gaze offset"), -kFocusOffsetMax, kFocusOffsetMax, 1},
@@ -233,6 +233,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Height: return &v.height;
     case MenuItem::Feather: return &v.feather;
     case MenuItem::FocusCorridorWidth: return &v.focusCorridorWidth;
+    case MenuItem::FocusCorridorHeight: return &v.focusCorridorHeight;
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
     case MenuItem::GazeDeadzone: return &v.gazeDeadzone;
@@ -362,12 +363,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             items.push_back(MenuItem::GazeDeadzone);
         if (l.qvfr && l.focusQuads)  // focus_layer=2's test
             items.push_back(MenuItem::FocusQuadDistance);
-        if (l.qvfr && l.focusCorridor) {  // road focus, and with Sim-QVFR's DLSS on its band
+        if (l.qvfr && l.focusCorridor && !v.eyeTracking) {  // road focus: fixed foveation only
             items.push_back(MenuItem::FocusCorridor);
             if (v.focusCorridor)
-                items.push_back(MenuItem::FocusCorridorWidth);
-            if (v.focusCorridor && (l.ownDlss || l.apiDlss) && v.dlss.on)
-                items.push_back(MenuItem::FocusCorridorBand);
+                add({MenuItem::FocusCorridorWidth, MenuItem::FocusCorridorHeight});
         }
         items.push_back(MenuItem::Outline);
     } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
@@ -643,17 +642,21 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     default: break;
     }
+    if (item == MenuItem::FocusCorridor) {  // on: the cockpit's shape and size (the player's kept); off: theirs back
+        MenuValues& v = menu.values;
+        road_focus_switched(!v.focusCorridor, v.shape, v.width, v.height, v.roadSaved, menu.launch.runtimeFocusWidth,
+                            menu.launch.runtimeFocusHeight);
+        v.focusCorridor = !v.focusCorridor;
+        return true;
+    }
     if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Clock ||
         item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
         item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain ||
         item == MenuItem::ColorOn || item == MenuItem::CarLightOn || item == MenuItem::CarLightShadows ||
         item == MenuItem::CarLightDetail || item == MenuItem::CarLightReflections ||
-        item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision ||
-        item == MenuItem::FocusCorridor || item == MenuItem::FocusCorridorBand) {
+        item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
-                     : item == MenuItem::FocusCorridor ? menu.values.focusCorridor
-                     : item == MenuItem::FocusCorridorBand ? menu.values.focusCorridorBand
                      : item == MenuItem::ColorOn     ? menu.values.color.on
                      : item == MenuItem::CarLightOn  ? menu.values.carLight.on
                      : item == MenuItem::CarLightShadows ? menu.values.carLight.shadows
@@ -701,8 +704,9 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.focusMask = ini_flag(ini, kFocusMask);
     v.focusMaskMargin = ini_int(ini, kFocusMaskMargin);
     v.focusCorridor = ini_flag(ini, kFocusCorridor);
-    v.focusCorridorBand = ini_flag(ini, kFocusCorridorBand);
     v.focusCorridorWidth = ini_int(ini, kFocusCorridorWidth);
+    v.focusCorridorHeight = ini_int(ini, kFocusCorridorHeight);
+    v.roadSaved = read_road_focus_saved(ini);
     v.overlay = read_osd_placement(ini);
     v.clock = read_clock_placement(ini);
     v.placement = read_menu_placement(ini);
@@ -730,8 +734,9 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     bool ok = true;
     if (qvfr && focusCorridor) {
         ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
-        ok &= write(ini, kFocusCorridorBand, v.focusCorridorBand ? 1 : 0);
         ok &= write(ini, kFocusCorridorWidth, kFocusCorridorWidth.clamp(v.focusCorridorWidth));
+        ok &= write(ini, kFocusCorridorHeight, kFocusCorridorHeight.clamp(v.focusCorridorHeight));
+        ok &= write_road_focus_saved(ini, v.roadSaved);
     }
     if (qvfr && carLighting)
         ok &= write_car_lighting(ini, v.carLight);
@@ -1141,10 +1146,11 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = on_off(v.outline);
         else if (items[i] == MenuItem::FocusCorridor)
             line.value = on_off(v.focusCorridor);
-        else if (items[i] == MenuItem::FocusCorridorBand)
-            line.value = on_off(v.focusCorridorBand);
         else if (items[i] == MenuItem::FocusCorridorWidth)
             line.value = std::to_wstring(v.focusCorridorWidth) + L" m";
+        else if (items[i] == MenuItem::FocusCorridorHeight)
+            line.value = std::to_wstring(v.focusCorridorHeight / 10) + L"." + std::to_wstring(v.focusCorridorHeight % 10) +
+                         L" m";
         else if (items[i] == MenuItem::Shape)
             line.value = w.t(v.shape.custom ? I18N(L"Custom shape") : I18N(L"Rectangle"));
         else if (items[i] == MenuItem::ShapePoint)  // "Whole shape", "Point 2 of 5"

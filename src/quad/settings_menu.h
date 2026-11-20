@@ -10,6 +10,7 @@
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
 #include "car_lighting.h"
+#include "road_focus_shape.h"
 #include "color_grade.h"
 #include "focus_offset.h"
 #include "focus_quad_distance.h"
@@ -75,8 +76,8 @@ enum class MenuItem {
     // then the game's light kept, ambient occlusion, the highlights and the gloss.
     CarLightOn, CarLightQuality, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
     CarLightShadows, CarLightDetail, CarLightReflections, CarLightHeadlights, CarLightGround, CarLightNightVision,
-    // The Foveation section's road focus ([quad] focus_corridor; MenuLaunch::focusCorridor), and with DLSS on its band.
-    FocusCorridor, FocusCorridorBand, FocusCorridorWidth,
+    // The Foveation section's road focus ([quad] focus_corridor; MenuLaunch::focusCorridor, fixed foveation), its width.
+    FocusCorridor, FocusCorridorWidth, FocusCorridorHeight,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
@@ -115,8 +116,9 @@ struct MenuValues {
     FocusShape shape;         // [quad] focus_shape and shape_points
     bool focusMask = kFocusMask.def != 0;        // [quad] focus_mask (read only: the pixels saved)
     bool focusCorridor = kFocusCorridor.def != 0;          // [quad] focus_corridor (road focus)
-    bool focusCorridorBand = kFocusCorridorBand.def != 0;  // [quad] focus_corridor_dlss_band
     int focusCorridorWidth = kFocusCorridorWidth.def;      // [quad] focus_corridor_width, metres either side
+    int focusCorridorHeight = kFocusCorridorHeight.def;    // [quad] focus_corridor_height, tenths of a metre
+    RoadFocusSaved roadSaved;  // the player's own shape and size while Road focus's cockpit shape is set
     int focusMaskMargin = kFocusMaskMargin.def;  // [experiment] focus_mask_margin (likewise)
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     ClockPlacement clock;     // [clock]: the clock, on or off, and its place
@@ -177,6 +179,7 @@ struct MenuLaunch {
     bool focusQuads = false;
     // The runtime composes the views (native quad views: Pimax, Varjo): the settings page says its own sliders don't apply.
     bool runtimeComposes = false;  // the runtime composes the views: the focus area inside its own focus region
+    int runtimeFocusWidth = 0, runtimeFocusHeight = 0;  // that region, percent of the eye (0: not known yet)
     // Sim-QVFR's own DLSS can run in this launch (GameFeatures::sideLoadedDlss, QVFR with the multi-view path, a build
     // with the NGX SDK): its DLSS page ([dlss]), live.
     bool ownDlss = false;

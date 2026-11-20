@@ -231,6 +231,8 @@ void menu_open(int64_t now) {
         menu.model.launch.focusCorridor = features.focusCorridor && experiment.views4;  // road focus: QVFR's (LMU)
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
         menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
+        menu.model.launch.runtimeFocusWidth = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareX * 100) : 0;
+        menu.model.launch.runtimeFocusHeight = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareY * 100) : 0;
         menu.model.launch.liveResolution = features.liveResolution;
         if (experiment.replayCompose)
             menu.model.launch.liveResolution = false;  // periphery and density: the next launch

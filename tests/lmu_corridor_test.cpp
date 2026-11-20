@@ -166,6 +166,11 @@ struct Filled {
 // The scene through the pipeline: the road pass (centre smoothing 1: at once) on its depth as the copy, then the mask,
 // then with `filled` the fill. Out: each focus texel masked or kept, what it shows, and the road's centre.
 // The corridor's rows as margin_main gathered them (the band DLSS takes) and as the margin map holds them: [top, bottom).
+// The car kept sharp (corridor_shader.h fill.x): whatever lies nearer than this, metres; 0 none.
+float gCarM = 0;
+// The corridor's widening with distance (corridor_shader.h focus.w): the tangent of its angle either side; 0 straight.
+float gSpreadTan = 0;
+
 struct Rows {
     unsigned gpuTop = 0, gpuBottom = 0, mapTop = 0, mapBottom = 0;
     bool read = false;
@@ -218,9 +223,9 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
         FAILED(d->CreateUnorderedAccessView(centreBuf.Get(), nullptr, &centreUav)) ||
         FAILED(d->CreateShaderResourceView(centreBuf.Get(), nullptr, &centreSrv)))
         return false;
-    float k[32] = {0, 0, kCW, kCH, kL, kR, kU, kD, kA, kB, kStart, kTall, 0, 1, 0, kEyeHeight,
+    float k[36] = {0, 0, kCW, kCH, kL, kR, kU, kD, kA, kB, kStart, kTall, 0, 1, 0, kEyeHeight,
                    kHalf, 0, kCW, kCH, std::cos(35.0f * 3.14159265f / 180), 1.0f, kReach, 0,
-                   0, kFeather, kFW, kFH, 0, 0, 0, 0};
+                   gCarM, kFeather, kFW, kFH, 0, 0, 0, gSpreadTan, 0, 0, 0, 0};
     const uint32_t stamp = 7;  // the mask's stamp this pass (the fill finds its texels by it)
     std::memcpy(&k[30], &stamp, sizeof(stamp));
     c->UpdateSubresource(g.cb.Get(), 0, nullptr, k, 0, 0);
@@ -463,7 +468,7 @@ int SIM_QVFR_TEST_MAIN() {
     d->CreateComputeShader(classifyCode->GetBufferPointer(), classifyCode->GetBufferSize(), nullptr, &g.classify);
     d->CreateComputeShader(marginCode->GetBufferPointer(), marginCode->GetBufferSize(), nullptr, &g.margin);
     d->CreateComputeShader(centreCode->GetBufferPointer(), centreCode->GetBufferSize(), nullptr, &g.centre);
-    const D3D11_BUFFER_DESC cbDesc = {32 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC cbDesc = {36 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     d->CreateBuffer(&cbDesc, nullptr, &g.cb);
     D3D11_RASTERIZER_DESC rs{};
     rs.FillMode = D3D11_FILL_SOLID;
@@ -494,7 +499,9 @@ int SIM_QVFR_TEST_MAIN() {
         d->CreateShaderResourceView(eyeTex.Get(), nullptr, &eyeSrv);
         d->CreateTexture2D(&outDesc, nullptr, &outTex);
         d->CreateRenderTargetView(outTex.Get(), nullptr, &outRtv);
-        const float k[32] = {kBX, kBY, kCW, kCH};
+        float k[36] = {kBX, kBY, kCW, kCH};
+        k[18] = kCW;  // the copy's size: the box's own texels (no focus view: fill.z 0)
+        k[19] = kCH;
         ID3D11DeviceContext* c = g.context.Get();
         c->UpdateSubresource(g.cb.Get(), 0, nullptr, k, 0, 0);
         const D3D11_VIEWPORT vp{0, 0, kCW, kCH, 0, 1};
@@ -514,6 +521,49 @@ int SIM_QVFR_TEST_MAIN() {
             for (UINT x = 0; same && x < kCW; ++x)
                 same = out[y * kCW + x] == eye[(kBY + y) * kTW + kBX + x];
         check(same, "copy: the box region of the eye's depth, texel for texel, from its corner in the target");
+        // With a focus view (kCW x kCH at 80,60 in the same target): its depth where it drew it, the eye's where this
+        // pass's mask stamped its texels (stamp 9 on every 7th texel; 8 elsewhere, an older pass's).
+        {
+            constexpr UINT kFX = 80, kFY = 60;
+            constexpr uint32_t kStamp = 9;
+            std::vector<uint32_t> stampData(kCW * kCH);
+            for (UINT i = 0; i < stampData.size(); ++i)
+                stampData[i] = i % 7 == 0 ? kStamp : 8;
+            const D3D11_TEXTURE2D_DESC stampDesc = {kCW, kCH, 1, 1, DXGI_FORMAT_R32_UINT, {1, 0}, D3D11_USAGE_DEFAULT,
+                                                    D3D11_BIND_SHADER_RESOURCE, 0, 0};
+            const D3D11_SUBRESOURCE_DATA stampInit = {stampData.data(), kCW * sizeof(uint32_t), 0};
+            ComPtr<ID3D11Texture2D> stampTex;
+            ComPtr<ID3D11ShaderResourceView> stampSrv;
+            d->CreateTexture2D(&stampDesc, &stampInit, &stampTex);
+            d->CreateShaderResourceView(stampTex.Get(), nullptr, &stampSrv);
+            k[26] = kCW;  // the focus view's size and corner
+            k[27] = kCH;
+            k[28] = kFX;
+            k[29] = kFY;
+            std::memcpy(&k[30], &kStamp, sizeof(kStamp));
+            c->UpdateSubresource(g.cb.Get(), 0, nullptr, k, 0, 0);
+            ID3D11ShaderResourceView* in[5] = {eyeSrv.Get(), nullptr, nullptr, nullptr, stampSrv.Get()};
+            c->PSSetShaderResources(0, 5, in);
+            c->OMSetRenderTargets(1, outRtv.GetAddressOf(), nullptr);
+            c->Draw(3, 0);
+            c->OMSetRenderTargets(0, nullptr, nullptr);
+            ID3D11ShaderResourceView* none5[5] = {};
+            c->PSSetShaderResources(0, 5, none5);
+            std::vector<float> both;
+            bool right = readback(d, c, outTex.Get(), both, kCW * kCH, kCW);
+            unsigned fromFocus = 0, fromEye = 0;
+            for (UINT y = 0; right && y < kCH; ++y)
+                for (UINT x = 0; right && x < kCW; ++x) {
+                    const bool masked = (y * kCW + x) % 7 == 0;
+                    const float want = masked ? eye[(kBY + y) * kTW + kBX + x] : eye[(kFY + y) * kTW + kFX + x];
+                    right = both[y * kCW + x] == want;
+                    (masked ? fromEye : fromFocus) += right ? 1 : 0;
+                }
+            std::printf("     copy with a focus view: %u texels from it, %u from the eye where the mask skipped it\n",
+                        fromFocus, fromEye);
+            check(right && fromFocus > 0 && fromEye > 0,
+                  "copy: the focus view's depth where it drew it, the eye's where this pass's mask skipped it");
+        }
     }
 
     std::vector<bool> masked;
@@ -541,6 +591,39 @@ int SIM_QVFR_TEST_MAIN() {
         check(lastRows.read && lastRows.gpuBottom > lastRows.gpuTop && lastRows.gpuTop == lastRows.mapTop &&
                   lastRows.gpuBottom == lastRows.mapBottom,
               "flat road: the corridor's rows gathered for DLSS's band are the margin map's");
+        // The car kept sharp (whatever lies nearer than the corridor's start): the dash kept too, the rest as before.
+        gCarM = kStart;
+        check(run_scene(g, flat, masked, centre, hits), "flat road, the car kept: through the pipeline");
+        gCarM = 0;
+        const double carDash = kept_share(masked, hits, [](const Hit& h) { return h.what == 3; });
+        const double carSky = kept_share(masked, hits, [](const Hit& h) { return h.what == 0; });
+        const double carWalls = kept_share(masked, hits, [](const Hit& h) { return h.what == 2 && h.y + kEyeHeight > kTall + 1; });
+        std::printf("     flat, the car kept: dash %.3f, sky %.3f, walls above 4.5 m %.3f\n", carDash, carSky, carWalls);
+        check(carDash > 0.95 && carSky == 0 && carWalls < 0.03,
+              "flat road, the car kept: the dash kept, the sky and the walls' upper parts still not");
+    }
+    // 1b. A bend: the ground's road leaving the head's line to the right past 40 m (25 m across at 100 m), a 20 m tall wall
+    // across at 200 m. Straight, the far road falls outside; widening 15 degrees with distance, it stays in, the wall's
+    // upper part still out.
+    {
+        const auto bendAt = [](float z) { return z > 40 ? (z - 40) * (z - 40) / 144.0f : 0.0f; };
+        const Scene flat{[](float, float) { return 0.0f; }, {{true, 200, -300, 300, 20}}};
+        const auto bendRoad = [&](const Hit& h) {
+            return h.what == 1 && h.z > 70 && h.z < 105 && std::fabs(h.x - bendAt(h.z)) < 3;
+        };
+        check(run_scene(g, flat, masked, centre, hits), "bend, straight: through the pipeline");
+        const double straight = kept_share(masked, hits, bendRoad);
+        gSpreadTan = static_cast<float>(std::tan(15.0 * 3.14159265 / 180));
+        check(run_scene(g, flat, masked, centre, hits), "bend, widening: through the pipeline");
+        gSpreadTan = 0;
+        const double widened = kept_share(masked, hits, bendRoad);
+        const double wallTop = kept_share(masked, hits, [](const Hit& h) {
+            return h.what == 2 && h.y + kEyeHeight > kTall + 1;
+        });
+        std::printf("     bend: its road 70-105 m out kept %.3f straight, %.3f widening 15 degrees; the wall above 4.5 m %.3f\n",
+                    straight, widened, wallTop);
+        check(straight < 0.5 && widened > 0.95 && wallTop < 0.05,
+              "bend: the road bending away kept with the corridor widening, not without; the wall's upper part still out");
     }
     // 2. The road climbing 12 degrees from 40 m out, a wall across it at 150 m (20 m tall).
     {

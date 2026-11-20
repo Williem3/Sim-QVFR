@@ -63,8 +63,9 @@ Settings load_settings(const std::wstring& ini) {
     s.focusMask = ini_flag(f, kFocusMask);
     s.focusMaskMargin = ini_int(f, kFocusMaskMargin);
     s.corridor = ini_flag(f, kFocusCorridor);
-    s.corridorBand = ini_flag(f, kFocusCorridorBand);
+    s.roadSaved = read_road_focus_saved(f);
     s.corridorWidth = ini_int(f, kFocusCorridorWidth);
+    s.corridorHeight = ini_int(f, kFocusCorridorHeight);
     s.eyeTracking = ini_flag(f, kGaze);
     s.offset = read_focus_offset(f);
     s.gazeDeadzone = read_gaze_deadzone(f);
@@ -209,8 +210,9 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write_color_grade(ini.c_str(), s.grade);
         ok &= write_car_lighting(ini.c_str(), s.carLight);
         ok &= write(ini, kFocusCorridor, s.corridor ? L"1" : L"0");  // road focus (a game without it ignores them)
-        ok &= write(ini, kFocusCorridorBand, s.corridorBand ? L"1" : L"0");
+        ok &= write_road_focus_saved(ini.c_str(), s.roadSaved);
         ok &= write(ini, kFocusCorridorWidth, n(kFocusCorridorWidth.clamp(s.corridorWidth)));
+        ok &= write(ini, kFocusCorridorHeight, n(kFocusCorridorHeight.clamp(s.corridorHeight)));
     }
     ok &= write(ini, kFocusPercent, n(s.width));
     ok &= write(ini, kFocusHeightPercent, n(s.height));

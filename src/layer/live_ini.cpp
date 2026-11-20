@@ -134,8 +134,9 @@ void live_apply(const LiveSettings& l) {
     if (experiment.views4 && !experiment.views4EyeCamera) {  // the focus mask: the shape as the compositor has it
         game->qvfr_set_focus_mask(l.focusMask, focus_area_from(focus_shape_words(l.shape), l.cornerRadius),
                                   l.focusMaskMargin);
-        game->qvfr_set_focus_corridor(l.focusCorridor, l.focusCorridorBand,  // road focus (the game logs a change)
-                                      l.focusCorridorWidth);
+        native_quad_focus_visible();  // what the runtime shows of the box (its size may have changed)
+        game->qvfr_set_focus_corridor(l.focusCorridor && !l.gaze,  // road focus, fixed foveation (the game logs a change)
+                                      l.focusCorridorWidth, l.focusCorridorHeight);
     }
     if (game->shows_overlay()) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);

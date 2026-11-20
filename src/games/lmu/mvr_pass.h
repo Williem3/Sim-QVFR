@@ -146,6 +146,12 @@ void mvr_corridor(bool on, bool off, float halfM, float tallM, float startM, flo
 // view's height (0: off), placed over the corridor's rows as last read back with `padPct` of the height either side;
 // the rows outside it take the eye's image. Between frames.
 void mvr_corridor_band(int pct, int padPct);
+// The player's own car kept in the focus views with the corridor: whatever lies nearer than `metres` (the cockpit,
+// mirrors, displays, the bonnet), blended over the corridor's feather; 0: the car from the eye's image too. Between frames.
+void mvr_corridor_car(float metres);
+// The corridor's widening with distance: past its start its half width grows by tan(`degrees`) a metre ahead, so the road
+// stays inside where it bends away from the head's line far ahead (0: a straight band). Between frames.
+void mvr_corridor_spread(float degrees);
 // R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
 // right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
 // elsewhere with mvr_redraw_panel. Null: none.

@@ -31,8 +31,12 @@ cbuffer Corridor : register(b0) {
     float4 up;      // the world's up in the eye's view space (x right, y up, z ahead), w: the eye's height above the road
     float4 extent;  // x: half width (m), y: far end (m, 0 none), zw: the copy's size
     float4 ground;  // x: cos of the steepest slope taken as road, y: the centre's smoothing (0..1 a pass), z: its reach (m)
-    float4 fill;    // x: unused, y: the feather (m), zw: the focus view's size
-    float4 focus;   // xy: the focus viewport's corner in the target (texels), z: this pass's mask stamp (its bits), w: unused
+    float4 fill;    // x: the car kept: whatever lies nearer than this (m; 0 none), y: the feather (m), zw: the focus view's size
+    float4 focus;   // xy: the focus viewport's corner in the target (texels), z: this pass's mask stamp (its bits), w: the
+                    // corridor's widening with distance past its start (the tangent of its angle either side; 0 straight)
+    // The mask's read of the last pass's margin map where the box was then (the box follows the gaze): uv there = uv now
+    // x xy + zw (0, 0: the same box).
+    float4 shift;
 };
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V vs_main(uint id : SV_VertexID) {
@@ -43,8 +47,19 @@ V vs_main(uint id : SV_VertexID) {
 }
 Texture2DMS<float> depthMs : register(t0);
 Texture2D<float> depthSs : register(t0);
-float copy_ms(V v) : SV_Target { return depthMs.Load(int2(v.pos.xy) + int2(box.xy), 0); }
-float copy_ss(V v) : SV_Target { return depthSs.Load(int3(int2(v.pos.xy) + int2(box.xy), 0)); }
+// The copy (extent.zw texels over the box): the focus view's depth where it drew it (fill.zw its size, focus.xy its corner
+// in the target), at its own resolution whatever the periphery's; the eye's where this pass's mask skipped the focus
+// view (its texels stamped focus.z) or without one (fill.z 0). Nearest texels both.
+Texture2D<uint> copyMasked : register(t4);
+int2 copy_focus_at(float2 uv) { return min(int2(uv * fill.zw), int2(fill.zw) - 1); }
+bool copy_from_focus(float2 uv) { return fill.z > 0 && copyMasked.Load(int3(copy_focus_at(uv), 0)) != asuint(focus.z); }
+int2 copy_eye_at(float2 uv) { return int2(box.xy) + min(int2(uv * box.zw), int2(box.zw) - 1); }
+int2 copy_at(V v) {
+    const float2 uv = v.pos.xy / extent.zw;
+    return copy_from_focus(uv) ? copy_focus_at(uv) + int2(focus.xy) : copy_eye_at(uv);
+}
+float copy_ms(V v) : SV_Target { return depthMs.Load(copy_at(v), 0); }
+float copy_ss(V v) : SV_Target { return depthSs.Load(int3(copy_at(v), 0)); }
 // The eye's colour over the box (the fill's source): multisampled, its samples averaged (a resolve).
 Texture2DMS<float4> colourMs : register(t0);
 Texture2D<float4> colourSs : register(t0);
@@ -167,9 +182,14 @@ float corridor_margin(float2 uv) {
     const float ahead = dot(p, fwd), across = abs(dot(p, side) - centreNow[0]);
     const float road = groundBelow.Load(int3(at / 2, 0));  // the road grid: half the copy's size
     const float above = height_of(p) - (road > kNone * 0.5 ? road : 0);
-    float m = min(min(ahead - terms.z, extent.x - across), min(above + 1, terms.w - above));
+    // Its half width: the road width near, opening by focus.w's angle further out, so a bend (the road leaving the
+    // head's straight line far ahead: Eau Rouge, a hairpin, the pit exit) stays inside; far things are small on screen.
+    const float half = extent.x + max(ahead - terms.z, 0) * focus.w;
+    float m = min(min(ahead - terms.z, half - across), min(above + 1, terms.w - above));
     if (extent.y > 0)
         m = min(m, extent.y - ahead);
+    if (fill.x > 0)  // the car (cockpit, mirrors, bonnet) kept too: whatever lies nearer than fill.x
+        m = max(m, fill.x - length(p));
     return m;
 }
 // The margin map (margin_main, once a pass after the road pass): corridor_margin at every copy texel, held within
@@ -213,7 +233,9 @@ bool in_corridor(float2 uv) { return margin_at(uv) > 0; }
 // number in our own texture (the focus viewport's size), so the fill knows them without reading the depth back.
 RWTexture2D<uint> maskedOut : register(u0);
 void mask_main(V v) {
-    if (in_corridor(v.uv))
+    // The last pass's map, where this texel lay in the box as it was then; outside it, kept (rendered).
+    const float2 at = any(shift.xy != 0) ? v.uv * shift.xy + shift.zw : v.uv;
+    if (any(at < 0) || any(at > 1) || in_corridor(at))
         discard;
     maskedOut[uint2(v.pos.xy - focus.xy)] = asuint(focus.z);
 }
