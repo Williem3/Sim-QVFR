@@ -84,7 +84,7 @@ Picture
   looks too dark, washed out or dull in your headset. The periphery and the focus area change alike;
   menus and loading screens show as the game draws them, and the truck sims aren't corrected yet. It
   applies live, also from the headset menu's Color page.
-  Night cars (LMU only, off by default): at night LMU lights its cars with the same flat light across
+  Night cars (experimental; LMU only, off by default): at night LMU lights its cars with the same flat light across
   the whole car. With it on, the cars get highlights from the floodlights and other cars' headlights
   on their paint, shading in their creases and under the body, reflections in the lacquer and shadows
   on the track around them. Quality is Low, Medium or High (High costs the most GPU time, Low about a
@@ -102,7 +102,7 @@ Picture
   right-click to remove it; Whole shape, or Shift+drag, moves them all together), to trace your
   windscreen, say. In LMU and ACE what the shape cuts off, and rounded corners, isn't rendered at all,
   which saves GPU time. Show focus outline and its colour (teal, magenta, green).
-  Road focus (LMU only, fixed foveation, on by default): the focus area renders in full detail only
+  Road focus (LMU only, fixed foveation, off by default): the focus area renders in full detail only
   along the road ahead (Road width either side of it, 5 to 20 m, and Road height above it, 2 to 8 m),
   following its hills and bends, and in your own car; the trees, grandstands and sky beside and above
   the road come from the periphery. It saves the most with a large focus area. Preset A or B sets a
@@ -111,8 +111,9 @@ Picture
   from the periphery. It's off while the focus follows your eyes. Turn it off if something beside the
   road looks softer than you want. All of it applies live, also from the headset menu.
   The two eyes' focus areas meet at the depth of what you look at (the dash, or the road), so near
-  things fall inside both; in X-Plane they stay parallel, and when the headset composes the views
-  itself (Pimax or Varjo with their Quad-Views Foveated Rendering on) it places them.
+  things fall inside both; in X-Plane they stay parallel. When the headset composes the views itself
+  (Pimax or Varjo with their Quad-Views Foveated Rendering on) it places the focus area: the position
+  and gaze offset sliders do nothing then and aren't offered; the shape and Feather still apply.
 - Preview: the focus area and the resulting view sizes, for the left eye, the right eye or both.
   Pixel sizes appear after the first launch, once the headset has reported its recommended resolution
   (runtime.ini).

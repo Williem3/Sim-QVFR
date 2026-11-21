@@ -64,11 +64,11 @@ with the same options. Both are also in the headset menu.
 - **LMU's own render scale and FSR** (LMU's VR graphics settings) work with Sim-QVFR. They lower every view's
   resolution on top of Sim-QVFR's sliders. This is LMU's own FSR, separate from Sim-QVFR's **FSR (experimental)**
   card above.
-- **Road focus** (**Picture › Foveation**, on by default with fixed foveation): the sharp area renders in full detail
+- **Road focus** (**Picture › Foveation**, off by default, for fixed foveation): the sharp area renders in full detail
   only along the road ahead and in your own car; what's beside and above the road comes from the periphery. Turn it
   off if something beside the road looks softer than you want. More in the
   [optimization guide](../LMU-OPTIMIZATION-GUIDE.md).
-- **Night cars** (**Picture › Night cars**, off by default): at night LMU lights its cars with the same flat light
+- **Night cars (experimental)** (**Picture › Night cars (experimental)**, off by default): at night LMU lights its cars with the same flat light
   across the whole car. With it on they get highlights from the floodlights and other cars' headlights, shading,
   reflections in the paint and shadows on the track around them. **Quality** Low, Medium or High sets its GPU cost.
   The switch starts at the next launch.
