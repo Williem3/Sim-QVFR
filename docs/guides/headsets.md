@@ -50,7 +50,11 @@ together itself, which saves the memory and GPU time of that step.
 - **Keep Pimax Play's or Varjo Base's own foveated area at least as large as Sim-QVFR's focus area.** The headset
   only shows the sharp area inside its own region. **Game › Diagnostics** in the launcher tells you when it's
   too small.
-- The headset's software places the sharp area here, so Sim-QVFR's gaze dead-zone and vertical offset don't apply.
+- The headset's software places the sharp area here, so Sim-QVFR's gaze dead-zone and its position sliders
+  (**Vertical position**, **Horizontal position**, **Gaze offset**, **Horizontal gaze offset**) don't apply. **To use
+  them, turn Quad-Views Foveated Rendering off in Pimax Play or Varjo Base:** Sim-QVFR then puts the picture together
+  itself. The headset menu leaves these sliders out while the headset's software composes; the launcher leaves them
+  out after a session in which it did. The custom shape and Feather apply either way.
 - With frame generation (VectorXR, Cheeky's) or another OpenXR tool in between, Sim-QVFR puts the picture together
   itself as usual. A report from **Game › Diagnostics** says what the last launch did.
 
