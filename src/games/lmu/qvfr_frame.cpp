@@ -64,6 +64,8 @@ float focusVisible[4] = {0, 0, 1, 1};  // the part of the box the headset shows 
 std::atomic<bool> corridorLive{simqvfr::kFocusCorridor.def != 0};
 std::atomic<int> corridorWidthLive{simqvfr::kFocusCorridorWidth.def};
 std::atomic<int> corridorHeightLive{simqvfr::kFocusCorridorHeight.def};  // tenths of a metre
+std::atomic<int> corridorBlendLive{simqvfr::kFocusCorridorBlend.def};    // tenths of a metre
+std::atomic<bool> corridorShowLive{simqvfr::kFocusCorridorShow.def != 0};
 int corridorLogged = -1;
 float gazeTan[2][2] = {};
 bool gazeValid[2] = {};
@@ -784,13 +786,20 @@ void mvr_before_pass(int p) {
             // The car kept sharp (the cockpit, mirrors and displays you glance at): out to the corridor's start.
             mvr_corridor_car(cfg.corridorCarCm >= 0 ? cfg.corridorCarCm / 100.0f : cfg.corridorStartM);
             mvr_corridor_spread(static_cast<float>(cfg.corridorSpreadDeg));  // bends stay inside
+            // The edges' blend: the player's Road edge blend (near), its growth with distance in proportion (3% of the
+            // distance a metre of blend), so one slider softens near and far edges alike.
+            const float roadBlendM = cfg.corridorFeatherM >= 0
+                                         ? cfg.corridorFeatherM
+                                         : corridorBlendLive.load(std::memory_order_relaxed) / 10.0f;
+            mvr_corridor_feather_growth(static_cast<float>(cfg.corridorFeatherGrowthPct) * roadBlendM);  // far edges soft
+            mvr_corridor_coverage(corridorShowLive.load(std::memory_order_relaxed));  // Show Road focus area
             mvr_corridor_band(cfg.corridorBandPct > 0 ? cfg.corridorBandPct : 0, cfg.corridorBandPadPct);  // experiment
             if (cfg.corridorShow && cfg.corridorAb <= 0)  // show mode alone: tinted, never masked
                 mvr_corridor(true, true, roadHalfM, roadTallM, cfg.corridorStartM, cfg.corridorFarM,
-                             cfg.corridorEyeHeightM, true, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
+                             cfg.corridorEyeHeightM, true, cfg.corridorSlopeDeg, cfg.corridorCentreM, roadBlendM);
             else if (cfg.corridorAb <= 0)  // on every frame (masked, the periphery composed in), or off
                 mvr_corridor(roadOn, false, roadHalfM, roadTallM, cfg.corridorStartM, cfg.corridorFarM,
-                             cfg.corridorEyeHeightM, false, cfg.corridorSlopeDeg, cfg.corridorCentreM, cfg.corridorFeatherM);
+                             cfg.corridorEyeHeightM, false, cfg.corridorSlopeDeg, cfg.corridorCentreM, roadBlendM);
             if (cfg.corridorAb > 0) {  // the focus corridor this frame or not (between frames)
                 if (!corridorAbLogged) {
                     corridorAbLogged = true;
@@ -802,7 +811,7 @@ void mvr_before_pass(int p) {
                 corridorSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.corridorAb)) % 2);
                 mvr_corridor(true, corridorSide == 1, roadHalfM, roadTallM, cfg.corridorStartM,
                              cfg.corridorFarM, cfg.corridorEyeHeightM, cfg.corridorShow, cfg.corridorSlopeDeg,
-                             cfg.corridorCentreM, cfg.corridorFeatherM);
+                             cfg.corridorCentreM, roadBlendM);
                 mvr_frame_mode(corridorSide);
             }
             {  // the focus mask as last set (live)
@@ -1753,7 +1762,9 @@ void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned
     focusMaskMargin = marginTexels;
 }
 
-void qvfr_frame_set_corridor(bool on, int widthM, int heightDm) {
+void qvfr_frame_set_corridor(bool on, int widthM, int heightDm, int blendDm, bool show) {
+    corridorBlendLive.store(simqvfr::kFocusCorridorBlend.clamp(blendDm), std::memory_order_relaxed);
+    corridorShowLive.store(show, std::memory_order_relaxed);
     corridorHeightLive.store(simqvfr::kFocusCorridorHeight.clamp(heightDm), std::memory_order_relaxed);
     corridorLive.store(on, std::memory_order_relaxed);
     corridorWidthLive.store(simqvfr::kFocusCorridorWidth.clamp(widthM), std::memory_order_relaxed);

@@ -157,6 +157,7 @@ struct DlssPass {
     float focusKeepFeather = 0;
     ID3D11ShaderResourceView* focusStamps = nullptr;
     uint32_t focusStamp = 0;
+    bool focusKeepTint = false;  // what takes the eye's image tinted blue (the game's coverage view)
 };
 // Transparents that write depth (LMU's car glass: blended, depth written): through them DLSS would see the glass's
 // distance for the world behind it, and every pixel there would get the vector of a point half a metre away (the road

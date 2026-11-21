@@ -210,6 +210,7 @@ void activate(Ctl id, int option) {
     case kVisor:
     case kHelmetDetail:
     case kEyeOff:
+    case kCorridorPreset:
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kNrOrder:
@@ -370,6 +371,12 @@ void activate(Ctl id, int option) {
     case kCheekyMotionFix: app.s.cheeky.motionFix = !app.s.cheeky.motionFix; changed(); return;
     case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
     case kOutline: app.s.outline = !app.s.outline; changed(); return;
+    case kCorridorShow:
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+            app.s.corridorShow = !app.s.corridorShow;
+            changed();
+        }
+        return;
     case kCorridorOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
             // On: the cockpit's shape and size (the player's kept); off: the player's back (road_focus_shape.h).
@@ -377,8 +384,9 @@ void activate(Ctl id, int option) {
             // point under it: inside it).
             const RuntimeInfo& rt = app.runtime;
             const bool region = rt.quadViewsUsed && rt.quadFocusWidth > 1 && rt.quadFocusHeight > 1;
-            road_focus_switched(!app.s.corridor, app.s.shape, app.s.width, app.s.height, app.s.roadSaved,
-                                region ? rt.quadFocusWidth - 1 : 0, region ? rt.quadFocusHeight - 1 : 0);
+            road_focus_switched(!app.s.corridor, app.s.corridorPreset, app.s.shape, app.s.width, app.s.height,
+                                app.s.offset, app.s.roadSaved, region ? rt.quadFocusWidth - 1 : 0,
+                                region ? rt.quadFocusHeight - 1 : 0);
             app.s.corridor = !app.s.corridor;
             changed();
         }
@@ -515,6 +523,8 @@ bool space_control(Ctl id) {
     case kMode:
     case kOutline:
     case kCorridorOn:
+    case kCorridorPreset:
+    case kCorridorShow:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:

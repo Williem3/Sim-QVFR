@@ -95,7 +95,7 @@ struct QvfrFrameRun {
     // lmu_corridor=1: the corridor every frame (the focus views kept to it, the periphery composed into the rest);
     // lmu_corridor_feather_cm its blend at the edge.
     bool corridorOn = false;
-    float corridorFeatherM = 1;
+    float corridorFeatherM = -1;  // lmu_corridor_feather_cm; -1 (missing): the player's [quad] focus_corridor_blend
     // lmu_corridor_dlss_band_pct: DLSS on the focus views over that share of their rows, over the corridor's
     // (lmu_corridor_dlss_band_pad_pct kept about them); 0 or missing: off (an experiment: with the car kept the rows
     // that need it nearly fill the box).
@@ -104,6 +104,8 @@ struct QvfrFrameRun {
     int corridorCarCm = -1;
     // lmu_corridor_spread_deg: the corridor's widening with distance, degrees either side (bends stay inside).
     int corridorSpreadDeg = 15;
+    // lmu_corridor_feather_growth_pct: the corridor edge's blend grows by that percent of the distance (far edges soft).
+    int corridorFeatherGrowthPct = 3;
     float corridorHalfM = 0, corridorTallM = 0, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
     float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
@@ -152,7 +154,7 @@ void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned
 // Road focus ([quad] focus_corridor, focus_corridor_width; off with eye tracking), live: the focus views kept to the
 // corridor along the road and the player's car (mvr_pass.h mvr_corridor). The [experiment] lmu_corridor keys (on, A/B,
 // show mode, the DLSS band) win over it.
-void qvfr_frame_set_corridor(bool on, int widthM, int heightDm);
+void qvfr_frame_set_corridor(bool on, int widthM, int heightDm, int blendDm, bool show);
 // The part of the focus box the headset shows (GameAdapter::qvfr_set_focus_visible), live: the focus mask skips the rest.
 void qvfr_frame_set_focus_visible(const float (&visible)[4]);
 // The latest composed frame's record (the eyes' and focus views' tangents, unturned); false before the first.

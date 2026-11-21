@@ -170,9 +170,14 @@ struct Filled {
 float gCarM = 0;
 // The corridor's widening with distance (corridor_shader.h focus.w): the tangent of its angle either side; 0 straight.
 float gSpreadTan = 0;
+// The corridor edge's blend growing with distance (corridor_shader.h ground.w): metres more a metre away.
+float gFeatherGrowth = 0;
+// Show Road focus area (corridor_shader.h view.x): the fill's eye colour tinted.
+float gCoverage = 0;
 
 struct Rows {
     unsigned gpuTop = 0, gpuBottom = 0, mapTop = 0, mapBottom = 0;
+    unsigned blend = 0;  // the map's texels within the edge's blend (0 < margin < 1 blend width)
     bool read = false;
 } lastRows;
 
@@ -223,9 +228,9 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
         FAILED(d->CreateUnorderedAccessView(centreBuf.Get(), nullptr, &centreUav)) ||
         FAILED(d->CreateShaderResourceView(centreBuf.Get(), nullptr, &centreSrv)))
         return false;
-    float k[36] = {0, 0, kCW, kCH, kL, kR, kU, kD, kA, kB, kStart, kTall, 0, 1, 0, kEyeHeight,
-                   kHalf, 0, kCW, kCH, std::cos(35.0f * 3.14159265f / 180), 1.0f, kReach, 0,
-                   gCarM, kFeather, kFW, kFH, 0, 0, 0, gSpreadTan, 0, 0, 0, 0};
+    float k[40] = {0, 0, kCW, kCH, kL, kR, kU, kD, kA, kB, kStart, kTall, 0, 1, 0, kEyeHeight,
+                   kHalf, 0, kCW, kCH, std::cos(35.0f * 3.14159265f / 180), 1.0f, kReach, gFeatherGrowth,
+                   gCarM, kFeather, kFW, kFH, 0, 0, 0, gSpreadTan, 0, 0, 0, 0, gCoverage, 0, 0, 0};
     const uint32_t stamp = 7;  // the mask's stamp this pass (the fill finds its texels by it)
     std::memcpy(&k[30], &stamp, sizeof(stamp));
     c->UpdateSubresource(g.cb.Get(), 0, nullptr, k, 0, 0);
@@ -285,6 +290,7 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
                     if (!(h & 0x8000) && (h & 0x7fff)) {  // above 0 (a half's sign and magnitude)
                         top = (std::min)(top, static_cast<unsigned>(y));
                         bottom = (std::max)(bottom, static_cast<unsigned>(y) + 1);
+                        lastRows.blend += (h & 0x7fff) < 0x3c00 ? 1 : 0;  // below 1.0
                     }
                 }
             lastRows.mapTop = bottom ? top : 0;
@@ -468,7 +474,7 @@ int SIM_QVFR_TEST_MAIN() {
     d->CreateComputeShader(classifyCode->GetBufferPointer(), classifyCode->GetBufferSize(), nullptr, &g.classify);
     d->CreateComputeShader(marginCode->GetBufferPointer(), marginCode->GetBufferSize(), nullptr, &g.margin);
     d->CreateComputeShader(centreCode->GetBufferPointer(), centreCode->GetBufferSize(), nullptr, &g.centre);
-    const D3D11_BUFFER_DESC cbDesc = {36 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC cbDesc = {40 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     d->CreateBuffer(&cbDesc, nullptr, &g.cb);
     D3D11_RASTERIZER_DESC rs{};
     rs.FillMode = D3D11_FILL_SOLID;
@@ -499,7 +505,7 @@ int SIM_QVFR_TEST_MAIN() {
         d->CreateShaderResourceView(eyeTex.Get(), nullptr, &eyeSrv);
         d->CreateTexture2D(&outDesc, nullptr, &outTex);
         d->CreateRenderTargetView(outTex.Get(), nullptr, &outRtv);
-        float k[36] = {kBX, kBY, kCW, kCH};
+        float k[40] = {kBX, kBY, kCW, kCH};
         k[18] = kCW;  // the copy's size: the box's own texels (no focus view: fill.z 0)
         k[19] = kCH;
         ID3D11DeviceContext* c = g.context.Get();
@@ -602,6 +608,23 @@ int SIM_QVFR_TEST_MAIN() {
         check(carDash > 0.95 && carSky == 0 && carWalls < 0.03,
               "flat road, the car kept: the dash kept, the sky and the walls' upper parts still not");
     }
+    // 1a. The edge's blend growing with distance: more of the map within the blend, the corridor itself the same.
+    {
+        const Scene flat{[](float, float) { return 0.0f; }, {{false, -12, 0, 3000, 8}, {false, 12, 0, 3000, 8}}};
+        check(run_scene(g, flat, masked, centre, hits), "blend, fixed: through the pipeline");
+        const Rows fixedRows = lastRows;
+        gFeatherGrowth = 0.03f;
+        check(run_scene(g, flat, masked, centre, hits), "blend, growing: through the pipeline");
+        gFeatherGrowth = 0;
+        std::printf("     blend: %u texels within the edge's blend fixed at 1 m, %u growing 3%% with distance; rows %u-%u, %u-%u\n",
+                    fixedRows.blend, lastRows.blend, fixedRows.mapTop, fixedRows.mapBottom, lastRows.mapTop,
+                    lastRows.mapBottom);
+        // (Only the real edges widen: the road surface stays out of the blend, checked with the fill below. A first
+        // version let the far road itself slide into the blend: 4.8 times the texels here, a blurred far road in game.)
+        check(lastRows.blend > fixedRows.blend && lastRows.blend < fixedRows.blend * 2 && lastRows.mapTop == fixedRows.mapTop &&
+                  lastRows.mapBottom == fixedRows.mapBottom,
+              "blend: wider far away with the growth (its edges only), the corridor's rows the same");
+    }
     // 1b. A bend: the ground's road leaving the head's line to the right past 40 m (25 m across at 100 m), a 20 m tall wall
     // across at 200 m. Straight, the far road falls outside; widening 15 degrees with distance, it stays in, the wall's
     // upper part still out.
@@ -700,6 +723,49 @@ int SIM_QVFR_TEST_MAIN() {
         check(deepN > 0 && deepRed >= deepN * 0.99, "fill: the focus view kept deep inside the corridor");
         check(edgeN > 0 && edgeMixed >= edgeN * 0.9, "fill: a blend within the feather of the corridor's edge");
         check(junk == 0, "fill: nothing but the two views and their blends");
+        // The edge's blend growing with distance: the road far ahead, well inside the corridor's sides and top, stays the
+        // focus view's (the road surface itself is a metre over the corridor's floor: that bound keeps the near blend).
+        Filled grown;
+        gFeatherGrowth = 0.03f;
+        check(run_scene(g, flat, masked, centre, hits, &grown), "fill, the blend growing: through the pipeline");
+        gFeatherGrowth = 0;
+        int farN = 0, farRed = 0;
+        for (UINT y = 0; y < kFH; ++y)
+            for (UINT x = 0; x < kFW; ++x) {
+                const size_t i = y * kFW + x;
+                const Hit& h = hits[i];
+                if (masked[i] || h.what != 1 || h.z < 30)
+                    continue;
+                const float blend = kFeather + 0.03f * std::sqrt(h.x * h.x + h.y * h.y + h.z * h.z);
+                const float m = (std::min)(kHalf - std::fabs(h.x), kTall - (h.y + kEyeHeight));
+                if (m > blend + 0.5f) {
+                    ++farN;
+                    farRed += grown.colour[4 * i] > 0.99f ? 1 : 0;
+                }
+            }
+        std::printf("     fill, the blend growing: the road 30 m and further, inside the grown blend, the focus view's %d / %d\n",
+                    farRed, farN);
+        check(farN > 0 && farRed >= farN * 0.99, "fill, the blend growing: the far road stays the focus view's");
+        // Show Road focus area: the masked texels take the eye's colour tinted (green 1 x 0.4), the corridor as ever.
+        Filled tinted;
+        gCoverage = 1;
+        check(run_scene(g, flat, masked, centre, hits, &tinted), "fill, the coverage shown: through the pipeline");
+        gCoverage = 0;
+        int tintN = 0, tintOk = 0, keptN = 0, keptRed = 0;
+        for (size_t i = 0; i < hits.size(); ++i) {
+            const float r = tinted.colour[4 * i], gr = tinted.colour[4 * i + 1];
+            if (masked[i]) {
+                ++tintN;
+                tintOk += std::fabs(gr - 0.4f) < 0.01f && r < 0.01f ? 1 : 0;
+            } else if (r > 0.99f) {
+                ++keptRed;
+            }
+            keptN += masked[i] ? 0 : 1;
+        }
+        std::printf("     fill, the coverage shown: masked texels tinted %d / %d; kept texels red %d / %d\n", tintOk, tintN,
+                    keptRed, keptN);
+        check(tintN > 0 && tintOk == tintN && keptRed > keptN / 2,
+              "fill, the coverage shown: what comes from the periphery tinted, the corridor the focus view's");
     }
     return test_result();
 }

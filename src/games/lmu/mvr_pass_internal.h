@@ -560,7 +560,9 @@ struct State {
         bool show = false;   // lmu_corridor_show: what's outside it tinted in the focus view, at the copy (this frame)
         float halfM = 10, tallM = 3.5f, startM = 3, farM = 0, eyeHeightM = 1.3f;
         float roadSlopeDeg = 35, centreReachM = 6;  // the steepest surface taken as road; how far the centre may move
-        float featherM = 1;  // the fill's blend at the corridor's edge, metres inside it
+        float featherM = 1;  // the fill's blend at the corridor's edge, metres inside it (near)
+        bool coverage = false;  // Show Road focus area: what it takes from the periphery tinted (mvr_corridor_coverage)
+        float featherGrowth = 0.03f;  // and its growth with distance: metres more a metre away (mvr_corridor_feather_growth)
         float carM = 3;      // the car kept sharp: whatever lies nearer than this, metres (0: none; mvr_corridor_car)
         // The corridor's widening with distance, degrees either side (mvr_corridor_spread; -1: not set yet, logged when set).
         float spreadDeg = -1;

@@ -12,7 +12,7 @@
 #pragma once
 
 // The shaders: corridor_shader.h (kCorridorShaders); their constant buffer's floats.
-constexpr int kCorridorConstants = 36;
+constexpr int kCorridorConstants = 40;
 
 bool corridor_resources(ID3D11DeviceContext* context) {
     auto& c = g.corridor;
@@ -164,11 +164,12 @@ bool corridor_constants(int p, float (&k)[kCorridorConstants], float (&upV)[3]) 
                                           static_cast<float>(a), static_cast<float>(bTerm), c.startM, c.tallM,
                                           upV[0], upV[1], upV[2], c.eyeHeightM,
                                           c.halfM, c.farM, static_cast<float>(t.w), static_cast<float>(t.h),
-                                          slopeCos, 0.1f, c.centreReachM, 0,
+                                          slopeCos, 0.1f, c.centreReachM, c.featherGrowth,
                                           c.carM, c.featherM, static_cast<float>(t.fw), static_cast<float>(t.fh),
                                           g.appliedVps[1].TopLeftX, g.appliedVps[1].TopLeftY, 0,
                                           static_cast<float>(std::tan(std::clamp(c.spreadDeg, 0.0f, 60.0f) * 3.14159265 / 180)),
-                                          0, 0, 0, 0};
+                                          0, 0, 0, 0,
+                                          c.coverage ? 1.0f : 0.0f, 0, 0, 0};
     std::memcpy(k, k2, sizeof(k2));
     // The stamp the fill looks for: this pass's if its mask ran, else one no texel holds yet (the next).
     const uint32_t stamp = c.maskedThisPass[p] ? c.stamp[p] : c.stamp[p] + 1;
@@ -352,7 +353,8 @@ bool corridor_keep(int p, simqvfr::DlssPass& dp) {
     dp.focusKeep = t.marginSrv.Get();
     dp.focusKeepWidth = t.w;
     dp.focusKeepHeight = t.h;
-    dp.focusKeepFeather = c.featherM;
+    dp.focusKeepFeather = 1;  // the map's margin is in blend widths already (corridor_shader.h corridor_margin)
+    dp.focusKeepTint = c.coverage;  // Show Road focus area: the eye's image tinted where it stands in
     dp.focusStamps = t.stampsSrv.Get();
     dp.focusStamp = c.fillStamp[p];
     return true;

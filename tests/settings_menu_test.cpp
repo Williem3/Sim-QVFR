@@ -1508,20 +1508,34 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         go(r, MenuPage::Foveation);
         check(!has(r, MenuItem::FocusCorridor), "road focus: not on the Foveation page of a game without it");
         r.launch.focusCorridor = true;
-        check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
+        check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::FocusCorridorPreset) &&
+                  at(r, MenuItem::FocusCorridorPreset) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
+                  line_of(r, MenuItem::FocusCorridorPreset).value == L"Preset A" &&
                   at(r, MenuItem::FocusCorridorWidth) + 1 == at(r, MenuItem::FocusCorridorHeight) &&
-                  at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::Outline) &&
+                  at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::FocusCorridorBlend) &&
+                  at(r, MenuItem::FocusCorridorBlend) + 1 == at(r, MenuItem::FocusCorridorShow) &&
+                  at(r, MenuItem::FocusCorridorShow) + 1 == at(r, MenuItem::Outline) &&
+                  line_of(r, MenuItem::FocusCorridorBlend).value == L"1.0 m" &&
+                  line_of(r, MenuItem::FocusCorridorShow).value == L"Off" &&
                   line_of(r, MenuItem::FocusCorridorHeight).label == L"Road height" &&
                   line_of(r, MenuItem::FocusCorridorHeight).value == L"3.5 m" &&
                   line_of(r, MenuItem::FocusCorridor).label == L"Road focus" &&
                   line_of(r, MenuItem::FocusCorridor).value == L"On" &&
                   line_of(r, MenuItem::FocusCorridorWidth).label == L"Road width" &&
                   line_of(r, MenuItem::FocusCorridorWidth).value == L"10 m",
-              "road focus: on by default, its width (10 m) and height (3.5 m) under it, before the outline");
+              "road focus: on by default, its preset (A), width (10 m) and height (3.5 m) under it, before the outline");
         r.launch.ownDlss = true;
         r.values.dlss.on = true;
-        check(at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::Outline),
+        check(at(r, MenuItem::FocusCorridorShow) + 1 == at(r, MenuItem::Outline),
               "road focus: no DLSS band line, with Sim-QVFR's DLSS on too");
+        pick(r, MenuItem::FocusCorridorBlend);
+        check(menu_key(r, MenuKey::Left) && r.values.focusCorridorBlend == 5 &&
+                  line_of(r, MenuItem::FocusCorridorBlend).value == L"0.5 m",
+              "road edge blend: half a metre a step");
+        pick(r, MenuItem::FocusCorridorShow);
+        check(menu_key(r, MenuKey::Right) && r.values.focusCorridorShow, "show road focus area: switches on");
+        r.values.focusCorridorBlend = kFocusCorridorBlend.def;
+        r.values.focusCorridorShow = false;
         r.values.eyeTracking = true;
         check(!has(r, MenuItem::FocusCorridor) && !has(r, MenuItem::FocusCorridorWidth),
               "road focus: hidden while the focus follows the eyes");
@@ -1542,8 +1556,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(r.values.focusCorridorHeight == 20, "road height: down to 2 m");
         pick(r, MenuItem::FocusCorridor);
         check(menu_key(r, MenuKey::Right) && !r.values.focusCorridor && !has(r, MenuItem::FocusCorridorWidth) &&
-                  !has(r, MenuItem::FocusCorridorHeight),
-              "road focus: off, its width and height hidden");
+                  !has(r, MenuItem::FocusCorridorHeight) && !has(r, MenuItem::FocusCorridorPreset),
+              "road focus: off, its preset, width and height hidden");
         {  // On: the cockpit's shape and size, the player's kept; off: theirs back.
             const FocusShape own = focus_shape_of({{-50, 40}, {50, 40}, {40, -50}, {-40, -50}});
             r.values.shape = own;
@@ -1566,6 +1580,23 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             check(!r.values.focusCorridor && r.values.shape == own && r.values.width == 44 && r.values.height == 38 &&
                       !r.values.roadSaved.have,
                   "road focus off: the player's own shape and size back");
+            {  // Preset B: picked while on, set at once (smaller, 8 degrees down); off, the player's own place back
+                r.values.offset.fixed = 3;
+                pick(r, MenuItem::FocusCorridor);
+                menu_key(r, MenuKey::Right);  // on, preset A
+                pick(r, MenuItem::FocusCorridorPreset);
+                check(menu_key(r, MenuKey::Right) && r.values.focusCorridorPreset == 1 && r.values.width == 46 &&
+                          r.values.height == 43 && r.values.offset.fixed == -8 &&
+                          line_of(r, MenuItem::FocusCorridorPreset).value == L"Preset B",
+                      "road focus preset B: picked while on, its size and place set at once");
+                check(!menu_key(r, MenuKey::Right), "road focus preset: B the last");
+                pick(r, MenuItem::FocusCorridor);
+                menu_key(r, MenuKey::Right);  // off
+                check(r.values.shape == own && r.values.width == 44 && r.values.height == 38 && r.values.offset.fixed == 3,
+                      "road focus off after preset B: the player's own shape, size and place back");
+                r.values.focusCorridorPreset = 0;
+                r.values.offset.fixed = 0;
+            }
             r.launch.runtimeFocusWidth = 46;  // native quad views: the runtime's focus region
             r.launch.runtimeFocusHeight = 52;
             pick(r, MenuItem::FocusCorridor);

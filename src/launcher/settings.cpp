@@ -66,6 +66,9 @@ Settings load_settings(const std::wstring& ini) {
     s.roadSaved = read_road_focus_saved(f);
     s.corridorWidth = ini_int(f, kFocusCorridorWidth);
     s.corridorHeight = ini_int(f, kFocusCorridorHeight);
+    s.corridorPreset = ini_int(f, kFocusCorridorPreset);
+    s.corridorBlend = ini_int(f, kFocusCorridorBlend);
+    s.corridorShow = ini_flag(f, kFocusCorridorShow);
     s.eyeTracking = ini_flag(f, kGaze);
     s.offset = read_focus_offset(f);
     s.gazeDeadzone = read_gaze_deadzone(f);
@@ -213,6 +216,9 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write_road_focus_saved(ini.c_str(), s.roadSaved);
         ok &= write(ini, kFocusCorridorWidth, n(kFocusCorridorWidth.clamp(s.corridorWidth)));
         ok &= write(ini, kFocusCorridorHeight, n(kFocusCorridorHeight.clamp(s.corridorHeight)));
+        ok &= write(ini, kFocusCorridorPreset, n(kFocusCorridorPreset.clamp(s.corridorPreset)));
+        ok &= write(ini, kFocusCorridorBlend, n(kFocusCorridorBlend.clamp(s.corridorBlend)));
+        ok &= write(ini, kFocusCorridorShow, s.corridorShow ? L"1" : L"0");
     }
     ok &= write(ini, kFocusPercent, n(s.width));
     ok &= write(ini, kFocusHeightPercent, n(s.height));

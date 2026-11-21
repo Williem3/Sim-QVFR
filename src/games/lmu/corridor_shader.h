@@ -10,7 +10,7 @@
 // tinted blue by multiplying, the same in sunlight and shade); copy_colour_ms / copy_colour_ss (the eye's colour over
 // the box), fill_outside_main and fill_edge_main (the eye's colour and depth into the focus view outside the corridor,
 // blended within the feather of its edge: the periphery composed into the focus view in the game's own frame).
-// Constant buffer b0, 32 floats (see the source).
+// Constant buffer b0, 40 floats (see the source).
 // Its own header so tests/lmu_corridor_test.cpp runs the same source on WARP.
 //
 // The corridor follows the terrain: a point is in it when it lies ahead of the start, within the half width of the
@@ -30,14 +30,19 @@ cbuffer Corridor : register(b0) {
     float4 terms;   // depth = x + y / z (the depth target's own convention); z: the corridor's start (m), w: its height
     float4 up;      // the world's up in the eye's view space (x right, y up, z ahead), w: the eye's height above the road
     float4 extent;  // x: half width (m), y: far end (m, 0 none), zw: the copy's size
-    float4 ground;  // x: cos of the steepest slope taken as road, y: the centre's smoothing (0..1 a pass), z: its reach (m)
+    float4 ground;  // x: cos of the steepest slope taken as road, y: the centre's smoothing (0..1 a pass), z: its reach (m),
+                    // w: the edge's blend growing with distance (metres more a metre away; fill.y the blend near)
     float4 fill;    // x: the car kept: whatever lies nearer than this (m; 0 none), y: the feather (m), zw: the focus view's size
     float4 focus;   // xy: the focus viewport's corner in the target (texels), z: this pass's mask stamp (its bits), w: the
                     // corridor's widening with distance past its start (the tangent of its angle either side; 0 straight)
     // The mask's read of the last pass's margin map where the box was then (the box follows the gaze): uv there = uv now
     // x xy + zw (0, 0: the same box).
     float4 shift;
+    float4 view;    // x: 1 the coverage shown (Show Road focus area): what the fill takes from the periphery tinted
 };
+// The coverage's tint (multiplied: the periphery's colour, shown blue), as show mode's and the DLSS composition's.
+static const float3 kCoverageTint = float3(0.25, 0.4, 1.0);
+float3 coverage(float3 c) { return view.x > 0 ? c * kCoverageTint : c; }
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V vs_main(uint id : SV_VertexID) {
     V v;
@@ -170,9 +175,10 @@ void centre_main() {
         centreOut[0] = lerp(centreOut[0], clamp(sum / count, -ground.z, ground.z), ground.y);
 }
 
-// How far inside the corridor the focus texel at `uv` (0..1 across the focus viewport) lies, in metres: the least of its
-// margins (past the start, inside the half width of the road's centre, above 1 m below its road, below the corridor's
-// top, before the far end); negative outside.
+// How far inside the corridor the focus texel at `uv` (0..1 across the focus viewport) lies, in widths of the edge's
+// blend there: the least of its margins in metres (past the start, inside the half width of the road's centre, above
+// 1 m below its road, below the corridor's top, before the far end) over the blend's width at its distance (fill.y,
+// growing by ground.w a metre: soft far away, where a metre is a pixel or two); negative outside, 0..1 the blend.
 float corridor_margin(float2 uv) {
     const int2 at = min(int2(uv * extent.zw), int2(extent.zw) - 1);
     const float3 p = point_at(at);
@@ -185,11 +191,16 @@ float corridor_margin(float2 uv) {
     // Its half width: the road width near, opening by focus.w's angle further out, so a bend (the road leaving the
     // head's straight line far ahead: Eau Rouge, a hairpin, the pit exit) stays inside; far things are small on screen.
     const float half = extent.x + max(ahead - terms.z, 0) * focus.w;
-    float m = min(min(ahead - terms.z, half - across), min(above + 1, terms.w - above));
+    // The blend's width here: fill.y near, growing by ground.w a metre away (far edges fade over a few degrees).
+    const float blend = max(fill.y + ground.w * length(p), 1e-3);
+    float m = min(min(ahead - terms.z, half - across), terms.w - above) / blend;
     if (extent.y > 0)
-        m = min(m, extent.y - ahead);
+        m = min(m, (extent.y - ahead) / blend);
+    // Below: the road surface itself lies just inside (a metre over its floor), so that bound keeps the near blend
+    // (grown, the road far ahead would sit inside the blend and fade toward the periphery: the 2026-11-20 run).
+    m = min(m, (above + 1) / max(fill.y, 1e-3));
     if (fill.x > 0)  // the car (cockpit, mirrors, bonnet) kept too: whatever lies nearer than fill.x
-        m = max(m, fill.x - length(p));
+        m = max(m, (fill.x - length(p)) / max(fill.y, 1e-3));
     return m;
 }
 // The margin map (margin_main, once a pass after the road pass): corridor_margin at every copy texel, held within
@@ -257,15 +268,15 @@ Filled fill_outside_main(V v) {
     if (!masked_at(v.pos) && margin_at(v.uv) > 0)
         discard;
     Filled f;
-    f.colour = float4(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb, 1);
+    f.colour = float4(coverage(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb), 1);
     f.depth = eyeDepth.Load(int3(min(int2(v.uv * extent.zw), int2(extent.zw) - 1), 0));
     return f;
 }
 float4 fill_edge_main(V v) : SV_Target {
     const float margin = margin_at(v.uv);
-    if (margin <= 0 || margin >= fill.y || masked_at(v.pos))
+    if (margin <= 0 || margin >= 1 || masked_at(v.pos))  // (the margin in blend widths: 0..1 the blend)
         discard;
-    return float4(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb, 1 - margin / max(fill.y, 1e-3));
+    return float4(coverage(eyeColour.SampleLevel(linearClamp, v.uv, 0).rgb), 1 - margin);
 }
 )";
 

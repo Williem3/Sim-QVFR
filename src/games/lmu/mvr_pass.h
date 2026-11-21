@@ -152,6 +152,12 @@ void mvr_corridor_car(float metres);
 // The corridor's widening with distance: past its start its half width grows by tan(`degrees`) a metre ahead, so the road
 // stays inside where it bends away from the head's line far ahead (0: a straight band). Between frames.
 void mvr_corridor_spread(float degrees);
+// The corridor edge's blend growing with distance: `percent` of a point's distance added to the near blend (featherM),
+// so the far edge fades over a few degrees instead of a pixel or two. Between frames.
+void mvr_corridor_feather_growth(float percent);
+// Show Road focus area: what the corridor takes from the periphery tinted blue in the focus views (the fill's and, with
+// DLSS, the composition's after it), everything else as ever. Between frames.
+void mvr_corridor_coverage(bool show);
 // R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
 // right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
 // elsewhere with mvr_redraw_panel. Null: none.
