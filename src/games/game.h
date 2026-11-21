@@ -49,6 +49,9 @@ struct GameFeatures {
     // views render only a corridor along the road ahead and the player's car, with fixed foveation. Offered in the
     // launcher and the headset menu only with this (and fixed foveation).
     bool focusCorridor = false;
+    // The GPU regulator ([regulator], quad/regulator_settings.h, live): the game renders QVFR itself and the layer times its eye
+    // passes, so it can take Periphery and Focus density down while frames run over a GPU time limit (rFactor 2).
+    bool gpuRegulator = false;
 };
 
 // How the layer offers the game its QVFR views (GameAdapter::qvfr_eye_columns, qvfr_one_view_size, qvfr_separate_views,

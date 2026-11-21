@@ -18,6 +18,7 @@ struct ID3D11Texture2D;
 
 namespace simqvfr {
 
+struct GpuRegulatorSettings;  // quad/regulator_settings.h
 // What one game frame's views were rendered with, recorded when the game fills the focus cameras: per
 // eye the outer view's tangents (left, right, up, down; read back from the game's own eye projection, so
 // they hold whatever FOV it used), the focus view's tangents, and the focus camera's turn (in the eye's
@@ -55,6 +56,16 @@ struct QvfrStart {
 // eyesOnly: the multi-view path is on but no focus views are being made (the eyes alone, at full resolution).
 enum class QvfrMultiView { none, nvidia, software, fallback, eyesOnly };
 
+// A measure_only game's GPU regulator as it stands now (the overlay's row): the views' sizes the regulator has brought the
+// set ones down to, as shares of the native eye (periphery) and of its pixel density (focus), and by how many percentage
+// points. `active` false: no regulator running.
+struct QvfrRegulatorStatus {
+    bool active = false;
+    bool periphery = false, focus = false;  // the axes it regulates
+    double peripheryPercent = 0, densityPercent = 0;
+    int cutPeriphery = 0, cutDensity = 0;
+};
+
 class GameAdapter {
 public:
     virtual ~GameAdapter() = default;
@@ -62,6 +73,38 @@ public:
     // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
     // as mode=off, and puts nothing of its own into the game or the headset.
     virtual bool has_qvfr() const { return true; }
+    // True: the game renders QVFR itself in its own D3D11 pass (RF2), and the layer only adds its measurement: the
+    // performance overlay and the reports, as mode=off with measure=1. The game gets the runtime's own eye size, and
+    // none of the layer's views4 or quad methods (which resize the eyes and compose) start, whatever the ini says.
+    virtual bool measure_only() const { return false; }
+
+    // A measure_only game's GPU regulator ([regulator], quad/regulator_settings.h; at the start and live): it lowers the
+    // periphery and/or the focus density a percent at a time while the GPU time per frame runs over its limit, and back up
+    // while it runs under. `density`: the set focus density as a share (1.0 = 100%).
+    virtual void qvfr_set_regulator(const GpuRegulatorSettings& settings, double density) {
+        (void)settings;
+        (void)density;
+    }
+
+    // A measure_only game's view sizes as shares of the native eye ([experiment] periphery_scale, focus_density; the
+    // focus box's share applied), at the start and live.
+    virtual void qvfr_set_density(double peripheryScale, double focusWidth, double focusHeight) {
+        (void)peripheryScale;
+        (void)focusWidth;
+        (void)focusHeight;
+    }
+
+    // A measure_only game's focus area look and place ([quad] feather_percent, corner_radius_percent, debug_border and its
+    // colour, and the box's vertical offset in degrees, up positive; the ini's fixed_offset_y or gaze_offset_y by gaze),
+    // at the start and live.
+    virtual void qvfr_set_focus_look(double feather, double cornerRadius, bool outline,
+                                     const float (&outlineColor)[4], double offsetDegrees) {
+        (void)feather;
+        (void)cornerRadius;
+        (void)outline;
+        (void)outlineColor;
+        (void)offsetDegrees;
+    }
     // xrEnumerateViewConfigurationViews (stereo): the size each eye's view was offered to the game, after the layer's
     // own change to it (LMU: its eye targets' size, on any game build).
     virtual void views_offered(uint32_t width, uint32_t height) {
@@ -187,6 +230,24 @@ public:
         (void)image;
         (void)rects;
     }
+    // The untouched stereo projection layer presented by the game at xrEndFrame, before QVFR rewrites it.
+    // OpenVR/OpenComposite games use this as the authoritative eye/sub-image submission boundary.
+    virtual void qvfr_note_projection(const XrCompositionLayerProjection* projection) {
+        (void)projection;
+    }
+
+    // D3D11 images exposed by an application swapchain and the image index acquired for rendering.
+    virtual void qvfr_note_swapchain_images(XrSwapchain swapchain,
+                                            const XrSwapchainImageD3D11KHR* images, uint32_t count) {
+        (void)swapchain;
+        (void)images;
+        (void)count;
+    }
+
+    virtual void qvfr_note_swapchain_acquired(XrSwapchain swapchain, uint32_t index) {
+        (void)swapchain;
+        (void)index;
+    }
     // The views the game just located (diagnostics; LMU: the FOV its lens mask is built with).
     virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
     // The game's stereo views as it is about to get them, after everything the layer reads from them: a game whose
@@ -210,6 +271,9 @@ public:
         (void)cpuMs;
         return false;
     }
+
+    // The GPU regulator's present state (the overlay's row). Any thread.
+    virtual QvfrRegulatorStatus qvfr_regulator_status() const { return {}; }
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
     // The layer was loaded at the game's first vkCreateInstance (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain,

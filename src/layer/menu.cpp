@@ -218,6 +218,7 @@ void menu_open(int64_t now) {
             menu.model.launch.qvfr = true;
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
+        menu.model.launch.selfRendered = game && game->measure_only();  // RF2: the game renders QVFR, the menu steers it
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
         menu.model.launch.cropPage = features.fovCrop;
         menu.model.launch.helmetPage = features.helmet;
@@ -244,6 +245,12 @@ void menu_open(int64_t now) {
             menu.model.launch.shapePage = false;
             menu.model.launch.optimize = false;
             menu.model.launch.cornerFit = true;  // the sizes in effect by the SCS corner's rule (quad/corner_fit.h)
+        }
+        if (menu.model.launch.selfRendered) {  // RF2: no view crop, helmet, focus shape or optimizer
+            menu.model.launch.cropPage = false;
+            menu.model.launch.helmetPage = false;
+            menu.model.launch.shapePage = false;
+            menu.model.launch.optimize = false;
         }
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
@@ -325,8 +332,9 @@ void menu_press(MenuKey key, int64_t now) {
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
                      eyeOff = menu.model.launch.eyeOff, carLighting = menu.model.launch.carLighting,
                      corridor = menu.model.launch.focusCorridor,
+                     selfRendered = menu.model.launch.selfRendered,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, selfRendered);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -335,7 +343,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, selfRendered);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)

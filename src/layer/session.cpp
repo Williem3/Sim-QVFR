@@ -127,7 +127,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR) {
             ID3D11Device* device = reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device;
             d3d11_capture_start(device, experiment.d3d11CaptureFrame);
-            if (experiment.views4ComposeD3D11 || game->observes_d3d11())
+            if (experiment.views4ComposeD3D11 || game->observes_d3d11() || game->measure_only())
                 game->d3d11_session(device);
             cheeky_session_d3d11(device);  // when Cheeky runs in this game (loads_cheeky)
             if (experiment.views4 || experiment.measure) {  // as D3D12 below: the overlay's GPU split and busiest thread
@@ -528,6 +528,12 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
 XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* countOutput,
                                                   XrSwapchainImageBaseHeader* images) {
     XrResult r = next.EnumerateSwapchainImages(swapchain, capacity, countOutput, images);
+    if (XR_SUCCEEDED(r) && capacity > 0 && countOutput && images &&
+        images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR && game) {
+        game->qvfr_note_swapchain_images(
+            swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
+            std::min(*countOutput, capacity));
+    }
     if (XR_SUCCEEDED(r) && capacity > 0 && images && images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR &&
         experiment.d3d11CaptureFrame)
         d3d11_capture_images(swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
@@ -578,6 +584,8 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
     if (XR_SUCCEEDED(r))
         game->swapchain_acquired(swapchain, *index, next.EnumerateSwapchainImages);
+    if (XR_SUCCEEDED(r) && index && game)
+        game->qvfr_note_swapchain_acquired(swapchain, *index);
     if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
         d3d11_capture_acquired(swapchain, *index);
     if (XR_SUCCEEDED(r) && v4d3d11_tracks_chains()) {

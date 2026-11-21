@@ -391,6 +391,8 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kRegFocus: app.s.regulator.focus = !app.s.regulator.focus; changed(); return;
+    case kRegPeriphery: app.s.regulator.periphery = !app.s.regulator.periphery; changed(); return;
     case kGradeOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
@@ -525,6 +527,8 @@ bool space_control(Ctl id) {
     case kCorridorOn:
     case kCorridorPreset:
     case kCorridorShow:
+    case kRegFocus:
+    case kRegPeriphery:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:

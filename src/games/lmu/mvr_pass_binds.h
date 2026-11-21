@@ -131,6 +131,8 @@ void without_slot(UINT& n, ID3D11RenderTargetView* const*& rtvs, ID3D11RenderTar
 
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
+    if (g.rf2Policy)
+        rf2.note_target_bind(context, g.context, g.replaying, n, rtvs, dsv);
     ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
     if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
         without_slot(n, rtvs, own);
@@ -183,6 +185,8 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
                                                       ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv,
                                                       UINT uavStart, UINT uavCount,
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    if (g.rf2Policy)
+        rf2.note_target_bind(context, g.context, g.replaying, n, rtvs, dsv);
     ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
     if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
         without_slot(n, rtvs, own);
@@ -397,6 +401,8 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
 
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
+    if (g.rf2Policy)
+        rf2.note_resolve(context, g.context, g.replaying, src);
     if (pt.recording && context == g.context && !g.replaying) {
         const std::string from = pt_tex(src), to = pt_tex(dst);
         pt_event("R %s > %s, %s", from.c_str(), to.c_str(),
@@ -452,6 +458,8 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         return;
     }
     realResolveSubresource(context, dst, dstSub, src, srcSub, format);
+    if (g.rf2Policy)
+        rf2.note_resolved(context, g.context, g.replaying, dst, dstSub, src);
     if (!multisample)
         return;
     ++g.stats.resolves;

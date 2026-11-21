@@ -93,6 +93,11 @@ struct OsdInput {
     uint64_t vramUsed = 0, vramBudget = 0;  // bytes, 0: unknown
     OsdMultiView multiView = OsdMultiView::None;
     bool dlss = false;  // DLSS evaluated views since the card was last drawn (said beside the multi-view badge)
+    // A game's GPU regulator (RF2): the periphery and the focus density it has brought the set ones down to (percent), and by
+    // how many percentage points. While it runs, its row takes the render thread's place.
+    bool regulatorOn = false, regulatorPeriphery = false, regulatorFocus = false;
+    double regulatorPeripheryPercent = 0, regulatorDensityPercent = 0;
+    int regulatorCutPeriphery = 0, regulatorCutDensity = 0;
     std::wstring upscaler = L"DLSS";  // what evaluated them: "DLSS", "FSR4", "FSR3.1" (engine/dlss_views.h)
     // Night car lighting's cost per frame (games/adapter.h qvfr_car_light_costs), -1 unknown: shown in frame
     // generation's cell while frame generation is off (a game with it has no Cheeky: LMU).

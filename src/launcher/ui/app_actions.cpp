@@ -357,6 +357,10 @@ int* slider_value(Ctl id) {
     case kFocusOffset: return &app.s.offset.for_mode(app.s.eyeTracking);
     case kFocusOffsetX: return &app.s.offset.for_mode_x(app.s.eyeTracking);
     case kGazeDeadzone: return &app.s.gazeDeadzone;
+    case kRegDecrease: return &app.s.regulator.decreaseAbove;
+    case kRegIncrease: return &app.s.regulator.increaseBelow;
+    case kRegLowerFrames: return &app.s.regulator.lowerFrames;
+    case kRegRaiseFrames: return &app.s.regulator.raiseFrames;
     case kShapePointY:
     case kShapePointX: {  // the picked point of the custom shape, or the whole shape's middle (shape_slider_set)
         app.shapePoint = std::clamp(app.shapePoint, kFocusWholeShape, std::clamp(app.s.shape.count, 1, kFocusPointsMax) - 1);
@@ -427,6 +431,10 @@ Range slider_range(Ctl id) {
     case kFocusOffset:
     case kFocusOffsetX: return kFocusOffsetRange;
     case kGazeDeadzone: return kGazeDeadzoneRange;
+    case kRegDecrease:
+    case kRegIncrease: return kRegulatorMsRange;
+    case kRegLowerFrames: return kRegulatorLowerFramesRange;
+    case kRegRaiseFrames: return kRegulatorRaiseFramesRange;
     case kShapePointY:
     case kShapePointX: return kFocusPointRange;
     case kMenuYaw: return kMenuYawRange;

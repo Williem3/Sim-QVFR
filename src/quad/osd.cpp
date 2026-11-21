@@ -335,7 +335,15 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         }
         rows.push_back(r);
     }
-    {
+    if (in.regulatorOn) {
+        // The views' sizes now, periphery then focus density ("off": that axis isn't regulated); yellow while below the set ones.
+        OsdRow r{L"Regulator (periph · focus)"};
+        const auto axis = [](bool on, double percent) { return on ? format(L"%.0f%%", percent) : std::wstring(L"off"); };
+        r.value = axis(in.regulatorPeriphery, in.regulatorPeripheryPercent) + L" · " +
+                  axis(in.regulatorFocus, in.regulatorDensityPercent);
+        r.tone = in.regulatorCutPeriphery > 0 || in.regulatorCutDensity > 0 ? OsdTone::Warn : OsdTone::Good;
+        rows.push_back(r);
+    } else {
         OsdRow r{lang::tr(L"Render thread")};
         r.value = s.cpuBusyMs >= 0 ? lang::trf(L"{busy} busy · {blocked} blocked",
                                                {{L"busy", format(L"%.1f", s.cpuBusyMs)},
