@@ -11,6 +11,8 @@
 // Usage: sim-qvfr-launcher               the settings window (window.cpp)
 //        sim-qvfr-launcher --launch      launch now, report on the console it was started from
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
+//        sim-qvfr-launcher -lmu          launch that game now (-<id>: the folder name in src/games: -lmu, -acc ...),
+//                                        for this run only (not saved); --dry-run -lmu plans it, starts nothing
 //        sim-qvfr-launcher --apply-system-layers <request> <sha256>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h), if the
 //                                            request file still has that hash
@@ -833,11 +835,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         return unregister_after(handle.c_str(), ledger);
     }
     bool dryRun = false, launchNow = false;
+    std::wstring gameArg;  // -lmu, -acc: the game for this run (its id, case ignored); not saved to the ini
     std::wstring request, requestHash;
     bool applyRequest = false;
     for (int i = 1; i < argc; ++i) {
         dryRun |= _wcsicmp(argv[i], L"--dry-run") == 0;
         launchNow |= _wcsicmp(argv[i], L"--launch") == 0;
+        if (argv[i][0] == L'-' && argv[i][1] != L'-' && argv[i][1] != L'\0')  // -<game id>: the game, and launch it now
+            gameArg = argv[i] + 1;
         if (_wcsicmp(argv[i], L"--apply-system-layers") == 0) {
             applyRequest = true;
             if (i + 1 < argc)
@@ -857,6 +862,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         log_registrations(notes);
     }
     choose_launcher_game();
+    bool unknownGame = false;
+    if (!gameArg.empty()) {
+        if (const games::GameInfo* chosen = games::game_by_id(narrow(gameArg).c_str()))
+            games::set_launcher_game(*chosen);
+        else
+            unknownGame = true;
+        launchNow = true;  // a game on the command line starts it (as --launch), with no window
+    }
     if (!dryRun && !launchNow)
         return run_window(instance, show);
     // Command line: report to the console (or pipe) the launcher was started from, if any.
@@ -868,5 +881,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (cliOut == INVALID_HANDLE_VALUE)
             cliOut = nullptr;
     }
+    if (unknownGame)
+        return fail(L"unknown game: -" + gameArg + L" (a folder name in src/games: lmu, acc, ace ...)");
     return run(dryRun);
 }
