@@ -143,6 +143,20 @@ constexpr Help kHelp[] = {
      I18N(L"How far either side of the road’s centre stays in full detail with Road focus on. Lower keeps just the track "
      L"sharp and saves the most; higher brings the kerbs, run-off and barriers into the focus area and saves less. 10 m "
      L"suits most circuits. Changes while you drive.")},
+    {I18N(L"Cockpit preset"),
+     I18N(L"The focus area’s shape, size and position Road focus sets when you switch it on, or at once when you pick the "
+     L"other one here. A: a large cockpit shape over the windscreen, dash and wheel. B: a smaller one moved down to the "
+     L"road and the dash. Adjust either afterwards as you like; your own shape, size and position come back when you "
+     L"switch Road focus off. When the headset composes the views itself, the size stays inside its own focus region "
+     L"and the position doesn’t apply.")},
+    {I18N(L"Road edge blend"),
+     I18N(L"How softly Road focus’s full detail fades into the periphery at its edges: this many metres near you, wider in "
+     L"proportion far away so distant edges fade too. Raise it if you notice where the sharp area ends; 0 is a hard "
+     L"edge. Changes while you drive.")},
+    {I18N(L"Show Road focus area"),
+     I18N(L"Tints blue, in the headset, everything Road focus takes from the periphery, so you can see exactly what stays "
+     L"in full detail (untinted) as you drive. Road focus works as usual meanwhile. For setting up; turn it off to "
+     L"drive.")},
     {I18N(L"Road height"),
      I18N(L"How high above the road stays in full detail with Road focus on. Lower keeps just the road and the cars sharp "
      L"and saves the most; higher brings signs, gantries and the grandstands’ lower rows into the focus area and saves "

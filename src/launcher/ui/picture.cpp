@@ -343,9 +343,21 @@ Card foveation_card() {
                          s.corridor ? tr(L"Full detail along the road ahead and in your car; the scenery beside and above "
                                          L"the road from the periphery.")
                                     : tr(L"Off"));
-                b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"), {tr(L"Road width"), tr(L"Road height")}, [](Body& r) {
+                b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"),
+                         {tr(L"Cockpit preset"), tr(L"Road width"), tr(L"Road height"), tr(L"Road edge blend"),
+                          tr(L"Show Road focus area")},
+                         [](Body& r) {
+                    std::vector<std::wstring> presets;
+                    const int preset = choice_items(kCorridorPreset, presets);
+                    r.segments(kCorridorPreset, tr(L"Cockpit preset"), presets, preset);
                     r.sliders({kCorridorWidth, tr(L"Road width"), app.s.corridorWidth, L" m"},
                               {kCorridorHeight, tr(L"Road height"), app.s.corridorHeight, L" m", L"", true});
+                    r.slider({kCorridorBlend, tr(L"Road edge blend"), app.s.corridorBlend, L" m",
+                              app.s.corridorBlend == 0 ? tr(L"Off") : L"", true});
+                    const bool show = app.s.corridorShow;
+                    r.toggle(kCorridorShow, tr(L"Show Road focus area"), show,
+                             show ? tr(L"What Road focus takes from the periphery tinted blue in the headset.")
+                                  : tr(L"Off"));
                 });
             }
         }
@@ -369,6 +381,9 @@ Card foveation_card() {
         s.corridor = d.corridor;
         s.corridorWidth = d.corridorWidth;
         s.corridorHeight = d.corridorHeight;
+        s.corridorPreset = d.corridorPreset;
+        s.corridorBlend = d.corridorBlend;
+        s.corridorShow = d.corridorShow;
     };
     return c;
 }

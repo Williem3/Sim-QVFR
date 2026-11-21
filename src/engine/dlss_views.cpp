@@ -1045,6 +1045,7 @@ bool band_outside(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_F
     c.r[6] = keep ? 1.0f : 0.0f;
     c.r[7] = pass.focusStamps ? 1.0f : 0.0f;
     std::memcpy(&c.r[8], &pass.focusStamp, sizeof(pass.focusStamp));
+    c.r[9] = pass.focusKeepTint ? 1.0f : 0.0f;
     c.js[0] = static_cast<float>(eyeW);
     c.js[1] = static_cast<float>(eyeH);
     c.js[2] = static_cast<float>(fw);

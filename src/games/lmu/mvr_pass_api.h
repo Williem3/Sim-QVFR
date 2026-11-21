@@ -571,6 +571,22 @@ void mvr_corridor_band(int pct, int padPct) {
     c.bandPadPct = std::clamp(padPct, 0, 50);
 }
 
+void mvr_corridor_coverage(bool show) {
+    auto& c = g.corridor;
+    if (show != c.coverage)
+        simqvfr::logf("lmu mvr: corridor: its coverage %s", show ? "shown (what it takes from the periphery tinted blue)"
+                                                                 : "not shown");
+    c.coverage = show;
+}
+
+void mvr_corridor_feather_growth(float percent) {
+    auto& c = g.corridor;
+    const float f = std::clamp(percent, 0.0f, 50.0f) / 100.0f;
+    if (f != c.featherGrowth)
+        simqvfr::logf("lmu mvr: corridor: its edge's blend grows by %.0f%% of the distance", f * 100);
+    c.featherGrowth = f;
+}
+
 void mvr_corridor_spread(float degrees) {
     auto& c = g.corridor;
     const float d = std::clamp(degrees, 0.0f, 60.0f);

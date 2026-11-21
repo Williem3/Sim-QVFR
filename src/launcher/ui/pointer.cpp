@@ -241,6 +241,9 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     } else if (owner == kEyeOff) {
         items = {tr(L"None"), tr(L"Left"), tr(L"Right")};  // [quad] eye_off's 0, 1, 2
         selected = std::clamp(app.s.eyeOff, 0, 2);
+    } else if (owner == kCorridorPreset) {
+        items = {tr(L"Preset A"), tr(L"Preset B")};  // [quad] focus_corridor_preset's 0, 1
+        selected = kFocusCorridorPreset.clamp(app.s.corridorPreset);
     } else if (owner == kNightQuality) {  // car_lighting.h's presets: the switches they set (Custom: none selected)
         items = {tr(L"Low"), tr(L"Medium"), tr(L"High")};
         selected = car_lighting_preset_of(app.s.carLight);
@@ -268,6 +271,7 @@ bool segmented_ctl(Ctl id) {
     case kVisor:
     case kHelmetDetail:
     case kEyeOff:
+    case kCorridorPreset:
     case kNightQuality:
     case kDlssFocusPreset:
     case kDlssEyePreset:
@@ -480,6 +484,15 @@ void choose(Ctl owner, int option) {
         app.s.helmet.detail = option == 1;
     else if (owner == kEyeOff)
         app.s.eyeOff = std::clamp(option, 0, 2);
+    else if (owner == kCorridorPreset) {  // the other preset, set at once while Road focus is on (road_focus_shape.h)
+        const int was = app.s.corridorPreset;
+        app.s.corridorPreset = kFocusCorridorPreset.clamp(option);
+        const RuntimeInfo& rt = app.runtime;
+        const bool region = rt.quadViewsUsed && rt.quadFocusWidth > 1 && rt.quadFocusHeight > 1;
+        if (app.s.corridor && app.s.corridorPreset != was)
+            road_focus_apply(app.s.corridorPreset, app.s.shape, app.s.width, app.s.height, app.s.offset,
+                             region ? rt.quadFocusWidth - 1 : 0, region ? rt.quadFocusHeight - 1 : 0);
+    }
     else if (owner == kNightQuality)
         car_lighting_preset(app.s.carLight, std::clamp(option, 0, kCarLightPresets - 1));
     else if (owner == kShape)

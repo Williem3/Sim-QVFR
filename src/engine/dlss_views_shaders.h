@@ -240,7 +240,7 @@ inline constexpr char kBandOutsideShader[] = R"(
 cbuffer C : register(b0) {
     row_major float4x4 R;    // [0]: the focus view's left in the target, the band's top row, its height (0: none), the
                              // feather; [1]: the keep texture's width, height, 1 with it, 1 with the stamps; [2].x: the
-                             // stamp (its bits)
+                             // stamp (its bits), [2].y: 1 the eye's image tinted (the coverage shown)
     row_major float4x4 R2;
     float4 js;               // the eye's width, height; the focus view's width, height
     float4 origin;           // the copied region's top-left in the eye (pixels); its width, height
@@ -269,7 +269,10 @@ float4 ps(float4 pos : SV_Position) : SV_Target {
     float2 f = float2(fp.x / js.z * 2 - 1, 1 - fp.y / js.w * 2);
     float2 e = float2((f.x - extra.y) / extra.x, (f.y - extra.w) / extra.z);
     float2 px = float2((e.x + 1) * 0.5 * js.x, (1 - e.y) * 0.5 * js.y);
-    return float4(src.SampleLevel(linearClamp, (px - origin.xy) / origin.zw, 0).rgb, 1 - keep);
+    float3 rgb = src.SampleLevel(linearClamp, (px - origin.xy) / origin.zw, 0).rgb;
+    if (R[2].y > 0)
+        rgb *= float3(0.25, 0.4, 1.0);  // the coverage shown: the eye's image tinted where it stands in
+    return float4(rgb, 1 - keep);
 }
 )";
 
