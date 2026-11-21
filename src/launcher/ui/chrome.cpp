@@ -23,6 +23,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::Headset: return headset_page(x, y, w, draw);
     case Pane::Game: return game_page(x, y, w, draw);
     case Pane::LmuGame: return lmu_game_page(x, y, w, draw);
+    case Pane::Developer: return app.s.developer ? developer_page(x, y, w, draw) : 0;
     }
     return 0;
 }
@@ -30,7 +31,8 @@ float pane_content(float x, float y, float w, bool draw) {
 namespace {
 
 constexpr const wchar_t* kPaneLabels[] = {I18N(L"Overview"), I18N(L"Picture"), I18N(L"Headset"), I18N(L"Game"),
-                                          I18N(L"In-game settings")};
+                                          I18N(L"In-game settings"),
+                                          I18N(L"Developer")};
 
 static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
@@ -38,7 +40,11 @@ static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
 // A page this game has: every one but In-game settings, which is LMU's alone (a game's own features are otherwise cards
 // and rows the Picture tab leaves out).
-bool pane_shown(int pane) { return pane != static_cast<int>(Pane::LmuGame) || lmu_game_shown(); }
+bool pane_shown(int pane) {
+    if (pane == static_cast<int>(Pane::Developer))  // [launcher] developer=1
+        return app.s.developer;
+    return pane != static_cast<int>(Pane::LmuGame) || lmu_game_shown();
+}
 
 // A page's name in the page strip and as its title, in the current language.
 const wchar_t* pane_label(int pane) { return tr(kPaneLabels[std::clamp(pane, 0, kPanes - 1)]); }

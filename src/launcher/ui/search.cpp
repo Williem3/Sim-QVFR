@@ -118,7 +118,7 @@ void search_index_pages(float x, float w) {
     const float scroll = app.scroll;
     app.searchIndex.clear();
     app.canvas.push_clip({0, 0, 0, 0});
-    for (int t = 0; t < kTabs; ++t)
+    for (int t = 0; t < tab_count(); ++t)  // the Developer tab's only while it shows
         for (Pane p : tab_pages(static_cast<Tab>(t))) {
             app.pane = p;
             app.drawnLabels.clear();

@@ -41,15 +41,17 @@ using lang::trn;
 // The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
 // headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
 // LmuGame: Le Mans Ultimate's own graphics settings (pane_lmu_game.cpp), a second page of the Game tab, LMU only.
-enum class Pane { Overview, Picture, Headset, Game, LmuGame };
+// Developer: the Developer tab's ([launcher] developer=1; developer.cpp).
+enum class Pane { Overview, Picture, Headset, Game, LmuGame, Developer };
 
-inline constexpr int kPanes = 5;
+inline constexpr int kPanes = 6;
 
 // The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
 // strip under the top bar (shell.cpp kTabPages).
-enum class Tab { Overview, Picture, Headset, Game };
+// The Developer tab, last, shows only with [launcher] developer=1 (tab_count).
+enum class Tab { Overview, Picture, Headset, Game, Developer };
 
-inline constexpr int kTabs = 4;
+inline constexpr int kTabs = 5;
 
 enum Ctl {
     // kPage: a page (option: its Pane) in the strip under the top bar; kGameTab: a game on the rail (option: its index in
@@ -161,7 +163,10 @@ enum Ctl {
     // the game's VR FOV scale set to 100%; then one control per LMU setting (kLmuSetting + its index in
     // lmu_settings::defs(), up to kLmuSettingEnd).
     kLmuReload, kLmuOpenFolder, kLmuRestore, kLmuFovReset,
-    kLmuSetting, kLmuSettingEnd = kLmuSetting + 64
+    kLmuSetting, kLmuSettingEnd = kLmuSetting + 64,
+    // The Developer tab (developer.cpp): the showcase's Stock/QVFR in the running game and its A/B table, then one
+    // switch per dev_switches.h entry (kDevSwitch0 + its index).
+    kDevStock, kDevAbTable, kDevSwitch0, kDevSwitchLast = kDevSwitch0 + 31
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -365,7 +370,10 @@ struct App {
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
     Pane pane = Pane::Overview;
-    Pane tabPage[kTabs] = {Pane::Overview, Pane::Picture, Pane::Headset, Pane::Game};  // each tab's page
+    Pane tabPage[kTabs] = {Pane::Overview, Pane::Picture, Pane::Headset, Pane::Game, Pane::Developer};  // each tab's page
+    // The Developer tab's Stock/QVFR: the running game's [quad] stock as last read (devStockAt, GetTickCount64) or set.
+    bool devStock = false;
+    uint64_t devStockAt = 0;
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -737,6 +745,11 @@ float placement_readouts(float x, float y, float w, bool draw);
 // headset.cpp: the Headset tab's cards.
 float headset_page(float x, float y, float w, bool draw);
 
+// developer.cpp: the Developer tab's cards; its switches pressed.
+float developer_page(float x, float y, float w, bool draw);
+bool developer_press(Ctl id);
+
+
 // pane_about.cpp: the About panel's content.
 float about_pane(float x, float y, float w, bool draw);
 
@@ -751,6 +764,8 @@ void edit_font();
 void paint();
 
 // shell.cpp: the tabs and their pages, the rail, the top bar and the page strip.
+// The tabs shown: the Developer tab only with [launcher] developer=1 (the last of kTabs).
+int tab_count();
 Tab tab_of(Pane pane);
 const wchar_t* tab_label(Tab tab);
 uint32_t section_color(Tab tab);

@@ -24,6 +24,8 @@ void activate(Ctl id, int option) {
         lmu_game_activate(id, option);  // LMU's own files (pane_lmu_game.cpp)
         return;
     }
+    if (developer_press(id))  // the Developer tab's switches (developer.cpp)
+        return;
     switch (id) {
     case kPage:
         app.pane = static_cast<Pane>(option);
@@ -526,6 +528,8 @@ bool push_button(Ctl id) {
 bool space_control(Ctl id) {
     if (lmu_game_ctl(id))  // LMU's switches and pop-ups
         return true;
+    if (id == kDevStock || id == kDevAbTable || (id >= kDevSwitch0 && id <= kDevSwitchLast))
+        return true;  // the Developer tab's switches
     switch (id) {
     case kMethod:
     case kMode:
@@ -760,9 +764,9 @@ void on_key(WPARAM key) {
     case kTopTab: {  // the tabs: Left and Right, Home and End
         const int i = static_cast<int>(tab_of(app.pane));
         if (key == VK_LEFT || key == VK_RIGHT)
-            show_tab(static_cast<Tab>((i + (key == VK_RIGHT ? 1 : kTabs - 1)) % kTabs));
+            show_tab(static_cast<Tab>((i + (key == VK_RIGHT ? 1 : tab_count() - 1)) % tab_count()));
         else if (key == VK_HOME || key == VK_END)
-            show_tab(key == VK_HOME ? Tab::Overview : Tab::Game);
+            show_tab(key == VK_HOME ? Tab::Overview : static_cast<Tab>(tab_count() - 1));
         break;
     }
     case kMenuPanel:

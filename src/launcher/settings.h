@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 
+#include "dev_switches.h"
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
@@ -133,6 +134,10 @@ struct Settings {
     // user gave it one). [launcher] color_<id>: a game's own colour (RRGGBB) in place of its built-in accent.
     std::wstring hiddenGames, shownGames;
     std::map<std::wstring, uint32_t> gameColors;  // game id -> 0xRRGGBB; a game without one keeps its own
+    // [launcher] developer: the Developer tab shown (read only: the user sets it in the ini). Its switches' values
+    // (dev_switches.h), at the next launch, every game's (not in a game's copy or a profile).
+    bool developer = false;
+    DevValues dev{};
 };
 
 struct Range {
