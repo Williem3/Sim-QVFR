@@ -197,6 +197,14 @@ void load_experiment() {
         logf("experiment: %ls has no QVFR yet: log only, running as mode=off (ini mode=%ls)", game->info()->name, mode);
     if (logOnly)
         wcscpy_s(mode, L"off");
+    // A game that renders QVFR itself (RF2): the layer only measures. mode=off whatever the ini says (its views4 would
+    // resize the eyes the game renders at), the performance overlay and the reports on.
+    const bool measureOnly = !logOnly && game->measure_only();
+    if (measureOnly) {
+        logf("experiment: %ls renders QVFR itself: the layer only measures, running as mode=off (ini mode=%ls)",
+             game->info()->name, mode);
+        wcscpy_s(mode, L"off");
+    }
     // ACE's QVFR: the API path (state.h apiPath) unless the deprecated 4views path is asked for. It runs as mode=off
     // underneath (ACE renders its own two eyes; nothing of views4's), with the replay keys defaulting on below.
     {
@@ -337,7 +345,7 @@ void load_experiment() {
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_slow_ms", 0, ini.c_str())), 0, 1000);
     experiment.measure =
         GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline ||
-        experiment.apiPath;  // (the overlay's GPU and thread figures, as views4 has them)
+        measureOnly || experiment.apiPath;  // (the overlay's GPU and thread figures, as views4 has them)
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
     experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
     experiment.views4FocusCullMargin =
@@ -450,7 +458,7 @@ void load_experiment() {
             log_line("experiment: diagnostics set in the ini (automatic captures, GPU step timing, A/B probes) are off: they "
                      "run only in a Detailed logs launch (the launcher's Diagnostics pane)");
     }
-    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
+    experiment.probes = logOnly || measureOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // In quad mode this is the outer view's resolution; at most 100 (the shared table's range). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the

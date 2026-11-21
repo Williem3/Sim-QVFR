@@ -101,8 +101,14 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
         }
         game->qvfr_set_gaze(tan, valid, gazing);
     }
-    if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {
+    // RF2 (the game renders QVFR itself, no views4) needs the real stereo OpenXR FOV too; every other game as before.
+    if ((experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) || (stereo && game->measure_only()))
         game->qvfr_note_views(views, std::min(*countOutput, capacity));
+
+    if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {
+
+
+
         if (views4_outline_on() && *countOutput >= 2 && capacity >= 2) {
             std::lock_guard guard(v4outline.mutex);
             v4outline.fov[0] = views[0].fov;

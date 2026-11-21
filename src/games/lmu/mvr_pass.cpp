@@ -30,6 +30,8 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
+#include "../../quad/offaxis_focus.h"
+#include "../rf2/session_backend.h"
 #include "../../engine/dlss_views.h"
 #include "car_motion.h"
 #include "corridor_shader.h"
@@ -94,6 +96,20 @@ namespace {
 bool corridor_band(ID3D11DeviceContext* context, int p, unsigned fh, unsigned& top, unsigned& height);
 // What DLSS keeps of the focus view (mvr_pass_corridor.h corridor_keep): the rest from the eye's finished image.
 bool corridor_keep(int p, simqvfr::DlssPass& dp);
+
+// RF2's backend state (src/games/rf2/session_backend.h). The hooks forward to it only while g.rf2Policy is on (mvr_rf2_policy):
+// no other game reaches it.
+simqvfr::games::rf2::SessionBackend rf2;
+
+// Observer's view of a draw: the hook layer's stage tracking and twin lookup, for the twin the passes draw with now
+// (NVIDIA's single-pass stereo's, or the instanced one).
+inline void rf2_scene_draw(ID3D11DeviceContext* context) {
+    if (!g.rf2Policy)
+        return;
+    rf2.note_draw(context, g.context, g.replaying, {g.gsBound, g.hsBound, g.dsBound, g.soBound},
+                  g.instanced ? kMvrInstancedTwinGuid : kMvrTwinGuid,
+                  [](ID3D11VertexShader* vs) { return twin_of(vs) != nullptr; });
+}
 
 #include "mvr_pass_binds.h"
 

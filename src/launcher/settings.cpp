@@ -73,6 +73,7 @@ Settings load_settings(const std::wstring& ini) {
     s.offset = read_focus_offset(f);
     s.gazeDeadzone = read_gaze_deadzone(f);
     s.shape = read_focus_shape(f);
+    s.regulator = read_regulator(ini.c_str());
     s.outline = ini_flag(f, kDebugBorder);
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
@@ -229,6 +230,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write_focus_offset(ini.c_str(), s.offset);
     ok &= write_gaze_deadzone(ini.c_str(), s.gazeDeadzone);
     ok &= write_focus_shape(ini.c_str(), s.shape);
+    ok &= write_regulator(ini.c_str(), s.regulator);
     ok &= write(ini, kDebugBorder, s.outline ? L"1" : L"0");
     ok &= write(ini, kBorderColorSection, kBorderColorKey, color_name(s.color));
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));

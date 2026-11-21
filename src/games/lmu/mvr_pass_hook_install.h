@@ -4,12 +4,38 @@
 // path stays in one translation unit (no whole-program optimization). No includes of its own: mvr_pass.cpp's.
 #pragma once
 
+// Log every context that reaches any of the hooked D3D11 functions (RF2 only: its OpenXR session and its renderer may use
+// different devices and contexts). Observational: it does not change which context the pass tracker treats as its own.
+std::mutex contextCensusMutex;
+std::vector<ID3D11DeviceContext*> contextCensus;
+
+void context_census(ID3D11DeviceContext* context, int hook) {
+    if (!context)
+        return;
+    {
+        std::lock_guard guard(contextCensusMutex);
+        if (std::find(contextCensus.begin(), contextCensus.end(), context) != contextCensus.end())
+            return;
+        contextCensus.push_back(context);
+    }
+    ComPtr<ID3D11Device> device;
+    context->GetDevice(&device);
+    const D3D11_DEVICE_CONTEXT_TYPE type = context->GetType();
+    simqvfr::logf("rf2 hooks: context census: context=%p device=%p type=%s firstHook=%s trackedContext=%p same=%d",
+                  static_cast<void*>(context), static_cast<void*>(device.Get()),
+                  type == D3D11_DEVICE_CONTEXT_IMMEDIATE ? "immediate" : type == D3D11_DEVICE_CONTEXT_DEFERRED ? "deferred" : "unknown",
+                  hook >= 0 && hook < kHooks ? kHookName[hook] : "unknown", static_cast<void*>(g.context),
+                  context == g.context ? 1 : 0);
+}
+
 // The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
 // the handler, which passes the call on through call_real.
 template <int H, auto Handler, typename... A>
 struct Detours {
     template <int N>
     static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, A... a) {
+        if (g.rf2Policy)
+            context_census(context, H);
         if (depth[H] > 0) {
             reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...)>(functions[H].real[N])(context, a...);
             return;
@@ -134,6 +160,14 @@ void* detour_for(int h, int n) {
 // from single-pass stereo (it happens mid-pass, where d3d11's other modes can't be looked for): without either MVR's
 // hooks are as before.
 bool wanted(int h) {
+    if (g.rf2Policy) {
+        // rFactor 2: every draw-family hook (the observer and the eye-pass doubling need them all); VSSetConstantBuffers and the
+        // viewport reads stay unhooked (RF2's remap CB13 is bound through the context directly); the rest as for any game.
+        if (is_draw(h) || is_undoubled_draw(h))
+            return true;
+        if (h == kHookVSCB || h == kHookVPGet)
+            return false;
+    }
     if (h == kHookCSUav)  // FSR seen at the d3d11 level: only on a build whose FSR setting can't be read
         return g.fsrWatch;
     if (h == kHookVPGet)  // the game's viewport reads (lmu_viewport_reads=0: not hooked, an A/B)

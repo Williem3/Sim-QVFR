@@ -96,6 +96,44 @@ inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
 bool mvr_pass_install(ID3D11Device* device);
+
+// RF2: OpenXR FOV tangents, ordered left, right, down, up.
+// Used to derive the per-eye focus remap without LMU memory addresses.
+void mvr_rf2_note_fov(const float (&tan)[2][4]);
+
+// RF2: the focus box's share of the eye's field of view per axis (0-1; the ini's focus_percent), live.
+void mvr_rf2_set_focus(double fractionX, double fractionY);
+
+// RF2: the two views' sizes as shares of the native eye (the ini's periphery_scale; focus density x the box's share),
+// live. They set the outer and focus views' pixel counts, so the periphery's and the focus area's density.
+void mvr_rf2_set_density(double outerScale, double focusW, double focusH);
+
+// RF2: the focus area's look and place, live: the feather band (a share of the box), the corner radius (a share of half the
+// shorter side), the outline and its linear RGBA colour, and the box's vertical offset in degrees (up positive).
+void mvr_rf2_set_focus_look(double feather, double cornerRadius, bool outline, const float (&outlineColor)[4],
+                            double offsetDegrees);
+
+// RF2: its hook set (all draw hooks on; resource copies and clears off) and instancing
+// forced, as the probe reports it. Call after mvr_probe_device and before mvr_pass_install; other games leave it off.
+void mvr_rf2_policy(bool on);
+
+// RF2: the GPU regulator ([regulator]): which of Focus density and Periphery it regulates, the GPU time (tenths of a ms) over
+// which it steps down and under which it steps up, the frames over (lowerFrames) and under (raiseFrames) that count before a
+// 1% step down and up, and the set focus density as a share (1.0 = 100%).
+void mvr_rf2_set_regulator(bool focus, bool periphery, int decreaseAboveTenths, int increaseBelowTenths, int lowerFrames,
+                           int raiseFrames, double density);
+
+// RF2: the log-only GPU timing of the eye passes ([experiment] gpu_timing: 0 off, 1 the default, 2 also each pass's pipeline
+// statistics): a summary every 300 frames.
+void mvr_rf2_set_gpu_timing(int mode);
+
+// RF2: the GPU regulator as it stands (any thread; the overlay's row): false while none runs. Else which axes it regulates,
+// the periphery (percent of the native eye) and the focus density (percent) it has brought the set ones down to, and by how
+// many percentage points.
+bool mvr_rf2_regulator_status(bool& focus, bool& periphery, double& peripheryPercent, double& densityPercent,
+                              int& cutPeriphery, int& cutDensity);
+
+
 // Every pass: `view` for a pass that also draws its focus view (0-1), null otherwise. `sample` (pass 0): this frame's
 // focus views are compared (the regions copied at each pass's end).
 void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replaceResolve = false);
