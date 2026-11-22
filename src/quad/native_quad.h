@@ -171,6 +171,27 @@ inline double box_share_in_region(const float (&box)[4], const float (&region)[4
     return area > 0 ? std::clamp(w * h / area, 0.0, 1.0) : 0.0;
 }
 
+// The part of a focus box centred in the runtime's focus region that the region shows (shares of the box: left, top,
+// right, bottom), for the focus mask to skip the rest. `boxX` / `boxY` and `regionX` / `regionY` are both shares of the
+// runtime's whole eye: the box's share of the outer view (ExperimentState::box_x / box_y) is of the cropped eye under
+// [crop], so it is turned back first (1.2.3: compared as it was, the crop masked 18% off the top and bottom of a box
+// the size of the region, the scene never drawn there).
+inline void focus_visible_in_region(double boxX, double boxY, double regionX, double regionY, float (&visible)[4]) {
+    visible[0] = visible[1] = 0;
+    visible[2] = visible[3] = 1;
+    if (regionX <= 0 || regionY <= 0)
+        return;
+    constexpr double kSlack = 1e-3;  // the same size as the region in another rounding
+    if (boxX > regionX + kSlack) {
+        visible[0] = static_cast<float>(0.5 - regionX / (2 * boxX));
+        visible[2] = static_cast<float>(0.5 + regionX / (2 * boxX));
+    }
+    if (boxY > regionY + kSlack) {
+        visible[1] = static_cast<float>(0.5 - regionY / (2 * boxY));
+        visible[3] = static_cast<float>(0.5 + regionY / (2 * boxY));
+    }
+}
+
 // One frame's layers for a quad view session, built by quad_frame. Its pointers point into itself: keep it alive
 // until the runtime's xrEndFrame returns, and don't copy it.
 struct QuadFrame {

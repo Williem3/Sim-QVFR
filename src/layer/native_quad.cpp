@@ -349,16 +349,11 @@ void native_quad_focus_visible() {
     float visible[4] = {0, 0, 1, 1};
     const float rx = nativeQuad.regionShareX, ry = nativeQuad.regionShareY;
     // Fixed foveation: the box centred in the runtime's region (eye tracked, both move: not known here, all of it kept).
-    if (nativeQuad.active && !experiment.gaze && rx > 0 && ry > 0) {
-        const double bx = experiment.box_x(), by = experiment.box_y();
-        if (bx > rx) {
-            visible[0] = static_cast<float>(0.5 - rx / (2 * bx));
-            visible[2] = static_cast<float>(0.5 + rx / (2 * bx));
-        }
-        if (by > ry) {
-            visible[1] = static_cast<float>(0.5 - ry / (2 * by));
-            visible[3] = static_cast<float>(0.5 + ry / (2 * by));
-        }
+    if (nativeQuad.active && !experiment.gaze) {
+        // The box as a share of the runtime's whole eye, as the region is (box_x / box_y are of the cropped eye).
+        const FovCrop crop = experiment.crop();
+        focus_visible_in_region(experiment.box_x() * crop.kept_width(), experiment.box_y() * crop.kept_height(), rx, ry,
+                                visible);
     }
     game->qvfr_set_focus_visible(visible);
 }

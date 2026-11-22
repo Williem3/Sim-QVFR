@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "layer/layer.h"
+#include "quad/fov_crop.h"
 #include "quad/native_quad.h"
 #include "test_util.h"
 
@@ -169,6 +170,23 @@ XrCompositionLayerProjectionView eye_view(XrSwapchain chain) {
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
+    // focus_visible_in_region: the box and the region both as shares of the runtime's whole eye. The 1.2.3 report
+    // (Pimax, LMU, crop top 20% bottom 15% outer 8%, box 38% x 28% = the region): the box's cropped-eye shares
+    // (0.413 x 0.431) compared with the region masked 18% off its top and bottom; turned back, nothing is masked.
+    {
+        float v[4];
+        const FovCrop crop{0.20, 0.15, 0.08, 0.0};
+        const double bx = cropped_share(0.38, crop.kept_width()), by = cropped_share(0.28, crop.kept_height());
+        focus_visible_in_region(bx * crop.kept_width(), by * crop.kept_height(), 0.38, 0.28, v);
+        check(v[0] == 0 && v[1] == 0 && v[2] == 1 && v[3] == 1, "focus visible: a cropped box the region's size, all shown");
+        focus_visible_in_region(0.38, 0.28, 0.38, 0.28, v);
+        check(v[0] == 0 && v[1] == 0 && v[2] == 1 && v[3] == 1, "focus visible: the box the region's size, all shown");
+        focus_visible_in_region(0.50, 0.28, 0.38, 0.28, v);
+        check(std::fabs(v[0] - 0.12f) < 1e-4f && std::fabs(v[2] - 0.88f) < 1e-4f && v[1] == 0 && v[3] == 1,
+              "focus visible: a box wider than the region, its sides past it masked");
+        focus_visible_in_region(0.38, 0.28, 0.0, 0.0, v);
+        check(v[0] == 0 && v[1] == 0 && v[2] == 1 && v[3] == 1, "focus visible: no region yet, all shown");
+    }
     // quad_frame on its own: a stereo layer widened with copies, a four-view one kept, a quad passed through, a
     // three-view one left out.
     {
