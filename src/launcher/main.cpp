@@ -11,8 +11,8 @@
 // Usage: sim-qvfr-launcher               the settings window (window.cpp)
 //        sim-qvfr-launcher --launch      launch now, report on the console it was started from
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
-//        sim-qvfr-launcher -lmu          launch that game now (-<id>: the folder name in src/games: -lmu, -acc ...),
-//                                        for this run only (not saved); --dry-run -lmu plans it, starts nothing
+//        sim-qvfr-launcher -lmu          launch that game now with its own settings (-<id>: ace, acc, xplane, lmu, ats,
+//                                        ets2), for this run only (not saved); --dry-run -lmu plans it, starts nothing
 //        sim-qvfr-launcher --apply-system-layers <request> <sha256>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h), if the
 //                                            request file still has that hash
@@ -375,6 +375,9 @@ struct LoaderOutput {
     LoaderOutput& operator=(const LoaderOutput&) = delete;
 };
 
+// -<game id> on the command line (wWinMain): the game this launch starts with its own settings; empty otherwise.
+std::wstring cliGameId;
+
 int fail(const std::wstring& why) {
     say(L"ERROR: " + why);
     return 1;
@@ -400,8 +403,25 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const fs::path ini = here / L"sim-qvfr.ini";
     if (!fs::exists(ini, ec))
         return fail(L"sim-qvfr.ini not found next to the launcher (" + ini.wstring() + L")");
+    // -<game id> (wWinMain): that game's own settings for this launch, the ini left as it is (settings.h
+    // launch_game_settings). `settings` is what this launch reads; `ini` stays the launcher's (its own keys written back,
+    // and the layer's SIM_QVFR_SETTINGS, where the headset menu files the game's settings).
+    struct LaunchSettings {
+        fs::path path;
+        ~LaunchSettings() {
+            if (!path.empty())
+                DeleteFileW(path.c_str());
+        }
+    } launchSettings;
+    fs::path settings = ini;
+    if (!cliGameId.empty()) {
+        launchSettings.path = fs::temp_directory_path(ec) / (L"sim-qvfr-launch-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
+        if (ec || !launch_game_settings(ini.wstring(), cliGameId, launchSettings.path.wstring()))
+            return fail(L"cannot make the settings of " + cliGameId + L" for this launch (" + launchSettings.path.wstring() + L")");
+        settings = launchSettings.path;
+    }
 
-    const std::wstring game = game_folder(ini.wstring());
+    const std::wstring game = game_folder(settings.wstring());
     const games::GameInfo& info = games::launcher_game();
     const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
@@ -409,15 +429,15 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
                     L" in [launcher] of sim-qvfr.ini");
     // [launcher] anticheat=1 (the Games pane), for a game with an anti-cheat bootstrapper: the game starts protected,
     // through the bootstrapper, and the layer runs in it as usual (games/game.h antiCheatStart). The user's risk.
-    const bool viaAntiCheat = info.antiCheatStart && games::anticheat_chosen(ini.c_str());
+    const bool viaAntiCheat = info.antiCheatStart && games::anticheat_chosen(settings.c_str());
     const fs::path bootstrapper = viaAntiCheat ? exe.parent_path() / info.antiCheatStart : fs::path();
     if (viaAntiCheat && !fs::exists(bootstrapper, ec))
         return fail(std::wstring(info.antiCheatStart) + L" not found next to " + exe.wstring() +
                     L" (Run with anti-cheat is on): verify the game's files in Steam");
 
-    const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
+    const std::wstring mode = ini_string(settings.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
-    const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(ini.wstring(), environment));
+    const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(settings.wstring(), environment));
     // Nothing of Cheeky's runs in a game its anti-cheat protects: its layer is off (ini_layer_options), so the launch
     // refuses where it can't be kept out (a registration without a disable variable, its loader in the game folder).
     if (viaAntiCheat) {
@@ -452,20 +472,20 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     // removes nothing.
     const PruneResult pruned = dryRun ? PruneResult{} : prune_logs(logs.wstring());
     // The Diagnostics pane's Detailed logs ([launcher] debug_logs, launches left): the layer logs at debug level.
-    const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, ini.c_str())), 0,
+    const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, settings.c_str())), 0,
                                      kDebugLogLaunches);
     const fs::path log = logs / (std::wstring(L"session-") + stamp + L".log"), iniCopy = runFolder / L"sim-qvfr.ini";
     std::wstring error;
     if (!write_run_folder(runFolder.wstring(), manifest.wstring(), library.wstring(), plan, error))
         return fail(error);
-    if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
+    if (!CopyFileW(settings.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
     // Multi-view rendering on any GPU: NVIDIA's on an RTX 20 series or newer (engine/nvapi_gpus.h), Sim-QVFR's own
     // (instancing) on others (the layer checks the game's device).
     const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
-    const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
+    const bool baseline = ini_string(settings.wstring(), L"launcher", L"baseline_next") == L"1";
     if (baseline)
         WritePrivateProfileStringW(L"experiment", L"baseline", L"1", iniCopy.c_str());
     auto variables =
@@ -483,7 +503,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     // manifests XR_ENABLE_API_LAYERS names are registered there for this launch (explicit_layers.h), unless
     // [launcher] elevated_registration=0.
     const bool elevated = launcher_elevated();
-    const bool registerLayers = elevated && ini_string(ini.wstring(), L"launcher", L"elevated_registration") != L"0";
+    const bool registerLayers = elevated && ini_string(settings.wstring(), L"launcher", L"elevated_registration") != L"0";
     std::vector<std::wstring> named;
     for (const auto& [name, value] : variables)
         if (name == L"XR_ENABLE_API_LAYERS")
@@ -864,10 +884,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     choose_launcher_game();
     bool unknownGame = false;
     if (!gameArg.empty()) {
-        if (const games::GameInfo* chosen = games::game_by_id(narrow(gameArg).c_str()))
+        if (const games::GameInfo* chosen = games::game_by_id(narrow(gameArg).c_str())) {
             games::set_launcher_game(*chosen);
-        else
+            cliGameId = games::wide_id(*chosen);  // run(): its settings, not those of the game the ini has
+        } else {
             unknownGame = true;
+        }
         launchNow = true;  // a game on the command line starts it (as --launch), with no window
     }
     if (!dryRun && !launchNow)
@@ -881,7 +903,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (cliOut == INVALID_HANDLE_VALUE)
             cliOut = nullptr;
     }
-    if (unknownGame)
-        return fail(L"unknown game: -" + gameArg + L" (a folder name in src/games: lmu, acc, ace ...)");
+    if (unknownGame) {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        std::wstring ids;
+        for (std::size_t i = 0; i < count; ++i)
+            ids += (i ? L", -" : L"-") + games::wide_id(*all[i]);
+        return fail(L"unknown game: -" + gameArg + L" (one of " + ids + L")");
+    }
     return run(dryRun);
 }

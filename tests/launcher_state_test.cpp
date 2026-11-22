@@ -642,6 +642,23 @@ void per_game_settings_checks() {
     WritePrivateProfileStringW(L"experiment", L"mode", L"views4", fresh.c_str());
     check(game_settings_target(fresh, L"ace") == fresh && game_settings_target(fresh, L"xplane") == game_settings_file(fresh, L"xplane"),
           "per-game: an ini without [launcher] game means ACE, as the launcher reads it");
+
+    // The launcher's -<game id> (launch_game_settings): -ace while the launcher shows ACC launches with ACE's own
+    // settings and [launcher] game=ace in the launch's copy; the ini and the games' copies stay as they are.
+    const std::string iniBefore = read_text(ini), aceBefore = read_text(game_settings_file(ini, L"ace"));
+    const std::wstring launch = (dir / L"launch.ini").wstring();
+    check(launch_game_settings(ini, L"ace", launch) && load_settings(launch).inner == 160 && load_settings(launch).sharpen == 0 &&
+              launcher_game_id(launch.c_str()) == L"ace" && ini_int(launch, L"menu", L"yaw") == 7,
+          "per-game: -ace launches with ACE's own settings, ACE as its game, the shared keys kept");
+    check(read_text(ini) == iniBefore && read_text(game_settings_file(ini, L"ace")) == aceBefore,
+          "per-game: -ace writes nothing to the launcher's ini or ACE's copy");
+    check(launch_game_settings(ini, L"acc", launch) && load_settings(launch).sharpen == 100 &&
+              launcher_game_id(launch.c_str()) == L"acc",
+          "per-game: -acc, the game the launcher shows, launches with the ini's own settings");
+    DeleteFileW(game_settings_file(ini, L"lmu").c_str());
+    check(launch_game_settings(ini, L"lmu", launch) && launcher_game_id(launch.c_str()) == L"lmu" &&
+              GetFileAttributesW(game_settings_file(ini, L"lmu").c_str()) == INVALID_FILE_ATTRIBUTES,
+          "per-game: -lmu without a copy launches from the settings in use and makes no copy");
     fs::remove_all(dir, ec);
 }
 

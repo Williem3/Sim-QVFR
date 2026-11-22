@@ -168,6 +168,10 @@ int seed_game_settings(const std::wstring& ini);
 // Leaving `fromId` for `toId`: the ini stored as `fromId`'s copy, then `toId`'s loaded (a copy of the ini first if
 // it has none). False if a step failed.
 bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId);
+// A launch of `gameId` that leaves the ini as it is (the launcher's -<game id>): `into` made a copy of the ini holding
+// `gameId`'s per-game settings (its copy, or the first one switch_game_settings would make) and [launcher] game=<gameId>.
+// Nothing else is written. False if a step failed.
+bool launch_game_settings(const std::wstring& ini, const std::wstring& gameId, const std::wstring& into);
 // A profile as text to share: only its keys that differ from the defaults' profile.
 std::string share_profile(const Profile& profile);
 // A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the
