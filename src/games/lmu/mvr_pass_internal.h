@@ -425,9 +425,6 @@ struct State {
     // The focus post (mvr_focus_replay): on; this pass's post-processing has begun (its multisample resolve is done);
     // its copy and composite replayed.
     bool focusReplay = false, postWindow = false, focusCopied = false, focusComposited = false;
-    // mvr_rf2_policy: rFactor 2 renders QVFR through this hook layer (src/games/rf2): its backend is fed by the hooks, its draws
-    // are doubled by its own rules, VSSetConstantBuffers and the viewport reads are not hooked. Off for every other game.
-    bool rf2Policy = false;
     bool compositeOk = false;  // this pass's focus composite made (the blit's input)
     // In the post window before the focus copy: the last draw into a single-sample texture of the resolve's size other
     // than the resolve's target (a stage between the resolve and YEBIS, whose copy then starts from it: reflections

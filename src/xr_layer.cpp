@@ -373,7 +373,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     if (experiment.pixCaptureFrame || experiment.pixCaptureHotkey)  // before ACE creates its D3D12 device
         pix_capture_load(experiment.pixCaptureFrame);
     game->instance_created(live.ini.c_str(), experiment.mode);
-    if (!experiment.views4 && game->measure_only()) {  // renders QVFR itself (RF2): its focus box and sizes, at once
+    if (!experiment.views4 && game->adapter_qvfr()) {  // QVFR in the adapter (RF2): its focus box and sizes, at once
         game->qvfr_set_live(experiment.focusFraction.load(), experiment.focus_y(), 1.0 + experiment.feather.load(),
                             experiment.gaze.load());
         const Views4Sizes sizes =

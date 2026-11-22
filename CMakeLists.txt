@@ -546,6 +546,11 @@ sim_qvfr_test(focus_turn_test tests/focus_turn_test.cpp)
 target_include_directories(focus_turn_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_turn_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 
+# Offline check of rFactor 2's QVFR pieces: atlas rule, layout, focus mapping, GPU regulator, eye passes (tests/rf2_test.cpp).
+sim_qvfr_test(rf2_test tests/rf2_test.cpp)
+target_include_directories(rf2_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(rf2_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+
 # Offline check of the focus mask's mesh against the compositor's focus shape (tests/focus_mask_test.cpp).
 sim_qvfr_test(focus_mask_test tests/focus_mask_test.cpp)
 target_include_directories(focus_mask_test PRIVATE src)

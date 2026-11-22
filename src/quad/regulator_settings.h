@@ -1,7 +1,7 @@
 // The GPU regulator's settings ([regulator], live): it watches the GPU time of the game's eye passes and takes
 // Periphery and/or Focus density down one percent at a time while frames run over `decreaseAbove`, and back up
 // while they run under `increaseBelow`. The set values (periphery_scale, focus_density) are the ceiling: the
-// regulator never goes above them and never writes them. For a game that renders QVFR itself (rFactor 2).
+// regulator never goes above them and never writes them. For a game whose adapter makes QVFR (rFactor 2).
 // Shared by the layer (games/rf2/regulator.h acts on it) and the launcher.
 #pragma once
 

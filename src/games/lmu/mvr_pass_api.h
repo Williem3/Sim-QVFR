@@ -4,99 +4,17 @@
 // translation unit (no whole-program optimization). No includes of its own: mvr_pass.cpp's.
 #pragma once
 
-void mvr_rf2_note_fov(const float (&tanFov)[2][4]) { rf2.note_fov(tanFov); }
-
-void mvr_rf2_set_focus(double fractionX, double fractionY) { rf2.set_focus_fraction(fractionX, fractionY); }
-
-void mvr_rf2_set_density(double outerScale, double focusW, double focusH) { rf2.set_density(outerScale, focusW, focusH); }
-
-void mvr_rf2_set_focus_look(double feather, double cornerRadius, bool outline, const float (&outlineColor)[4],
-                            double offsetDegrees) {
-    rf2.set_focus_look(feather, cornerRadius, outline, outlineColor, offsetDegrees);
-}
-
-void mvr_rf2_set_gpu_timing(int mode) { rf2.set_gpu_timing(mode); }
-
-void mvr_rf2_set_regulator(bool focus, bool periphery, int decreaseAboveTenths, int increaseBelowTenths, int lowerFrames,
-                           int raiseFrames, double density) {
-    simqvfr::GpuRegulatorSettings s;
-    s.focus = focus;
-    s.periphery = periphery;
-    s.decreaseAbove = decreaseAboveTenths;
-    s.increaseBelow = increaseBelowTenths;
-    s.lowerFrames = lowerFrames;
-    s.raiseFrames = raiseFrames;
-    rf2.set_regulator(s, density);
-}
-
-bool mvr_rf2_regulator_status(bool& focus, bool& periphery, double& peripheryPercent, double& densityPercent,
-                              int& cutPeriphery, int& cutDensity) {
-    return rf2.regulator_status(focus, periphery, peripheryPercent, densityPercent, cutPeriphery, cutDensity);
-}
-
-void mvr_rf2_policy(bool on) {
-    g.rf2Policy = on;
-    if (!on || g.context)  // the instancing choice is made once, before the first install
-        return;
-    // How the eye passes draw their two views: NVIDIA's multi-view rendering (single-pass stereo through NVAPI: each draw
-    // once, with the game shader's NVAPI twin, the clip remap in cb13) where the device has it, else Sim-QVFR's
-    // instancing (each Draw* with two instances, the instanced twin writing SV_ViewportArrayIndex). [experiment]
-    // multi_view_software=1 asks for instancing where NVIDIA's is there too (mvr_probe_backend). If the driver refuses
-    // the two-view mode at the first draw, instancing takes over (take_over_with_instancing).
-    const bool available = mvr_probe_instanced();
-    const bool nvidia = mvr_probe_backend() == MvrBackend::nvapi;
-    g.instanced = !nvidia && available;
-    g.canInstance = available;
-    if (nvidia)
-        rf2.use_single_pass_stereo(g.twoViews);
-    simqvfr::logf("rf2 multi-view backend: %s (instancing available=%d; multi_view_software=1 forces instancing)",
-                  nvidia ? "NVIDIA's single-pass stereo" : g.instanced ? "instancing" : "none", available ? 1 : 0);
-}
-
-// CB13's remap constants (identity until a pass sets them) on `device`, replacing any earlier buffer.
-static bool create_remap_cb(ID3D11Device* device) {
-    g.remapCb.Reset();
-    const D3D11_BUFFER_DESC desc = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-    const float identity[4] = {1, 0, 1, 0};
-    const D3D11_SUBRESOURCE_DATA init = {identity, 0, 0};
-    return SUCCEEDED(device->CreateBuffer(&desc, &init, &g.remapCb));
-}
-
 bool mvr_pass_install(ID3D11Device* device) {
-    if (g.context && !g.rf2Policy)  // once (RF2's session and renderer may be two devices: below)
+    if (g.context)
         return true;
     if (!device)
         return false;
     ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
-    if (!context)
-        return false;
-    if (g.context) {  // RF2: installed already; another device's immediate context is the renderer's
-        if (g.context == context.Get()) {
-            simqvfr::logf("rf2 hooks: context census: install repeated for device=%p immediateContext=%p",
-                          static_cast<void*>(device), static_cast<void*>(context.Get()));
-            return true;
-        }
-        ID3D11DeviceContext* previous = g.context;
-        g.context = context.Get();
-        g.context1.Reset();
-        g.multithread.Reset();
-        context.As(&g.context1);
-        context.As(&g.multithread);
-        // D3D11 resources are owned by their creating device. A game's OpenXR session can use one device and its renderer a
-        // second one (RF2 through OpenComposite), so a remapCb made on the first is invalid on the renderer's context: CB13
-        // would be rebound before each draw without effect. Recreate it on this device.
-        if (!create_remap_cb(device)) {
-            simqvfr::log_line("rf2 hooks: failed to recreate remap CB13 on the renderer device");
-            return false;
-        }
-        simqvfr::logf("rf2 hooks: recreated remap CB13=%p on renderer device=%p; switched tracked context from %p to %p "
-                      "(existing global D3D11 hooks kept)",
-                      static_cast<void*>(g.remapCb.Get()), static_cast<void*>(device), static_cast<void*>(previous),
-                      static_cast<void*>(g.context));
-        return true;
-    }
-    if (!create_remap_cb(device))
+    const D3D11_BUFFER_DESC cd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const float identity[4] = {1, 0, 1, 0};
+    const D3D11_SUBRESOURCE_DATA init = {identity, 0, 0};
+    if (FAILED(device->CreateBuffer(&cd, &init, &g.remapCb)))
         return false;
     if (g.biasHooks) {  // texture sharpening's constants (no rectangle, no bias until a pass sets them)
         const D3D11_BUFFER_DESC bd = {sizeof(g.biasConstants), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
@@ -161,10 +79,6 @@ bool mvr_pass_install(ID3D11Device* device) {
     if (mvr_probe_instanced())
         g.canInstance = true;
     g.context = context.Get();
-    if (g.rf2Policy)
-        simqvfr::logf("rf2 hooks: context census: install device=%p immediateContext=%p type=%s", static_cast<void*>(device),
-                      static_cast<void*>(g.context),
-                      g.context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE ? "immediate" : "not-immediate");
     context.As(&g.multithread);
     {  // the game's VS b13 before its binds are seen
         ID3D11Buffer* b = nullptr;

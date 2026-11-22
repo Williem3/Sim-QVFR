@@ -400,7 +400,7 @@ Card foveation_card() {
 
 // ---- GPU regulator -----------------------------------------------------------------------------
 
-// A game that renders QVFR itself and whose eye passes the layer times (GameFeatures::gpuRegulator: rFactor 2). The set
+// A game whose adapter makes QVFR and times its eye passes (GameFeatures::gpuRegulator: rFactor 2). The set
 // Periphery resolution and Focus density are the most it uses; it lowers them 1% at a time while the GPU time per frame runs
 // over the first limit and raises them again while it runs under the second.
 Card regulator_card() {

@@ -1,14 +1,15 @@
-// rFactor 2's identity (../game.h). Experimental support: the layer recognises the game,
-// starts it through OpenComposite/OpenXR and runs log-only D3D11 probes. No QVFR yet.
+// rFactor 2's identity (../game.h): started through OpenComposite in VR; QVFR at the D3D11 level (adapter.cpp), no game
+// code hooked or called, so it runs on any build.
 #pragma once
-#include <iterator>
-#include "../game.h"
 
+#include <iterator>
+
+#include "../game.h"
 
 namespace rf2 {
 
 inline constexpr const char* kBuilds[] = {
-    "cf5a0e640befce57407c1f086e7635b45fcbf9c19af3b90f694384ffaa463048"
+    "cf5a0e640befce57407c1f086e7635b45fcbf9c19af3b90f694384ffaa463048",
 };
 
 inline constexpr simqvfr::games::GameInfo kGame = {
@@ -22,17 +23,18 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"+path=\"..\" +VR",
     L"Bin64\\openvr_api.dll",
     nullptr,
-
-    // Identity/probe stage only. Do not expose launcher controls for features that
-    // the RF2 adapter does not implement yet. By name: GameFeatures has more members than it had.
+    // The launcher offers what the adapter has: the GPU regulator (no crop, helmet, focus shape or eye tracking yet).
     {.gpuRegulator = true},
-
     kBuilds,
     std::size(kBuilds),
-    false,
-    nullptr,
-    nullptr,
-    nullptr,
+    false,    // earlyLoad
+    nullptr,  // crashReports
+    nullptr,  // antiCheat
+    nullptr,  // antiCheatStart
+    {},       // defaults
+    true,     // anyBuild: nothing of the game's code is used
+    simqvfr::games::QvfrImage::DoubleWide,
+    true,  // quietGameOutput: its OpenXR loader and OpenComposite write tens of MB to stdout in a few minutes
 };
 
 }  // namespace rf2

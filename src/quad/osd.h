@@ -94,7 +94,7 @@ struct OsdInput {
     OsdMultiView multiView = OsdMultiView::None;
     bool dlss = false;  // DLSS evaluated views since the card was last drawn (said beside the multi-view badge)
     // A game's GPU regulator (RF2): the periphery and the focus density it has brought the set ones down to (percent), and by
-    // how many percentage points. While it runs, its row takes the render thread's place.
+    // how many percentage points: a row of its own while it runs.
     bool regulatorOn = false, regulatorPeriphery = false, regulatorFocus = false;
     double regulatorPeripheryPercent = 0, regulatorDensityPercent = 0;
     int regulatorCutPeriphery = 0, regulatorCutDensity = 0;

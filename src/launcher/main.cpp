@@ -473,14 +473,12 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     auto variables =
         launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring(),
                          info.openComposite != nullptr);  // OpenComposite's loader mangles a list of layers
-    // Normally the game's stdout and stderr go to openxr-loader.log, so the launcher can diagnose an OpenXR loader that
-    // refused a runtime or layer before Sim-QVFR started. Some games also write large unrelated debug streams there. Set
-    // [launcher] capture_game_output=0 to leave the child without standard handles and make no openxr-loader.log.
-    // Not set in the ini: on for every game but rFactor 2 (its OpenXR loader and OpenComposite write a log that grows by
-    // tens of MB in a few minutes); capture_game_output=1 turns it on there too.
+    // The OpenXR loader prints why it refuses a runtime or a layer (errors on stderr, XR_LOADER_DEBUG's levels on
+    // stdout), before any layer runs: a game it fails starts flat with no layer log at all. The game's stdout and stderr
+    // go to the run folder (loader_output) for the report, unless the game writes tens of MB there itself
+    // (GameInfo::quietGameOutput: rF2). [launcher] capture_game_output=0 or 1 decides for any game.
     const std::wstring captureSetting = ini_string(ini.wstring(), L"launcher", L"capture_game_output");
-    const bool captureGameOutput =
-        captureSetting.empty() ? info.id != std::string_view("rf2") : captureSetting != L"0";
+    const bool captureGameOutput = captureSetting.empty() ? !info.quietGameOutput : captureSetting != L"0";
     // XR_LOADER_DEBUG writes to stdout. Do not enable it when stdout/stderr capture is disabled; a user's own value is kept.
     if (captureGameOutput &&
         std::none_of(environment.begin(), environment.end(),

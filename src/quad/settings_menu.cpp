@@ -4,7 +4,7 @@
 #include "focus_mask.h"
 #include "fov_crop.h"
 #include "views4_layout.h"
-#include "../games/rf2/atlas_fit.h"
+#include "two_view_atlas.h"
 
 #include <algorithm>
 #include <cmath>
@@ -359,7 +359,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         // its place: three lines for any number of points), feather, the focus's place, the gaze dead-zone (eye
         // tracked), the outline.
         add({MenuItem::HeadFoveation});
-        if (!l.selfRendered)  // RF2 has no eye tracking: its focus box keeps the one fixed place
+        if (!l.adapterQvfr)  // RF2 has no eye tracking: its focus box keeps the one fixed place
             items.push_back(MenuItem::EyeTracking);
         add({MenuItem::Width, MenuItem::Height});
         if (l.shapePage)
@@ -371,7 +371,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         items.push_back(MenuItem::Feather);
         if (!l.runtimeComposes)  // the runtime places the focus area in its own focus region: the offsets do nothing
             add({MenuItem::FocusOffset, MenuItem::FocusOffsetX});
-        if (v.eyeTracking && !l.selfRendered)
+        if (v.eyeTracking && !l.adapterQvfr)
             items.push_back(MenuItem::GazeDeadzone);
         if (l.qvfr && l.focusQuads)  // focus_layer=2's test
             items.push_back(MenuItem::FocusQuadDistance);
@@ -385,7 +385,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
         if (!menu.profiles.empty())
             items.push_back(MenuItem::Profile);
-        if (l.qvfr || l.selfRendered) {
+        if (l.qvfr || l.adapterQvfr) {
             add({MenuItem::HeadResolution, MenuItem::Periphery, MenuItem::Density});
             if (l.qvfr && l.objectDetail)  // only a game with it (X-Plane)
                 items.push_back(MenuItem::ObjectDetail);
@@ -759,7 +759,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool selfRendered) {
+                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool adapterQvfr) {
     bool ok = true;
     if (qvfr && focusCorridor) {
         ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
@@ -782,7 +782,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
         ok &= write(ini, L"experiment", L"focus_quad_distance", focus_quad_metres(v.focusQuadStep));
     if (qvfr && objectDetail)
         ok &= write(ini, kObjectDetail, kObjectDetail.clamp(v.objectDetail));
-    if (qvfr || selfRendered) {
+    if (qvfr || adapterQvfr) {
         ok &= write(ini, kPeripheryScale, v.periphery);
         ok &= write(ini, kFocusDensity, v.density);
     }
@@ -828,14 +828,16 @@ MenuFit menu_fit(const SettingsMenu& menu) {
     f.focusWidth = f.wantFocusWidth;
     f.focusHeight = f.wantFocusHeight;
     f.densityX = f.densityY = v.density;
-    if (menu.launch.selfRendered) {
-        // RF2 composes the views itself: its atlas rule (games/rf2/atlas_fit.h), in percent of the native eye. The focus
+    if (menu.launch.adapterQvfr) {
+        // RF2's adapter composes the views: the two-view atlas rule (two_view_atlas.h), in percent of the native eye. The focus
         // view takes its width first; the periphery gets what is left, so a high density shrinks it.
-        const games::rf2::AtlasFit a =
-            games::rf2::fit_atlas(v.periphery / 100.0, f.wantFocusWidth / 100, f.wantFocusHeight / 100);
+        // The native eye is the target (its size once known; the rule's fixed pixels against a typical eye before).
+        const unsigned w = menu.launch.nativeWidth > 0 ? static_cast<unsigned>(menu.launch.nativeWidth) : 2000u;
+        const unsigned h = menu.launch.nativeHeight > 0 ? static_cast<unsigned>(menu.launch.nativeHeight) : 2000u;
+        const TwoViewAtlas a = fit_two_view_atlas(w, h, v.periphery / 100.0, f.wantFocusWidth / 100, f.wantFocusHeight / 100);
         f.periphery = a.outer * 100;
-        f.focusWidth = a.focusW * 100.0 / games::rf2::kAtlasWidth;
-        f.focusHeight = a.focusH * 100.0 / games::rf2::kAtlasHeight;
+        f.focusWidth = a.focusW * 100.0 / w;
+        f.focusHeight = a.focusH * 100.0 / h;
         f.peripheryCapped = a.outerCapped;
         f.peripheryByRoom = a.outerCapped;  // the focus view's width is the only limit there
         f.focusCapped = a.focusCapped;
@@ -935,7 +937,7 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     const MenuLaunch& l = menu.launch;
     const MenuFit f = menu_fit(menu);
     // Density in effect (QVFR: the fit's, horizontal; Two-loop: eye_scale over the box's share).
-    const bool own = l.qvfr || l.selfRendered;  // the views' sizes are the menu's own (RF2: its atlas, no crop)
+    const bool own = l.qvfr || l.adapterQvfr;  // the views' sizes are the menu's own (RF2: its atlas, no crop)
     const double density = own ? f.densityX : l.twoLoopScale * 100 / menu.values.width;
     if (l.nativePpd > 0)
         s.centerPpd = static_cast<int>(std::lround(l.nativePpd * (l.outputCap > 0 ? std::min(density, l.outputCap) : density) / 100));

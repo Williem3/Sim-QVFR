@@ -63,8 +63,6 @@ void car_light_frame_end() {
 void mvr_frame_end(unsigned long long frame) {
     if (!g.context)
         return;
-    if (g.rf2Policy)
-        rf2.end_frame(frame, g.stats.stereoErrors);
     if (census.level >= 4) {  // level 4: from this frame's end to the next pass 0's end, every 900 frames, 4 in all
         if (census.pre) {  // no scene this frame (menus): not counted, tried again at the next frame end
             census.pre = false;

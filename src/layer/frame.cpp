@@ -60,16 +60,6 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
         info = menu_frame(session, frameInfo, withMenu, menuLayers);
     }
     hang_watch_stage("overlay and menu: done");
-    // Observe the application's original projection submission at the common xrEndFrame boundary.
-    // Do this before views4/quad composition can replace swapchains, rectangles or FOV.
-    if (game && frameInfo && frameInfo->layers) {
-        for (uint32_t i = 0; i < frameInfo->layerCount; ++i) {
-            const XrCompositionLayerBaseHeader* layer = frameInfo->layers[i];
-            if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION)
-                game->qvfr_note_projection(
-                    reinterpret_cast<const XrCompositionLayerProjection*>(layer));
-        }
-    }
     ++endFrames;
     // The API path's gaze: ACE attaches its action sets (and the layer's gaze with them) at start-up, but not on every
     // launch (the 18:38 run: none in over two minutes); five seconds in, the layer attaches its own.

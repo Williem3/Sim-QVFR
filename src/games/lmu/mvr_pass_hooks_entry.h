@@ -8,7 +8,6 @@
 // mvr_pass_internal.h ----
 
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
-    rf2_scene_draw(context);
     if (g.slotsBound && g.vsRole == VsRole::lensMask && ours(context))
         bind_slot_view(-1);  // car slots: the lens mask is no car part (it may return before the parts' step below)
     if (context == g.context && !g.replaying) {
@@ -72,7 +71,6 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
 // Draw also the final blit's replay (focus_blit).
 template <int H, typename... A>
 void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
-    rf2_scene_draw(context);
     if (g.slotsBound && ours(context))
         bind_slot_view(-1);  // car slots: these draws are no car part's
     if (context == g.context && !g.replaying) {
@@ -149,9 +147,6 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
 // while two views are on the game's own shader draws it, into the eye's viewport alone; logged once.
 template <int H, typename... A>
 void STDMETHODCALLTYPE undoubled_draw(ID3D11DeviceContext* context, A... a) {
-    rf2_scene_draw(context);
-    if (g.rf2Policy)
-        rf2.note_unsupported_draw(context, g.context, g.replaying);
     if (context == g.context && !g.replaying)
         ++tr.draws;
     if (!(g.instanced && g.on && ours(context))) {
@@ -178,8 +173,6 @@ void read_bindings();
 // (the twin, a second viewport beside the atlas tile). So: the two views off, the replay passed on untouched, and the
 // state read again after it (RestoreContextState FALSE leaves the context cleared, TRUE as it was: the views back on).
 void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore) {
-    if (g.rf2Policy)
-        rf2.note_execute(context, g.context, g.replaying);
     if (context != g.context || g.replaying) {  // ours (the focus post's) or another context's
         call_real<kHookExecute>(context, list, restore);
         return;
@@ -204,7 +197,7 @@ void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11
     call_real<kHookExecute>(context, list, restore);
     g.replaying = false;
     g.inList = false;
-    if (!plain && !g.rf2Policy)  // (RF2 has no mvr passes: its state is read again after every list)
+    if (!plain)
         return;
     if (!restore) {  // the context's state cleared to its defaults: nothing of ours (twin, cb13, two viewports) bound
         // Nothing of ours bound now (slot target and view, blend twin, the b13 buffers): the flags as the context is,

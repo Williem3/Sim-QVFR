@@ -12,7 +12,6 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -885,13 +884,6 @@ HRESULT WINAPI create_device(IDXGIAdapter* adapter, D3D_DRIVER_TYPE type, HMODUL
                              const D3D_FEATURE_LEVEL* levels, UINT count, UINT sdk, ID3D11Device** device,
                              D3D_FEATURE_LEVEL* level, ID3D11DeviceContext** context) {
     const HRESULT hr = originalCreateDevice(adapter, type, software, flags, levels, count, sdk, device, level, context);
-    simqvfr::logf("lmu mvr probe: device census: D3D11CreateDevice hr=0x%08lx device=%p context=%p adapter=%p "
-                  "driverType=%u flags=0x%08x featureLevel=0x%04x",
-                  static_cast<unsigned long>(hr),
-                  device && *device ? static_cast<void*>(*device) : nullptr,
-                  context && *context ? static_cast<void*>(*context) : nullptr,
-                  static_cast<void*>(adapter), static_cast<unsigned>(type), static_cast<unsigned>(flags),
-                  level ? static_cast<unsigned>(*level) : 0u);
     if (SUCCEEDED(hr) && device && *device)
         hook_shaders(*device, "at D3D11CreateDevice");
     return hr;
@@ -904,17 +896,6 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
                                             ID3D11DeviceContext** context) {
     const HRESULT hr = originalCreateDeviceAndSwapChain(adapter, type, software, flags, levels, count, sdk, desc,
                                                         swapChain, device, level, context);
-    simqvfr::logf("lmu mvr probe: device census: D3D11CreateDeviceAndSwapChain hr=0x%08lx device=%p context=%p "
-                  "swapChain=%p adapter=%p driverType=%u flags=0x%08x featureLevel=0x%04x size=%ux%u format=%u",
-                  static_cast<unsigned long>(hr),
-                  device && *device ? static_cast<void*>(*device) : nullptr,
-                  context && *context ? static_cast<void*>(*context) : nullptr,
-                  swapChain && *swapChain ? static_cast<void*>(*swapChain) : nullptr,
-                  static_cast<void*>(adapter), static_cast<unsigned>(type), static_cast<unsigned>(flags),
-                  level ? static_cast<unsigned>(*level) : 0u,
-                  desc ? static_cast<unsigned>(desc->BufferDesc.Width) : 0u,
-                  desc ? static_cast<unsigned>(desc->BufferDesc.Height) : 0u,
-                  desc ? static_cast<unsigned>(desc->BufferDesc.Format) : 0u);
     if (SUCCEEDED(hr) && device && *device)
         hook_shaders(*device, "at D3D11CreateDeviceAndSwapChain");
     return hr;
@@ -976,8 +957,6 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
 }
 
 void mvr_probe_device(ID3D11Device* device) {
-    simqvfr::logf("lmu mvr probe: device census: xrCreateSession device=%p, %d devices hooked so far",
-                  static_cast<void*>(device), hookedCount);
     unhook_device_creation();
     log_support(device, "xrCreateSession");
     int before = 0, index = -1;

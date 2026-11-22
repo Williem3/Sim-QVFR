@@ -132,7 +132,7 @@ void live_apply(const LiveSettings& l) {
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.composing());
-    else if (!experiment.views4 && game->measure_only()) {  // renders QVFR itself (RF2): its focus box and sizes, from the ini
+    else if (!experiment.views4 && game->adapter_qvfr()) {  // QVFR in the adapter (RF2): its focus box and sizes, from the ini
         const double fy = l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction;
         game->qvfr_set_live(l.focusFraction, fy, 1.0 + l.feather, l.gaze);
         const Views4Sizes sizes = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
@@ -419,8 +419,8 @@ void live_reload() {
     clock_placement_changed(s->clock);
     hotkeys_changed(s->hotkeys);
     if (s->restartKeys != live.restartKeys) {
-        // A game that renders QVFR itself (RF2) applies its sizes at once (live_apply above): nothing waits for a launch.
-        if (!game->measure_only())
+        // A game whose adapter makes QVFR (RF2) applies its sizes at once (live_apply above): nothing waits for a launch.
+        if (!game->adapter_qvfr())
             logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
         live.restartKeys = s->restartKeys;
     }

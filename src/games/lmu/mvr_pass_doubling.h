@@ -82,20 +82,6 @@ void doubled_draw(ID3D11DeviceContext* context, ID3D11InputLayout* layout, ID3D1
 // allowing), else as it was; a draw that can't be doubled with the game's own shader, into the eye's viewport alone.
 template <int H, typename... A>
 void game_draw(ID3D11DeviceContext* context, A... a) {
-    // rFactor 2: its eye passes' draws by its own rules (the atlas, NVIDIA's single-pass stereo or instancing). Its input layouts
-    // are not looked at (the layout twins are LMU's), as before; a draw it doesn't handle goes on as every game's below.
-    if (g.rf2Policy &&
-        rf2.draw_eye(
-            context, g.context, g.replaying, kMvrInstancedTwinGuid, kMvrTwinGuid,
-            [&](ID3D11VertexShader* shader, ID3D11ClassInstance* const* instances, UINT count) {
-                realVSSetShader(context, shader, instances, count);
-            },
-            [&](UINT count, const D3D11_VIEWPORT* viewports) { realRSSetViewports(context, count, viewports); },
-            [&](UINT count, const D3D11_RECT* scissors) { realRSSetScissorRects(context, count, scissors); },
-            [&] { doubled_draw<H>(context, nullptr, nullptr, a...); },  // instancing: twice the instances
-            [&] { call_real<H>(context, a...); },                       // single-pass stereo: once, the driver makes both views
-            [] { return take_over_with_instancing(); }))  // the driver refused the two views: instancing, if it can
-        return;
     if (!(g.instanced && g.on && ours(context))) {
         call_real<H>(context, a...);
         return;

@@ -1,12 +1,18 @@
 #pragma once
 
-#include <algorithm>
-#include <cstring>
+// RF2's composition: at an eye's resolve, the resolved scene (its outer view at the top left, its focus view at the top
+// right: render_backend.h AtlasLayout) is redrawn over the whole resolved target as the finished eye, the outer view
+// stretched over it and the focus view inside its box, feathered, rounded and outlined as the ini says. Called from the
+// resolve's observer (context_hooks): its own calls on the context go straight through.
+
 #include <d3d11.h>
 #include <d3dcompiler.h>
-#include <mutex>
 #include <windows.h>
 #include <wrl/client.h>
+
+#include <algorithm>
+#include <cstring>
+#include <mutex>
 
 #include "../../log.h"
 #include "render_backend.h"
@@ -26,75 +32,42 @@ public:
         next.outline = outline ? 0.008f : 0.0f;
         std::memcpy(next.color, color, sizeof(next.color));
         std::lock_guard<std::mutex> lock(lookMutex_);
-        if (lookSet_ && std::memcmp(&next, &look_, sizeof(Look)) == 0) return;
-        simqvfr::logf("rf2 look: feather %.0f%%, corner radius %.0f%%, outline %s", next.feather * 100,
-                      next.corner * 100, outline ? "on" : "off");
+        if (lookSet_ && std::memcmp(&next, &look_, sizeof(Look)) == 0)
+            return;
+        simqvfr::logf("rf2 look: feather %.0f%%, corner radius %.0f%%, outline %s", next.feather * 100, next.corner * 100,
+                      outline ? "on" : "off");
         lookSet_ = true;
         look_ = next;
     }
 
-    bool compose(ID3D11DeviceContext* c, ID3D11Resource* resolved, UINT sub, int eye,
-                 const float (&focusRect)[2][4], const AtlasLayout& layout, bool& replaying) {
+    // `resolved` (subresource `sub`): the eye's resolved scene, the layout's size, single-sampled; `format`: the resolve's
+    // (a typed format, for the views). `focusRect`: the eye's box as shares of the image.
+    bool compose(ID3D11DeviceContext* c, ID3D11Resource* resolved, UINT sub, DXGI_FORMAT format, int eye,
+                 const float (&focusRect)[4], const AtlasLayout& layout) {
         using Microsoft::WRL::ComPtr;
-        if (!c || !resolved || sub || eye < 0 || eye > 1) return false;
+        if (!c || !resolved || sub || eye < 0 || eye > 1 || !layout.valid())
+            return false;
         ComPtr<ID3D11Texture2D> source;
-        if (FAILED(resolved->QueryInterface(IID_PPV_ARGS(&source)))) return false;
+        if (FAILED(resolved->QueryInterface(IID_PPV_ARGS(&source))))
+            return false;
         D3D11_TEXTURE2D_DESC td{};
         source->GetDesc(&td);
-        if (td.Width != 3184 || td.Height != 3096 || td.Format != DXGI_FORMAT_R16G16B16A16_FLOAT ||
-            td.SampleDesc.Count != 1) return false;
+        if (td.Width != layout.width || td.Height != layout.height || td.SampleDesc.Count != 1 || td.ArraySize != 1)
+            return false;
         ComPtr<ID3D11Device> device;
         c->GetDevice(&device);
-        if (!ensure(device.Get(), td)) return false;
+        if (!ensure(device.Get(), td, format))
+            return false;
 
         c->CopyResource(source_.Get(), resolved);
-        ComPtr<ID3D11RenderTargetView> oldRtv;
-        ComPtr<ID3D11DepthStencilView> oldDsv;
-        c->OMGetRenderTargets(1, &oldRtv, &oldDsv);
-        ComPtr<ID3D11BlendState> oldBlend;
-        FLOAT bf[4]{};
-        UINT mask = 0;
-        c->OMGetBlendState(&oldBlend, bf, &mask);
-        ComPtr<ID3D11DepthStencilState> oldDepth;
-        UINT stencil = 0;
-        c->OMGetDepthStencilState(&oldDepth, &stencil);
-        ComPtr<ID3D11RasterizerState> oldRs;
-        c->RSGetState(&oldRs);
-        D3D11_VIEWPORT oldVp[16]{};
-        UINT nVp = 16;
-        c->RSGetViewports(&nVp, oldVp);
-        D3D11_RECT oldSc[16]{};
-        UINT nSc = 16;
-        c->RSGetScissorRects(&nSc, oldSc);
-        ComPtr<ID3D11InputLayout> oldLayout;
-        c->IAGetInputLayout(&oldLayout);
-        D3D11_PRIMITIVE_TOPOLOGY oldTopo{};
-        c->IAGetPrimitiveTopology(&oldTopo);
-        ComPtr<ID3D11VertexShader> oldVs;
-        ComPtr<ID3D11PixelShader> oldPs;
-        ComPtr<ID3D11GeometryShader> oldGs;
-        ComPtr<ID3D11HullShader> oldHs;
-        ComPtr<ID3D11DomainShader> oldDs;
-        c->VSGetShader(&oldVs, nullptr, nullptr);
-        c->PSGetShader(&oldPs, nullptr, nullptr);
-        c->GSGetShader(&oldGs, nullptr, nullptr);
-        c->HSGetShader(&oldHs, nullptr, nullptr);
-        c->DSGetShader(&oldDs, nullptr, nullptr);
-        ComPtr<ID3D11ShaderResourceView> oldSrv;
-        c->PSGetShaderResources(0, 1, &oldSrv);
-        ComPtr<ID3D11SamplerState> oldSampler;
-        c->PSGetSamplers(0, 1, &oldSampler);
-        ComPtr<ID3D11Buffer> oldPsCb13;
-        c->PSGetConstantBuffers(13, 1, &oldPsCb13);
+        const SavedState saved(c);
 
-        const bool was = replaying;
-        replaying = true;
         ID3D11RenderTargetView* target = tempRtv_.Get();
         c->OMSetRenderTargets(1, &target, nullptr);
         c->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
         c->OMSetDepthStencilState(nullptr, 0);
         c->RSSetState(nullptr);
-        const D3D11_VIEWPORT full{0, 0, 3184.0f, 3096.0f, 0, 1};
+        const D3D11_VIEWPORT full{0, 0, static_cast<float>(layout.width), static_cast<float>(layout.height), 0, 1};
         c->RSSetViewports(1, &full);
         c->RSSetScissorRects(0, nullptr);
         c->IASetInputLayout(nullptr);
@@ -108,21 +81,21 @@ public:
         ID3D11SamplerState* sampler = sampler_.Get();
         c->PSSetShaderResources(0, 1, &srv);
         c->PSSetSamplers(0, 1, &sampler);
-        // The focus box (lo, hi), the focus view's tile and the outer view's size, as shares of the scene target; then
-        // the look: feather, outline width, corner radius (x, y, z), and the outline's colour.
         Look look;
         {
             std::lock_guard<std::mutex> lock(lookMutex_);
             look = look_;
         }
-        const float constants[20] = {focusRect[eye][0], focusRect[eye][1], focusRect[eye][2], focusRect[eye][3],
-                                     static_cast<float>(layout.focus_x()) / kSceneWidth, 0.0f,
-                                     static_cast<float>(layout.focusW) / kSceneWidth,
-                                     static_cast<float>(layout.focusH) / kSceneHeight,
-                                     static_cast<float>(layout.outerW) / kSceneWidth,
-                                     static_cast<float>(layout.outerH) / kSceneHeight, 0.0f, 0.0f,
+        const float w = static_cast<float>(layout.width), h = static_cast<float>(layout.height);
+        // The focus box (lo, hi), the focus view's tile and the outer view's size, as shares of the scene target; the
+        // look: feather, outline width, corner radius (x, y, z), the outline's colour; the target's texel and size.
+        const float constants[24] = {focusRect[0], focusRect[1], focusRect[2], focusRect[3],
+                                     static_cast<float>(layout.focus_x()) / w, 0.0f, static_cast<float>(layout.focusW) / w,
+                                     static_cast<float>(layout.focusH) / h,
+                                     static_cast<float>(layout.outerW) / w, static_cast<float>(layout.outerH) / h, 0.0f, 0.0f,
                                      look.feather, look.outline, look.corner, 0.0f,
-                                     look.color[0], look.color[1], look.color[2], look.color[3]};
+                                     look.color[0], look.color[1], look.color[2], look.color[3],
+                                     1.0f / w, 1.0f / h, w, h};
         c->UpdateSubresource(focusBoxCb_.Get(), 0, nullptr, constants, 0, 0);
         ID3D11Buffer* focusBox = focusBoxCb_.Get();
         c->PSSetConstantBuffers(13, 1, &focusBox);
@@ -130,28 +103,7 @@ public:
         ID3D11ShaderResourceView* nil = nullptr;
         c->PSSetShaderResources(0, 1, &nil);
         c->CopyResource(resolved, temp_.Get());
-
-        ID3D11RenderTargetView* restoreRtv = oldRtv.Get();
-        c->OMSetRenderTargets(1, &restoreRtv, oldDsv.Get());
-        c->OMSetBlendState(oldBlend.Get(), bf, mask);
-        c->OMSetDepthStencilState(oldDepth.Get(), stencil);
-        c->RSSetState(oldRs.Get());
-        if (nVp) c->RSSetViewports(nVp, oldVp);
-        if (nSc) c->RSSetScissorRects(nSc, oldSc);
-        c->IASetInputLayout(oldLayout.Get());
-        c->IASetPrimitiveTopology(oldTopo);
-        c->VSSetShader(oldVs.Get(), nullptr, 0);
-        c->PSSetShader(oldPs.Get(), nullptr, 0);
-        c->GSSetShader(oldGs.Get(), nullptr, 0);
-        c->HSSetShader(oldHs.Get(), nullptr, 0);
-        c->DSSetShader(oldDs.Get(), nullptr, 0);
-        ID3D11Buffer* restoreCb = oldPsCb13.Get();
-        c->PSSetConstantBuffers(13, 1, &restoreCb);
-        ID3D11ShaderResourceView* restoreSrv = oldSrv.Get();
-        ID3D11SamplerState* restoreSampler = oldSampler.Get();
-        c->PSSetShaderResources(0, 1, &restoreSrv);
-        c->PSSetSamplers(0, 1, &restoreSampler);
-        replaying = was;
+        saved.restore(c);
         ++frames_[eye];
         return true;
     }
@@ -159,14 +111,97 @@ public:
     uint64_t frames(int eye) const { return eye >= 0 && eye < 2 ? frames_[eye] : 0; }
 
 private:
-    bool ensure(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& target) {
+    // The context state the composition changes, put back after it.
+    struct SavedState {
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv;
+        Microsoft::WRL::ComPtr<ID3D11BlendState> blend;
+        FLOAT blendFactor[4]{};
+        UINT sampleMask = 0, stencilRef = 0, viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE,
+             scissors = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> depth;
+        Microsoft::WRL::ComPtr<ID3D11RasterizerState> rs;
+        D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+        D3D11_RECT sc[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+        Microsoft::WRL::ComPtr<ID3D11InputLayout> layout;
+        D3D11_PRIMITIVE_TOPOLOGY topology{};
+        Microsoft::WRL::ComPtr<ID3D11VertexShader> vs;
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> ps;
+        Microsoft::WRL::ComPtr<ID3D11GeometryShader> gs;
+        Microsoft::WRL::ComPtr<ID3D11HullShader> hs;
+        Microsoft::WRL::ComPtr<ID3D11DomainShader> ds;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+        Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
+        Microsoft::WRL::ComPtr<ID3D11Buffer> psCb13;
+
+        explicit SavedState(ID3D11DeviceContext* c) {
+            ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+            c->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+            for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+                rtv[i].Attach(rtvs[i]);
+            c->OMGetBlendState(&blend, blendFactor, &sampleMask);
+            c->OMGetDepthStencilState(&depth, &stencilRef);
+            c->RSGetState(&rs);
+            c->RSGetViewports(&viewports, vp);
+            c->RSGetScissorRects(&scissors, sc);
+            c->IAGetInputLayout(&layout);
+            c->IAGetPrimitiveTopology(&topology);
+            c->VSGetShader(&vs, nullptr, nullptr);
+            c->PSGetShader(&ps, nullptr, nullptr);
+            c->GSGetShader(&gs, nullptr, nullptr);
+            c->HSGetShader(&hs, nullptr, nullptr);
+            c->DSGetShader(&ds, nullptr, nullptr);
+            c->PSGetShaderResources(0, 1, &srv);
+            c->PSGetSamplers(0, 1, &sampler);
+            c->PSGetConstantBuffers(13, 1, &psCb13);
+        }
+        void restore(ID3D11DeviceContext* c) const {
+            ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            UINT count = 0;
+            for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
+                rtvs[i] = rtv[i].Get();
+                if (rtvs[i])
+                    count = i + 1;
+            }
+            c->OMSetRenderTargets(count, rtvs, dsv.Get());
+            c->OMSetBlendState(blend.Get(), blendFactor, sampleMask);
+            c->OMSetDepthStencilState(depth.Get(), stencilRef);
+            c->RSSetState(rs.Get());
+            c->RSSetViewports(viewports, vp);
+            c->RSSetScissorRects(scissors, sc);
+            c->IASetInputLayout(layout.Get());
+            c->IASetPrimitiveTopology(topology);
+            c->VSSetShader(vs.Get(), nullptr, 0);
+            c->PSSetShader(ps.Get(), nullptr, 0);
+            c->GSSetShader(gs.Get(), nullptr, 0);
+            c->HSSetShader(hs.Get(), nullptr, 0);
+            c->DSSetShader(ds.Get(), nullptr, 0);
+            ID3D11ShaderResourceView* s = srv.Get();
+            ID3D11SamplerState* smp = sampler.Get();
+            ID3D11Buffer* cb = psCb13.Get();
+            c->PSSetShaderResources(0, 1, &s);
+            c->PSSetSamplers(0, 1, &smp);
+            c->PSSetConstantBuffers(13, 1, &cb);
+        }
+    };
+
+    bool ensure(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& target, DXGI_FORMAT format) {
         using Microsoft::WRL::ComPtr;
-        if (!device) return false;
+        if (!device)
+            return false;
+        if (device != device_.Get()) {  // the renderer's device changed (context_hooks::retarget): everything made again
+            device_ = device;
+            vs_.Reset();
+            ps_.Reset();
+            focusBoxCb_.Reset();
+            sampler_.Reset();
+            temp_.Reset();
+        }
         if (!vs_ || !ps_) {
             static constexpr char shader[] = R"HLSL(
 Texture2D<float4> Atlas : register(t0);
 SamplerState LinearClamp : register(s0);
-cbuffer FocusBox : register(b13) { float4 FocusLoHi; float4 FocusTile; float4 OuterTile; float4 Look; float4 LookColor; };
+cbuffer FocusBox : register(b13) { float4 FocusLoHi; float4 FocusTile; float4 OuterTile; float4 Look; float4 LookColor; float4 Target; };
 struct VOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 VOut VS(uint id : SV_VertexID) { VOut o; float2 p=float2((id<<1)&2,id&2); o.uv=p; o.pos=float4(p.x*2-1,1-p.y*2,0,1); return o; }
 // How far inside the focus box a point is (f: 0..1 across it), as a share of the box; negative outside. Square corners:
@@ -180,13 +215,13 @@ float inside_box(float2 f, float2 size) {
  return -d/min(size.x,size.y);
 }
 float4 PS(VOut i) : SV_Target {
- float2 texel=float2(1.0/3184.0,1.0/3096.0);
+ float2 texel=Target.xy;
  float2 ouv=clamp(i.uv*OuterTile.xy,texel*0.5,OuterTile.xy-texel*0.5);
  float4 outer=Atlas.SampleLevel(LinearClamp,ouv,0);
  float2 lo=FocusLoHi.xy,hi=FocusLoHi.zw;
  bool inside=all(i.uv>=lo)&&all(i.uv<=hi);
  if(inside){ float2 local=(i.uv-lo)/(hi-lo);
-  float e=inside_box(local,(hi-lo)*float2(3184.0,3096.0));
+  float e=inside_box(local,(hi-lo)*Target.zw);
   if(e<0) return outer;
   float w=saturate(e/max(Look.x,1e-4)); w=w*w*(3-2*w);
   float2 uv=float2(FocusTile.x+local.x*FocusTile.z,local.y*FocusTile.w);
@@ -196,42 +231,71 @@ float4 PS(VOut i) : SV_Target {
   return color; }
  return outer;
 })HLSL";
-            using CompileFn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR,
-                                               LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
-            static HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
-            static CompileFn compile = module ? reinterpret_cast<CompileFn>(GetProcAddress(module, "D3DCompile")) : nullptr;
-            if (!compile) { simqvfr::log_line("rf2 outer+focus: d3dcompiler_47.dll / D3DCompile unavailable"); return false; }
             ComPtr<ID3DBlob> vsCode, psCode, errors;
             const UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
-            HRESULT hr = compile(shader, sizeof(shader)-1, "rf2_outer_focus", nullptr, nullptr, "VS", "vs_5_0", flags, 0, &vsCode, &errors);
-            if (FAILED(hr)) { simqvfr::logf("rf2 outer+focus: VS compile failed: %s", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "unknown"); return false; }
+            if (FAILED(D3DCompile(shader, sizeof(shader) - 1, "rf2_outer_focus", nullptr, nullptr, "VS", "vs_5_0", flags, 0,
+                                  &vsCode, &errors))) {
+                simqvfr::logf("rf2 compose: VS compile failed: %s",
+                              errors ? static_cast<const char*>(errors->GetBufferPointer()) : "unknown");
+                return false;
+            }
             errors.Reset();
-            hr = compile(shader, sizeof(shader)-1, "rf2_outer_focus", nullptr, nullptr, "PS", "ps_5_0", flags, 0, &psCode, &errors);
-            if (FAILED(hr)) { simqvfr::logf("rf2 outer+focus: PS compile failed: %s", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "unknown"); return false; }
+            if (FAILED(D3DCompile(shader, sizeof(shader) - 1, "rf2_outer_focus", nullptr, nullptr, "PS", "ps_5_0", flags, 0,
+                                  &psCode, &errors))) {
+                simqvfr::logf("rf2 compose: PS compile failed: %s",
+                              errors ? static_cast<const char*>(errors->GetBufferPointer()) : "unknown");
+                return false;
+            }
             if (FAILED(device->CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(), nullptr, &vs_)) ||
-                FAILED(device->CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(), nullptr, &ps_))) return false;
-            const D3D11_BUFFER_DESC cbd = {80, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-            if (FAILED(device->CreateBuffer(&cbd, nullptr, &focusBoxCb_))) return false;
+                FAILED(device->CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(), nullptr, &ps_)))
+                return false;
+            const D3D11_BUFFER_DESC cbd = {96, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+            if (FAILED(device->CreateBuffer(&cbd, nullptr, &focusBoxCb_)))
+                return false;
             D3D11_SAMPLER_DESC sd{};
             sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
             sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
             sd.MaxLOD = D3D11_FLOAT32_MAX;
-            if (FAILED(device->CreateSamplerState(&sd, &sampler_))) return false;
+            if (FAILED(device->CreateSamplerState(&sd, &sampler_)))
+                return false;
         }
-        if (!temp_ || !source_ || format_ != target.Format) {
+        if (!temp_ || width_ != target.Width || height_ != target.Height || format_ != target.Format || view_ != format) {
             D3D11_TEXTURE2D_DESC td = target;
-            td.MipLevels=1; td.ArraySize=1; td.SampleDesc.Count=1; td.SampleDesc.Quality=0;
-            td.Usage=D3D11_USAGE_DEFAULT; td.CPUAccessFlags=0; td.MiscFlags=0;
-            temp_.Reset(); tempRtv_.Reset(); source_.Reset(); sourceSrv_.Reset();
-            td.BindFlags=D3D11_BIND_RENDER_TARGET;
-            if (FAILED(device->CreateTexture2D(&td,nullptr,&temp_)) || FAILED(device->CreateRenderTargetView(temp_.Get(),nullptr,&tempRtv_))) return false;
-            td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
-            if (FAILED(device->CreateTexture2D(&td,nullptr,&source_)) || FAILED(device->CreateShaderResourceView(source_.Get(),nullptr,&sourceSrv_))) return false;
-            format_=target.Format;
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.SampleDesc = {1, 0};
+            td.Usage = D3D11_USAGE_DEFAULT;
+            td.CPUAccessFlags = 0;
+            td.MiscFlags = 0;
+            temp_.Reset();
+            tempRtv_.Reset();
+            source_.Reset();
+            sourceSrv_.Reset();
+            const DXGI_FORMAT viewFormat = format != DXGI_FORMAT_UNKNOWN ? format : target.Format;
+            D3D11_RENDER_TARGET_VIEW_DESC rd{viewFormat, D3D11_RTV_DIMENSION_TEXTURE2D};
+            D3D11_SHADER_RESOURCE_VIEW_DESC sd{viewFormat, D3D11_SRV_DIMENSION_TEXTURE2D};
+            sd.Texture2D.MipLevels = 1;
+            td.BindFlags = D3D11_BIND_RENDER_TARGET;
+            if (FAILED(device->CreateTexture2D(&td, nullptr, &temp_)) ||
+                FAILED(device->CreateRenderTargetView(temp_.Get(), &rd, &tempRtv_))) {
+                temp_.Reset();
+                return false;
+            }
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(device->CreateTexture2D(&td, nullptr, &source_)) ||
+                FAILED(device->CreateShaderResourceView(source_.Get(), &sd, &sourceSrv_))) {
+                temp_.Reset();
+                return false;
+            }
+            width_ = target.Width;
+            height_ = target.Height;
+            format_ = target.Format;
+            view_ = format;
         }
         return true;
     }
 
+    Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> focusBoxCb_;
@@ -240,7 +304,8 @@ float4 PS(VOut i) : SV_Target {
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> tempRtv_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> source_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> sourceSrv_;
-    DXGI_FORMAT format_ = DXGI_FORMAT_UNKNOWN;
+    UINT width_ = 0, height_ = 0;
+    DXGI_FORMAT format_ = DXGI_FORMAT_UNKNOWN, view_ = DXGI_FORMAT_UNKNOWN;
     uint64_t frames_[2]{};
 
     struct Look {
