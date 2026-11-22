@@ -78,6 +78,14 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1; focus 0 and 1 over a b
     unsigned long long beforeFrame = 0;
     bool haveBefore = false;
     unsigned beforeBandTop = 0;  // a band's top row in the frame before (its vectors carry the move)
+    // Highlights kept (DlssRun::keepHighlights, keep_highlights): the view as drawn (w x h), DLSS's output read, and the
+    // two merged (ow x oh), made for this size and format.
+    ComPtr<ID3D11Texture2D> hlDrawn, hlMerged;
+    ComPtr<ID3D11ShaderResourceView> hlDrawnSrv, hlOutputSrv;
+    ComPtr<ID3D11RenderTargetView> hlMergedRtv;
+    unsigned hlSize[4] = {};
+    DXGI_FORMAT hlFormat = DXGI_FORMAT_UNKNOWN;
+    bool hlRefused = false;
     unsigned long long runs = 0;  // frames this view went through DLAA at this size
     // A live size change waiting to settle (ensure): the size asked and since when (GetTickCount64), and whether this
     // frame's view was left as drawn for it (not a failure).
@@ -103,6 +111,8 @@ struct State {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch, bandOutside;
+    ComPtr<ID3D11PixelShader> highlights;  // keep_highlights' (null: not made; DLSS's output copied as it is)
+    unsigned long long highlightViews = 0;  // views merged with their highlights this launch
     // The vectors with our single-sample depth copy beside multisample object slots; the copy's and the measurement's.
     ComPtr<ID3D11PixelShader> vectorsCopyMs, depthCopyMs, depthCopySs, measureMs, measureSs, keepFarMs, keepFarSs;
     ComPtr<ID3D11Buffer> constants;
@@ -259,6 +269,15 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
     const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
     const auto bandOutside = compile(kBandOutsideShader, "ps", "ps_5_0", nullptr);
+    if (d.cfg.keepHighlights) {  // optional: without it DLSS's output goes back as it is
+        const auto highlights = compile(kHighlightShader, "ps", "ps_5_0", nullptr);
+        if (!highlights || FAILED(d.device->CreatePixelShader(highlights->GetBufferPointer(), highlights->GetBufferSize(),
+                                                              nullptr, &d.highlights)))
+            say("highlights kept asked for, but its shader couldn't be made: off");
+        else
+            say("highlights kept: floor %.2f, ratio %.2f, strength %.2f", d.cfg.highlightFloor, d.cfg.highlightRatio,
+                d.cfg.highlightStrength);
+    }
     const D3D_SHADER_MACRO bothMs[] = {{"MS", "1"}, {"DEPTH_MS", "1"}, {nullptr, nullptr}};
     const auto psBoth = compile(kVectorsShader, "ps", "ps_5_0", bothMs);
     const auto copyMs = compile(kDepthCopyShader, "ps", "ps_5_0", ms);
@@ -740,6 +759,63 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
                       d.frame, index, s.width, s.height, text[0], text[1]);
 }
 
+// DlssRun::keepHighlights: the view's DLSS output (s.output, ow x oh) merged with the view as the game drew it (w x h at
+// (x, y) of `resolved`, still there: DLSS wrote its own texture) and the merge put in the output's place. Inside
+// dlss_after_resolve's state guard, as run_view. False: not done (off, or its textures couldn't be made: the caller
+// copies the output as it is).
+bool keep_highlights(ID3D11DeviceContext* context, Slot& s, ID3D11Resource* resolved, DXGI_FORMAT format, unsigned x,
+                     unsigned y, unsigned w, unsigned h, unsigned ow, unsigned oh) {
+    if (!d.cfg.keepHighlights || !d.highlights || !s.output || d.cfg.highlightStrength <= 0)
+        return false;
+    const unsigned size[4] = {w, h, ow, oh};
+    if (std::memcmp(size, s.hlSize, sizeof(size)) != 0 || s.hlFormat != format) {
+        std::memcpy(s.hlSize, size, sizeof(size));
+        s.hlFormat = format;
+        s.hlDrawn.Reset();
+        s.hlMerged.Reset();
+        s.hlDrawnSrv.Reset();
+        s.hlOutputSrv.Reset();
+        s.hlMergedRtv.Reset();
+        s.hlRefused = !(make(s.hlDrawn, w, h, format, D3D11_BIND_SHADER_RESOURCE) &&
+                        make(s.hlMerged, ow, oh, format, D3D11_BIND_RENDER_TARGET) &&
+                        SUCCEEDED(d.device->CreateShaderResourceView(s.hlDrawn.Get(), nullptr, &s.hlDrawnSrv)) &&
+                        SUCCEEDED(d.device->CreateShaderResourceView(s.output.Get(), nullptr, &s.hlOutputSrv)) &&
+                        SUCCEEDED(d.device->CreateRenderTargetView(s.hlMerged.Get(), nullptr, &s.hlMergedRtv)));
+        if (s.hlRefused)
+            say("highlights kept: a view's textures (%ux%u to %ux%u, format %d) couldn't be made: copied as DLSS left it",
+                w, h, ow, oh, static_cast<int>(format));
+    }
+    if (s.hlRefused)
+        return false;
+    const D3D11_BOX box{x, y, 0, x + w, y + h, 1};
+    context->CopySubresourceRegion(s.hlDrawn.Get(), 0, 0, 0, 0, resolved, 0, &box);
+    Constants c{};
+    c.js[0] = static_cast<float>(w);
+    c.js[1] = static_cast<float>(h);
+    c.js[2] = static_cast<float>(ow);
+    c.js[3] = static_cast<float>(oh);
+    c.extra[0] = static_cast<float>(d.cfg.highlightFloor);
+    c.extra[1] = static_cast<float>(d.cfg.highlightRatio);
+    c.extra[2] = static_cast<float>(d.cfg.highlightStrength);
+    context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
+    context->RSSetState(nullptr);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context->OMSetDepthStencilState(nullptr, 0);
+    context->GSSetShader(nullptr, nullptr, 0);
+    context->HSSetShader(nullptr, nullptr, 0);
+    context->DSSetShader(nullptr, nullptr, 0);
+    context->OMSetRenderTargets(1, s.hlMergedRtv.GetAddressOf(), nullptr);
+    ID3D11ShaderResourceView* srvs[2] = {s.hlOutputSrv.Get(), s.hlDrawnSrv.Get()};
+    context->PSSetShaderResources(0, 2, srvs);
+    draw_triangle(context, d.highlights.Get(), ow, oh);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11ShaderResourceView* none[2] = {};
+    context->PSSetShaderResources(0, 2, none);
+    context->CopySubresourceRegion(resolved, 0, x, y, 0, s.hlMerged.Get(), 0, nullptr);
+    ++d.highlightViews;
+    return true;
+}
+
 // One view: its depth and vectors drawn, its part of the resolved scene (w x h at (x, y)) through DLSS and back into
 // place at ow x oh (DLAA: the same). False: not done (the view as it was drawn).
 bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
@@ -892,7 +968,8 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         done = ngx::evaluate(context, s.feature, e, result);
     }
     if (done) {
-        context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
+        if (!keep_highlights(context, s, resolved, format, x, y, w, h, ow, oh))
+            context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
         if (nr_view_wanted(index) && !nr_before_dlss())
             neural(ow, oh);
         ++d.evaluations;
@@ -1671,6 +1748,7 @@ void dlss_shutdown() {
     std::memset(d.stretchSize, 0, sizeof(d.stretchSize));
     d.constants.Reset();
     d.linearClamp.Reset();
+    d.highlights.Reset();
     for (int i = 0; i < 4; ++i) {
         d.checkTarget[i].Reset();
         d.checkRead[i].Reset();

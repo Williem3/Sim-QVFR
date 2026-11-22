@@ -75,6 +75,17 @@ struct DlssRun {
     // The copy taken only where what was drawn over it lies nearer than this (metres; 0: everywhere): the player's car's
     // glass, not another car drawn blended with its depth written (whose surface the depth is).
     double depthCopyNear = 3.0;
+    // Highlights kept (an experiment): DLSS averages a light's few very bright texels down over the frames (the jitter
+    // moves them; it takes them for noise), and the game's bloom, made from the brightest texels after DLSS, loses
+    // most of its glow at night (headlights, street lights). On: where the view as drawn is brighter than `floor`
+    // (luminance, the HDR scene's own units) and `ratio` times brighter than DLSS's output, the drawn texel comes back
+    // over DLSS's (by `strength`, 0..1), so the bloom sees the light's peak again. Off: DLSS's output as it is.
+    bool keepHighlights = false;
+    // Tested in LMU (SteamVR, day and night): 20 and 4 keep the night lights' bloom without sparkle in daylight; 1 and
+    // 2 caught sunlit paint and edges too.
+    double highlightFloor = 20.0;
+    double highlightRatio = 4.0;
+    double highlightStrength = 1.0;
 };
 
 // The game's side: eye `eye`'s pass's view matrix (world -> view, row vectors) and projection as rendered (jitter
