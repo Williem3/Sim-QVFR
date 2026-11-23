@@ -64,7 +64,10 @@ public:
         // The focus replays' full-screen shaders that turn their vertex into screen pixels (the light list's tiles) get
         // a twin placing the vertex at the box: [experiment] scs_focus_position=0 for the replays as before (A/B).
         if (simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"scs_mirror_diag", 0, ini) != 0)
-            corner_mirror_diag(true);  // which shaders read the pairs the mirrors rewrite (dev builds)
+            corner_mirror_diag(true);
+        // The violet flash's anomaly log (dev builds): every pair the copies rewrite against the draws that read it.
+        if (simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"scs_violet_log", 0, ini) != 0)
+            corner_violet_log(true);  // which shaders read the pairs the mirrors rewrite (dev builds)
         // The scene draws whose pixel shader reads the targets at its own pixel through the eye's projected position (the
         // signs' forward pass): their focus view reads its own region, not the eye's corner. [experiment]
         // scs_own_pixel_loads=0: as before (an A/B).

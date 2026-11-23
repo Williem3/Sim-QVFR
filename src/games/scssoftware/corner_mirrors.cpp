@@ -53,10 +53,11 @@ bool big_scratch(UINT bytes) {
 
 // Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back (b0 with its range).
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups, const void* rows) {
+            UINT groups, const void* rows, ID3D11UnorderedAccessView* log) {
     d3s::Spec spec;
     spec.parts = d3s::kCS;
-    spec.csSrv = spec.csUavs = {0, 1};
+    spec.csSrv = {0, 1};
+    spec.csUavs = {0, log ? 2u : 1u};
     spec.csCb = {0, rows ? 2u : 1u};
     spec.instances = false;
     const simqvfr::D3D11StateGuard keep(g.context.Get(), spec);
@@ -67,6 +68,10 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetShader(cs, nullptr, 0);
     g.context->CSSetShaderResources(0, 1, ins);
     g.context->CSSetUnorderedAccessViews(0, 1, outs, nullptr);
+    if (log) {  // u1: the mirror pass's anomaly log (corner_anomaly.cpp)
+        ID3D11UnorderedAccessView* const logs[] = {log};
+        g.context->CSSetUnorderedAccessViews(1, 1, logs, nullptr);
+    }
     g.context->CSSetConstantBuffers(0, 1, ps);
     if (rows) {  // b1: the shader's rows read by a fixed index (kCornerPatchCs)
         g.context->UpdateSubresource(g.rowsCb.Get(), 0, nullptr, rows, 0, 0);
@@ -87,16 +92,19 @@ void refresh(Mirror& m) {
     const Timed timed(State::kTimeMirrors);
     const D3D11_BOX box = {0, 0, 0, m.bytes, 1, 1};
     g.context->CopySubresourceRegion(g.bigIn.Get(), 0, 0, 0, 0, m.game.Get(), 0, &box);
-    const struct {
+    struct {  // (pad: the anomaly log's tag)
         float fx, fy;
         UINT count, pad;
         float w, h, p0, p1;
         float unused[8];
     } p = {g.fx, g.fy, m.bytes / 16, 0, static_cast<float>(g.eyeW), static_cast<float>(g.eyeH), 0, 0, {}};
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
-    run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
+    ++m.serial;  // this copy's (the anomaly log's tag carries it, and the draws that read it)
+    ID3D11UnorderedAccessView* const log = anomaly_uav();
+    if (log)
+        p.pad = anomaly_tag(m);
+    run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64, nullptr, log);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
-    ++m.serial;
     mirror_diag_refresh(m);
     ++g.mirrorRefreshes;
 }

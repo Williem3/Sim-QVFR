@@ -419,8 +419,17 @@ Mirror* mirror_of_game(ID3D11Buffer* b);
 ID3D11Buffer* game_of(ID3D11Buffer* b);
 bool big_scratch(UINT bytes);
 // ows: b1, the rows the rewritten shader reads by a fixed index (512 bytes), for kCornerPatchCs's flag 4.
+// corner_anomaly.cpp (dev builds, [experiment] scs_violet_log=1): the violet flash's anomaly log.
+void anomaly_enable(bool on);
+ID3D11UnorderedAccessView* anomaly_uav();  // the mirror pass's log this frame (null: off)
+uint32_t anomaly_tag(const Mirror& m);
+void anomaly_draw();       // a draw while our copies are bound (on_draw)
+void anomaly_frame_end();  // take_frame_end
+void anomaly_release();    // release_all
+uint64_t anomaly_entries();
+size_t anomaly_kinds();
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups, const void* rows = nullptr);
+            UINT groups, const void* rows = nullptr, ID3D11UnorderedAccessView* log = nullptr);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
 // The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last

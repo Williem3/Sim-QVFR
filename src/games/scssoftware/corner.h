@@ -61,6 +61,8 @@ void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpu
 void corner_set_force_ui_redraw(bool on);
 // Dev builds' mirror diagnostic ([experiment] scs_mirror_diag=1, corner_mirror_diag.cpp): before the game's shaders.
 void corner_mirror_diag(bool on);
+// Dev builds' violet-flash anomaly log ([experiment] scs_violet_log=1, corner_anomaly.cpp): before the install.
+void corner_violet_log(bool on);
 // The scene draws' own-pixel-loads twins (lmu::mvr_probe_own_pixel_loads): bound for their focus draws. Before the install.
 void corner_own_pixel_loads(bool on);
 bool corner_on();

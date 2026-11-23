@@ -52,6 +52,7 @@ void take_frame_end() {
     g.frameDraw = 0;
     ++g.stats.frames;
     mirror_diag_frame_end();
+    anomaly_frame_end();
     fixation_frame_end();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
@@ -350,6 +351,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     mirror_diag_draw();
+    anomaly_draw();  // (dev builds, scs_violet_log=1) which copy and range this draw reads
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
@@ -697,6 +699,7 @@ void release_all() {
     g.mirrors.clear();
     g.bigIn.Reset(), g.bigOut.Reset(), g.bigInView.Reset(), g.bigOutView.Reset();
     g.bigBytes = 0;
+    anomaly_release();
     // The focus view's.
     g.remapCb.Reset();
     g.lookCb.Reset();
@@ -906,6 +909,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
 
 void corner_mirror_diag(bool on) { mirror_diag_enable(on); }
+
+void corner_violet_log(bool on) { anomaly_enable(on); }
 
 void corner_own_pixel_loads(bool on) { g.ownPixelLoads = on; }
 
