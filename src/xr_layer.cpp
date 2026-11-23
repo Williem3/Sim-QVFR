@@ -443,7 +443,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     if (!ok)
         log_line("missing downstream functions; pass-through only");
     else
-        gaze_init(*instance);
+        gaze_init(*instance, gazeExtension == GazeExtension::Requested || gazeAdded);
     if (ok)
         eye_off_install();  // right above the runtime: it sees the frame as the runtime will
     if (ok)

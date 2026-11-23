@@ -323,6 +323,13 @@ int SIM_QVFR_TEST_MAIN() {
         checks = preflight_checks(in);
         const Check* eye = find(checks, "eye_tracking");
         check(eye && eye->tone == CheckTone::Warn && worst_tone(checks) == CheckTone::Warn, "preflight: no eye tracking last time");
+        check(eye && eye->detail.find(L"input focus") == std::wstring::npos, "preflight: the tracker blamed while focus is unknown");
+        in.sessionFocus = 0;
+        checks = preflight_checks(in);
+        eye = find(checks, "eye_tracking");
+        check(eye && eye->detail.find(L"never gave the game input focus") != std::wstring::npos,
+              "preflight: no eye tracking with a session that never got input focus names the focus");
+        in.sessionFocus = -1;
         in.eyeTracked = false;
         check(!find(preflight_checks(in), "eye_tracking"), "preflight: fixed foveation needs no eye tracker");
 
