@@ -41,6 +41,9 @@ struct Settings {
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening of the focus views as
     // they are composed (CAS's own sharpness), 0 off (the default) to 100 the strongest (live).
     int sharpen = kSharpenPercent.def;
+    // [quad] periphery_texture_match (QVFR, a game with GameFeatures::peripheryTextureMatch: ACE): the periphery's
+    // textures as sharp as the focus views', percent of the way; 0 off (live).
+    int textureMatch = kPeripheryTextureMatch.def;
     // [quad] color_correction and its values (QVFR, a game with GameFeatures::sharpening; quad/color_grade.h): the
     // headset image's exposure, brightness, contrast and saturation, off (the default) or on (live).
     ColorGrade grade;
@@ -140,6 +143,7 @@ constexpr Range range_of(const IniInt& k) { return {k.min, k.max}; }
 inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = range_of(kFocusDensity),
     kSizeRange = range_of(kFocusPercent), kFeatherRange = range_of(kFeatherPercent), kCornerRange = range_of(kCornerRadiusPercent),
     kCropRange = range_of(kCropTop), kObjectDetailRange = range_of(kObjectDetail), kSharpenRange = range_of(kSharpenPercent),
+    kTextureMatchRange = range_of(kPeripheryTextureMatch),
     kColorExposureRange = range_of(kColorExposure), kColorBrightnessRange = range_of(kColorBrightness),
     kColorContrastRange = range_of(kColorContrast), kColorSaturationRange = range_of(kColorSaturation),
     kCarFillRange = range_of(kCarLightFill), kCarOcclusionRange = range_of(kCarLightOcclusion),

@@ -129,6 +129,7 @@ void eye_record(List* gameList, const Stream& s) {
             const float floats[4] = {1.0f, 1.0f, p.w, p.h};  // the whole eye, at the list's live view size
             std::memcpy(params, floats, sizeof(floats));
             params[34] = 1;  // eyeMode
+            std::memcpy(params + 35, &s.eyeBias, 4);  // mipBias
             l->SetPipelineState(focus.patchPso.Get());
         } else {
             params[0] = static_cast<uint32_t>(p.mode);

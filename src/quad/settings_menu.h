@@ -54,6 +54,8 @@ enum class MenuItem {
     FocusQuadDistance,
     // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
     Sharpening,
+    // The settings page, after Sharpening, for a game with it (MenuLaunch::textureMatch: ACE).
+    TextureMatch,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
     // the focus views' mode and preset, the eyes' preset, texture sharpening; with MenuLaunch::fsr the upscaler (DLSS or
     // AMD FSR, an experiment).
@@ -135,6 +137,7 @@ struct MenuValues {
     HelmetSettings helmet;    // [helmet] (QVFR)
     int objectDetail = kObjectDetail.def;  // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
+    int textureMatch = kPeripheryTextureMatch.def;  // [quad] periphery_texture_match (a game with it), percent; 0 off
     ColorGrade color;         // [quad] color_correction and its values (QVFR, a game with sharpening; the Colour page)
     CarLighting carLight;     // [quad] car_light and its values (QVFR, a game with it; the Colour page's Night cars)
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
@@ -173,6 +176,8 @@ struct MenuLaunch {
     // Sharpening on the settings page (GameFeatures::sharpening), as objectDetail; with it (QVFR) the Colour page too:
     // every game whose compositor runs.
     bool sharpening = false;
+    // Periphery texture match on the settings page (GameFeatures::peripheryTextureMatch), as objectDetail.
+    bool textureMatch = false;
     // One eye off on the Picture page (GameFeatures::eyeOff), as objectDetail.
     bool eyeOff = false;
     // Night car lighting on the Colour page (GameFeatures::carLighting, QVFR), and whether it was on at launch (its
@@ -277,10 +282,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
 // Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
-// sharpening and colour correction only with `sharpening`, a game that has it). False if the file cannot be written.
+// sharpening and colour correction only with `sharpening`, periphery texture match only with `textureMatch`, a game
+// that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
                        bool focusQuads = false, bool sharpening = false, bool eyeOff = false, bool carLighting = false,
-                       bool focusCorridor = false);
+                       bool focusCorridor = false, bool textureMatch = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus

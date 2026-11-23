@@ -98,6 +98,8 @@ void live_apply(const LiveSettings& l) {
     experiment.fixedOffsetX = l.offset.fixedX;
     experiment.gazeOffsetX = l.offset.gazeX;
     experiment.gazeDeadzone = l.gazeDeadzone;
+    if (experiment.textureMatch.exchange(l.textureMatch) != l.textureMatch)
+        logf("live: periphery texture match %d%%%s", l.textureMatch, l.textureMatch ? "" : " (off)");
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
     if (const uint64_t bits = color_grade_bits(l.color); experiment.colorGrade.exchange(bits) != bits)
@@ -171,6 +173,11 @@ void live_apply(const LiveSettings& l) {
                                   std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
         }
         replay_probe_set_box(boxX, boxY);
+        // Periphery texture match; [experiment] replay_periphery_mip_bias (development builds) sets the mip levels
+        // itself, in hundredths (-130: 1.3 levels sharper).
+        replay_probe_set_eye_texture_match(
+            l.textureMatch / 100.0,
+            simqvfr::kDevBuild ? ini_signed(live.ini.c_str(), L"experiment", L"replay_periphery_mip_bias", 0) / 100.0 : 0.0);
         if (simqvfr::kDevBuild)  // diagnostic switches: development builds only (dev_build.h)
             replay_probe_set_live_diag(GetPrivateProfileIntW(L"experiment", L"replay_live_diag", 0, live.ini.c_str()));
         if (simqvfr::kDevBuild) {  // the self-test's fixed head pose and capture burst (development builds)

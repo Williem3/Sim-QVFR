@@ -79,6 +79,8 @@ enum Ctl {
     kClockOn, kClockYaw, kClockPitch, kClockSize, kClockPanel,
     // Sharpening ([quad] sharpen_percent, Resolution pane).
     kSharpen,
+    // Periphery texture match ([quad] periphery_texture_match, Resolution pane; ACE).
+    kTextureMatch,
     // Colour correction ([quad] color_correction and its values, the Picture tab's Color card).
     kGradeOn, kGradeExposure, kGradeBrightness, kGradeContrast, kGradeSaturation,
     // Night car lighting ([quad] car_light and its values, the Picture tab's Night cars card; LMU).

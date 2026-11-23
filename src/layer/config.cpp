@@ -57,6 +57,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.objectDetail = ini_int(ini, kObjectDetail);
     if (features.sharpening)
         l.sharpen = ini_int(ini, kSharpenPercent);
+    if (features.peripheryTextureMatch)
+        l.textureMatch = ini_int(ini, kPeripheryTextureMatch);
     if (features.sharpening)  // every game whose compositor runs (as sharpening)
         l.color = read_color_grade(ini);
     if (features.carLighting)  // night car lighting (the game reads it each frame: quad/car_lighting.h)
@@ -413,6 +415,7 @@ void load_experiment() {
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
+    experiment.textureMatch = settings.textureMatch;
     experiment.colorGrade = color_grade_bits(settings.color);
     set_car_lighting(settings.carLight);
     experiment.outputDensityMax = settings.outputDensityMax;
@@ -554,6 +557,8 @@ void load_experiment() {
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze,
          settings.offset.fixedX, settings.offset.gazeX, ini.c_str());
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
+    if (game_features().peripheryTextureMatch)
+        logf("experiment: periphery texture match %d%%%s", settings.textureMatch, settings.textureMatch ? "" : " (off)");
     if (game_features().sharpening)
         logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS on the focus views as they are composed)" : " (off)");
     if (game_features().sharpening)

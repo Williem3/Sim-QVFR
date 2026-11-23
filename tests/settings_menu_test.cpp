@@ -375,6 +375,15 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == 35 && read_menu_values(ini.c_str()).sharpen == 35,
           "sharpening: written for a game with it ([quad] sharpen_percent), and read back");
     v.sharpen = 0;
+    check(GetPrivateProfileIntW(L"quad", L"periphery_texture_match", -1, ini.c_str()) == -1 &&
+              read_menu_values(ini.c_str()).textureMatch == 100,
+          "periphery texture match: not written for a game without it; unset reads as 100%");
+    v.textureMatch = 40;
+    write_menu_values(ini.c_str(), v, true, false, false, false, false, false, false, true);
+    check(GetPrivateProfileIntW(L"quad", L"periphery_texture_match", -1, ini.c_str()) == 40 &&
+              read_menu_values(ini.c_str()).textureMatch == 40,
+          "periphery texture match: written for a game with it ([quad] periphery_texture_match), and read back");
+    v.textureMatch = 100;
     check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == -1 &&
               read_menu_values(ini.c_str()).focusQuadStep == kFocusQuadSteps - 1,
           "focus quad distance: not written without focus_layer=2; unset reads as 100 m");
@@ -684,6 +693,20 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             SettingsMenu loop = l;
             loop.launch.qvfr = false;
             check(!shown(loop), "Sharpening: QVFR only (not in Two-loop)");
+            {  // Periphery texture match: only a game with it (ACE), after Sharpening, 100% down to Off in tens
+                SettingsMenu m = l;
+                check(find(m, MenuItem::TextureMatch) == static_cast<std::ptrdiff_t>(menu_page_items(m).size()), "Periphery texture match: not without the game's feature");
+                m.launch.textureMatch = true;
+                check(find(m, MenuItem::TextureMatch) == find(m, MenuItem::Sharpening) + 1, "Periphery texture match: after Sharpening");
+                m.selected = static_cast<int>(find(m, MenuItem::TextureMatch));
+                check(menu_lines(m)[m.selected].label == L"Periphery texture match" && menu_lines(m)[m.selected].value == L"100%",
+                      "Periphery texture match's line: 100% by default");
+                check(!menu_key(m, MenuKey::Right) && menu_key(m, MenuKey::Left) && m.values.textureMatch == 90,
+                      "Periphery texture match: no higher than 100%, Left steps 10%");
+                for (int i = 0; i < 12; ++i)
+                    menu_key(m, MenuKey::Left);
+                check(m.values.textureMatch == 0 && menu_lines(m)[m.selected].value == L"Off", "Periphery texture match: down to Off");
+            }
         }
         {
             // focus_layer=2's test line: only with launch.focusQuads, right after Gaze dead-zone, in steps of metres.

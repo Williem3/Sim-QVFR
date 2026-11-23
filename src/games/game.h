@@ -49,6 +49,9 @@ struct GameFeatures {
     // views render only a corridor along the road ahead and the player's car, with fixed foveation. Offered in the
     // launcher and the headset menu only with this (and fixed foveation).
     bool focusCorridor = false;
+    // Periphery texture match ([quad] periphery_texture_match, live; ACE's replay_probe_set_eye_texture_match): the
+    // periphery's textures sampled as sharp as the focus views', so see-through surfaces look the same in both.
+    bool peripheryTextureMatch = false;
 };
 
 // How the layer offers the game its QVFR views (GameAdapter::qvfr_eye_columns, qvfr_one_view_size, qvfr_separate_views,

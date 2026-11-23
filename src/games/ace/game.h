@@ -17,7 +17,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // Foveated DLSS or its frame generation since QVFR is the API path (2026-11-14: its own focus DLSS; Cheeky untried
     // there). The focus mask on the API path's focus views (replay_focus.cpp: drawn after their clear; 2026-11-16 A/B
     // about -0.2 to -0.3 ms GPU for a 30% trapezoid).
-    {false, true, true, true, false, false, false, false, true, false, false, false, true},
+    // Periphery texture match (replay_eye_live.cpp: the eyes' pass constants with a mip bias).
+    {false, true, true, true, false, false, false, false, true, false, false, false, true, false, false, true},
     kBuilds, std::size(kBuilds),
 };
 

@@ -917,9 +917,21 @@ void eye_apply(List* l, Stream* s) {
             scissorsOriginal(l, s->scN, s->scAll);
         s->eyeScaled = false;
     }
-    if (want && scene) {
+    // The periphery texture bias without the live periphery: an eye scene draw at its own size reads our copy too.
+    bool biased = false;
+    if (!now.on && s->eyeBias != 0 && scene && s->vpN >= 1 && s->vpN <= 2) {
+        const float ew = focus.sceneEyeW.load(std::memory_order_relaxed), eh = focus.sceneEyeH.load(std::memory_order_relaxed);
+        biased = ew >= 64;
+        for (UINT i = 0; biased && i < s->vpN; ++i) {
+            const D3D12_VIEWPORT& v = s->vpAll[i];
+            biased = v.TopLeftY == 0 && std::fabs(v.Height - eh) <= 1 && std::fabs(v.Width - ew) <= 1 &&
+                     (v.TopLeftX == 0 || std::fabs(v.TopLeftX - v.Width) <= 1);
+        }
+    }
+    if ((want && scene) || biased) {
+        const float fx = want ? now.fx : 1.0f, fy = want ? now.fy : 1.0f;
         cbvOriginal(l, kPassConstantsRoot,
-                    eye_slot(s, s->gfxCbvs[kPassConstantsRoot], 0, s->vpAll[0].Width * now.fx, s->vpAll[0].Height * now.fy));
+                    eye_slot(s, s->gfxCbvs[kPassConstantsRoot], 0, s->vpAll[0].Width * fx, s->vpAll[0].Height * fy));
         s->eyeCbv1 = true;
     } else if (s->eyeCbv1) {
         if (s->gfxRoot == s->cbv1Root)
@@ -1230,6 +1242,7 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     if (probeMode == 3) {
         s->eyeState = eyeLive.state.load(std::memory_order_relaxed);
         s->eyeOut = eyeLive.out.load(std::memory_order_relaxed);
+        s->eyeBias = eyeLive.biasNow.load(std::memory_order_relaxed);
     }
     if (probeMode == 3 && !focusActive.load(std::memory_order_relaxed)) {
         s->active = false;  // cost A/B off: the hooks pass straight through (no recording)
@@ -2293,8 +2306,10 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
                                          s->vpAll[0].Height * now.fy),
                                 s->pso, vp, s->vpCount, sc, s->scCount, a, c, d, e);
             } else {
-                tyre_right_draw(l, s->tyreConstants, s->gfxCbvs[kPassConstantsRoot], s->pso, s->vp, s->vpCount, s->sc,
-                                s->scCount, a, c, d, e);
+                tyre_right_draw(l, s->tyreConstants,
+                                s->eyeCbv1 ? eye_slot(s, s->gfxCbvs[kPassConstantsRoot], 0, s->vpAll[0].Width, s->vpAll[0].Height)
+                                           : s->gfxCbvs[kPassConstantsRoot],
+                                s->pso, s->vp, s->vpCount, s->sc, s->scCount, a, c, d, e);
             }
             inReplay = false;
             if (!focus.tyreGameLogged.exchange(true))
@@ -2666,6 +2681,10 @@ void replay_probe_set_eye_scale(double scale) {
     eyeLive.wanted.store(static_cast<float>(std::clamp(scale, 0.25, 1.0)), std::memory_order_relaxed);
 }
 void replay_probe_eye_allow(bool composed) { eyeLive.allowed.store(composed, std::memory_order_relaxed); }
+void replay_probe_set_eye_texture_match(double share, double mips) {
+    eyeLive.match.store(static_cast<float>(std::clamp(share, 0.0, 1.0)), std::memory_order_relaxed);
+    eyeLive.mipBias.store(static_cast<float>(std::clamp(mips, -3.0, 1.0)), std::memory_order_relaxed);
+}
 void replay_probe_gpu_scope(bool compositor) { gpuBatchKind = compositor ? kStepCompose : kStepGame; }
 bool replay_probe_eye_region(float& fx, float& fy) {
     // The eye image the compositor reads is the game's final one: at its DLSS output size when it upscales.
@@ -2911,6 +2930,20 @@ void replay_probe_frame_end() {
                 eyeLive.state.store(next, std::memory_order_relaxed);
                 focus_ngx::set_eye_live(next);
             }
+            // The periphery texture bias: taken here, once the copies can be made and the eye's size is known.
+            // The player's share of the gap between the two (how many mip levels sharper the focus views are, in
+            // sixteenths of a level so a size that drifts doesn't change it every frame), or the diagnostic's levels.
+            const double gap =
+                std::log2(std::max(1.0, focus.sizeK / std::max(0.01, static_cast<double>(focus.settings.boxFraction))));
+            const float fixed = eyeLive.mipBias.load(std::memory_order_relaxed);
+            const float share = eyeLive.match.load(std::memory_order_relaxed);
+            const float biasAsked =
+                fixed != 0 ? fixed : static_cast<float>(-std::round(std::min(3.0, share * gap) * 16) / 16);
+            const float biasNext = biasAsked != 0 && ew >= 256 && eh >= 256 && eye_ready() ? biasAsked : 0.0f;
+            if (biasNext != eyeLive.biasNow.exchange(biasNext, std::memory_order_relaxed))
+                logf("replay eye: periphery texture match: %.2f mip levels on ACE's own eye passes (%.0f%% of the %.2f "
+                     "levels the focus views are sharper by%s)",
+                     biasNext, share * 100, gap, fixed != 0 ? "; replay_periphery_mip_bias set" : "");
             if (next != reported || why != eyeLive.whyNot) {
                 reported = next;
                 eyeLive.whyNot = why;

@@ -337,6 +337,7 @@ int* slider_value(Ctl id) {
     case kInner: return &app.s.inner;
     case kObjectDetail: return &app.s.objectDetail;
     case kSharpen: return &app.s.sharpen;
+    case kTextureMatch: return &app.s.textureMatch;
     case kGradeExposure: return &app.s.grade.exposure;
     case kGradeBrightness: return &app.s.grade.brightness;
     case kGradeContrast: return &app.s.grade.contrast;
@@ -410,6 +411,7 @@ Range slider_range(Ctl id) {
     case kInner: return kInnerRange;
     case kObjectDetail: return kObjectDetailRange;
     case kSharpen: return kSharpenRange;
+    case kTextureMatch: return kTextureMatchRange;
     case kGradeExposure: return kColorExposureRange;
     case kGradeBrightness: return kColorBrightnessRange;
     case kGradeContrast: return kColorContrastRange;
