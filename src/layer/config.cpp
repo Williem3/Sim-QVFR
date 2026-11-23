@@ -93,6 +93,7 @@ LiveSettings read_live(const wchar_t* ini) {
         l.focusCorridor = ini_flag(ini, kFocusCorridor);
         l.focusCorridorWidth = ini_int(ini, kFocusCorridorWidth);
         l.focusCorridorHeight = ini_int(ini, kFocusCorridorHeight);
+        l.focusCorridorSpread = ini_int(ini, kFocusCorridorSpread);
         l.focusCorridorBlend = ini_int(ini, kFocusCorridorBlend);
         l.focusCorridorShow = ini_flag(ini, kFocusCorridorShow);
     }
@@ -383,8 +384,8 @@ void load_experiment() {
     game->qvfr_set_focus_mask(settings.focusMask, focus_area_from(focus_shape_words(settings.shape), settings.cornerRadius),
                               settings.focusMaskMargin);
     game->qvfr_set_focus_corridor(settings.focusCorridor && !settings.gaze,  // road focus, likewise (fixed foveation)
-                                  settings.focusCorridorWidth, settings.focusCorridorHeight, settings.focusCorridorBlend,
-                                  settings.focusCorridorShow);
+                                  settings.focusCorridorWidth, settings.focusCorridorHeight,
+                                  settings.focusCorridorSpread, settings.focusCorridorBlend, settings.focusCorridorShow);
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));

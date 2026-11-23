@@ -354,7 +354,8 @@ Card foveation_card() {
                                          L"the road from the periphery.")
                                     : tr(L"Off"));
                 b.reveal(kCorridorOn, s.corridor, tr(L"Road focus"),
-                         {tr(L"Cockpit preset"), tr(L"Road width"), tr(L"Road height"), tr(L"Road edge blend"),
+                         {tr(L"Cockpit preset"), tr(L"Road width"), tr(L"Road height"), tr(L"Road widening"),
+                          tr(L"Road edge blend"),
                           tr(L"Show Road focus area")},
                          [](Body& r) {
                     std::vector<std::wstring> presets;
@@ -362,8 +363,9 @@ Card foveation_card() {
                     r.segments(kCorridorPreset, tr(L"Cockpit preset"), presets, preset);
                     r.sliders({kCorridorWidth, tr(L"Road width"), app.s.corridorWidth, L" m"},
                               {kCorridorHeight, tr(L"Road height"), app.s.corridorHeight, L" m", L"", true});
-                    r.slider({kCorridorBlend, tr(L"Road edge blend"), app.s.corridorBlend, L" m",
-                              app.s.corridorBlend == 0 ? tr(L"Off") : L"", true});
+                    r.sliders({kCorridorSpread, tr(L"Road widening"), app.s.corridorSpread, L"\u00b0"},
+                              {kCorridorBlend, tr(L"Road edge blend"), app.s.corridorBlend, L" m",
+                               app.s.corridorBlend == 0 ? tr(L"Off") : L"", true});
                     const bool show = app.s.corridorShow;
                     r.toggle(kCorridorShow, tr(L"Show Road focus area"), show,
                              show ? tr(L"What Road focus takes from the periphery tinted blue in the headset.")
@@ -392,6 +394,7 @@ Card foveation_card() {
         s.corridorWidth = d.corridorWidth;
         s.corridorHeight = d.corridorHeight;
         s.corridorPreset = d.corridorPreset;
+        s.corridorSpread = d.corridorSpread;
         s.corridorBlend = d.corridorBlend;
         s.corridorShow = d.corridorShow;
     };

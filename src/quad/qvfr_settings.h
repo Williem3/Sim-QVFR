@@ -48,10 +48,13 @@ inline constexpr IniInt kFocusCorridorWidth{L"quad", L"focus_corridor_width", 10
 // Road height: how high above the road stays sharp, tenths of a metre (2 m: the road and the cars; 8 m: signs, gantries
 // and the grandstands' lower rows too, less saved).
 inline constexpr IniInt kFocusCorridorHeight{L"quad", L"focus_corridor_height", 35, 20, 80, 5};
+// Road widening: degrees either side the corridor opens by with distance past its start, so a bend leaving the head's
+// line far ahead (Eau Rouge, a hairpin, the pit exit) stays inside; 0 straight (saves the most, far bends go soft).
+inline constexpr IniInt kFocusCorridorSpread{L"quad", L"focus_corridor_spread", 15, 0, 30, 1};
 // The cockpit preset Road focus sets when it's switched on (quad/road_focus_shape.h): 0 A, 1 B.
 inline constexpr IniInt kFocusCorridorPreset{L"quad", L"focus_corridor_preset", 0, 0, 1, 1};
 // Road edge blend: how soft its edges are, tenths of a metre near (growing with distance in proportion); 0 a hard edge.
-inline constexpr IniInt kFocusCorridorBlend{L"quad", L"focus_corridor_blend", 10, 0, 30, 5};
+inline constexpr IniInt kFocusCorridorBlend{L"quad", L"focus_corridor_blend", 10, 0, 30, 1};  // 0.1 m a step
 // Show Road focus area: what it takes from the periphery tinted blue in the headset (it works as ever). Live.
 inline constexpr IniInt kFocusCorridorShow{L"quad", L"focus_corridor_show", 0, 0, 1, 1};
 // Diagnostics: the mask's margin past the shape, focus view texels (what DLSS, sharpening and screen-space effects read

@@ -349,6 +349,7 @@ int* slider_value(Ctl id) {
     case kCorridorWidth: return &app.s.corridorWidth;
     case kCorridorHeight: return &app.s.corridorHeight;
     case kCorridorBlend: return &app.s.corridorBlend;
+    case kCorridorSpread: return &app.s.corridorSpread;
     case kColorValue: return &app.colorValue;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
@@ -421,6 +422,7 @@ Range slider_range(Ctl id) {
     case kCorridorWidth: return kCorridorWidthRange;
     case kCorridorHeight: return kCorridorHeightRange;
     case kCorridorBlend: return kCorridorBlendRange;
+    case kCorridorSpread: return kCorridorSpreadRange;
     case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;

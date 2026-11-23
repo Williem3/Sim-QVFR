@@ -96,7 +96,9 @@ height times density. A small area can take a high density cheaply.
   the edge instead of making the area bigger.
 - **Road focus** (off by default, fixed foveation only) renders the sharp area in full detail only along the road
   ahead, 10 m either side of it by default (**Road width**, 5 to 20 m: wider keeps the run-off and barriers sharp but
-  saves less) and 3.5 m above it by default (**Road height**, 2 to 8 m), following its hills and bends, and in your
+  saves less) and 3.5 m above it by default (**Road height**, 2 to 8 m), following its hills and bends, widening
+  with distance so bends far ahead stay sharp (**Road widening**, 0 to 30 degrees either side, 15 by default: lower
+  saves more but a far bend can go soft), and in your
   own car (the wheel, dash, displays and mirrors inside the sharp area); the trees, grandstands, hills and sky beside
   and above the road come from the periphery. It saves the most with a large focus area, so with it on a larger area
   costs less than before. It's off while the focus follows your eyes. Turn it off if something beside the road looks

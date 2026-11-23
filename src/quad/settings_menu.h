@@ -77,7 +77,8 @@ enum class MenuItem {
     CarLightOn, CarLightQuality, CarLightFill, CarLightOcclusion, CarLightHighlights, CarLightGloss, CarLightSmooth,
     CarLightShadows, CarLightDetail, CarLightReflections, CarLightHeadlights, CarLightGround, CarLightNightVision,
     // The Foveation section's road focus ([quad] focus_corridor; MenuLaunch::focusCorridor, fixed foveation), its width.
-    FocusCorridor, FocusCorridorPreset, FocusCorridorWidth, FocusCorridorHeight, FocusCorridorBlend, FocusCorridorShow,
+    FocusCorridor, FocusCorridorPreset, FocusCorridorWidth, FocusCorridorHeight, FocusCorridorSpread, FocusCorridorBlend,
+    FocusCorridorShow,
     // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
     // them). Each page is a launcher tab, its sections that tab's cards.
     HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
@@ -119,6 +120,7 @@ struct MenuValues {
     int focusCorridorWidth = kFocusCorridorWidth.def;      // [quad] focus_corridor_width, metres either side
     int focusCorridorHeight = kFocusCorridorHeight.def;    // [quad] focus_corridor_height, tenths of a metre
     int focusCorridorPreset = kFocusCorridorPreset.def;    // [quad] focus_corridor_preset: 0 A, 1 B
+    int focusCorridorSpread = kFocusCorridorSpread.def;    // [quad] focus_corridor_spread, degrees either side
     int focusCorridorBlend = kFocusCorridorBlend.def;      // [quad] focus_corridor_blend, tenths of a metre
     bool focusCorridorShow = kFocusCorridorShow.def != 0;  // [quad] focus_corridor_show
     RoadFocusSaved roadSaved;  // the player's own shape and size while Road focus's cockpit shape is set

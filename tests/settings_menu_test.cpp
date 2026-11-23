@@ -1563,7 +1563,10 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   at(r, MenuItem::FocusCorridorPreset) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
                   line_of(r, MenuItem::FocusCorridorPreset).value == L"Preset A" &&
                   at(r, MenuItem::FocusCorridorWidth) + 1 == at(r, MenuItem::FocusCorridorHeight) &&
-                  at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::FocusCorridorBlend) &&
+                  at(r, MenuItem::FocusCorridorHeight) + 1 == at(r, MenuItem::FocusCorridorSpread) &&
+                  at(r, MenuItem::FocusCorridorSpread) + 1 == at(r, MenuItem::FocusCorridorBlend) &&
+                  line_of(r, MenuItem::FocusCorridorSpread).label == L"Road widening" &&
+                  line_of(r, MenuItem::FocusCorridorSpread).value == L"15°" &&
                   at(r, MenuItem::FocusCorridorBlend) + 1 == at(r, MenuItem::FocusCorridorShow) &&
                   at(r, MenuItem::FocusCorridorShow) + 1 == at(r, MenuItem::Outline) &&
                   line_of(r, MenuItem::FocusCorridorBlend).value == L"1.0 m" &&
@@ -1580,9 +1583,19 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(at(r, MenuItem::FocusCorridorShow) + 1 == at(r, MenuItem::Outline),
               "road focus: no DLSS band line, with Sim-QVFR's DLSS on too");
         pick(r, MenuItem::FocusCorridorBlend);
-        check(menu_key(r, MenuKey::Left) && r.values.focusCorridorBlend == 5 &&
-                  line_of(r, MenuItem::FocusCorridorBlend).value == L"0.5 m",
-              "road edge blend: half a metre a step");
+        check(menu_key(r, MenuKey::Left) && r.values.focusCorridorBlend == 9 &&
+                  line_of(r, MenuItem::FocusCorridorBlend).value == L"0.9 m",
+              "road edge blend: a tenth of a metre a step");
+        pick(r, MenuItem::FocusCorridorSpread);
+        for (int i = 0; i < 40; ++i)
+            menu_key(r, MenuKey::Right);
+        check(r.values.focusCorridorSpread == 30 && !menu_key(r, MenuKey::Right) &&
+                  line_of(r, MenuItem::FocusCorridorSpread).value == L"30°",
+              "road widening: up to 30 degrees, a degree a step");
+        for (int i = 0; i < 40; ++i)
+            menu_key(r, MenuKey::Left);
+        check(r.values.focusCorridorSpread == 0, "road widening: down to 0 (straight)");
+        r.values.focusCorridorSpread = 7;
         pick(r, MenuItem::FocusCorridorShow);
         check(menu_key(r, MenuKey::Right) && r.values.focusCorridorShow, "show road focus area: switches on");
         r.values.focusCorridorBlend = kFocusCorridorBlend.def;
@@ -1665,6 +1678,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, true);
         const MenuValues back = read_menu_values(ini.c_str());
         check(!back.focusCorridor && back.focusCorridorWidth == 5 && back.focusCorridorHeight == 20 &&
+                  back.focusCorridorSpread == 7 &&
                   GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == 0,
               "road focus: written for a game with it, and read back");
         DeleteFileW(ini.c_str());

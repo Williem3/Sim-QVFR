@@ -89,7 +89,7 @@ enum Ctl {
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // Road focus ([quad] focus_corridor, focus_corridor_width; the Foveation card, a game with it, fixed foveation).
-    kCorridorOn, kCorridorWidth, kCorridorHeight, kCorridorPreset, kCorridorBlend, kCorridorShow,
+    kCorridorOn, kCorridorWidth, kCorridorHeight, kCorridorPreset, kCorridorBlend, kCorridorShow, kCorridorSpread,
     // The helmet overlay ([helmet], Resolution pane).
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
