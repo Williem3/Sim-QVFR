@@ -16,7 +16,9 @@
 // The corridor follows the terrain: a point is in it when it lies ahead of the start, within the half width of the
 // road's centre, and between 1 m below and `tall` above the road beneath it. "The road beneath it": the nearest surface
 // below it in the copy's column (towards the viewer on screen) that faces up (its normal, from the depth, within the
-// steepest slope of the vertical): a tree's foot, the grass under a barrier, the climbing road itself. "The road's
+// steepest slope of the vertical): a tree's foot, the grass under a barrier, the climbing road itself. Past a crest the
+// road ahead can hide (a dip) or show as a strip too thin to read as road: what lies further away than the road beneath
+// it may lie lower by the steepest grade (view.y) over the distance between them, so a car beyond a dip stays in. "The road's
 // centre": the mean sideways place of the up-facing ground 10-80 m ahead (each texel by the ground it covers), within
 // reach of the head's line, smoothed over passes and held within that reach.
 #pragma once
@@ -38,7 +40,8 @@ cbuffer Corridor : register(b0) {
     // The mask's read of the last pass's margin map where the box was then (the box follows the gaze): uv there = uv now
     // x xy + zw (0, 0: the same box).
     float4 shift;
-    float4 view;    // x: 1 the coverage shown (Show Road focus area): what the fill takes from the periphery tinted
+    float4 view;    // x: 1 the coverage shown (Show Road focus area): what the fill takes from the periphery tinted;
+                    // y: the steepest grade the road may fall by out of sight (a metre down a metre further on)
 };
 // The coverage's tint (multiplied: the periphery's colour, shown blue), as show mode's and the DLSS composition's.
 static const float3 kCoverageTint = float3(0.25, 0.4, 1.0);
@@ -79,7 +82,7 @@ float4 copy_colour_ms(V v) : SV_Target {
 float4 copy_colour_ss(V v) : SV_Target { return colourSs.Load(int3(int2(v.pos.xy) + int2(box.xy), 0)); }
 
 Texture2D<float> eyeDepth : register(t0);       // the copy
-Texture2D<float> groundBelow : register(t1);    // the road beneath each grid texel: its height (m), -1e9 none
+Texture2D<float2> groundBelow : register(t1);   // the road beneath each grid texel: its height (m, -1e9 none), how far ahead
 StructuredBuffer<float> centreNow : register(t2);  // [0]: the road's centre across (m, + right)
 static const float kNone = -1e9;
 
@@ -94,10 +97,10 @@ float3 point_at(int2 at) {
 float3 heading() { return normalize(float3(0, 0, 1) - up.xyz * up.z); }
 float height_of(float3 p) { return dot(p, up.xyz) + up.w; }
 
-RWTexture2D<float> groundOut : register(u0);           // the grid: the road beneath each texel
+RWTexture2D<float2> groundOut : register(u0);          // the grid: the road beneath each texel, its height and how far ahead
 RWStructuredBuffer<float2> columnSums : register(u1);  // per grid column: the road's sideways sum and weight (its area)
 RWStructuredBuffer<float> centreOut : register(u2);
-RWTexture2D<float4> roadOut : register(u3);            // the grid: road height (kNone: not road), across x area, area
+RWTexture2D<float4> roadOut : register(u3);            // the grid: road height (kNone: not road), across x area, area, ahead
 Texture2D<float4> roadIn : register(t3);
 // The road grid's size: half the copy's each way, rounded up.
 int2 grid_size() { return (int2(extent.zw) + 1) / 2; }
@@ -132,6 +135,7 @@ void classify_main(uint3 id : SV_DispatchThreadID) {
                 n = -n;  // towards the eye
             if (dot(n, up.xyz) > ground.x) {
                 result.x = height_of(p);
+                result.w = ahead;
                 const float across = dot(p, side);
                 if (ahead > 10 && ahead < 80 && abs(across) < ground.z + extent.x) {
                     // Weighted by the ground the texel covers (its distance squared over how squarely it faces the
@@ -152,11 +156,12 @@ void columns_main(uint3 id : SV_DispatchThreadID) {
     const int2 gs = grid_size();
     if ((int)id.x >= gs.x)
         return;
-    float last = kNone, sum = 0, count = 0;
+    float2 last = float2(kNone, 0);
+    float sum = 0, count = 0;
     for (int y = gs.y - 1; y >= 0; --y) {
         const float4 r = roadIn.Load(int3(id.x, y, 0));
         if (r.x > kNone * 0.5) {
-            last = r.x;
+            last = r.xw;
             sum += r.y;
             count += r.z;
         }
@@ -186,8 +191,12 @@ float corridor_margin(float2 uv) {
         return -1e9;  // the sky
     const float3 fwd = heading(), side = cross(up.xyz, fwd);
     const float ahead = dot(p, fwd), across = abs(dot(p, side) - centreNow[0]);
-    const float road = groundBelow.Load(int3(at / 2, 0));  // the road grid: half the copy's size
-    const float above = height_of(p) - (road > kNone * 0.5 ? road : 0);
+    const float2 road = groundBelow.Load(int3(at / 2, 0));  // the road grid: half the copy's size
+    const bool seen = road.x > kNone * 0.5;
+    const float above = height_of(p) - (seen ? road.x : 0);
+    // Further on than that road, the road may have fallen out of sight (over a crest, into a dip): the floor lowered by
+    // the steepest grade over the distance between them.
+    const float drop = seen ? max(ahead - road.y, 0) * view.y : 0;
     // Its half width: the road width near, opening by focus.w's angle further out, so a bend (the road leaving the
     // head's straight line far ahead: Eau Rouge, a hairpin, the pit exit) stays inside; far things are small on screen.
     const float half = extent.x + max(ahead - terms.z, 0) * focus.w;
@@ -198,7 +207,7 @@ float corridor_margin(float2 uv) {
         m = min(m, (extent.y - ahead) / blend);
     // Below: the road surface itself lies just inside (a metre over its floor), so that bound keeps the near blend
     // (grown, the road far ahead would sit inside the blend and fade toward the periphery: the 2026-11-20 run).
-    m = min(m, (above + 1) / max(fill.y, 1e-3));
+    m = min(m, (above + 1 + drop) / max(fill.y, 1e-3));
     if (fill.x > 0)  // the car (cockpit, mirrors, bonnet) kept too: whatever lies nearer than fill.x
         m = max(m, (fill.x - length(p)) / max(fill.y, 1e-3));
     return m;

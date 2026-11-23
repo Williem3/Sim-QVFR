@@ -796,6 +796,7 @@ void mvr_before_pass(int p) {
                                          ? cfg.corridorFeatherM
                                          : corridorBlendLive.load(std::memory_order_relaxed) / 10.0f;
             mvr_corridor_feather_growth(static_cast<float>(cfg.corridorFeatherGrowthPct) * roadBlendM);  // far edges soft
+            mvr_corridor_drop(static_cast<float>(cfg.corridorDropPct));  // the road and cars beyond a dip kept
             mvr_corridor_coverage(corridorShowLive.load(std::memory_order_relaxed));  // Show Road focus area
             mvr_corridor_band(cfg.corridorBandPct > 0 ? cfg.corridorBandPct : 0, cfg.corridorBandPadPct);  // experiment
             if (cfg.corridorShow && cfg.corridorAb <= 0)  // show mode alone: tinted, never masked

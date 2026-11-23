@@ -174,6 +174,8 @@ float gSpreadTan = 0;
 float gFeatherGrowth = 0;
 // Show Road focus area (corridor_shader.h view.x): the fill's eye colour tinted.
 float gCoverage = 0;
+// Past a crest, the steepest grade the road may fall by out of sight (corridor_shader.h view.y): the game's default.
+float gDropTan = 0.15f;
 
 struct Rows {
     unsigned gpuTop = 0, gpuBottom = 0, mapTop = 0, mapBottom = 0;
@@ -202,7 +204,7 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
     const D3D11_TEXTURE2D_DESC md = {kCW, kCH, 1, 1, DXGI_FORMAT_R16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
     ComPtr<ID3D11Buffer> sums, centreBuf;
-    const D3D11_TEXTURE2D_DESC gd = {kGW, kGH, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+    const D3D11_TEXTURE2D_DESC gd = {kGW, kGH, 1, 1, DXGI_FORMAT_R32G32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
     const D3D11_TEXTURE2D_DESC rd = {kGW, kGH, 1, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
@@ -230,7 +232,7 @@ bool run_scene(Gpu& g, const Scene& scene, std::vector<bool>& masked, float& cen
         return false;
     float k[40] = {0, 0, kCW, kCH, kL, kR, kU, kD, kA, kB, kStart, kTall, 0, 1, 0, kEyeHeight,
                    kHalf, 0, kCW, kCH, std::cos(35.0f * 3.14159265f / 180), 1.0f, kReach, gFeatherGrowth,
-                   gCarM, kFeather, kFW, kFH, 0, 0, 0, gSpreadTan, 0, 0, 0, 0, gCoverage, 0, 0, 0};
+                   gCarM, kFeather, kFW, kFH, 0, 0, 0, gSpreadTan, 0, 0, 0, 0, gCoverage, gDropTan, 0, 0};
     const uint32_t stamp = 7;  // the mask's stamp this pass (the fill finds its texels by it)
     std::memcpy(&k[30], &stamp, sizeof(stamp));
     c->UpdateSubresource(g.cb.Get(), 0, nullptr, k, 0, 0);
@@ -666,6 +668,44 @@ int SIM_QVFR_TEST_MAIN() {
         std::snprintf(what, sizeof(what), "hill: the climbing road kept (%.3f), the wall's upper part not (%.3f)", climb,
                       wallTop);
         check(climb > 0.95 && wallTop < 0.05, what);
+    }
+    // 2a. Downhill over a crest (Spa after Kemmel: Les Combes down to Rivage): the road falls 6% from 50 m to a dip at
+    // 150 m and climbs 6% beyond it (checked out to 400 m), a car (1.4 m tall, 2 m wide) on the far climb at 220 m.
+    // Before the drop (the floor 1 m below the last road seen) the far road showed as a strip too thin to read as road,
+    // so the car and a third of it were measured against the crest: 0.000 and 0.662 kept. And a rounded crest falling
+    // away (the road dropping 1 m by 40 m past it, 4 m by 80 m), a car on it at 75 m.
+    {
+        const Scene dip{[](float, float z) {
+                            return z < 50 ? 0.0f : z < 150 ? -(z - 50) * 0.06f : -6.0f + (z - 150) * 0.06f;
+                        },
+                        {{true, 220, -1, 1, 1.4f}}};
+        check(run_scene(g, dip, masked, centre, hits), "dip: through the pipeline");
+        const double farRoad = kept_share(masked, hits, [](const Hit& h) {
+            return h.what == 1 && h.z > 160 && h.z < 400 && std::fabs(h.x) < kHalf - 1;
+        });
+        const double car = kept_share(masked, hits, [](const Hit& h) { return h.what == 2 && h.z > 200; });
+        std::printf("     dip: the road past the dip kept %.3f, the car on it %.3f\n", farRoad, car);
+        gDropTan = 0;  // the floor as before: 1 m below the last road seen
+        check(run_scene(g, dip, masked, centre, hits), "dip, no drop: through the pipeline");
+        gDropTan = 0.15f;
+        const double farRoadOld = kept_share(masked, hits, [](const Hit& h) {
+            return h.what == 1 && h.z > 160 && h.z < 400 && std::fabs(h.x) < kHalf - 1;
+        });
+        const double carOld = kept_share(masked, hits, [](const Hit& h) { return h.what == 2 && h.z > 200; });
+        std::printf("     dip, no drop: the road past the dip kept %.3f, the car on it %.3f\n", farRoadOld, carOld);
+        std::snprintf(what, sizeof(what), "dip: the road and the car beyond it kept (%.3f, %.3f; without the drop %.3f, %.3f)",
+                      farRoad, car, farRoadOld, carOld);
+        check(farRoad > 0.95 && car > 0.95, what);
+        const Scene crest{[](float, float z) { return z < 40 ? 0.0f : -(z - 40) * (z - 40) / 1600.0f; },
+                          {{true, 75, -1, 1, 1.4f}}};
+        check(run_scene(g, crest, masked, centre, hits), "crest: through the pipeline");
+        const double fallRoad = kept_share(masked, hits, [](const Hit& h) {
+            return h.what == 1 && h.z > 50 && std::fabs(h.x) < kHalf - 1;
+        });
+        // Its middle (its two outer columns are edge texels at this test's resolution, as off centre's 0.6%).
+        const double carOn = kept_share(masked, hits, [](const Hit& h) { return h.what == 2 && std::fabs(h.x) < 0.8f; });
+        std::printf("     crest: the road falling away past 50 m kept %.3f, the car on it %.3f\n", fallRoad, carOn);
+        check(fallRoad > 0.95 && carOn > 0.95, "crest: the road falling away and the car on it kept");
     }
     // 3. The car 4 m left of a wall on its right, the road and the verge out to 30 m on its left.
     {

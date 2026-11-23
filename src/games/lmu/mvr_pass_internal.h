@@ -574,6 +574,9 @@ struct State {
         float carM = 3;      // the car kept sharp: whatever lies nearer than this, metres (0: none; mvr_corridor_car)
         // The corridor's widening with distance, degrees either side (mvr_corridor_spread; -1: not set yet, logged when set).
         float spreadDeg = -1;
+        // The steepest grade the road may fall by out of sight past a crest (mvr_corridor_drop; a metre down a metre on;
+        // -1: not set yet, logged when set).
+        float dropTan = -1;
         // DLSS over a band of the focus view's rows (mvr_corridor_band): its height and the margin kept about the
         // corridor's rows, percent of the view's height (0: off); since the last log line: bands placed, those whose
         // corridor (with the margin) was taller than the band, its rows' share summed; each pass's band top as last set.

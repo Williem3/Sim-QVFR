@@ -595,6 +595,14 @@ void mvr_corridor_spread(float degrees) {
     c.spreadDeg = d;
 }
 
+void mvr_corridor_drop(float percent) {
+    auto& c = g.corridor;
+    const float t = std::clamp(percent, 0.0f, 100.0f) / 100;
+    if (t != c.dropTan)
+        simqvfr::logf("lmu mvr: corridor: the road may fall %.0f%% out of sight past a crest", t * 100);
+    c.dropTan = t;
+}
+
 void mvr_corridor_car(float metres) {
     auto& c = g.corridor;
     const float m = (std::max)(0.0f, metres);
