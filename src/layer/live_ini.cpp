@@ -24,6 +24,7 @@
 #include "quad/osd.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
+#include "dev_build.h"
 #include "layer/layer.h"
 #include "layer/config.h"
 #include "probe/focus_ngx.h"
@@ -170,6 +171,15 @@ void live_apply(const LiveSettings& l) {
                                   std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
         }
         replay_probe_set_box(boxX, boxY);
+        if (simqvfr::kDevBuild)  // diagnostic switches: development builds only (dev_build.h)
+            replay_probe_set_live_diag(GetPrivateProfileIntW(L"experiment", L"replay_live_diag", 0, live.ini.c_str()));
+        if (simqvfr::kDevBuild) {  // the self-test's fixed head pose and capture burst (development builds)
+            const wchar_t* ini = live.ini.c_str();
+            dev_pose_set(GetPrivateProfileIntW(L"experiment", L"dev_pose", 0, ini) != 0,
+                         static_cast<float>(GetPrivateProfileIntW(L"experiment", L"dev_pose_yaw", 0, ini)),
+                         static_cast<float>(GetPrivateProfileIntW(L"experiment", L"dev_pose_pitch", 0, ini)));
+            frame_census_set_burst(GetPrivateProfileIntW(L"experiment", L"replay_census_burst", 1, ini));
+        }
         // The periphery: live below its launch size (ACE's eyes drawn into a smaller region of its launch-size targets).
         const double launchOuter = experiment.eyeScale > 0 ? experiment.eyeScale : 1.0;
         const double share = std::clamp(wanted.outer / launchOuter, 0.25, 1.0);

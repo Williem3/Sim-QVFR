@@ -587,6 +587,15 @@ bool QuadCompositor::save_views4_captures(ID3D12Resource* views, ID3D12Resource*
            save_left_eye(output, D3D12_RESOURCE_STATE_RENDER_TARGET, prefix + L"-output.png");
 }
 
+bool QuadCompositor::save_census_captures(ID3D12Resource* views, ID3D12Resource* focus, D3D12_RESOURCE_STATES focusState,
+                                          ID3D12Resource* output, const std::wstring& prefix) {
+    if (!ready_)
+        return false;
+    return save_left_eye(views, D3D12_RESOURCE_STATE_RENDER_TARGET, prefix + L"-views.png", 1) &&
+           (!focus || save_left_eye(focus, focusState, prefix + L"-focus.png", 1)) &&
+           save_left_eye(output, D3D12_RESOURCE_STATE_RENDER_TARGET, prefix + L"-output.png", 1);
+}
+
 bool QuadCompositor::save_captures(ID3D12Resource* focusImage, ID3D12Resource* output, const std::wstring& prefix) {
     if (!ready_ || !outerValid_)
         return false;

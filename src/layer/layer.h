@@ -119,6 +119,10 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
 void quad_record_a(const XrFrameEndInfo* info);
 bool quad_capture_due();
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
+// The draw census hotkey's capture (development builds): ACE's eye image, the focus views and the composed output, all
+// of each (both eyes), as frame `index` of a burst (v4censNN-hhmmss-fK-*.png).
+void views4_census_capture(ID3D12Resource* views, ID3D12Resource* focus, D3D12_RESOURCE_STATES focusState,
+                           ID3D12Resource* output, int index);
 XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info);
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask);
@@ -203,6 +207,12 @@ void clock_shutdown();
 // optimizer.cpp
 void optimize_tick(int64_t now);
 void frame_capture_poll();
+// views.cpp (development builds): the self-test's fixed head pose ([experiment] dev_pose*, live).
+void dev_pose_set(bool on, float yawDeg, float pitchDeg);
+// True for the next replay_census_burst frames after the draw census hotkey (replay_census_hotkey): the composed frame
+// saves ACE's eye image, the focus views and the output, both eyes. `index` is the frame's place in the burst.
+bool frame_census_take_capture(int& index);
+void frame_census_set_burst(int frames);
 void cpu_profile_poll();
 
 // frame.cpp

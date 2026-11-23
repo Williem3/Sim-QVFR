@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 
+#include "dev_build.h"
 #include "engine/dlss_math.h"
 #include "probe/cpu_isolation.h"
 #include "engine/dlss_settings.h"
@@ -289,6 +290,8 @@ void load_experiment() {
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
         experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", api, ini.c_str()) != 0;
         experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
+        experiment.replayFlagsWidth = GetPrivateProfileIntW(L"experiment", L"replay_flags_width", 1, ini.c_str()) != 0;
+        experiment.replayDepthFade =GetPrivateProfileIntW(L"experiment", L"replay_depth_fade", 1, ini.c_str()) != 0;
         experiment.replayFixation = GetPrivateProfileIntW(L"experiment", L"replay_fixation", 1, ini.c_str()) != 0;
         experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
         experiment.replayDiag = experiment.replayDiagMode == 1;
@@ -357,6 +360,11 @@ void load_experiment() {
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
     experiment.pixCaptureHotkey = GetPrivateProfileIntW(L"experiment", L"pix_capture_hotkey", 0, ini.c_str()) != 0;
+    // A diagnostic hotkey: development builds only (dev_build.h).
+    experiment.logCppExceptions =
+        simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"log_cpp_exceptions", 0, ini.c_str()) != 0;
+    experiment.replayCensusHotkey =
+        simqvfr::kDevBuild && GetPrivateProfileIntW(L"experiment", L"replay_census_hotkey", 0, ini.c_str()) != 0;
     experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
     // d3d11_capture_hotkey=1: tracked from the start with a frame never reached; the frame capture hotkey arms the next.
     experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;

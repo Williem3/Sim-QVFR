@@ -1,9 +1,11 @@
 // Locating views: the focus views' FOV, the submitted FOV's log, and the LocateViews hook.
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <mutex>
 
+#include "dev_build.h"
 #include "log.h"
 #include "quad/focus_converge.h"
 #include "quad/focus_offset.h"
@@ -64,9 +66,56 @@ double converge_distance(bool& fromGame) {
     return fromGame ? fixation : experiment.convergeM;
 }
 
+// Development builds: the self-test's fixed head ([experiment] dev_pose, dev_pose_yaw, dev_pose_pitch, live). An unworn
+// headset points anywhere (at the roof on its stand); the eyes keep their offsets and turns against the head, the head
+// is held at the first position seen and faces yaw/pitch (degrees) in the game's space.
+std::atomic<bool> devPoseOn{false};
+std::atomic<float> devPoseYaw{0}, devPosePitch{0};
+bool devPoseHeld = false;
+XrVector3f devPoseCentre{};
+
+void dev_pose_apply(XrView* views) {
+    if (!kDevBuild || !devPoseOn.load(std::memory_order_relaxed)) {
+        devPoseHeld = false;
+        return;
+    }
+    XrQuaternionf a = views[0].pose.orientation, b = views[1].pose.orientation;
+    if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0)
+        b = {-b.x, -b.y, -b.z, -b.w};
+    XrQuaternionf head{a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+    const float n = std::sqrt(head.x * head.x + head.y * head.y + head.z * head.z + head.w * head.w);
+    if (n < 1e-6f)
+        return;
+    head = {head.x / n, head.y / n, head.z / n, head.w / n};
+    const XrVector3f& p0 = views[0].pose.position;
+    const XrVector3f& p1 = views[1].pose.position;
+    const XrVector3f centre{(p0.x + p1.x) / 2, (p0.y + p1.y) / 2, (p0.z + p1.z) / 2};
+    if (!devPoseHeld) {
+        devPoseHeld = true;
+        devPoseCentre = centre;
+        logf("dev pose: the head held at %.3f,%.3f,%.3f facing yaw %.1f pitch %.1f deg (self-test)", centre.x, centre.y,
+             centre.z, devPoseYaw.load(), devPosePitch.load());
+    }
+    constexpr float kRad = 3.14159265f / 180.0f;
+    const float yaw = devPoseYaw.load(std::memory_order_relaxed) * kRad * 0.5f;
+    const float pitch = devPosePitch.load(std::memory_order_relaxed) * kRad * 0.5f;
+    const XrQuaternionf qYaw{0, std::sin(yaw), 0, std::cos(yaw)}, qPitch{std::sin(pitch), 0, 0, std::cos(pitch)};
+    const XrQuaternionf fixed = qmul(qYaw, qPitch);
+    for (int e = 0; e < 2; ++e) {
+        const XrVector3f& p = views[e].pose.position;
+        const XrVector3f local = rotate(qconj(head), {p.x - centre.x, p.y - centre.y, p.z - centre.z});
+        const XrVector3f turned = rotate(fixed, local);
+        views[e].pose.position = {devPoseCentre.x + turned.x, devPoseCentre.y + turned.y, devPoseCentre.z + turned.z};
+        views[e].pose.orientation = qmul(fixed, qmul(qconj(head), views[e].pose.orientation));
+    }
+}
+
 XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewState* state, uint32_t capacity,
                       uint32_t* countOutput, XrView* views) {
     XrResult r = next.LocateViews(session, info, state, capacity, countOutput, views);
+    if (kDevBuild && XR_SUCCEEDED(r) && views && countOutput && std::min(*countOutput, capacity) >= 2 &&
+        info->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)
+        dev_pose_apply(views);
     // The FOV crop: ACE renders, and submits, the cropped FOV (everything below follows it).
     const FovCrop crop = experiment.crop();
     const bool stereo = XR_SUCCEEDED(r) && views && countOutput && std::min(*countOutput, capacity) >= 2 &&
@@ -303,6 +352,15 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 }
 
 }  // namespace
+
+void dev_pose_set(bool on, float yawDeg, float pitchDeg) {
+    if (!kDevBuild)
+        return;
+    devPoseYaw = yawDeg;
+    devPosePitch = pitchDeg;
+    if (on != devPoseOn.exchange(on))
+        logf("dev pose: %s (yaw %.1f, pitch %.1f deg)", on ? "on" : "off", yawDeg, pitchDeg);
+}
 
 // views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
 // by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.

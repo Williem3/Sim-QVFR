@@ -139,7 +139,9 @@ struct Experiment {
     double replayEyeShareX = 0, replayEyeShareY = 0;  // the API path: ACE's eye size as a share of the native eye (launch)
     int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
-    bool replayTyres = true;               // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
+    bool replayFlagsWidth = true;          // replay_flags_width=0: ACE's half-width flags viewports left as they are
+    bool replayDepthFade = true;          // replay_depth_fade=0: the focus views' particles fade against ACE's eye depth
+    bool replayTyres = true;              // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
     bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
     bool replayFixation = true;            // replay_fixation=0: no focus-depth read for the boxes' convergence
     bool replayCostAb = false;
@@ -172,6 +174,9 @@ struct Experiment {
     bool gpuValidation = false;            // d3d12_debug=2: plus GPU-based validation (very slow)
     UINT pixCaptureFrame = 0;              // PIX GPU capture from this xrEndFrame (probe/pix_capture.h), 0 = off
     bool pixCaptureHotkey = false;         // pix_capture_hotkey=1: the frame capture hotkey takes a PIX capture (D3D12)
+    bool logCppExceptions = false;         // log_cpp_exceptions=1 (development builds): probe/cpp_exceptions.h
+    bool replayCensusHotkey = false;      // replay_census_hotkey=1 (development builds, ACE's API path): the frame capture
+                                           // hotkey logs the next frames' draws by pipeline and saves the eye images
     bool twoLoops = false;        // round 7: two complete ACE frames per display frame
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
@@ -967,6 +972,8 @@ extern Notice notice;
 extern bool visorHotkeyHeld;
 extern bool cpuProfileHotkeyHeld;
 extern bool frameCaptureHotkeyHeld;
+extern int frameCensusCapture;  // frames left whose eye images the draw census hotkey asked for (frame_census_take_capture)
+extern int frameCensusBurst;    // [experiment] replay_census_burst: consecutive frames saved per press (1-8)
 extern ProfileNotice profileNotice;
 extern std::atomic<int> loaderNegotiations;
 extern std::atomic<bool> instanceReachedLayer;

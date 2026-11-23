@@ -1280,6 +1280,18 @@ void focus_record(List* gameList, const Stream& s, bool mono) {
                                    ? focus.slotFirst + 15 - focus.baseIndex
                                    : 0;
     const UINT focusTilesX = focus.tilesReady && !focus.tilesBroken && focus.framePso ? focus.tilesX : 0, focusTilesY = focus.tilesY;
+    // frameData's depthBindlessIndex (the particles' depth fade): our resolved focus scene depth, where slot 12 names
+    // it (MSAA: the resolve replayed mid-frame rests as a shader resource; a depth twin still bound for writing can't
+    // be sampled, so without MSAA the game's index stays).
+    static std::atomic<bool> depthFadeLogged{false};
+    const uint32_t sceneDepthSrv = focus.settings.depthFade && !(liveDiag.load(std::memory_order_relaxed) & 1) && focus.resolvedDepth && focus.resolveReady && !focus.resolveBroken &&
+                                           focus.depthForTiles == focus.resolvedDepth.Get()
+                                       ? focus.slotFirst + 12 - focus.baseIndex
+                                       : 0;
+    if (sceneDepthSrv && focusTilesX && !depthFadeLogged.exchange(true))
+        logf("replay focus: depth fade: the focus replays' frame constants name our resolved scene depth (bindless %u) "
+             "for ACE's particles (spray, smoke)",
+             sceneDepthSrv);
     float gazeNow[4], gazeBefore[4];  // this frame's box centres off the eyes' axes, and last frame's
     std::memcpy(gazeNow, focus.gazeOffset, sizeof(gazeNow));
     std::memcpy(gazeBefore, focus.gazePrev, sizeof(gazeBefore));
@@ -1354,8 +1366,8 @@ void focus_record(List* gameList, const Stream& s, bool mono) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> constantsFrom = s.passConstants;
     if (focusTilesX) {
         l->SetPipelineState(focus.framePso.Get());
-        const uint32_t grid[2] = {focusTilesX, focusTilesY};
-        l->SetComputeRoot32BitConstants(1, 2, grid, 0);
+        const uint32_t grid[3] = {focusTilesX, focusTilesY, sceneDepthSrv};
+        l->SetComputeRoot32BitConstants(1, 3, grid, 0);
         for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.frameConstants) {
             const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
             const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.constants->GetGPUVirtualAddress() + UINT64{slot} * kSlotBytes;
@@ -1379,7 +1391,13 @@ void focus_record(List* gameList, const Stream& s, bool mono) {
     if (!skyMap.empty())
         sub.skyTables = &skyMap;
     sub.skip = cullProbePhase.load(std::memory_order_relaxed);
-    if (cull.use.load(std::memory_order_relaxed) &&
+    // Focus culling's buffers hold what ACE's two-eye (dual frustum) culling makes: the stereo scene lists' draws. The
+    // per-eye lists (transparents, the particles' OIT lists) draw from the same command buffer, but their commands are
+    // counted by other culling dispatches we don't replay: in our buffer they keep the template's zero instances.
+    // Pointed at ours, every instanced draw of a per-eye list came out empty in the focus views: no spray, no rain,
+    // no fence panels or crowd (RenderDoc capture 2026-11-23: 5,397 + 468 instances in ACE's eyes, 0 in the focus
+    // views), and they flashed back on the frames our culling wasn't ready. So a per-eye list keeps ACE's own buffers.
+    if (!mono && cull.use.load(std::memory_order_relaxed) &&
         cull.readyFrame.load(std::memory_order_relaxed) == focus.frame.load(std::memory_order_relaxed)) {
         AcquireSRWLockShared(&focus.lock);
         if (cull.commands && cull.instances && cull.gameCommands && !cull.broken) {

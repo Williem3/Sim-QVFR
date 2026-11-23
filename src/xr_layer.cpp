@@ -15,6 +15,7 @@
 #include "layer_chain.h"
 #include "log.h"
 #include "probe/dred.h"
+#include "probe/cpp_exceptions.h"
 #include "probe/pix_capture.h"
 #include "games/ace/replay_probe.h"
 #include "games/ace/stereo_flag.h"
@@ -295,6 +296,10 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // ACE's API path draws its focus views from ACE's single-pass stereo lists: on before ACE makes its renderer.
     if (experiment.replayCompose && std::strcmp(thisGame->id, "ace") == 0)
         ace_single_pass_stereo_on();
+    if (experiment.logCppExceptions)
+        cpp_exceptions_log_start();
+    if (experiment.replayProbe == 3 && std::strcmp(thisGame->id, "ace") == 0)
+        replay_probe_early_swap_chain();  // before the game makes its window swap chain
     if (experiment.replayProbe == 3 && ((experiment.replaySky && experiment.replayTiles) || experiment.replayTyres))
         replay_probe_early_sky();  // before the game makes its device and loads its pipelines
     if (experiment.replayProbe == 3 && experiment.replayDlss)

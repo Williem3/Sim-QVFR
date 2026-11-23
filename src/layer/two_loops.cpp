@@ -101,6 +101,24 @@ void views4_capture(ID3D12Resource* views, ID3D12Resource* output) {
     logf("views4: capture %ls %s (all four views, and the composed left eye)", name, ok ? "saved" : "FAILED");
 }
 
+void views4_census_capture(ID3D12Resource* views, ID3D12Resource* focus, D3D12_RESOURCE_STATES focusState,
+                           ID3D12Resource* output, int index) {
+    quad.lastCapture = GetTickCount64();
+    const std::filesystem::path dir = std::filesystem::path(log_directory()) / L"captures";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    static wchar_t stem[64];
+    if (index == 0) {  // one name per burst
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        swprintf_s(stem, L"v4cens%02d-%02u%02u%02u", ++quad.captures, t.wHour, t.wMinute, t.wSecond);
+    }
+    wchar_t name[96];
+    swprintf_s(name, L"%ls-f%d", stem, index);
+    const bool ok = quad.compositor.save_census_captures(views, focus, focusState, output, (dir / name).wstring());
+    logf("replay census: capture %ls %s (ACE's eyes, the focus views, the output; both eyes)", name, ok ? "saved" : "FAILED");
+}
+
 // Frame B's xrEndFrame: composes A (outer) and B (focus) into the output swapchain and submits it in
 // place of ACE's projection layer. Any missing piece shows ACE's frame B as it is (the focus box
 // with black around it) rather than dropping the frame.

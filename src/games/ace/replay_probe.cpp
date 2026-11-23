@@ -1,6 +1,7 @@
 #include "replay_probe.h"
 
 #include <d3dcompiler.h>
+#include <dxgi1_4.h>
 #include <intrin.h>
 
 #include <algorithm>
@@ -203,6 +204,7 @@ RecordTiming recordTiming;
 thread_local uint64_t skyCheckTicks = 0;  // emit's sky checks on this thread (read around one emit)
 thread_local uint64_t emitOps = 0;
 std::atomic<uint64_t> twinsMade{0}, twinsRemade{0};
+std::atomic<unsigned> liveDiag{0};
 }  // namespace replay_detail
 namespace {
 uint64_t windowFrames = 0, window = 0;
@@ -311,7 +313,8 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
         case kPso: {
             ID3D12PipelineState* r; get(r);
             curPso = r;
-            curTyre = sub && sub->count == 2 && sub->viewports && sub->scissors && is_tyre_pso(r);
+            // (not in ACE's flags pass: the right eye has a list of its own there, Stream::halfStereo)
+            curTyre = sub && sub->count == 2 && sub->viewports && sub->scissors && !s.halfStereo && is_tyre_pso(r);
             l->SetPipelineState(r);
             break;
         }
@@ -1120,8 +1123,20 @@ void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12Comm
         gpu_marker(queue, kStepGap);  // what follows until the next batch is not this batch's
 }
 
+// The game's window swap chain: its back buffers never go into our view records. Those records hold a reference to
+// each resource, and DXGI refuses ResizeBuffers while anything still holds a back buffer: ACE then throws "Failed to
+// resize swap chain" and aborts (under RenderDoc at every start, 2026-11-23; a window moved to another monitor
+// mid-session resizes it too). The buffers carry a private tag, set when the swap chain is made and after each resize.
+// {6f0b7c1e-3a52-4d1b-9e5f-2c8a41d7b3a9}
+constexpr GUID kBackBufferTag = {0x6f0b7c1e, 0x3a52, 0x4d1b, {0x9e, 0x5f, 0x2c, 0x8a, 0x41, 0xd7, 0xb3, 0xa9}};
+bool is_back_buffer(ID3D12Resource* resource) {
+    BYTE tag = 0;
+    UINT size = 1;
+    return resource && SUCCEEDED(resource->GetPrivateData(kBackBufferTag, &size, &tag));
+}
+
 void note_view(ID3D12Resource* resource, DXGI_FORMAT format, D3D12_CPU_DESCRIPTOR_HANDLE handle, bool depth) {
-    if (!resource || inReplay)
+    if (!resource || inReplay || is_back_buffer(resource))
         return;
     AcquireSRWLockExclusive(&focus.lock);
     ViewInfo& v = focus.views[handle.ptr];
@@ -1143,8 +1158,51 @@ void STDMETHODCALLTYPE rtvHook(ID3D12Device* d, ID3D12Resource* resource, const 
 
 // ---- Recording hooks -----------------------------------------------------------------------------------------------
 
+void note_failed_call(const char* call, List* list, HRESULT hr);
+
+// The draw census (replay_probe_census): lists Reset before this frame count log their draws by pipeline at their Close.
+std::atomic<uint64_t> censusUntil{0};
+
+// One draw of a census list: kind 0 Draw, 1 DrawIndexed, 2 ExecuteIndirect; `again`: our right-eye draw follows it.
+void census_draw(Stream* s, int kind, UINT elements, UINT instances, bool again) {
+    if (!s->census)
+        return;
+    auto it = std::find_if(s->censusPsos.begin(), s->censusPsos.end(),
+                           [&](const Stream::CensusPso& c) { return c.pso == s->pso; });
+    if (it == s->censusPsos.end()) {
+        if (s->censusPsos.size() >= 256)
+            return;
+        s->censusPsos.push_back({s->pso, 0, 0, 0, UINT32_MAX, 0, 0, 0, 0, 0});
+        it = s->censusPsos.end() - 1;
+    }
+    ++it->draws;
+    it->indexed += kind == 1;
+    it->indirect += kind == 2;
+    if (kind != 2) {
+        it->instMin = std::min(it->instMin, instances);
+        it->instMax = std::max(it->instMax, instances);
+        it->elements += elements;
+    }
+    it->oneViewport += s->vpCount == 1;
+    it->twoViewports += s->vpCount == 2;
+    it->again += again;
+}
+
+std::string census_name(ID3D12PipelineState* pso) {
+    wchar_t name[96] = {};
+    UINT size = sizeof(name) - sizeof(wchar_t);
+    if (!pso || FAILED(pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)) || !name[0])
+        return "unnamed";
+    std::string out;
+    for (const wchar_t* c = name; *c; ++c)
+        out += (std::iswalnum(*c) || *c == L'_') ? static_cast<char>(*c) : '_';
+    return out;
+}
+
 HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso) {
     const HRESULT hr = resetOriginal(list, allocator, pso);
+    if (FAILED(hr))
+        note_failed_call("Reset", list, hr);
     if (inReplay || FAILED(hr) || !installed.load(std::memory_order_relaxed) ||
         list->GetType() == D3D12_COMMAND_LIST_TYPE_BUNDLE)
         return hr;
@@ -1168,6 +1226,7 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     ReleaseSRWLockExclusive(&streamsLock);
     current = {list, s};
     s->begin(now_ticks());
+    s->census = focus.frame.load(std::memory_order_relaxed) < censusUntil.load(std::memory_order_relaxed);
     if (probeMode == 3) {
         s->eyeState = eyeLive.state.load(std::memory_order_relaxed);
         s->eyeOut = eyeLive.out.load(std::memory_order_relaxed);
@@ -1420,12 +1479,84 @@ bool transparents_now() {
     return focus.settings.transparents == 1 || (focus.settings.transparents == 2 && focus.samplesTaken.load() % 2 == 0);
 }
 
+// A census list at its Close: what it is, where it draws, how the replay takes it, and its draws by pipeline.
+void census_log(List* list, const Stream& s) {
+    if (s.draws == 0 && s.dispatchPsos.empty())
+        return;
+    const unsigned long long frame = focus.frame.load();
+    std::string targets;
+    AcquireSRWLockShared(&focus.lock);
+    for (const SIZE_T h : s.targets) {
+        const auto it = focus.views.find(h);
+        if (it == focus.views.end() || !it->second.resource) {
+            targets += " (unknown)";
+            continue;
+        }
+        const D3D12_RESOURCE_DESC d = it->second.resource->GetDesc();
+        targets += " " + debug_name(it->second.resource.Get()) + " " + std::to_string(d.Width) + "x" + std::to_string(d.Height);
+    }
+    ReleaseSRWLockShared(&focus.lock);
+    const float ew = focus.sceneEyeW.load(), eh = focus.sceneEyeH.load();
+    const char* taken = "not replayed";
+    if (s.replayable(focus.settings.allTargets))
+        taken = "a stereo scene list (replayed)";
+    else if (transparents_now() && s.oitDraw)
+        taken = "the OIT composite (replayed)";
+    else if (transparents_now() && !s.stereo && s.monoSeen && !s.monoMixed && s.draws > 0 && !s.passConstants.empty() &&
+             (s.sawRtv || s.sawDsv) && std::fabs(s.monoW - ew) <= 1 && s.monoH == eh)
+        taken = "a per-eye list (replayed)";
+    std::string dispatches;
+    std::vector<ID3D12PipelineState*> seen;
+    for (ID3D12PipelineState* p : s.dispatchPsos)
+        if (std::find(seen.begin(), seen.end(), p) == seen.end() && seen.size() < 16) {
+            seen.push_back(p);
+            dispatches += " " + census_name(p);
+        }
+    logf("replay census: frame %llu list %p: draws %u, dispatches %zu (%s ), viewports %u (first %.0f,%.0f %.0fx%.0f), "
+         "stereo %d (eye %.0fx%.0f), per-eye %d (x %.0f %.0fx%.0f, mixed %d), scene eye %.0fx%.0f, oit %d, pass constants "
+         "%zu, targets:%s; %s",
+         frame, static_cast<void*>(list), s.draws, s.dispatchPsos.size(), dispatches.c_str(), s.vpN, s.vpAll[0].TopLeftX,
+         s.vpAll[0].TopLeftY, s.vpAll[0].Width, s.vpAll[0].Height, s.stereo ? 1 : 0, s.eyeW, s.eyeH, s.monoSeen ? 1 : 0,
+         s.monoX, s.monoW, s.monoH, s.monoMixed ? 1 : 0, ew, eh, s.oitDraw ? 1 : 0, s.passConstants.size(),
+         targets.c_str(), taken);
+    for (const Stream::CensusPso& c : s.censusPsos) {
+        Focus::VsInfo info{};
+        AcquireSRWLockShared(&focus.psoLock);
+        const auto it = focus.vsSeen.find(c.pso);
+        const bool created = it != focus.vsSeen.end();
+        if (created)
+            info = it->second;
+        const bool tyre = focus.tyrePsos.count(c.pso) != 0;
+        ReleaseSRWLockShared(&focus.psoLock);
+        logf("replay census:   list %p pipeline %p %s: draws %u (indexed %u, indirect %u), instances %u..%u, elements %llu, "
+             "with one viewport %u, with two %u, drawn again for the right eye %u; creation seen %d (vertex shader %u B, "
+             "signature bits %u), flagged as a tyre pipeline %d",
+             static_cast<void*>(list), static_cast<void*>(c.pso), census_name(c.pso).c_str(), c.draws, c.indexed, c.indirect,
+             c.instMin == UINT32_MAX ? 0 : c.instMin, c.instMax, static_cast<unsigned long long>(c.elements), c.oneViewport,
+             c.twoViewports, c.again, created ? 1 : 0, info.length, info.bits, tyre ? 1 : 0);
+    }
+}
+
+// A command-list call of the game's that failed (the game throws on these): which, on which list, and whether we had
+// recorded anything for it. The first few only.
+void note_failed_call(const char* call, List* list, HRESULT hr) {
+    static std::atomic<int> said{0};
+    if (said.fetch_add(1) < 12)
+        logf("replay probe: the game's %s on list %p failed: hr=0x%08lx (our own recording %d, renderdoc.dll %s)", call,
+             static_cast<void*>(list), static_cast<unsigned long>(hr), inReplay ? 1 : 0,
+             GetModuleHandleW(L"renderdoc.dll") ? "loaded" : "not loaded");
+}
+
 HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     const HRESULT hr = closeOriginal(list);
+    if (FAILED(hr))
+        note_failed_call("Close", list, hr);
     Stream* s = stream_of(list);
     if (!s)
         return hr;
     s->active = false;
+    if (s->census)
+        census_log(list, *s);
     listsSeen.fetch_add(1, std::memory_order_relaxed);
     hookCycles.fetch_add(s->hookCycles, std::memory_order_relaxed);
     if (!s->eyePatches.empty())  // (whatever Close returned: the list's bindings name our copies)
@@ -1495,7 +1626,11 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s);
         } else if (SUCCEEDED(hr) && transparents_now() && s->oitDraw) {
-            focus_oit_record(list, *s);
+            if (!(liveDiag.load(std::memory_order_relaxed) & 2))
+                focus_oit_record(list, *s);
+        } else if (const unsigned diag = liveDiag.load(std::memory_order_relaxed);
+                   (diag & 4) || ((diag & 8) && s->draws <= 4)) {
+            // (live diagnostic: this per-eye list left out of the focus views)
         } else if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && !s->monoMixed &&
                    s->draws > 0 && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
                    std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 && s->monoH == focus.sceneEyeH.load()) {  // one eye of the scene
@@ -1633,7 +1768,61 @@ void STDMETHODCALLTYPE vbHook(List* l, UINT start, UINT n, const D3D12_VERTEX_BU
     }
     vbOriginal(l, start, n, views);
 }
+// ACE's `flags` pass under single-pass stereo (the per-pixel object flags its OIT composite masks the transparents'
+// reveal with, so spray stays off the cockpit): its vertex shaders have no stereo variant, so the "stereo" list draws
+// the left eye only, and into a viewport half as wide as the eye (0,0 544x875 of a 2178-wide target; the right eye
+// gets a list of its own at the right place). The left eye's flags are then the scene squeezed to half width: the
+// composite cut the left eye's spray along the squeezed cockpit's edges (hard straight lines, 2026-11-20, a wet race),
+// in ACE's own image and in the focus views replayed from it. Here: a side-by-side pair a quarter of its target wide
+// is widened to the target's halves. False: not such a pair (or the target isn't known yet).
+float half_stereo_target_width(const Stream* s, float pairWidth) {
+    if (probeMode != 3 || !focus.settings.flagsWidth || (liveDiag.load(std::memory_order_relaxed) & 16) || !s->lastRtv ||
+        pairWidth < 64)
+        return 0;
+    float width = 0;
+    AcquireSRWLockShared(&focus.lock);
+    if (const auto it = focus.views.find(s->lastRtv); it != focus.views.end() && it->second.resource)
+        width = static_cast<float>(it->second.resource->GetDesc().Width);
+    ReleaseSRWLockShared(&focus.lock);
+    return std::fabs(pairWidth * 4 - width) <= 4 ? width : 0;
+}
+bool widen_half_stereo(const Stream* s, const D3D12_VIEWPORT* v, D3D12_VIEWPORT (&out)[2]) {
+    if (!(v[0].TopLeftX == 0 && v[0].TopLeftY == 0 && v[1].TopLeftY == 0 && v[0].Width == v[1].Width &&
+          v[0].Height == v[1].Height && v[1].TopLeftX == v[0].Width))
+        return false;
+    const float width = half_stereo_target_width(s, v[0].Width);
+    if (width == 0)
+        return false;
+    out[0] = v[0];
+    out[1] = v[1];
+    out[0].Width = out[1].Width = out[1].TopLeftX = width / 2;
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        logf("replay focus: flags: ACE's half-width stereo viewports (%.0fx%.0f each in a %.0f-wide target) widened to "
+             "the target's halves, as its transparency composite reads them",
+             v[0].Width, v[0].Height, width);
+    return true;
+}
+bool widen_half_scissors(const Stream* s, const D3D12_RECT* r, D3D12_RECT (&out)[2]) {
+    const LONG w = r[0].right - r[0].left;
+    if (!(r[0].left == 0 && r[0].top == 0 && r[1].top == 0 && r[1].left == r[0].right && r[1].right - r[1].left == w &&
+          r[0].bottom == r[1].bottom))
+        return false;
+    const float width = half_stereo_target_width(s, static_cast<float>(w));
+    if (width == 0)
+        return false;
+    const LONG half = static_cast<LONG>(width / 2);
+    out[0] = {0, 0, half, r[0].bottom};
+    out[1] = {half, 0, static_cast<LONG>(width), r[1].bottom};
+    return true;
+}
+
 void STDMETHODCALLTYPE viewportsHook(List* l, UINT n, const D3D12_VIEWPORT* v) {
+    D3D12_VIEWPORT wide[2];
+    if (Stream* s = stream_of(l); s && v && n == 2 && widen_half_stereo(s, v, wide)) {
+        v = wide;
+        s->halfStereo = true;
+    }
     if (Stream* s = stream_of(l); s && v) {
         HookTimer t(s);
         s->op(kViewports); s->put(n); s->put_bytes(v, sizeof(D3D12_VIEWPORT) * n);
@@ -1662,6 +1851,11 @@ void STDMETHODCALLTYPE viewportsHook(List* l, UINT n, const D3D12_VIEWPORT* v) {
     viewportsOriginal(l, n, v);
 }
 void STDMETHODCALLTYPE scissorsHook(List* l, UINT n, const D3D12_RECT* r) {
+    D3D12_RECT wide[2];
+    if (Stream* s = stream_of(l); s && r && n == 2 && widen_half_scissors(s, r, wide)) {
+        r = wide;
+        s->halfStereo = true;
+    }
     if (Stream* s = stream_of(l); s && r) {
         HookTimer t(s);
         s->op(kScissors); s->put(n); s->put_bytes(r, sizeof(D3D12_RECT) * n);
@@ -1704,6 +1898,19 @@ void STDMETHODCALLTYPE omHook(List* l, UINT n, const D3D12_CPU_DESCRIPTOR_HANDLE
         }
     }
     omOriginal(l, n, rtvs, single, dsv);
+    // Viewports or scissors set before their target was bound: the half-width pair widened now (widen_half_stereo).
+    if (Stream* s = stream_of(l); s && n > 0 && probeMode == 3) {
+        D3D12_VIEWPORT wide[2];
+        if (s->vpCount == 2 && widen_half_stereo(s, s->vp, wide)) {
+            s->halfStereo = true;
+            viewportsHook(l, 2, wide);
+        }
+        D3D12_RECT rects[2];
+        if (s->scCount == 2 && widen_half_scissors(s, s->sc, rects)) {
+            s->halfStereo = true;
+            scissorsHook(l, 2, rects);
+        }
+    }
 }
 void STDMETHODCALLTYPE computeRootSigHook(List* l, ID3D12RootSignature* r) {
     if (Stream* s = stream_of(l)) s->computeRoot = r;
@@ -1935,6 +2142,10 @@ void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D
     srvViewOriginal(d, r, desc, dest);
     if (inReplay)
         return;
+    if (is_back_buffer(r)) {  // never held (note_view): only the write into the heap is checked
+        note_game_write(dest.ptr, 1);
+        return;
+    }
     const int k = r && desc && (desc->ViewDimension == D3D12_SRV_DIMENSION_BUFFER ||
                                 desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D)
                       ? tile_view_kind(r)
@@ -2003,6 +2214,7 @@ void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
         HookTimer t(s);
         s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d);
         ++s->draws;
+        census_draw(s, 0, a, b, false);
         note_sky_draw(s);
         if (s->psoKind == 9 || s->psoKind == 10) {  // P1: tonemap, fxaa
             Stream::PostDraw& pd = s->psoKind == 9 ? s->tonemapDraw : s->fxaaDraw;
@@ -2029,6 +2241,9 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
         HookTimer t(s);
         s->op(kDrawIndexed); s->put(a); s->put(b); s->put(c); s->put(d); s->put(e);
         ++s->draws;
+        census_draw(s, 1, a, b,
+                    s->tyreBound && !s->halfStereo && b == 1 && s->vpCount == 2 && s->gfxCbvs[kPassConstantsRoot] &&
+                        focus.tyrePso && !s->computeRoot);
         note_sky_draw(s);
         eye_apply(l, s);
         // ACE's tyres in a stereo list (one instance: the left eye only): again for the right eye, in ACE's own list.
@@ -2051,7 +2266,7 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
                      s->computeRoot ? 1 : 0, focus.tyrePso ? 1 : 0, known, all);
             }
         }
-        if (s->tyreBound && b == 1 && s->vpCount == 2 && s->gfxCbvs[kPassConstantsRoot] && focus.tyrePso) {
+        if (s->tyreBound && !s->halfStereo && b == 1 && s->vpCount == 2 && s->gfxCbvs[kPassConstantsRoot] && focus.tyrePso) {
             drawIndexedOriginal(l, a, b, c, d, e);
             if (s->computeRoot) {  // our copy would replace compute bindings the game set in this list
                 if (!focus.tyreComputeLogged.exchange(true))
@@ -2096,6 +2311,7 @@ void STDMETHODCALLTYPE indirectHook(List* l, ID3D12CommandSignature* sig, UINT m
         HookTimer t(s);
         s->op(kIndirect); s->put(sig); s->put(max); s->put(args); s->put(argsOffset); s->put(count); s->put(countOffset);
         ++s->draws;
+        census_draw(s, 2, max, 0, false);
         note_sky_draw(s);
         eye_apply(l, s);
     }
@@ -2117,6 +2333,119 @@ void calibrate() {
 bool skyHooksEarly = false;
 // The vtables were patched by a start that then failed: patched again, the originals saved would be our own hooks.
 bool startPatched = false;
+
+// ---- The game's window swap chain (is_back_buffer) -----------------------------------------------------------------
+
+using SwapForHwndFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
+                                                  const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+using SwapFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+using ResizeFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+using Resize1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*,
+                                              IUnknown* const*);
+SwapForHwndFn swapForHwndOriginal = nullptr;
+SwapFn swapOriginal = nullptr;
+ResizeFn resizeOriginal = nullptr;
+Resize1Fn resize1Original = nullptr;
+bool swapHooksEarly = false;
+constexpr size_t kSlotCreateSwapChain = 10, kSlotCreateSwapChainForHwnd = 15, kSlotResizeBuffers = 13, kSlotResizeBuffers1 = 39;
+
+// Each back buffer tagged; with `purge`, our records of it (made before the tag, if any) are dropped first.
+void tag_back_buffers(IDXGISwapChain* chain, bool purge) {
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (!chain || FAILED(chain->GetDesc(&desc)))
+        return;
+    UINT tagged = 0;
+    for (UINT i = 0; i < desc.BufferCount; ++i) {
+        ComPtr<ID3D12Resource> buffer;
+        if (FAILED(chain->GetBuffer(i, IID_PPV_ARGS(&buffer))) || !buffer)
+            continue;
+        const BYTE one = 1;
+        buffer->SetPrivateData(kBackBufferTag, 1, &one);
+        ++tagged;
+        if (purge) {
+            AcquireSRWLockExclusive(&focus.lock);
+            std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == buffer.Get(); });
+            std::erase_if(focus.srvInfo, [&](const auto& v) { return v.second.first.Get() == buffer.Get(); });
+            ReleaseSRWLockExclusive(&focus.lock);
+        }
+    }
+    static std::atomic<bool> said{false};
+    if (tagged && !said.exchange(true))
+        logf("replay focus: the game's window swap chain (%ux%u, %u buffers): its back buffers stay out of our view records",
+             desc.BufferDesc.Width, desc.BufferDesc.Height, tagged);
+}
+HRESULT STDMETHODCALLTYPE resizeHook(IDXGISwapChain* chain, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags) {
+    tag_back_buffers(chain, true);
+    const HRESULT hr = resizeOriginal(chain, count, w, h, format, flags);
+    if (FAILED(hr))
+        logf("replay focus: the game's ResizeBuffers(%u, %ux%u) failed: hr=0x%08lx", count, w, h, static_cast<unsigned long>(hr));
+    tag_back_buffers(chain, false);
+    return hr;
+}
+HRESULT STDMETHODCALLTYPE resize1Hook(IDXGISwapChain3* chain, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags,
+                                      const UINT* masks, IUnknown* const* queues) {
+    tag_back_buffers(chain, true);
+    const HRESULT hr = resize1Original(chain, count, w, h, format, flags, masks, queues);
+    if (FAILED(hr))
+        logf("replay focus: the game's ResizeBuffers1(%u, %ux%u) failed: hr=0x%08lx", count, w, h, static_cast<unsigned long>(hr));
+    tag_back_buffers(chain, false);
+    return hr;
+}
+// A swap chain the game just made: its resize calls hooked (once: the class's vtable is shared), its buffers tagged.
+void adopt_swap_chain(IDXGISwapChain* chain) {
+    if (!chain)
+        return;
+    ComPtr<ID3D12Resource> first;
+    if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&first))))
+        return;  // not a D3D12 swap chain
+    static std::atomic<bool> hooked{false};
+    if (!hooked.exchange(true)) {
+        void** table = *reinterpret_cast<void***>(chain);
+        bool ok = vtable_hook(table, kSlotResizeBuffers, &resizeHook, &resizeOriginal);
+        ComPtr<IDXGISwapChain3> chain3;
+        if (ok && SUCCEEDED(chain->QueryInterface(IID_PPV_ARGS(&chain3))))
+            ok = vtable_hook(*reinterpret_cast<void***>(chain3.Get()), kSlotResizeBuffers1, &resize1Hook, &resize1Original);
+        if (!ok)
+            log_line("replay focus: the window swap chain's resize calls could not be hooked");
+    }
+    tag_back_buffers(chain, true);
+}
+HRESULT STDMETHODCALLTYPE swapForHwndHook(IDXGIFactory2* f, IUnknown* owner, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+                                          const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* output,
+                                          IDXGISwapChain1** out) {
+    const HRESULT hr = swapForHwndOriginal(f, owner, hwnd, desc, full, output, out);
+    if (SUCCEEDED(hr) && out)
+        adopt_swap_chain(*out);
+    return hr;
+}
+HRESULT STDMETHODCALLTYPE swapHook(IDXGIFactory* f, IUnknown* owner, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
+    const HRESULT hr = swapOriginal(f, owner, desc, out);
+    if (SUCCEEDED(hr) && out)
+        adopt_swap_chain(*out);
+    return hr;
+}
+}
+
+void replay_probe_early_swap_chain() {
+    if (swapHooksEarly)
+        return;
+    HMODULE dxgi = GetModuleHandleW(L"dxgi.dll");
+    if (!dxgi)
+        dxgi = LoadLibraryExW(L"dxgi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    using CreateFn = HRESULT(WINAPI*)(UINT, REFIID, void**);
+    const auto create = dxgi ? reinterpret_cast<CreateFn>(GetProcAddress(dxgi, "CreateDXGIFactory2")) : nullptr;
+    ComPtr<IDXGIFactory2> factory;
+    if (!create || FAILED(create(0, IID_PPV_ARGS(&factory)))) {
+        log_line("replay focus: no early DXGI factory; the window swap chain's back buffers are not told apart");
+        return;
+    }
+    void** table = *reinterpret_cast<void***>(factory.Get());
+    swapHooksEarly = vtable_hook(table, kSlotCreateSwapChainForHwnd, &swapForHwndHook, &swapForHwndOriginal) &&
+                     vtable_hook(table, kSlotCreateSwapChain, &swapHook, &swapOriginal);
+    logf("replay focus: window swap chain: creation hooks %s at instance creation", swapHooksEarly ? "installed" : "FAILED");
+}
+
+namespace {
 }
 
 void replay_probe_early_sky() {
@@ -2304,6 +2633,23 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
 }
 
 bool replay_probe_installed() { return installed; }
+
+void replay_probe_set_live_diag(unsigned bits) {
+    if (liveDiag.exchange(bits) != bits)
+        logf("replay focus: live diagnostic switches now %u (1 depth fade off, 2 no OIT composite, 4 no per-eye lists, 8 no "
+             "small per-eye lists, 16 flags not widened)",
+             bits);
+}
+
+bool replay_probe_census(unsigned count) {
+    if (!installed || probeMode != 3)
+        return false;
+    const uint64_t now = focus.frame.load();
+    censusUntil.store(now + 1 + count);
+    logf("replay census: armed at frame %llu: the lists begun from now until frame %llu log their draws by pipeline",
+         static_cast<unsigned long long>(now), static_cast<unsigned long long>(now + 1 + count));
+    return true;
+}
 
 void replay_probe_set_size(double k, double kY, double renderScale) {
     if (probeMode != 3)

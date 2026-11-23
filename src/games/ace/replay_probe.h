@@ -76,6 +76,10 @@ struct ReplayFocusSettings {
                                   // fed by ACE's velocity packing replayed with focus constants (needs `post`)
     bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our
                                   // resampled clouds in the focus replay (needs `tiles`)
+    bool depthFade = true;        // the focus replays' frame constants name our resolved focus scene depth
+                                  // (depthBindlessIndex), which ACE's particles (water spray, smoke) fade against
+    bool flagsWidth = true;       // ACE's `flags` pass under single-pass stereo draws into viewports half the eye's
+                                  // width: widened to the eye's, in ACE's own list (its OIT composite reads them)
     bool tyres = false;           // ACE's tyre pipeline has no single-pass-stereo variant (one instance, viewport 0: the left
                                   // eye only): each tyre draw in a stereo list drawn again for the right eye, in ACE's own
                                   // lists and in the focus replays
@@ -125,7 +129,16 @@ void replay_probe_frame_end();
 // pipeline-library loads, constant-buffer views) on D3D12's shared device vtable, through a throwaway device. The game's
 // pipelines come from its PSO cache before the session; hooks installed at the session see none of them.
 void replay_probe_early_sky();
+// At instance creation too: the game's window swap chain is watched from its creation, so its back buffers never enter
+// the view records (they hold references, and DXGI refuses to resize a swap chain whose buffers are still held).
+void replay_probe_early_swap_chain();
 bool replay_probe_installed();
+// The draw census (a development build's capture hotkey, [experiment] replay_census_hotkey=1): every list the game
+// begins in the rest of this frame and the next `frames` logs, at its Close, its targets, viewports, how the replay
+// takes it and its draws by pipeline (name, instance counts, our right-eye draws). False when the API path isn't running.
+bool replay_probe_census(unsigned frames);
+// Development builds: live diagnostic switches for the focus replays' stages (replay_internal.h liveDiag has the bits).
+void replay_probe_set_live_diag(unsigned bits);
 // P3: the focus views' final image (both eyes side by side, after the post: the swapchain's format, typeless), its
 // rest state, and the focus box (half extent in each eye's NDC, centred on its forward axis). False before the first
 // post replay.
