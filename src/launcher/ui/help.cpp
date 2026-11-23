@@ -45,6 +45,11 @@ constexpr Help kHelp[] = {
      L"other CAS sharpeners show it: any setting above 0% already sharpens. Only the focus area is sharpened, fading out "
      L"across its feather so its edge stays even: your side vision sees shimmer more than detail. 0% is off; it changes "
      L"while you drive.")},
+    {I18N(L"Periphery texture match"),
+     I18N(L"Makes fences, nets and other see-through surfaces look the same in your side vision as in the focus area. "
+     L"At the periphery’s lower resolution the game blends them into a light solid shade, so the focus area looked "
+     L"darker behind them. At 100% the periphery reads its textures at the same detail level as the focus area; lower "
+     L"it if distant textures shimmer in your side vision. 0% is off (the game’s own); it changes while you drive.")},
     {I18N(L"Night car lighting"),
      I18N(L"Adds highlights and shading to the cars at night. "
      L"Sim-QVFR relights each car after the game draws it, before the game's own post-processing: highlights where the "

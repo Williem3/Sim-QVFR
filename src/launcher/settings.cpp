@@ -52,6 +52,7 @@ Settings load_settings(const std::wstring& ini) {
     s.inner = kFocusDensity.clamp(density ? density : static_cast<int>(std::lround(100.0 * kEyeScale.clamp(eyeScale) / s.width)));
     s.objectDetail = ini_int(f, kObjectDetail);
     s.sharpen = ini_int(f, kSharpenPercent);
+    s.textureMatch = ini_int(f, kPeripheryTextureMatch);
     s.grade = read_color_grade(f);
     s.carLight = read_car_lighting(f);
     s.eyeOff = ini_int(f, kEyeOff);
@@ -210,6 +211,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
         ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
         ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
+        ok &= write(ini, kPeripheryTextureMatch, n(clamp_to(s.textureMatch, kTextureMatchRange)));
         ok &= write_color_grade(ini.c_str(), s.grade);
         ok &= write_car_lighting(ini.c_str(), s.carLight);
         ok &= write(ini, kFocusCorridor, s.corridor ? L"1" : L"0");  // road focus (a game without it ignores them)

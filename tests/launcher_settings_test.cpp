@@ -380,6 +380,14 @@ int SIM_QVFR_TEST_MAIN() {
             }
             detail.sharpen = 0;
             save_settings(ini, detail);
+            check(detail.textureMatch == 100, "settings: periphery texture match defaults to 100%");
+            detail.textureMatch = 30;
+            save_live_settings(ini, detail);
+            check(load_settings(ini).textureMatch == 30 && ini_int(ini, L"quad", L"periphery_texture_match") == 30,
+                  "settings: periphery texture match round-trips, live ([quad] periphery_texture_match)");
+            check(per_game_key(L"quad", L"periphery_texture_match"), "settings: periphery_texture_match is a per-game key");
+            detail.textureMatch = 100;
+            save_settings(ini, detail);
             check(!detail.grade.on, "settings: colour correction defaults to off");
             detail.grade = {true, -5, 10, -20, 40};
             save_live_settings(ini, detail);

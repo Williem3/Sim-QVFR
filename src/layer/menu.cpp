@@ -224,6 +224,7 @@ void menu_open(int64_t now) {
         menu.model.launch.fgPage = features.frameGeneration;
         menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
         menu.model.launch.sharpening = features.sharpening;
+        menu.model.launch.textureMatch = features.peripheryTextureMatch && experiment.replayCompose;  // ACE's API path
         menu.model.launch.eyeOff = features.eyeOff;
         menu.model.launch.carLighting = features.carLighting && experiment.views4;  // night cars: QVFR's multi-view path
         menu.model.launch.carLightReady = menu.model.launch.carLighting && experiment.carLightAtLaunch;
@@ -324,9 +325,9 @@ void menu_press(MenuKey key, int64_t now) {
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
                      eyeOff = menu.model.launch.eyeOff, carLighting = menu.model.launch.carLighting,
-                     corridor = menu.model.launch.focusCorridor,
+                     corridor = menu.model.launch.focusCorridor, match = menu.model.launch.textureMatch,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -335,7 +336,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)

@@ -156,6 +156,7 @@ struct Stream {
     ID3D12RootSignature* sceneRoot = nullptr;  // ACE's scene root signature (its table 18 was set under it)
     uint64_t eyeState = 0;                     // the live size this list records with (0: off), taken at its Reset
     uint64_t eyeOut = 0;                       // and the region after the game's DLSS upscale (eye_out), taken with it
+    float eyeBias = 0;                         // the periphery texture bias this list records with (0: off), taken with it
     struct EyePatch {
         D3D12_GPU_VIRTUAL_ADDRESS from, to;
         int mode;    // 0 pass constants, 1 tile culling, 2 normal reconstruction, 3 deferred shadows, 4 velocity packing
@@ -221,6 +222,7 @@ struct Stream {
         eyeDirty = eyeScaled = eyeCbv1 = eyeCbv5 = eyeClipped = false;
         cbv1Root = cbv5Root = sceneRoot = nullptr;
         eyeState = eyeOut = 0;
+        eyeBias = 0;
         eyePatches.clear();
     }
     template <class T> void put(const T& v) {
@@ -606,6 +608,11 @@ struct EyeLive {
     // with it, when the game's DLSS upscales its eyes (Quality, Balanced, Performance): the region at the output size,
     // as NGX is told it (focus_ngx: the output x fx, rounded), ow | oh << 16 | outW << 32 | outH << 48; 0: no upscale
     std::atomic<uint64_t> out{0};
+    // Periphery texture match (replay_probe_set_eye_texture_match): ACE's own eye passes read a copy of their pass
+    // constants with globalMaterialMipBias moved by this many mip levels (negative: sharper). ACE's alpha-to-coverage
+    // surfaces (fences, lattices) average to a light solid shade at the periphery's low resolution and are see-through
+    // in the sharper focus views; a sharper periphery makes the two agree. `biasNow`: taken at a frame's end.
+    std::atomic<float> match{0}, mipBias{0}, biasNow{0};
     ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
     ComPtr<ID3D12PipelineState> pso;   // kEyeShader
     std::atomic<uint32_t> nextSlot{0};

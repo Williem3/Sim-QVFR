@@ -144,6 +144,9 @@ Card resolution_card() {
             b.slider({kInner, tr(L"Focus density"), app.s.inner, L"%", known ? px(ro.focus) : L""});
             if (game_has(&games::GameFeatures::sharpening))
                 b.slider({kSharpen, tr(L"Sharpening"), app.s.sharpen, L"%", app.s.sharpen == 0 ? tr(L"Off") : L""});
+            if (game_has(&games::GameFeatures::peripheryTextureMatch))
+                b.slider({kTextureMatch, tr(L"Periphery texture match"), app.s.textureMatch, L"%",
+                          app.s.textureMatch == 0 ? tr(L"Off") : L""});
             if (game_has(&games::GameFeatures::objectDetail))
                 b.slider({kObjectDetail, tr(L"Object detail"), app.s.objectDetail});
         } else {
@@ -188,6 +191,7 @@ Card resolution_card() {
         s.outer = d.outer;
         s.inner = d.inner;
         s.sharpen = d.sharpen;
+        s.textureMatch = d.textureMatch;
         s.objectDetail = d.objectDetail;
     };
     return c;

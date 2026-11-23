@@ -207,6 +207,7 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         values(L"Focus density", percent(a.inner), percent(b.inner));
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
     values(L"Sharpening", percent(a.sharpen), percent(b.sharpen));
+    values(L"Periphery texture match", percent(a.textureMatch), percent(b.textureMatch));
     {
         const auto grade = [](const ColorGrade& g) {
             if (!g.on)

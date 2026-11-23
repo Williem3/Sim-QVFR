@@ -59,6 +59,11 @@ inline constexpr IniInt kFocusCorridorShow{L"quad", L"focus_corridor_show", 0, 0
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};
 inline constexpr IniInt kGaze{L"quad", L"gaze", 1, 0, 1, 1};
 inline constexpr IniInt kSharpenPercent{L"quad", L"sharpen_percent", 0, 0, 100, 5};
+// Periphery texture match (a game with GameFeatures::peripheryTextureMatch, ACE): the periphery samples its textures
+// sharper, by this share of the mip levels the focus views are sharper by, so see-through surfaces (fences, nets,
+// lattices) look the same in both: at the periphery's resolution they otherwise blend into a light solid shade the
+// focus views don't show. 100 the same level as the focus views (the default), 0 off (the game's own). Live.
+inline constexpr IniInt kPeripheryTextureMatch{L"quad", L"periphery_texture_match", 100, 0, 100, 10};
 // Colour correction (quad/color_grade.h; a game whose compositor runs, GameFeatures::sharpening): the switch, then the
 // exposure in tenths of a stop and brightness, contrast and saturation in percent, each 0 unchanged. Live.
 inline constexpr IniInt kColorCorrection{L"quad", L"color_correction", 0, 0, 1, 1};

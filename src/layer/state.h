@@ -222,6 +222,8 @@ struct Experiment {
     // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS on the focus views as they are composed
     // (EyeComposition::sharpness), percent; 0 off.
     std::atomic<int> sharpen = 0;
+    // [quad] periphery_texture_match (a game with GameFeatures::peripheryTextureMatch), percent; 0 off.
+    std::atomic<int> textureMatch = 0;
     // [quad] color_correction and its values (a game with GameFeatures::sharpening; quad/color_grade.h's bits): the
     // composed image's exposure, brightness, contrast and saturation (EyeComposition::color). Live.
     std::atomic<uint64_t> colorGrade = kColorGradeNone;
@@ -267,6 +269,7 @@ struct LiveSettings {
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
+    int textureMatch = 0;    // [quad] periphery_texture_match, percent (GameFeatures::peripheryTextureMatch); 0 off
     ColorGrade color;        // [quad] color_correction and its values (a game with GameFeatures::sharpening)
     CarLighting carLight;    // [quad] car_light and its values (a game with GameFeatures::carLighting)
     int outputDensityMax = 400;  // [quad] output_density_max, percent of the native eye (100: composed at native size)

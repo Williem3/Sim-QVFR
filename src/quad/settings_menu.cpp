@@ -41,6 +41,7 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Density, I18N(L"Focus density"), kFocusDensity),
     spec_of(MenuItem::ObjectDetail, I18N(L"Object detail"), kObjectDetail),
     spec_of(MenuItem::Sharpening, I18N(L"Sharpening"), kSharpenPercent),
+    spec_of(MenuItem::TextureMatch, I18N(L"Periphery texture match"), kPeripheryTextureMatch),
     // The Colour page (color_grade.h): the switch, exposure in tenths of a stop, the rest in percent.
     spec_of(MenuItem::ColorOn, I18N(L"Color correction"), kColorCorrection),
     spec_of(MenuItem::ColorExposure, I18N(L"Exposure"), kColorExposure),
@@ -222,6 +223,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Density: return &v.density;
     case MenuItem::ObjectDetail: return &v.objectDetail;
     case MenuItem::Sharpening: return &v.sharpen;
+    case MenuItem::TextureMatch: return &v.textureMatch;
     case MenuItem::ColorExposure: return &v.color.exposure;
     case MenuItem::ColorBrightness: return &v.color.brightness;
     case MenuItem::ColorContrast: return &v.color.contrast;
@@ -387,6 +389,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
                 items.push_back(MenuItem::ObjectDetail);
             if (l.sharpening)
                 items.push_back(MenuItem::Sharpening);
+            if (l.textureMatch)
+                items.push_back(MenuItem::TextureMatch);
             if (l.optimize)
                 items.push_back(MenuItem::Optimize);
         }
@@ -745,6 +749,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.helmet = read_helmet_settings(ini);
     v.objectDetail = ini_int(ini, kObjectDetail);
     v.sharpen = ini_int(ini, kSharpenPercent);
+    v.textureMatch = ini_int(ini, kPeripheryTextureMatch);
     v.color = read_color_grade(ini);
     v.carLight = read_car_lighting(ini);
     v.eyeOff = ini_int(ini, kEyeOff);
@@ -755,8 +760,10 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor) {
+                       bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool textureMatch) {
     bool ok = true;
+    if (qvfr && textureMatch)
+        ok &= write(ini, kPeripheryTextureMatch, kPeripheryTextureMatch.clamp(v.textureMatch));
     if (qvfr && focusCorridor) {
         ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
         ok &= write(ini, kFocusCorridorWidth, kFocusCorridorWidth.clamp(v.focusCorridorWidth));
@@ -1279,7 +1286,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
                                                : gaze_deadzone_text(v.gazeDeadzone) + L"°";
         else if (items[i] == MenuItem::FocusQuadDistance)
             line.value = std::to_wstring(focus_quad_metres(v.focusQuadStep)) + L" m";
-        else if (items[i] == MenuItem::Sharpening && v.sharpen == 0)
+        else if ((items[i] == MenuItem::Sharpening && v.sharpen == 0) ||
+                 (items[i] == MenuItem::TextureMatch && v.textureMatch == 0))
             line.value = w.t(I18N(L"Off"));
         else if (items[i] == MenuItem::EyeOff)
             line.value = w.t(v.eyeOff == 1   ? I18N(L"Left (right eye only)")

@@ -163,6 +163,11 @@ void replay_probe_set_focus_mask(bool on, const FocusArea& area, unsigned margin
 // region in use (replay_probe_eye_allow, each frame: whether the frame was composed).
 void replay_probe_set_eye_scale(double scale);
 void replay_probe_eye_allow(bool composed);
+// Periphery texture match ([quad] periphery_texture_match), live: ACE's own eye passes sample their material textures
+// sharper by `share` (0..1; 0 off) of the mip levels the focus views are sharper by, so see-through surfaces (fences,
+// lattices) look the same in the periphery as in the focus views. One value for every material texture of the
+// periphery: sharper also means more shimmer. `mips` other than 0 (a diagnostic) sets the levels instead.
+void replay_probe_set_eye_texture_match(double share, double mips);
 // GPU time by step: the batches this thread executes from now on are our compositor's (true) or the game's (false).
 void replay_probe_gpu_scope(bool compositor);
 // The share of each eye's launch-size image in use, each way (true while the live periphery is in effect).
