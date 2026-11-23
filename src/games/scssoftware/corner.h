@@ -61,6 +61,8 @@ void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpu
 void corner_set_force_ui_redraw(bool on);
 // Dev builds' mirror diagnostic ([experiment] scs_mirror_diag=1, corner_mirror_diag.cpp): before the game's shaders.
 void corner_mirror_diag(bool on);
+// The scene draws' own-pixel-loads twins (lmu::mvr_probe_own_pixel_loads): bound for their focus draws. Before the install.
+void corner_own_pixel_loads(bool on);
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame
 // just drawn had its eyes in it; `info` itself otherwise. The copies live until the next call.

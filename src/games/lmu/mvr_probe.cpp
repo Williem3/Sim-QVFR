@@ -92,6 +92,8 @@ int64_t lastLogQpc = 0;
 int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
 std::atomic<bool> positionTwins{false};  // the SCS games' focus replays: full-screen shaders' position twins
+std::atomic<bool> ownLoadsTwins{false};  // the SCS games' scene draws: pixel shaders' own-pixel-loads twins
+std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11PixelShader>> ownLoadsByCode;  // (or null), under twinMutex
 std::atomic<bool> cbRows{false};  // the SCS mirror diagnostic: shader ids and slots 0-3's fixed rows
 
 // The SCS mirror diagnostic's tags (mvr_probe_cb_rows).
@@ -720,6 +722,33 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         if (!refusedWhy.empty())
             ++stats.pixelRefused[refusedWhy];
     }
+    // The SCS games' scene draws: a pixel shader that loads the targets at its own pixel through a projected screen
+    // position gets the twin reading SV_Position there (dxbc::add_own_pixel_loads), one per distinct bytecode.
+    if (ownLoadsTwins.load(std::memory_order_relaxed) && !inProbe && code && size) {
+        const auto* bytes = static_cast<const uint8_t*>(code);
+        const uint64_t id = id_of(bytes, size);
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> twin;
+        bool seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = ownLoadsByCode.find(id); it != ownLoadsByCode.end()) {
+                twin = it->second;
+                seen = true;
+            }
+        }
+        if (!seen) {
+            const dxbc::OwnPixelLoads o = dxbc::add_own_pixel_loads(bytes, size);
+            if (!o.bytecode.empty() && FAILED(currentHook->pixel(device, o.bytecode.data(), o.bytecode.size(), nullptr, &twin)))
+                twin.Reset();
+            std::lock_guard guard(twinMutex);
+            ownLoadsByCode[id] = twin;
+        }
+        if (twin) {
+            (*shader)->SetPrivateDataInterface(kOwnPixelLoadsTwinGuid, twin.Get());
+            std::lock_guard guard(statsMutex);
+            ++stats.ownLoadsTwins;
+        }
+    }
     // Other cars' motion vectors (lmu_car_vectors): the slot twin, and the slot twin of the mip bias twin, one each per
     // distinct bytecode, made when first seen.
     if (attach && makeSlotTwins && !inProbe && role == YebisRole::none && code && size) {
@@ -904,6 +933,7 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 }  // namespace
 
 void mvr_probe_position_twins(bool on) { positionTwins.store(on, std::memory_order_relaxed); }
+void mvr_probe_own_pixel_loads(bool on) { ownLoadsTwins.store(on, std::memory_order_relaxed); }
 void mvr_probe_cb_rows(bool on) { cbRows.store(on, std::memory_order_relaxed); }
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
