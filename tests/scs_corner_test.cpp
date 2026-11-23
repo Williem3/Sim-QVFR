@@ -683,7 +683,7 @@ ComPtr<ID3DBlob> compile_blob(const char* src, const char* entry, const char* pr
 
 // kCornerPatchCs on a vertex range (flags 1 | 2, plus 8 for the position twin): the range's 4096 vectors back.
 std::vector<float> run_patch(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ComputeShader* cs,
-                             const std::vector<float>& range, const void* params, const void* rowsData = nullptr) {
+                             const std::vector<float>& range, const void* params) {
     std::vector<float> data(4096 * 4, 0.0f);
     std::memcpy(data.data(), range.data(), range.size() * 4);
     const D3D11_BUFFER_DESC raw = {4096 * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0,
@@ -691,10 +691,10 @@ std::vector<float> run_patch(ID3D11Device* device, ID3D11DeviceContext* context,
     const D3D11_BUFFER_DESC pd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     const D3D11_BUFFER_DESC rd = {512, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     const D3D11_BUFFER_DESC sd = {4096 * 16, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
-    const D3D11_SUBRESOURCE_DATA init = {data.data(), 0, 0}, pInit = {params, 0, 0}, rInit = {rowsData, 0, 0};
+    const D3D11_SUBRESOURCE_DATA init = {data.data(), 0, 0}, pInit = {params, 0, 0};
     ComPtr<ID3D11Buffer> in, out, p, rows, staging;
     if (FAILED(device->CreateBuffer(&raw, &init, &in)) || FAILED(device->CreateBuffer(&raw, nullptr, &out)) ||
-        FAILED(device->CreateBuffer(&pd, &pInit, &p)) || FAILED(device->CreateBuffer(&rd, rowsData ? &rInit : nullptr, &rows)) ||
+        FAILED(device->CreateBuffer(&pd, &pInit, &p)) || FAILED(device->CreateBuffer(&rd, nullptr, &rows)) ||
         FAILED(device->CreateBuffer(&sd, nullptr, &staging)))
         return {};
     D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
@@ -868,9 +868,9 @@ namespace {
 // The mirror pass's anomaly log (corner_anomaly.cpp): with a tag, each pair it rewrites is appended (tag, index, the
 // vectors around it); a (1,1,1,1) ending one 16-vector block before a size opening the next isn't a pair, nor logged;
 // without a tag nothing is logged.
-// The violet flash's fix: a material's white tint at row 6 right before the viewport size at row 7 (and its view ray),
-// rewritten per draw with the shader's colour rows left out of the pair rule: the tint stays white, the size row the
-// shader reads takes the corner's, a real pair further on is rewritten as before.
+// The violet flash's fix: the shader analysis finds a material's colour row (cb0[6].xyz) apart from its scale row
+// (cb0[7].xy); the mirror pass's tinted copy rewrites every pair's size as the plain copy does but leaves its white
+// white (a tint before the viewport size), the plain copy unchanged.
 void tint_checks() {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -879,13 +879,6 @@ void tint_checks() {
         check(false, "tint: a WARP device");
         return;
     }
-    const ComPtr<ID3DBlob> csCode = compile_blob(scs::kCornerPatchCs, "main", "cs_5_0");
-    ComPtr<ID3D11ComputeShader> cs;
-    if (!csCode || FAILED(device->CreateComputeShader(csCode->GetBufferPointer(), csCode->GetBufferSize(), nullptr, &cs))) {
-        check(false, "tint: the rewrite shader");
-        return;
-    }
-    // The shader analysis: a colour times cb0[6].xyz and a scale by cb0[7].xy.
     const ComPtr<ID3DBlob> ps = compile_blob(
         "cbuffer C : register(b0) { float4 pad[6]; float4 tint; float4 vsz; };"
         "float4 main(float4 c : COLOR0, float2 uv : TEXCOORD0) : SV_Target { return float4(c.xyz * tint.xyz, 1) +"
@@ -899,34 +892,77 @@ void tint_checks() {
     check(read && colour[0] == (1ull << 6) && (rowsRead[0] & (3ull << 6)) == (3ull << 6),
           "tint: row 6 read as a colour (xyz), row 7 as a scale (xy): only 6 is a colour row");
 
-    std::vector<float> range(16 * 4, 0.0f);
-    const auto put = [&](int i, float x, float y, float z, float w) {
-        range[i * 4] = x, range[i * 4 + 1] = y, range[i * 4 + 2] = z, range[i * 4 + 3] = w;
+    const ComPtr<ID3DBlob> code = compile_blob(scs::kCornerMirrorCs, "main", "cs_5_0");
+    ComPtr<ID3D11ComputeShader> cs;
+    if (!code || FAILED(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &cs))) {
+        check(false, "tint: the mirror shader");
+        return;
+    }
+    constexpr UINT kVectors = 16;
+    std::vector<float> in(kVectors * 4, 0.0f);
+    const auto put = [&](UINT i, float x, float y, float z, float w) {
+        in[i * 4] = x, in[i * 4 + 1] = y, in[i * 4 + 2] = z, in[i * 4 + 3] = w;
     };
     put(5, 0.2f, 0.3f, 0.4f, 0.5f);
-    put(6, 1, 1, 1, 1);               // the material's white tint
-    put(7, 1280, 1024, 1, 1);         // the scene's viewport size
-    put(8, 3.7f, 4.6f, 6.1f, 0);      // its view ray
-    put(10, 1, 1, 1, 1);              // a real pair
-    put(11, 1280, 1024, 1, 1);
-    uint32_t rows[128] = {};          // read: 5-8, 10, 11; less the colour row 6
-    for (int r : {5, 7, 8, 10, 11})
-        rows[r >> 5] |= 1u << (r & 31);
+    put(6, 1, 1, 1, 1);           // a material's white tint
+    put(7, 1280, 1024, 1, 1);     // the scene's viewport size
+    put(8, 3.7f, 4.6f, 6.1f, 0);  // its view ray
+    const D3D11_BUFFER_DESC raw = {kVectors * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+                                   0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+    const D3D11_BUFFER_DESC pd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     const struct {
         float fx, fy;
-        UINT count, flags;
-        float box[4], remap[4];
-        float px, py;
-        uint32_t rectRow, sizeRow;
-    } p = {0.5f, 0.5f, 16, 4u, {0, 0, 1, 1}, {1, 0, 1, 0}, 0.5f, 0.5f, ~0u, ~0u};  // pixel rules, rows given
-    const std::vector<float> out = run_patch(device.Get(), context.Get(), cs.Get(), range, &p, rows);
-    check(!out.empty() && out[6 * 4] == 1 && out[6 * 4 + 2] == 1 && out[6 * 4 + 3] == 1,
-          "tint: the white tint left white (no violet)");
-    check(!out.empty() && out[7 * 4] == 640 && out[7 * 4 + 1] == 512 && out[7 * 4 + 2] == 0.5f,
-          "tint: the viewport size the shader reads takes the corner's");
-    check(!out.empty() && out[10 * 4] == 0.5f && out[10 * 4 + 2] == 2 && out[11 * 4] == 640,
-          "tint: a real pair further on rewritten as before");
-    check(!out.empty() && out[8 * 4] == 3.7f && out[5 * 4] == 0.2f, "tint: the other rows as the game wrote them");
+        UINT count, tag;
+        float w, h;
+        UINT tint, p1;
+        float unused[8];
+    } p = {0.5f, 0.5f, kVectors, 0, 1280, 1024, 1, 0, {}};
+    const D3D11_SUBRESOURCE_DATA init = {in.data(), 0, 0}, pInit = {&p, 0, 0};
+    ComPtr<ID3D11Buffer> src, dst, tinted, params;
+    device->CreateBuffer(&raw, &init, &src);
+    device->CreateBuffer(&raw, nullptr, &dst);
+    device->CreateBuffer(&raw, nullptr, &tinted);
+    device->CreateBuffer(&pd, &pInit, &params);
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = DXGI_FORMAT_R32_TYPELESS;
+    sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+    sv.BufferEx = {0, kVectors * 4, D3D11_BUFFEREX_SRV_FLAG_RAW};
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uv{};
+    uv.Format = DXGI_FORMAT_R32_TYPELESS;
+    uv.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uv.Buffer = {0, kVectors * 4, D3D11_BUFFER_UAV_FLAG_RAW};
+    ComPtr<ID3D11ShaderResourceView> srcView;
+    ComPtr<ID3D11UnorderedAccessView> dstView, tintView;
+    device->CreateShaderResourceView(src.Get(), &sv, &srcView);
+    device->CreateUnorderedAccessView(dst.Get(), &uv, &dstView);
+    device->CreateUnorderedAccessView(tinted.Get(), &uv, &tintView);
+    ID3D11UnorderedAccessView* const uavs[] = {dstView.Get(), nullptr, tintView.Get()};
+    context->CSSetShader(cs.Get(), nullptr, 0);
+    context->CSSetShaderResources(0, 1, srcView.GetAddressOf());
+    context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    context->CSSetConstantBuffers(0, 1, params.GetAddressOf());
+    context->Dispatch(1, 1, 1);
+    const auto read_back = [&](ID3D11Buffer* from) {
+        std::vector<float> out(kVectors * 4, 0.0f);
+        const D3D11_BUFFER_DESC sd = {kVectors * 16, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> s;
+        device->CreateBuffer(&sd, nullptr, &s);
+        context->CopyResource(s.Get(), from);
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(context->Map(s.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+            std::memcpy(out.data(), m.pData, kVectors * 16);
+            context->Unmap(s.Get(), 0);
+        }
+        return out;
+    };
+    const std::vector<float> plain = read_back(dst.Get()), tint = read_back(tinted.Get());
+    check(plain[6 * 4] == 0.5f && plain[6 * 4 + 2] == 2 && plain[7 * 4] == 640,
+          "tint: the plain copy rewrites the pair as before");
+    check(tint[6 * 4] == 1 && tint[6 * 4 + 1] == 1 && tint[6 * 4 + 2] == 1 && tint[6 * 4 + 3] == 1,
+          "tint: the tinted copy leaves the white tint white (no violet)");
+    check(tint[7 * 4] == 640 && tint[7 * 4 + 1] == 512 && tint[7 * 4 + 2] == 0.5f,
+          "tint: the tinted copy's viewport size takes the corner's");
+    check(tint[8 * 4] == 3.7f && tint[5 * 4] == 0.2f && plain[8 * 4] == 3.7f, "tint: the other rows as the game wrote them");
 }
 
 void anomaly_cs_checks() {

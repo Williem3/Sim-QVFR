@@ -146,7 +146,8 @@ void take_frame_end() {
     if (g.stats.frames % 450 == 0)
         perf_line();
     if (g.stats.frames % 900 == 0 && g.tintRows)
-        simqvfr::logf("scs corner: tinted scene draws (a constant row read as a colour, left out of the pair rule): %llu",
+        simqvfr::logf("scs corner: draws on a mirror's tinted copy (a constant row read as a colour, pairs' whites left "
+                      "white): %llu",
                       static_cast<unsigned long long>(g.tintDraws));
     if (g.stats.frames % 900 == 0 && g.ownPixelLoads)
         simqvfr::logf("scs focus: own-pixel loads (the signs' forward pass): %llu draws with the twin, %llu left as they were "
@@ -354,9 +355,9 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     mirror_diag_draw();
+    tint_draw();     // a shader that reads a constant row as a colour: the mirror's copy with pairs' whites left white
     anomaly_draw();  // (dev builds, scs_violet_log=1) which copy and range this draw reads
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        tint_draw();  // a material that reads a constant row as a colour: its range without our copies' pair rule there
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
             mark(kMarkDraw, (g.frameDraw & 0xFFFFFF) | 1u << 24 | (focusDraw ? 1u << 25 : 0));

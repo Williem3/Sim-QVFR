@@ -53,6 +53,8 @@ inline d3s::Spec blit_state(uint32_t parts) {
 constexpr UINT kMirrorMin = 256 * 1024;
 struct Mirror {
     ComPtr<ID3D11Buffer> game, copy;
+    // With State::tintRows: the copy with every pair's (1,1,1,1) left white, for draws whose shader reads a row as a colour.
+    ComPtr<ID3D11Buffer> tinted;
     UINT bytes = 0;
     uint64_t refreshedFrame = ~0ull;
     uint64_t usedFrame = 0;  // the last frame a bind used it (evict_mirrors)
@@ -115,9 +117,9 @@ struct State {
     bool rewriteRing = true;
     ComPtr<ID3D11ComputeShader> patchCs, mirrorCs;
     std::vector<Mirror> mirrors;
-    ComPtr<ID3D11Buffer> bigIn, bigOut;  // the mirrors' scratch, as large as the largest
+    ComPtr<ID3D11Buffer> bigIn, bigOut, bigTinted;  // the mirrors' scratch, as large as the largest
     ComPtr<ID3D11ShaderResourceView> bigInView;
-    ComPtr<ID3D11UnorderedAccessView> bigOutView;
+    ComPtr<ID3D11UnorderedAccessView> bigOutView, bigTintedView;
     UINT bigBytes = 0;
     uint64_t mirrorRefreshes = 0, mirrorSwaps = 0, midFrameWrites = 0;
     // Writes (Unmap) to a mirrored buffer from a thread other than the one drawing the eyes: our copy is made on the
@@ -324,9 +326,9 @@ struct State {
     // view is the eye's corner (ATS's signs a mosaic at the periphery's resolution in the box, 2026-11-22).
     ID3D11PixelShader* gamePs = nullptr;
     bool ownPixelLoads = false;
-    // Scene draws whose shader reads a constant row as a colour get their range rewritten per draw from the game's data
-    // with those rows left alone, instead of our copies (which rewrite a white tint before the viewport size as a pair:
-    // the violet flash, 2026-11-22). [experiment] scs_tint_rows=0: off.
+    // Draws whose shader reads a constant row as a colour read the mirror's tinted copy (pairs' whites left white) instead
+    // of the plain one (which rewrites a white tint before the viewport size as a pair: the violet flash, 2026-11-22; a
+    // per-draw rewrite of their ranges first cost the frame rate, 10 fps). [experiment] scs_tint_rows=0: off.
     bool tintRows = false;
     uint64_t tintDraws = 0;
     uint64_t ownLoadDraws = 0, ownLoadSkips = 0;  // draws with the twin; with a smaller eye-sized input (left as they were)
@@ -434,7 +436,8 @@ void anomaly_release();    // release_all
 uint64_t anomaly_entries();
 size_t anomaly_kinds();
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups, const void* rows = nullptr, ID3D11UnorderedAccessView* log = nullptr);
+            UINT groups, const void* rows = nullptr, ID3D11UnorderedAccessView* log = nullptr,
+            ID3D11UnorderedAccessView* tinted = nullptr);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
 // The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last
@@ -460,10 +463,10 @@ void mirror_diag_frame_end();
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
-// `tinted`: a scene draw whose shader reads a constant row as a colour (kCb0TintRowsGuid): the pair rule over the whole
-// range for either stage, writing only rows the shader reads and never its colour rows (the violet flash).
-bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr, bool tinted = false);
-void tint_draw();  // corner_mirrors.cpp: a scene draw's tinted stages rewritten from the game's data
+bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr);
+// corner_mirrors.cpp: before each draw, slot 0 of each stage on the mirror's tinted copy when its shader reads a constant
+// row as a colour (kCb0TintRowsGuid), on the plain copy otherwise: a binding, no GPU work.
+void tint_draw();
 constexpr UINT kPositionAt = 4080;  // kCornerPatchCs's: where the position twin's two vectors go in our copy
 void put_back(Range& r, bool pixel);
 

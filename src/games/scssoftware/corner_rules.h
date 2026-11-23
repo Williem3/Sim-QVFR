@@ -232,10 +232,13 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
 // byte 0, then 80-byte entries from byte 16 (the tag, the (1,1,1,1)'s index, two words free, the vectors before, at,
 // after it and the one after that).
 inline constexpr char kCornerMirrorCs[] = R"(
-cbuffer Params : register(b0) { float2 f; uint count; uint tag; float2 eye; float2 pad2; };
+cbuffer Params : register(b0) { float2 f; uint count; uint tag; float2 eye; uint tint; uint pad2; };
 ByteAddressBuffer src : register(t0);
 RWByteAddressBuffer dst : register(u0);
 RWByteAddressBuffer anomalies : register(u1);
+// tint != 0: the tinted copy too, every pair's size rewritten but its (1,1,1,1) left white: bound for the draws whose
+// shader reads a constant row as a colour (a material's white tint right before the viewport size: the violet flash).
+RWByteAddressBuffer tinted : register(u2);
 static const uint kAnomalyCapacity = 4096;
 float4 at(uint i) { return asfloat(src.Load4(i * 16)); }
 bool isOnes(float4 v) { return all(v == float4(1, 1, 1, 1)); }
@@ -250,6 +253,7 @@ bool isEyeSize(float4 v) {
     if (i >= count)
         return;
     float4 v = at(i);
+    const float4 game = v;
     if (i > 0 && (i & 15) != 0 && isOnes(at(i - 1)) && isEyeSize(v))
         v = float4(f * v.xy, f);
     else if (i + 1 < count && ((i + 1) & 15) != 0 && isOnes(v) && isEyeSize(at(i + 1))) {
@@ -268,6 +272,8 @@ bool isEyeSize(float4 v) {
         }
     }
     dst.Store4(i * 16, asuint(v));
+    if (tint)
+        tinted.Store4(i * 16, asuint(isOnes(game) ? game : v));
 }
 )";
 
