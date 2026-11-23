@@ -102,6 +102,8 @@ bool visorHotkeyHeld = false;
 bool cpuProfileHotkeyHeld = false;
 
 bool frameCaptureHotkeyHeld = false;
+int frameCensusCapture = 0;
+int frameCensusBurst = 1;
 
 ProfileNotice profileNotice;
 

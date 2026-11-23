@@ -334,6 +334,7 @@ int SIM_QVFR_TEST_MAIN() {
         }
         frame();
     }
+    check(simqvfr::replay_probe_census(1), "the draw census arms while the API path runs");
     frame();  // frame 4 gets the second sample (frame 2) copied, before its clear
     const simqvfr::ReplayProbeStats stats = simqvfr::replay_probe_take_stats();
     std::printf("lists replayed %llu, executed %llu; twins made %llu, made again %llu\n",
@@ -357,6 +358,15 @@ int SIM_QVFR_TEST_MAIN() {
     {
         const std::string log = read_text(logPath);
         check(log.find("replay mask: on: ") != std::string::npos, "the log says the mask was recorded into the clear list");
+        // The draw census: frame 4's three lists, each with its targets, how the replay took it and its pipeline's draws.
+        size_t lists = 0;
+        for (size_t at = log.find("a stereo scene list (replayed)"); at != std::string::npos;
+             at = log.find("a stereo scene list (replayed)", at + 1))
+            ++lists;
+        check(lists == 3, "the census describes the frame's three stereo lists as replayed");
+        check(log.find("draws 1 (indexed 0, indirect 0), instances 2..2, elements 12, with one viewport 0, with two 1") !=
+                  std::string::npos,
+              "the census counts a list's draws by pipeline, with their instances and viewports");
     }
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
     {  // the debug layer's errors, if it ran

@@ -109,6 +109,9 @@ public:
     // Debug, views4: saves the whole four-view image as <prefix>-views.png and the output's left eye
     // as <prefix>-output.png (both in RENDER_TARGET state). Stalls the GPU.
     bool save_views4_captures(ID3D12Resource* views, ID3D12Resource* output, const std::wstring& prefix);
+    // Development builds' census capture: all of each image (both eyes): -views, -focus, -output.
+    bool save_census_captures(ID3D12Resource* views, ID3D12Resource* focus, D3D12_RESOURCE_STATES focusState,
+                              ID3D12Resource* output, const std::wstring& prefix);
     void shutdown();
 
 protected:

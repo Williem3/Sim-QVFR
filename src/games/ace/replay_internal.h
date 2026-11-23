@@ -162,9 +162,24 @@ struct Stream {
         float w, h;  // mode 0: the list's live view size
     };
     std::vector<EyePatch> eyePatches;
+    // The draw census (replay_probe_census, a development build's capture hotkey): this list's draws by pipeline,
+    // logged at its Close.
+    struct CensusPso {
+        ID3D12PipelineState* pso;
+        uint32_t draws, indexed, indirect, instMin, instMax, oneViewport, twoViewports, again;
+        uint64_t elements;
+    };
+    bool census = false;
+    std::vector<CensusPso> censusPsos;
+    // ACE's flags pass: its half-width viewport pair was widened (widen_half_stereo). The list draws the left eye only
+    // and ACE draws the right eye in a list of its own, so nothing of ours draws its objects again for the right eye.
+    bool halfStereo = false;
 
     void begin(int64_t now) {
         bytes.clear();
+        census = false;
+        halfStereo = false;
+        censusPsos.clear();
         active = true;
         draws = calls = 0;
         maxViewportWidth = 0;
@@ -631,6 +646,10 @@ extern RtvFn rtvOriginal;
 extern SrvFn srvViewOriginal;
 extern CbvFn cbvViewOriginal;
 extern std::atomic<uint64_t> listsReplayed, callsReplayed, drawsReplayed, replayTicks, twinsMade, twinsRemade;
+// Development builds: live diagnostic switches ([experiment] replay_live_diag, read with the live settings). Bits:
+// 1 the depth-fade remap off, 2 the OIT composite not replayed, 4 per-eye lists not replayed, 8 per-eye lists of at
+// most 4 draws (the particles' OIT lists) not replayed, 16 the flags pass's viewports not widened.
+extern std::atomic<unsigned> liveDiag;
 extern RecordTiming recordTiming;
 extern thread_local uint64_t skyCheckTicks, emitOps;
 extern std::atomic<int> cullProbePhase;

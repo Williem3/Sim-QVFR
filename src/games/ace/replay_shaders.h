@@ -120,14 +120,19 @@ constexpr UINT kTyreSlots = 64, kTyreSlotBytes = 2048;
 // frameData (root 0, 1136 B) for the focus replays: tileCount (uint2 at 0, the lighting's tile-list stride) is the
 // focus views' own grid. The game's grid is its eye's; a focus view with more pixels than the eye has more tiles, and
 // with the game's stride its lists wrapped and ran out (18:39 capture: a dark band and blocks in the focus image).
+// depthBindlessIndex (int at 1024, row 64.x): the scene depth ACE's particles sample at their own screen position for
+// their depth fade (water spray, smoke: Material DepthFade_Enable). The game's names its eye's depth; read at a focus
+// view's coordinates the spray compared against another part of the scene and faded out or flickered (2026-11-20, a
+// wet race). Ours is the focus views' resolved scene depth (0: left as the game's).
 constexpr char kFrameShader[] = R"(
 cbuffer Src : register(b0) { float4 src[72]; };
-cbuffer P : register(b1) { uint tx; uint ty; };
+cbuffer P : register(b1) { uint tx; uint ty; uint depthSrv; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 72) return;
     uint4 v = asuint(src[i]);
     if (i == 0) { v.x = tx; v.y = ty; }
+    if (i == 64 && depthSrv != 0) v.x = depthSrv;
     dst.Store4(i * 16, v);
 }
 )";

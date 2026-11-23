@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "games/ace/replay_probe.h"
 #include "input/hotkeys.h"
 #include "lang.h"
 #include "log.h"
@@ -199,14 +200,30 @@ void profile_notice(const std::wstring& text, int64_t ms) {
 
 }  // namespace
 
+bool frame_census_take_capture(int& index) {
+    if (frameCensusCapture <= 0)
+        return false;
+    index = frameCensusBurst - frameCensusCapture;
+    --frameCensusCapture;
+    return true;
+}
+
+void frame_census_set_burst(int frames) { frameCensusBurst = std::clamp(frames, 1, 8); }
+
 // The frame capture hotkey (d3d11_capture_hotkey, probe/d3d11_capture.h): each press saves the next frame's swapchain
 // images, the game's and the composed output: what the headset gets at that moment.
 void frame_capture_poll() {
-    if (!experiment.d3d11CaptureHotkey && !experiment.pixCaptureHotkey)
+    if (!experiment.d3d11CaptureHotkey && !experiment.pixCaptureHotkey && !experiment.replayCensusHotkey)
         return;
     const bool held = hotkey_held(HotkeyAction::FrameCapture);
     const bool pressed = held && !frameCaptureHotkeyHeld;
     frameCaptureHotkeyHeld = held;
+    // replay_census_hotkey (ACE's API path, development builds): the next two frames' draws by pipeline into the log,
+    // and ACE's eye image with the composed output into the logs folder's captures.
+    if (pressed && experiment.replayCensusHotkey && replay_probe_census(2)) {
+        frameCensusCapture = frameCensusBurst;
+        profile_notice(L"Draw census: written to the log, eye images to captures", 2500);
+    }
     if (pressed && experiment.d3d11CaptureHotkey && d3d11_capture_arm(endFrames + 1))
         profile_notice(lang::tr(L"Frame capture: saved to the logs folder (captures)"), 2500);
     // pix_capture_hotkey (D3D12): a PIX GPU capture of the next frames, into the logs folder's pix folder.

@@ -219,6 +219,9 @@ void replay_compose() {
     replay_probe_gpu_scope(true);
     const bool ok = quad.compositor.capture_outer(app) && quad.compositor.compose(focusImage, out, eyes, focusState);
     replay_probe_gpu_scope(false);
+    int burstIndex = 0;
+    if (frame_census_take_capture(burstIndex) && ok)  // the draw census hotkey: ACE's eyes, the focus views, the output
+        views4_census_capture(app, focusImage, focusState, out, burstIndex);
     if (experiment.replayEyeCapture) {  // diagnostic: ACE's whole eye image and the composed left eye, about two seconds
                                         // after each change of the live periphery (up to 12 a session)
         static float lastX = -1;
