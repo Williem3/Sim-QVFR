@@ -68,7 +68,8 @@ with the same options. Both are also in the headset menu.
   only along the road ahead and in your own car; what's beside and above the road comes from the periphery. Turn it
   off if something beside the road looks softer than you want. More in the
   [optimization guide](../LMU-OPTIMIZATION-GUIDE.md).
-- **Night cars (experimental)** (**Picture › Night cars (experimental)**, off by default): an optional extra
+- **Game Lighting Enhancement (experimental)** (**Picture › Game Lighting Enhancement (experimental)**, off by
+  default; called Night cars before): an optional extra
   lighting pass for the cars at night. With it on they get highlights from the floodlights and other cars' headlights, shading,
   reflections in the paint and shadows on the track around them. **Quality** Low, Medium or High sets its GPU cost.
   The switch starts at the next launch.

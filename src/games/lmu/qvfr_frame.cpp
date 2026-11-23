@@ -732,7 +732,7 @@ void mvr_before_pass(int p) {
                 if (light.on != carLightLogged || !carLightSaid) {
                     carLightSaid = true;
                     carLightLogged = light.on;
-                    simqvfr::logf("lmu qvfr: night car lighting %s", simqvfr::car_lighting_log(light).c_str());
+                    simqvfr::logf("lmu qvfr: game lighting enhancement %s", simqvfr::car_lighting_log(light).c_str());
                 }
             }
             if (car_ab_on()) {  // the other cars' motion this frame or not (between frames)

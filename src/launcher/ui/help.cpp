@@ -50,44 +50,58 @@ constexpr Help kHelp[] = {
      L"At the periphery’s lower resolution the game blends them into a light solid shade, so the focus area looked "
      L"darker behind them. At 100% the periphery reads its textures at the same detail level as the focus area; lower "
      L"it if distant textures shimmer in your side vision. 0% is off (the game’s own); it changes while you drive.")},
-    {I18N(L"Night car lighting"),
+    {I18N(L"Game Lighting Enhancement"),
      I18N(L"Adds highlights and shading to the cars at night. "
      L"Sim-QVFR relights each car after the game draws it, before the game's own post-processing: highlights where the "
      L"floodlights and headlights reflect off the paint, shading in creases and under the car, and the effects below. "
-     L"The rest of the scene is untouched. It costs about 0.5 to 1 ms of GPU time with everything on. The switch takes "
-     L"effect at the next launch; the values and effects change while you drive.")},
+     L"The rest of the scene is untouched. Measured on an RTX 5070 Ti with everything on at High: about 1 ms of GPU "
+     L"time in a quiet scene, 2 to 3.7 ms in race traffic, and 0.4 to 0.9 ms of CPU time; none of the switches below "
+     L"adds measurable CPU time. The switch takes effect at the next launch; the values and effects change while you "
+     L"drive.")},
     {I18N(L"Quality"),
      I18N(L"How finely the effects are worked out: fewer samples and steps for the shadows, occlusion and smoothing "
-     L"at Low, all of them at High. The switches below stay as you set them. Low takes about a third less GPU time than "
-     L"High and looks a little grainier; the periphery always runs one step below the focus area, where it's least seen.")},
+     L"at Low, all of them at High; the reflections keep all theirs at every tier. The switches below stay as you set "
+     L"them, and the periphery always runs one step below the focus area, where it's least seen. Measured in a night "
+     L"race on an RTX 5070 Ti with everything on: High 1.35 to 1.55 ms of GPU time, Medium 1.10 to 1.30 ms, Low 1.00 "
+     L"to 1.10 ms, a quarter to a third less than High. In testing Low looked a little grainier than High, its "
+     L"floodlight shadows almost unchanged.")},
     {I18N(L"Fill light"),
      I18N(L"How much of the game's own floodlight lighting stays on the cars. Lower makes the shading and highlights stand "
-     L"out more; 100% keeps the game's brightness.")},
+     L"out more; 100% keeps the game's brightness. It is part of the base relight, about 0.4 ms of GPU time in a quiet "
+     L"scene and 1 ms in race traffic (measured at High on an RTX 5070 Ti), and costs the same at any value.")},
     {I18N(L"Ambient occlusion"),
-     I18N(L"Darkens creases, wheel arches and the underside, where light reaches less. 0% is off.")},
+     I18N(L"Darkens creases, wheel arches and the underside, where light reaches less. 0% is off. It is part of the base "
+     L"relight, about 0.4 ms of GPU time in a quiet scene and 1 ms in race traffic (measured at High on an RTX 5070 Ti), and costs the same at any value.")},
     {I18N(L"Highlights"),
      I18N(L"The strength of the floodlights' and headlights' reflections on the paint. 0% is off; above 100% is brighter "
-     L"than the lights would make it.")},
+     L"than the lights would make it. It is part of the base relight, about 0.4 ms of GPU time in a quiet scene and 1 ms in "
+     L"race traffic (measured at High on an RTX 5070 Ti), and costs the same at any value.")},
     {I18N(L"Paint gloss"),
-     I18N(L"How glossy the lacquer is: higher gives smaller, sharper highlights, lower broad soft ones.")},
+     I18N(L"How glossy the lacquer is: higher gives smaller, sharper highlights, lower broad soft ones. It is part of the "
+     L"base relight, about 0.4 ms of GPU time in a quiet scene and 1 ms in race traffic (measured at High on an RTX 5070 "
+     L"Ti), and costs the same at any value.")},
     {I18N(L"Smoothing"),
      I18N(L"Smooths the surface direction over this distance where the game's own normals aren't available, which "
      L"hides faceted highlights on low-polygon parts. About 15 cm suits most cars; 0 is off.")},
     {I18N(L"Floodlight shadows"),
-     I18N(L"A part of a car hidden from a floodlight, behind a wing or another car, loses that light and its highlight.")},
+     I18N(L"A part of a car hidden from a floodlight, behind a wing or another car, loses that light and its highlight. "
+     L"Measured at High on an RTX 5070 Ti: about 0.2 ms of GPU time in a quiet scene, 0.5 ms in race traffic.")},
     {I18N(L"Paint detail"),
-     I18N(L"Uses the paint's fine surface detail, orange peel and the carbon weave, in the highlights.")},
+     I18N(L"Uses the paint's fine surface detail, orange peel and the carbon weave, in the highlights. "
+     L"Measured at High on an RTX 5070 Ti: about 0.1 ms of GPU time in race traffic, too little to measure in a quiet scene.")},
     {I18N(L"Lacquer reflections"),
      I18N(L"Mirrors what's around a car in its paint, strongest at shallow angles. Only what's on screen can be "
-     L"reflected, and only where both eyes can see it, so both eyes show the same.")},
+     L"reflected, and only where both eyes can see it, so both eyes show the same. Measured on an RTX 5070 Ti: about "
+     L"0.02 ms of GPU time in a quiet scene, 0.15 ms in race traffic.")},
     {I18N(L"Headlight highlights"),
-     I18N(L"Other cars' headlights, and yours in the mirrors, shine on the paint as the floodlights do.")},
+     I18N(L"Other cars' headlights, and yours in the mirrors, shine on the paint as the floodlights do. Measured on an "
+     L"RTX 5070 Ti: about 0.03 to 0.05 ms of GPU time.")},
     {I18N(L"Shadows on the ground"),
      I18N(L"Darkens the track and walls under and beside the cars, and casts soft floodlight shadows, so the cars sit on "
-     L"the ground.")},
+     L"the ground. Measured at High on an RTX 5070 Ti: about 0.2 ms of GPU time in a quiet scene, 0.55 ms in race traffic.")},
     {I18N(L"Night vision color"),
      I18N(L"As eyes do at night, dark areas lose their colour and turn slightly blue while lit areas keep theirs. A "
-     L"matter of taste, off by default.")},
+     L"matter of taste, off by default. Measured on an RTX 5070 Ti: about 0.03 ms of GPU time.")},
     {I18N(L"Color correction"),
      I18N(L"Adjusts the picture in the headset: exposure, brightness, contrast and saturation, for a game that looks too "
      L"dark, washed out or dull in your headset. Sim-QVFR applies it as it composes the views, the periphery and the "

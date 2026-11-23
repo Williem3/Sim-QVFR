@@ -357,8 +357,8 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         rows.push_back(r);
     }
     if (in.fg == OsdFg::Off && in.carLightGpuMs >= 0 && in.carLightCpuMs >= 0) {
-        // Night car lighting's cost in frame generation's cell (a game with it has none: LMU).
-        OsdRow r{lang::tr(L"Night cars GPU · CPU")};
+        // Game Lighting Enhancement's cost in frame generation's cell (a game with it has none: LMU).
+        OsdRow r{lang::tr(L"Game lighting GPU · CPU")};
         r.value = format(L"%.2f · %.2f ms", in.carLightGpuMs, in.carLightCpuMs);
         rows.push_back(r);
     } else {
