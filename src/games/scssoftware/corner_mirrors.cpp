@@ -312,7 +312,7 @@ bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buf
 
 // The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy) and bound in its place for this draw
 // (put_back undoes it). False: left as the game bound it.
-bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
+bool rewrite(Range& r, bool pixel, bool focus, const int* position, bool tinted) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
     if (pixel)
@@ -369,6 +369,17 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
             UINT rowsSize = sizeof(rows);
             haveRows = SUCCEEDED(shader->GetPrivateData(lmu::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
         }
+        if (tinted) {  // the rows it reads by a fixed index, less its colour rows
+            uint64_t tint[2][64];
+            UINT tintSize = sizeof(tint);
+            if (!shader || FAILED(shader->GetPrivateData(lmu::kCb0TintRowsGuid, &tintSize, tint)) || tintSize != sizeof(tint)) {
+                r = Range{};
+                return false;
+            }
+            for (int k = 0; k < 64; ++k)
+                rows[k] = tint[0][k] & ~tint[1][k];
+            haveRows = true;
+        }
         UINT vectors = 0, size = sizeof(vectors);
         if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors))) {
             if (!vectors) {  // the shader reads no constants from slot 0: nothing of its to rewrite
@@ -389,7 +400,8 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
         float box[4], remap[4];
         float px, py;
         uint32_t rectRow, sizeRow;
-    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
+    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared,
+           (pixel || tinted ? 0u : 1u) | (focus ? 2u : 0u) | (haveRows ? 4u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
            focus ? focus_fy() : g.fy, ~0u, ~0u};
     const bool positioned = position && !pixel && count <= kPositionAt;  // the eye's pass: its size row alone
@@ -418,6 +430,35 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
         g.context->VSSetConstantBuffers1(0, 1, &ours, &zero, &n);
     r.ours = true;
     return true;
+}
+
+// A scene draw while our copies are bound: a stage whose shader reads a constant row as a colour gets its range rewritten
+// from the game's own data with those rows left alone (rewrite, tinted); put back after the draw with the rest.
+void tint_draw() {
+    if (!g.tintRows || !g.mirrorsBound || g.vs.game || g.ps.game)
+        return;
+    const auto tinted = [](ID3D11DeviceChild* s) {
+        UINT size = 0;
+        return s && s->GetPrivateData(lmu::kCb0TintRowsGuid, &size, nullptr) != DXGI_ERROR_NOT_FOUND && size;
+    };
+    bool any = false;
+    {
+        ID3D11VertexShader* vs = nullptr;
+        g.context->VSGetShader(&vs, nullptr, nullptr);
+        ComPtr<ID3D11VertexShader> keep;
+        keep.Attach(vs);
+        if (tinted(vs))
+            any |= rewrite(g.vs, false, false, nullptr, true);
+    }
+    {
+        ID3D11PixelShader* ps = nullptr;
+        g.context->PSGetShader(&ps, nullptr, nullptr);
+        ComPtr<ID3D11PixelShader> keep;
+        keep.Attach(ps);
+        if (tinted(ps))
+            any |= rewrite(g.ps, true, false, nullptr, true);
+    }
+    g.tintDraws += any ? 1 : 0;
 }
 
 void put_back(Range& r, bool pixel) {

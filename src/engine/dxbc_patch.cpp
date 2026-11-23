@@ -1680,6 +1680,53 @@ bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot
     return false;
 }
 
+bool constant_buffer_colour_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]) {
+    std::fill(std::begin(rows), std::end(rows), 0ull);
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks))
+        return false;
+    for (const Chunk& c : chunks) {
+        if (c.fourcc != fourcc("SHDR") && c.fourcc != fourcc("SHEX"))
+            continue;
+        const size_t words = c.data.size() / 4;
+        if (words < 2)
+            return false;
+        std::vector<uint32_t> t(words);
+        std::memcpy(t.data(), c.data.data(), words * 4);
+        for (size_t i = 2; i < words;) {
+            const uint32_t n = length_of(&t[i], words - i);
+            if (!n || i + n > words)
+                return false;
+            const uint32_t op = opcode_of(t[i]);
+            if (!is_declaration(op)) {
+                const size_t first = operands_at(&t[i], n);
+                if (!first)
+                    return false;
+                for (size_t at = i + first; at < i + n;) {
+                    Operand o;
+                    const size_t len = read_operand(&t[at], i + n - at, o);
+                    if (!len)
+                        return false;
+                    const uint32_t token = t[at];
+                    if (o.type == kConstantBuffer && o.dims == 2 && o.index0Immediate && o.index0 == slot &&
+                        o.index1Representation == 0 && o.index1 < 4096 && (token & 3) == 2 && ((token >> 2) & 3) == 1) {
+                        const uint32_t s = (token >> 4) & 0xff;
+                        unsigned seen = 0;
+                        for (int k = 0; k < 4; ++k)
+                            seen |= 1u << ((s >> (2 * k)) & 3);
+                        if (((seen & 1) + ((seen >> 1) & 1) + ((seen >> 2) & 1) + ((seen >> 3) & 1)) >= 3)
+                            rows[o.index1 / 64] |= 1ull << (o.index1 % 64);
+                    }
+                    at += len;
+                }
+            }
+            i += n;
+        }
+        return true;
+    }
+    return false;
+}
+
 uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot) {
     std::vector<Chunk> chunks;
     if (!read_chunks(data, size, chunks))

@@ -102,6 +102,10 @@ inline constexpr GUID kCb0VectorsGuid = {0x64b0e3a9, 0x2f17, 0x4c58, {0xb4, 0x0a
 inline constexpr GUID kPixelIdGuid = {0x3c8d1f52, 0x6a94, 0x4e07, {0x9b, 0x21, 0x5d, 0xe3, 0x70, 0x8a, 0x44, 0xc6}};
 // A pixel shader's rows of constant buffer 0 read by a fixed index (512 bytes: dxbc::constant_buffer_static_rows).
 inline constexpr GUID kCb0StaticRowsGuid = {0x5e2a7b14, 0xc39d, 0x4f61, {0x8e, 0x05, 0xa7, 0x3b, 0x91, 0xd2, 0x6c, 0x48}};
+// The SCS games (mvr_probe_tint_rows): a vertex or pixel shader that reads a row of constant buffer 0 as a colour
+// (dxbc::constant_buffer_colour_rows) carries 1024 bytes: the rows it reads by a fixed index (64 uint64), then its colour
+// rows (64 uint64). Our copies must not rewrite those as a pair for its draws (the violet flash).
+inline constexpr GUID kCb0TintRowsGuid = {0x0c9e4a71, 0x3b58, 0x4d26, {0x95, 0x1f, 0x6a, 0xe2, 0x07, 0xc4, 0x8b, 0x3d}};
 // The SCS games' focus replays (mvr_probe_position_twins): a full-screen pass's vertex shader that turns its vertex into
 // screen pixels carries its dxbc::add_position_remap twin (an interface) and the twin's rectangle and size rows (two ints).
 inline constexpr GUID kFocusPositionTwinGuid = {0x8b3e51c7, 0x2d64, 0x4a19, {0x9f, 0x0e, 0x73, 0xc2, 0x58, 0xa1, 0x4d, 0x36}};
@@ -132,6 +136,8 @@ void mvr_probe_device(ID3D11Device* device);
 void mvr_probe_position_twins(bool on);
 // The SCS games: pixel shaders get their own-pixel-loads twins (kOwnPixelLoadsTwinGuid) from now on.
 void mvr_probe_own_pixel_loads(bool on);
+// The SCS games: vertex and pixel shaders that read a constant row as a colour get kCb0TintRowsGuid from now on.
+void mvr_probe_tint_rows(bool on);
 // The SCS mirror diagnostic (dev builds): every shader tagged with its id (kShaderIdGuid, DXBC checksum words 0-1)
 // and the rows of constant buffer slots 0-3 it reads by a fixed index (kCbRows4Guid: 4 x 64 uint64).
 void mvr_probe_cb_rows(bool on);

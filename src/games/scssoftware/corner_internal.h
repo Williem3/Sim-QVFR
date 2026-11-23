@@ -324,6 +324,11 @@ struct State {
     // view is the eye's corner (ATS's signs a mosaic at the periphery's resolution in the box, 2026-11-22).
     ID3D11PixelShader* gamePs = nullptr;
     bool ownPixelLoads = false;
+    // Scene draws whose shader reads a constant row as a colour get their range rewritten per draw from the game's data
+    // with those rows left alone, instead of our copies (which rewrite a white tint before the viewport size as a pair:
+    // the violet flash, 2026-11-22). [experiment] scs_tint_rows=0: off.
+    bool tintRows = false;
+    uint64_t tintDraws = 0;
     uint64_t ownLoadDraws = 0, ownLoadSkips = 0;  // draws with the twin; with a smaller eye-sized input (left as they were)
     ComPtr<ID3D11Buffer> gameCb13;         // the game's vertex b13 while the remap is bound there (gameVs set)
     uint64_t focusDraws = 0, noTwin = 0;
@@ -455,7 +460,10 @@ void mirror_diag_frame_end();
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
-bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr);
+// `tinted`: a scene draw whose shader reads a constant row as a colour (kCb0TintRowsGuid): the pair rule over the whole
+// range for either stage, writing only rows the shader reads and never its colour rows (the violet flash).
+bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr, bool tinted = false);
+void tint_draw();  // corner_mirrors.cpp: a scene draw's tinted stages rewritten from the game's data
 constexpr UINT kPositionAt = 4080;  // kCornerPatchCs's: where the position twin's two vectors go in our copy
 void put_back(Range& r, bool pixel);
 
