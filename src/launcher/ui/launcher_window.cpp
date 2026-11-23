@@ -196,6 +196,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             refresh_installed();  // a game installed or removed meanwhile
             if (app.pane == Pane::Game)  // a layer may have been installed or switched meanwhile
                 refresh_layers();
+            if (app.pane == Pane::LmuGame)  // LMU writes its settings when it closes
+                lmu_game_refresh();
             refresh_checks();
             InvalidateRect(hwnd, nullptr, FALSE);
         }

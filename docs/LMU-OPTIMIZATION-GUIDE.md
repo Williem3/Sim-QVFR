@@ -146,6 +146,12 @@ LMU's render scale lowers the focus area too.
 Shadows, reflections, post-processing and MSAA in LMU's own menus all cost GPU time as they do without Sim-QVFR.
 Change them in LMU as you normally would. With Sim-QVFR's DLSS on, keep MSAA off (3.4).
 
+You can also change them outside the headset: the launcher's **Game** tab has an **In-game settings** page for LMU
+(post effects, MSAA, circuit, car and opponent detail, shadows, reflections, the mirrors and their draw distance, and an Advanced performance card with LMU's automatic detail drop,
+opponents' cockpits and the interface refresh rate). It edits LMU's own
+files while LMU is closed and applies at LMU's next start. Only the settings you change are rewritten, and a copy of
+each file is kept first, so **Put back the originals** undoes everything.
+
 ---
 
 ## 4. If the CPU holds you back

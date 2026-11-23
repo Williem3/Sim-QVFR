@@ -27,7 +27,7 @@ const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Overview},
     {Pane::Picture},
     {Pane::Headset},
-    {Pane::Game},
+    {Pane::Game, Pane::LmuGame},  // the second only for LMU (pane_shown)
 };
 
 // English, as identities; tab_label() and the top bar show them through tr().

@@ -15,6 +15,7 @@
 #include "../install.h"
 #include "../launch_plan.h"
 #include "../launch_watch.h"
+#include "../lmu_game_settings.h"
 #include "../layer_order.h"
 #include "../preflight.h"
 #include "../session_history.h"
@@ -39,9 +40,10 @@ using lang::trn;
 
 // The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
 // headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
-enum class Pane { Overview, Picture, Headset, Game };
+// LmuGame: Le Mans Ultimate's own graphics settings (pane_lmu_game.cpp), a second page of the Game tab, LMU only.
+enum class Pane { Overview, Picture, Headset, Game, LmuGame };
 
-inline constexpr int kPanes = 4;
+inline constexpr int kPanes = 5;
 
 // The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
 // strip under the top bar (shell.cpp kTabPages).
@@ -152,7 +154,12 @@ enum Ctl {
     // Text a screen reader reads (reader_text): never a click target or a Tab stop.
     kText,
     // The undo bar's Undo (the last change).
-    kUndoChange
+    kUndoChange,
+    // The In-game settings page (pane_lmu_game.cpp): its files read again, their folder opened, the originals put back,
+    // the game's VR FOV scale set to 100%; then one control per LMU setting (kLmuSetting + its index in
+    // lmu_settings::defs(), up to kLmuSettingEnd).
+    kLmuReload, kLmuOpenFolder, kLmuRestore, kLmuFovReset,
+    kLmuSetting, kLmuSettingEnd = kLmuSetting + 64
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -508,6 +515,12 @@ struct App {
     std::wstring undoText;
     unsigned long long undoUntil = 0;
     bool undoing = false;
+    // The In-game settings page: LMU's files as last read (lmu_game_refresh), and what the last change said (an error:
+    // tone 2).
+    lmu_settings::Snapshot lmuGame;
+    bool lmuGameRead = false;
+    std::wstring lmuGameMessage;
+    int lmuGameTone = 3;
 };
 
 // The window (window_state.cpp).
@@ -670,6 +683,18 @@ void use_color_preset(int preset);
 // The colour panel's content (Custom… on the Games card), and the Game tab's cards.
 float color_panel(float x, float y, float w, bool draw);
 float game_page(float x, float y, float w, bool draw);
+
+// pane_lmu_game.cpp: Le Mans Ultimate's own graphics settings (lmu_game_settings.h). The page; its files read again (the
+// page opened, the window back in front); whether a control is one of its own, a choice's items and the one chosen, a
+// choice made, a control used.
+float lmu_game_page(float x, float y, float w, bool draw);
+bool lmu_game_shown();
+void lmu_game_refresh();
+bool lmu_game_ctl(Ctl id);
+bool lmu_game_choice(Ctl id);
+int lmu_game_items(Ctl id, std::vector<std::wstring>& items);
+void lmu_game_choose(Ctl id, int option);
+void lmu_game_activate(Ctl id, int option);
 
 // panels.cpp: a panel over the window (Report an issue, a game's colour, Manage profiles, About); Escape or its ✕ closes
 // it. Its title and content are Find a setting's too.

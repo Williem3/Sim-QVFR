@@ -155,6 +155,8 @@ void set_panel_from(float x, float y) {
 int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     int selected = 0;
     items.clear();
+    if (lmu_game_ctl(owner))  // one of LMU's own settings
+        return lmu_game_items(owner, items);
     const auto add_all = [&items](const auto& names) {  // a table's names, each in the player's language
         for (const auto& name : names)
             items.push_back(tr(name));
@@ -412,6 +414,10 @@ void profile_menu_action(int option) {
 }
 
 void choose(Ctl owner, int option) {
+    if (lmu_game_ctl(owner)) {  // LMU's own file, not Sim-QVFR's settings
+        lmu_game_choose(owner, option);
+        return;
+    }
     if (owner == kProfileMenu) {  // actions, not settings: each saves as it would from its own button
         profile_menu_action(option);
         return;
