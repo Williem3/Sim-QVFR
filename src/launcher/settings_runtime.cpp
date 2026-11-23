@@ -131,6 +131,8 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.centerPpd = _wtof(read_string(path, L"runtime", L"native_center_ppd").c_str());
     const int eye = read_int(path, L"runtime", L"eye_tracking", -1);
     r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
+    const std::wstring focus = read_string(path, L"runtime", L"session_focus");  // empty: not known (GetPrivateProfileInt reads 0)
+    r.sessionFocus = focus == L"1" ? 1 : focus == L"0" ? 0 : -1;
     r.cheekyStatus = read_string(path, L"runtime", L"cheeky_status");
     r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
     r.quadViews = read_string(path, L"runtime", L"quad_views");

@@ -112,6 +112,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r))
+        gaze_session_created(instance, info->systemId);
+    if (XR_SUCCEEDED(r))
         native_quad_plan(instance, info->systemId);  // begun as a quad view session if the runtime composes them
     if (XR_SUCCEEDED(r)) {
         {

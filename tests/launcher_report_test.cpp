@@ -339,6 +339,13 @@ int SIM_QVFR_TEST_MAIN() {
         check(titles(likely_causes(fixed, troubled)).find(L"tracker") == std::wstring::npos &&
                   titles(likely_causes(healthy, troubled)).find(L"Cheeky") == std::wstring::npos,
               "causes: no tracker warning in Fixed, no Cheeky one with Foveated DLSS off");
+        RuntimeInfo unfocused = fine;
+        unfocused.eyeTracker = EyeTracker::Missing;
+        unfocused.sessionFocus = 0;
+        const std::wstring focusCauses = titles(likely_causes(healthy, unfocused));
+        check(focusCauses.find(L"never gave the game input focus") != std::wstring::npos &&
+                  focusCauses.find(L"tracker sent nothing") == std::wstring::npos,
+              "causes: a session that never got input focus is named instead of the tracker");
         RuntimeInfo gpu = fine, cpu = fine;
         gpu.session.limited = L"GPU";
         gpu.session.gpuBusy = 98;

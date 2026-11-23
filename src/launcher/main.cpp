@@ -806,7 +806,9 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.layers = launcher_layer_plan();
     in.toolkitTurbo = exe.empty() ? -1 : toolkit_turbo(exe);
     in.eyeTracked = load_settings(ini).eyeTracking;
-    in.eyeTracker = load_runtime_info(runtime_info_path()).eyeTracker;
+    const RuntimeInfo runtime = load_runtime_info(runtime_info_path());
+    in.eyeTracker = runtime.eyeTracker;
+    in.sessionFocus = runtime.sessionFocus;
     return in;
 }
 

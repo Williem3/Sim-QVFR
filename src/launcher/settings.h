@@ -240,6 +240,9 @@ struct RuntimeInfo {
     int width = 0, height = 0, maxWidth = 0, maxHeight = 0;
     double centerPpd = 0;  // pixels per degree at the view's centre at 100% density (the layer's native_center_ppd)
     EyeTracker eyeTracker = EyeTracker::Unknown;
+    // Whether the last launch's session got input focus from the runtime (FOCUSED): 1 yes, 0 VISIBLE only, -1 not known.
+    // OpenXR actions, the eye gaze among them, are inactive without it (SteamVR with the Steam Frame, issue 37).
+    int sessionFocus = -1;
     // Cheeky at the last launch: off, missing, refused or running (empty: no launch yet), and its version.
     std::wstring cheekyStatus, cheekyVersion;
     // Quad views at the last launch: the runtime offered them ("offered", "none", "unknown": a layer between; empty: no

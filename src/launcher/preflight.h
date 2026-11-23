@@ -66,6 +66,7 @@ struct PreflightInput {
     int toolkitTurbo = -1; // OpenXR Toolkit's Turbo mode for ACE: 1 on, 0 off, -1 not set (or no Toolkit)
     bool eyeTracked = true;
     EyeTracker eyeTracker = EyeTracker::Unknown;
+    int sessionFocus = -1;  // RuntimeInfo::sessionFocus
     OpenComposite openComposite = OpenComposite::Unknown;  // only for a game that needs it
     std::wstring dlssPath, dlssVersion;  // the game's nvngx_dlss.dll and its file version ("2.2.15.0"); empty: unknown
     // Sim-QVFR's own DLSS ([dlss] on, a game with GameFeatures::sideLoadedDlss, QVFR): whether multi-view rendering,
