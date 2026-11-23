@@ -81,6 +81,40 @@ void menu_values_changed(const IniSnapshot& s) {
     menu.dirty = true;
 }
 
+void road_focus_region_known(int regionWidth, int regionHeight) {
+    if (!game_features().focusCorridor || !experiment.views4 || regionWidth <= 0 || regionHeight <= 0)
+        return;
+    // The launcher's ini, where the next launch reads them (menu.settingsIni is only filled when the menu first
+    // opens, on the render thread: read the environment here).
+    std::wstring settings;
+    {
+        wchar_t path[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", path, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            settings = path;
+    }
+    ini_write_later([ini = live.ini, settings = std::move(settings), regionWidth, regionHeight] {
+        const auto cap = [regionWidth, regionHeight](const std::wstring& path) {
+            const wchar_t* f = path.c_str();
+            if (path.empty() || !ini_flag(f, kFocusCorridor) || ini_flag(f, kGaze))  // Road focus: fixed foveation
+                return;
+            int width = ini_int(f, kFocusPercent), height = ini_int(f, kFocusHeightPercent, width);
+            const int wasWidth = width, wasHeight = height;
+            if (!road_focus_capped(ini_int(f, kFocusCorridorPreset), read_focus_shape(f), width, height, regionWidth,
+                                   regionHeight))
+                return;
+            ini_put(f, kFocusPercent.section, kFocusPercent.key, width);
+            ini_put(f, kFocusHeightPercent.section, kFocusHeightPercent.key, height);
+            logf("road focus: its preset (%d%% x %d%%, set before the runtime's focus region was known) capped to the "
+                 "region: %d%% x %d%% (%ls)",
+                 wasWidth, wasHeight, width, height, f);
+        };
+        cap(ini);
+        if (!settings.empty())
+            cap(game_settings_ini(settings));
+    });
+}
+
 // Moved from the launcher (its Headset menu pane): the panel goes there and shows, so you can see it.
 void menu_placement_changed(const MenuPlacement& placement) {
     if (placement == live.menuPlacement)

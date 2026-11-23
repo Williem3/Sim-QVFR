@@ -75,6 +75,8 @@ void note_regions(XrTime time, const XrView (&four)[kQuadViews]) {
         nativeQuad.regionShareX = share[0][0];
         nativeQuad.regionShareY = share[0][1];
         native_quad_focus_visible();  // the box past the region: never shown, the game's mask skips it
+        // A Road focus preset set before the region was known: capped to it now (the headset menu's rounding).
+        road_focus_region_known(static_cast<int>(share[0][0] * 100), static_cast<int>(share[0][1] * 100));
     }
 }
 
