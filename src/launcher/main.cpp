@@ -41,6 +41,7 @@
 #include "../probe/hang_dump.h"
 #include "../quad/qvfr_settings.h"
 #include "explicit_layers.h"
+#include "game_settings_snapshot.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -458,6 +459,10 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
+    // The game's own graphics settings as this launch starts (game_settings_snapshot.h), for the report: read only.
+    const std::string gameSettings = game_settings_text(info.id, exe.wstring());
+    const bool gameSettingsSaved =
+        !gameSettings.empty() && write_file((runFolder / kGameSettingsName).wstring(), gameSettings);
     // Multi-view rendering on any GPU: NVIDIA's on an RTX 20 series or newer (engine/nvapi_gpus.h), Sim-QVFR's own
     // (instancing) on others (the layer checks the game's device).
     const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
@@ -506,6 +511,9 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
                           : L"ADMINISTRATOR: the game inherits it and OpenXR won't find the layers (elevated_registration=0)") +
         L" (started by " + (parent.empty() ? L"unknown" : parent) + L")");
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
+    if (!gameSettings.empty())
+        say(L"  game settings: " + game_settings_summary(gameSettings) +
+            (gameSettingsSaved ? L" (" + std::wstring(kGameSettingsName) + L" in the run folder)" : L" (NOT saved)"));
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
     if (info.features.multiView || info.features.layerMultiView)

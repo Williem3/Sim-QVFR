@@ -13,7 +13,7 @@
 //     and nothing at all when the logs folder is a link or junction;
 //   - only plain files, never a link or junction; a minidump only if it starts "MDMP", a zip only if it starts "PK";
 //   - a run folder is never removed recursively: the files a launch writes into it go (launch.txt, the ini copy,
-//     openxr-loader.log, openxr-explicit-before.reg, the layer manifests *.json), then the folder only if that left it
+//     openxr-loader.log, openxr-explicit-before.reg, game-settings.txt, the layer manifests *.json), then the folder only if that left it
 //     empty; a subfolder or any other file keeps it.
 // Never touched either: openxr-registrations\ (an elevated launch's ledgers, the unregister sweep needs them) and its
 // log, and the diagnostics' own output (diagnostics_paths: captures*, pix, shaders, image dumps), which the user asked

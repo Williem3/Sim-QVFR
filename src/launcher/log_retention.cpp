@@ -76,6 +76,7 @@ bool run_file(const fs::path& p) {
     const std::wstring name = p.filename().wstring();
     return plain_file(p) && (name == L"launch.txt" || name == L"sim-qvfr.ini" || name == L"ace-quadview.ini" ||
                              name == L"openxr-loader.log" || name == L"openxr-explicit-before.reg" ||
+                             name == L"game-settings.txt" ||
                              iends_with(name, L".json"));
 }
 

@@ -646,7 +646,7 @@ configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/l
 # object as it did when they were its own sources (none has a static initializer, so their order doesn't matter).
 add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp
   src/launcher/settings_per_game.cpp src/launcher/settings_runtime.cpp src/launcher/settings_readouts.cpp src/launcher/launch_watch.cpp
-  src/launcher/game_tabs.cpp src/launcher/lmu_game_settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
+  src/launcher/game_tabs.cpp src/launcher/lmu_game_settings.cpp src/launcher/game_settings_snapshot.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
   src/launcher/log_retention.cpp src/launcher/signature_check.cpp
@@ -772,6 +772,11 @@ target_include_directories(lmu_game_settings_test PRIVATE src)
 target_compile_definitions(lmu_game_settings_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_game_settings_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_game_settings_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(game_settings_snapshot_test tests/game_settings_snapshot_test.cpp)
+target_include_directories(game_settings_snapshot_test PRIVATE src)
+target_compile_definitions(game_settings_snapshot_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(game_settings_snapshot_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(game_settings_snapshot_test PRIVATE sim_qvfr_launcher_shared)
 sim_qvfr_test(launcher_install_test tests/launcher_install_test.cpp)
 target_include_directories(launcher_install_test PRIVATE src)
 target_compile_definitions(launcher_install_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
