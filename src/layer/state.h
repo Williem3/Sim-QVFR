@@ -350,6 +350,9 @@ struct Gaze {
     XrVector3f direction{0, 0, -1};  // last tracked gaze, in the space ACE locates its views in
     XrTime directionTime = 0;
     uint64_t queries = 0, tracked = 0;
+    // This session's lookups while the Foveation was eye tracked (experiment.gaze): the lookups also run in Fixed (for
+    // a live switch), and a Fixed session's untracked ones are no sign of a missing tracker (issue 39).
+    uint64_t wantedQueries = 0;
     bool firstLogged = false;
     // The game's own gaze pose action (from its eye gaze suggestion; X-Plane binds one), and a space of it: the
     // lookups fall back to it while the layer's own action never tracks (its set not synced or not active).

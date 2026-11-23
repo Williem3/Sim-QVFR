@@ -292,6 +292,7 @@ void gaze_session_created(XrInstance instance, XrSystemId system) {
         gaze.visibleQpc = 0;
         gaze.everFocused = gaze.unfocusedLogged = false;
         gaze.focusedQueries = 0;
+        gaze.wantedQueries = 0;
         extension = gaze.extensionEnabled && gaze.set;
     }
     runtime_info(L"session_focus", L"");  // this launch's answer, not the last one's (VISIBLE: 0, FOCUSED: 1)
