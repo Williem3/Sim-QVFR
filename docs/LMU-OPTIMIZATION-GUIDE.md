@@ -94,7 +94,7 @@ height times density. A small area can take a high density cheaply.
 - **Fixed focus:** larger (35-42% wide, 30-38% tall), as your eyes leave the centre.
 - **Feather** (how the sharp area blends into the periphery) and **Corner radius** cost nothing: raise them to hide
   the edge instead of making the area bigger.
-- **Road focus** (on by default, fixed foveation only) renders the sharp area in full detail only along the road
+- **Road focus** (off by default, fixed foveation only) renders the sharp area in full detail only along the road
   ahead, 10 m either side of it by default (**Road width**, 5 to 20 m: wider keeps the run-off and barriers sharp but
   saves less) and 3.5 m above it by default (**Road height**, 2 to 8 m), following its hills and bends, and in your
   own car (the wheel, dash, displays and mirrors inside the sharp area); the trees, grandstands, hills and sky beside

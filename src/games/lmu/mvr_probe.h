@@ -42,6 +42,7 @@ struct MvrProbeStats {
     uint64_t finalBlits = 0;  // the game's final blit pixel shaders marked (yebis_shaders.h)
     uint64_t lensMasks = 0, vruiPanels = 0;  // the lens mask's and VR UI panel's vertex shaders marked (VsRole)
     uint64_t positionTwins = 0;  // full-screen shaders given a position twin (mvr_probe_position_twins)
+    uint64_t ownLoadsTwins = 0;  // pixel shaders given an own-pixel-loads twin (mvr_probe_own_pixel_loads)
     // Pixel shaders (lmu_mvr): created, given a mip bias twin (dxbc::add_focus_mip_bias; texture sharpening), and why not.
     uint64_t pixelCreated = 0, pixelTwinned = 0, pixelRepeats = 0, pixelFailed = 0;
     std::map<std::string, uint64_t> pixelRefused;
@@ -101,9 +102,16 @@ inline constexpr GUID kCb0VectorsGuid = {0x64b0e3a9, 0x2f17, 0x4c58, {0xb4, 0x0a
 inline constexpr GUID kPixelIdGuid = {0x3c8d1f52, 0x6a94, 0x4e07, {0x9b, 0x21, 0x5d, 0xe3, 0x70, 0x8a, 0x44, 0xc6}};
 // A pixel shader's rows of constant buffer 0 read by a fixed index (512 bytes: dxbc::constant_buffer_static_rows).
 inline constexpr GUID kCb0StaticRowsGuid = {0x5e2a7b14, 0xc39d, 0x4f61, {0x8e, 0x05, 0xa7, 0x3b, 0x91, 0xd2, 0x6c, 0x48}};
+// The SCS games (mvr_probe_tint_rows): a vertex or pixel shader that reads a row of constant buffer 0 as a colour
+// (dxbc::constant_buffer_colour_rows) carries 1024 bytes: the rows it reads by a fixed index (64 uint64), then its colour
+// rows (64 uint64). Our copies must not rewrite those as a pair for its draws (the violet flash).
+inline constexpr GUID kCb0TintRowsGuid = {0x0c9e4a71, 0x3b58, 0x4d26, {0x95, 0x1f, 0x6a, 0xe2, 0x07, 0xc4, 0x8b, 0x3d}};
 // The SCS games' focus replays (mvr_probe_position_twins): a full-screen pass's vertex shader that turns its vertex into
 // screen pixels carries its dxbc::add_position_remap twin (an interface) and the twin's rectangle and size rows (two ints).
 inline constexpr GUID kFocusPositionTwinGuid = {0x8b3e51c7, 0x2d64, 0x4a19, {0x9f, 0x0e, 0x73, 0xc2, 0x58, 0xa1, 0x4d, 0x36}};
+// The SCS games' scene draws (mvr_probe_own_pixel_loads): a pixel shader whose loads read its own pixel at a projected
+// screen position carries its dxbc::add_own_pixel_loads twin (an interface): those loads at SV_Position.
+inline constexpr GUID kOwnPixelLoadsTwinGuid = {0x3d71b9e4, 0x5a26, 0x4c18, {0x8f, 0x43, 0x92, 0xe0, 0x1b, 0x6d, 0xa7, 0x55}};
 inline constexpr GUID kShaderIdGuid = {0x2b9e64d1, 0x8f30, 0x4c57, {0xb2, 0x1a, 0x6e, 0x95, 0x03, 0xd8, 0x47, 0xc2}};
 inline constexpr GUID kCbRows4Guid = {0x7a15c3e8, 0x46b2, 0x4e9d, {0x81, 0x6c, 0x2f, 0xa0, 0x5b, 0x93, 0xd4, 0x17}};
 inline constexpr GUID kFocusPositionRowsGuid = {0x1f6a9c38, 0x7e05, 0x4b72, {0xa4, 0xd9, 0x0c, 0x83, 0x6e, 0x27, 0xb5, 0x91}};
@@ -126,6 +134,10 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false, bool nameSh
 void mvr_probe_device(ID3D11Device* device);
 // The SCS games: full-screen shaders get their position twins (kFocusPositionTwinGuid) from now on.
 void mvr_probe_position_twins(bool on);
+// The SCS games: pixel shaders get their own-pixel-loads twins (kOwnPixelLoadsTwinGuid) from now on.
+void mvr_probe_own_pixel_loads(bool on);
+// The SCS games: vertex and pixel shaders that read a constant row as a colour get kCb0TintRowsGuid from now on.
+void mvr_probe_tint_rows(bool on);
 // The SCS mirror diagnostic (dev builds): every shader tagged with its id (kShaderIdGuid, DXBC checksum words 0-1)
 // and the rows of constant buffer slots 0-3 it reads by a fixed index (kCbRows4Guid: 4 x 64 uint64).
 void mvr_probe_cb_rows(bool on);

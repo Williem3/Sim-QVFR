@@ -41,6 +41,8 @@ bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& di
     }
     XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
     ++gaze.queries;
+    if (experiment.gaze)
+        ++gaze.wantedQueries;
     const bool ok = XR_SUCCEEDED(next.LocateSpace(gaze.space, base, time, &location)) &&
                     (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                     (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
@@ -70,7 +72,11 @@ constexpr uint64_t kGazeUntrackedLookups = 500;
 
 void gaze_untracked_check(XrSession session, bool ok, XrResult located, XrSpaceLocationFlags flags) {
     std::lock_guard guard(gaze.mutex);
-    if (ok || gaze.tracked > 0 || gaze.queries + 1 != kGazeUntrackedLookups)
+    // Early (the session often not yet FOCUSED then: actions inactive by the spec) and again that many lookups after
+    // it first became FOCUSED, the check that tells a runtime holding focus back from one sending no gaze.
+    const bool early = gaze.queries + 1 == kGazeUntrackedLookups;
+    const bool afterFocus = gaze.everFocused && gaze.queries + 1 == gaze.focusedQueries + kGazeUntrackedLookups;
+    if (ok || gaze.tracked > 0 || (!early && !afterFocus))
         return;
     const auto active = [&](XrAction action) {
         if (!action || !next.GetActionStatePose)
@@ -90,11 +96,15 @@ void gaze_untracked_check(XrSession session, bool ok, XrResult located, XrSpaceL
                       : state.interactionProfile == XR_NULL_PATH ? std::string("none")
                                                                  : path_name(gaze.instance, state.interactionProfile);
     }
-    logf("gaze: no tracked sample in %llu lookups (xrLocateSpace %d, flags 0x%llx; the layer's gaze action %s, the "
-         "game's %s; %llu game syncs; /user/eyes_ext profile %s)",
-         static_cast<unsigned long long>(kGazeUntrackedLookups), located, static_cast<unsigned long long>(flags),
-         active(gaze.action).c_str(), active(gaze.gameAction).c_str(), static_cast<unsigned long long>(gaze.appSyncs),
-         eyesProfile.c_str());
+    const char* const sessionState = gaze.sessionState == XR_SESSION_STATE_FOCUSED   ? "FOCUSED"
+                                     : gaze.sessionState == XR_SESSION_STATE_VISIBLE ? "VISIBLE, not focused"
+                                     : gaze.everFocused                              ? "not focused now"
+                                                                                     : "not yet focused";
+    logf("gaze: no tracked sample in %llu lookups%s (xrLocateSpace %d, flags 0x%llx; the layer's gaze action %s, the "
+         "game's %s; %llu game syncs; /user/eyes_ext profile %s; session %s)",
+         static_cast<unsigned long long>(kGazeUntrackedLookups), afterFocus && !early ? " since FOCUSED" : "", located,
+         static_cast<unsigned long long>(flags), active(gaze.action).c_str(), active(gaze.gameAction).c_str(),
+         static_cast<unsigned long long>(gaze.appSyncs), eyesProfile.c_str(), sessionState);
     if (gaze.gameAction && !gaze.gameSpace) {
         XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
         spaceInfo.action = gaze.gameAction;
@@ -159,6 +169,8 @@ void gaze_thread_run() {
             {
                 std::lock_guard guard(gaze.mutex);  // the counts the overlay and the log read
                 ++gaze.queries;
+                if (experiment.gaze)
+                    ++gaze.wantedQueries;
                 if (ok) {
                     ++gaze.tracked;
                     gaze.direction = direction;

@@ -46,7 +46,7 @@ constexpr Help kHelp[] = {
      L"across its feather so its edge stays even: your side vision sees shimmer more than detail. 0% is off; it changes "
      L"while you drive.")},
     {I18N(L"Night car lighting"),
-     I18N(L"Makes the cars look lit at night instead of flat: LMU lights the paint with a flat wash from the floodlights. "
+     I18N(L"Adds highlights and shading to the cars at night. "
      L"Sim-QVFR relights each car after the game draws it, before the game's own post-processing: highlights where the "
      L"floodlights and headlights reflect off the paint, shading in creases and under the car, and the effects below. "
      L"The rest of the scene is untouched. It costs about 0.5 to 1 ms of GPU time with everything on. The switch takes "
@@ -56,7 +56,7 @@ constexpr Help kHelp[] = {
      L"at Low, all of them at High. The switches below stay as you set them. Low takes about a third less GPU time than "
      L"High and looks a little grainier; the periphery always runs one step below the focus area, where it's least seen.")},
     {I18N(L"Fill light"),
-     I18N(L"How much of the game's flat floodlight wash stays on the cars. Lower makes the shading and highlights stand "
+     I18N(L"How much of the game's own floodlight lighting stays on the cars. Lower makes the shading and highlights stand "
      L"out more; 100% keeps the game's brightness.")},
     {I18N(L"Ambient occlusion"),
      I18N(L"Darkens creases, wheel arches and the underside, where light reaches less. 0% is off.")},

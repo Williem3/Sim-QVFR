@@ -229,7 +229,7 @@ Card color_card() {
 // the same. The switch takes effect at the next launch (it hooks the game's shaders as they're made); the rest changes
 // while you drive.
 Card night_cars_card() {
-    Card c{Tab::Picture, tr(L"Night cars"), Applies::Live};
+    Card c{Tab::Picture, tr(L"Night cars (experimental)"), Applies::Live};
     c.body = [](Body& b) {
         if (!qvfr()) {
             b.note(tr(L"Night car lighting is available in Quad View Foveated Rendering."));
@@ -322,14 +322,24 @@ Card foveation_card() {
         }
         b.slider({kFeather, tr(L"Feather"), s.feather});
         b.note(tr(L"See the edge of the sharp area? Raise Feather, or make the focus larger."));
+        // The headset's runtime composed the views at the last launch (Pimax, Varjo; native quad views): it places the
+        // focus area in its own focus region, so the position sliders would do nothing. The custom shape still shows.
+        const bool runtimePlaces =
+            qvfr() && game_has(&games::GameFeatures::nativeQuadViews) && app.runtime.quadViewsUsed;
+        if (runtimePlaces)
+            b.note(tr(L"Your headset’s software composes the views (Quad-Views Foveated Rendering in Pimax Play or Varjo "
+                      L"Base) and places the focus area itself, so the position sliders aren’t offered. The shape and "
+                      L"Feather still apply."));
         if (s.eyeTracking) {
-            b.sliders({kFocusOffset, tr(L"Gaze offset"), s.offset.gaze, L"°"},
-                      {kFocusOffsetX, tr(L"Horizontal gaze offset"), s.offset.gazeX, L"°"});
+            if (!runtimePlaces)
+                b.sliders({kFocusOffset, tr(L"Gaze offset"), s.offset.gaze, L"°"},
+                          {kFocusOffsetX, tr(L"Horizontal gaze offset"), s.offset.gazeX, L"°"});
             b.slider({kGazeDeadzone, tr(L"Gaze dead-zone"), s.gazeDeadzone, L"°", L"", true});
             b.hidden(tr(L"Foveated mode"), tr(L"Fixed"), {tr(L"Vertical position"), tr(L"Horizontal position")});
         } else {
-            b.sliders({kFocusOffset, tr(L"Vertical position"), s.offset.fixed, L"°"},
-                      {kFocusOffsetX, tr(L"Horizontal position"), s.offset.fixedX, L"°"});
+            if (!runtimePlaces)
+                b.sliders({kFocusOffset, tr(L"Vertical position"), s.offset.fixed, L"°"},
+                          {kFocusOffsetX, tr(L"Horizontal position"), s.offset.fixedX, L"°"});
             b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"),
                      {tr(L"Gaze dead-zone"), tr(L"Gaze offset"), tr(L"Horizontal gaze offset")});
         }

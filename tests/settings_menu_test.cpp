@@ -713,7 +713,12 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             SettingsMenu n = c;
             go(n, MenuPage::Foveation);
             check(menu_subtitle(n).empty(), "runtime composition off: no note");
+            check(has(n, MenuItem::FocusOffset) && has(n, MenuItem::FocusOffsetX),
+                  "runtime composition off: the focus area's offsets are offered");
             n.launch.runtimeComposes = true;
+            check(!has(n, MenuItem::FocusOffset) && !has(n, MenuItem::FocusOffsetX) && has(n, MenuItem::Feather) &&
+                      has(n, MenuItem::Outline),
+                  "runtime composing: no offsets (the runtime places the focus area), the feather and outline stay");
             check(menu_subtitle(n).find(L"inside its own focus region") != std::wstring::npos,
                   "runtime composing: Foveation notes the focus area shows inside the runtime's focus region");
             n.optimizeDetail = L"Measuring… keep driving";
@@ -1550,6 +1555,10 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         go(r, MenuPage::Foveation);
         check(!has(r, MenuItem::FocusCorridor), "road focus: not on the Foveation page of a game without it");
         r.launch.focusCorridor = true;
+        check(has(r, MenuItem::FocusCorridor) && line_of(r, MenuItem::FocusCorridor).value == L"Off" &&
+                  !has(r, MenuItem::FocusCorridorPreset) && !MenuValues{}.focusCorridor,
+              "road focus: off by default (the player opts in), its lines hidden");
+        r.values.focusCorridor = true;
         check(has(r, MenuItem::FocusCorridor) && at(r, MenuItem::FocusCorridor) + 1 == at(r, MenuItem::FocusCorridorPreset) &&
                   at(r, MenuItem::FocusCorridorPreset) + 1 == at(r, MenuItem::FocusCorridorWidth) &&
                   line_of(r, MenuItem::FocusCorridorPreset).value == L"Preset A" &&
@@ -1565,7 +1574,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   line_of(r, MenuItem::FocusCorridor).value == L"On" &&
                   line_of(r, MenuItem::FocusCorridorWidth).label == L"Road width" &&
                   line_of(r, MenuItem::FocusCorridorWidth).value == L"10 m",
-              "road focus: on by default, its preset (A), width (10 m) and height (3.5 m) under it, before the outline");
+              "road focus on: its preset (A), width (10 m) and height (3.5 m) under it, before the outline");
         r.launch.ownDlss = true;
         r.values.dlss.on = true;
         check(at(r, MenuItem::FocusCorridorShow) + 1 == at(r, MenuItem::Outline),

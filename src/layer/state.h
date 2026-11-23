@@ -355,12 +355,26 @@ struct Gaze {
     XrVector3f direction{0, 0, -1};  // last tracked gaze, in the space ACE locates its views in
     XrTime directionTime = 0;
     uint64_t queries = 0, tracked = 0;
+    // This session's lookups while the Foveation was eye tracked (experiment.gaze): the lookups also run in Fixed (for
+    // a live switch), and a Fixed session's untracked ones are no sign of a missing tracker (issue 39).
+    uint64_t wantedQueries = 0;
     bool firstLogged = false;
     // The game's own gaze pose action (from its eye gaze suggestion; X-Plane binds one), and a space of it: the
     // lookups fall back to it while the layer's own action never tracks (its set not synced or not active).
     XrAction gameAction = XR_NULL_HANDLE;
     XrSpace gameSpace = XR_NULL_HANDLE;
     bool syncFailLogged = false, syncLogged = false;
+    // XR_EXT_eye_gaze_interaction on the game's instance (the game's own or added by the layer): only then may the
+    // system's eye gaze properties be asked for (gaze_session_created).
+    bool extensionEnabled = false;
+    // The session's state (layerPollEvent). Actions, the gaze among them, are active only while it is FOCUSED: a
+    // runtime that keeps the game VISIBLE only (SteamVR with the Steam Frame, issue 37) gives no gaze at all.
+    // visibleQpc: when it last became VISIBLE without focus (0: not waiting); focusedQueries: gaze.queries when it
+    // first became FOCUSED (the untracked check runs again kGazeUntrackedLookups after it).
+    XrSessionState sessionState = XR_SESSION_STATE_UNKNOWN;
+    int64_t visibleQpc = 0;
+    bool everFocused = false, unfocusedLogged = false;
+    uint64_t focusedQueries = 0;
 };
 
 // The game's head-locked reference spaces (XR_REFERENCE_SPACE_TYPE_VIEW, from its xrCreateReferenceSpace).

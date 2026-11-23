@@ -383,10 +383,15 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     }
 
     // Eye tracking at the last launch.
+    // The runtime never gave the game input focus: no OpenXR action is active then, so the tracker isn't to blame.
     if (method && in.eyeTracked && in.eyeTracker == EyeTracker::Missing) {
         Check& c = add("eye_tracking", CheckTone::Warn, tr(L"No eye tracking at the last launch"),
-                       tr(L"The focus area stayed in the centre. Check that the headset’s eye tracker is on and "
-                          L"calibrated, or choose Fixed foveation."));
+                       in.sessionFocus == 0
+                           ? tr(L"The headset runtime never gave the game input focus, and OpenXR sends the eye gaze "
+                                L"only to the app in focus: the focus area stayed in the centre. Close the runtime’s "
+                                L"dashboard and any overlay or gaze app before the game.")
+                           : tr(L"The focus area stayed in the centre. Check that the headset’s eye tracker is on and "
+                                L"calibrated, or choose Fixed foveation."));
         c.fix = CheckFix::OpenFoveation;
         c.fixLabel = tr(L"Open Foveation");
     }

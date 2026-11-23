@@ -6,6 +6,7 @@
 #include <iterator>
 #include <cstring>
 #include <map>
+#include <set>
 
 namespace simqvfr::dxbc {
 
@@ -1037,6 +1038,277 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
     return r;
 }
 
+namespace {
+
+// One instruction's operands: where each starts (token offset in the instruction), its length, what it is.
+struct Op {
+    size_t at = 0, len = 0;
+    Operand o;
+    uint32_t token = 0;
+};
+bool operands_of(const uint32_t* t, size_t n, std::vector<Op>& ops) {
+    ops.clear();
+    size_t at = operands_at(t, n);
+    if (!at)
+        return false;
+    while (at < n) {
+        Op op;
+        op.at = at;
+        op.token = t[at];
+        op.len = read_operand(t + at, n - at, op.o);
+        if (!op.len)
+            return false;
+        ops.push_back(op);
+        at += op.len;
+    }
+    return true;
+}
+// A plain temp or input operand: one immediate index, no extended (modifier) token.
+bool plain(const Op& op, uint32_t type) {
+    return op.o.type == type && op.o.dims == 1 && op.o.index0Immediate && (op.token >> 31) == 0 && op.len == 2;
+}
+uint32_t mask_of(const Op& op) { return ((op.token >> 2) & 3) == 0 ? (op.token >> 4) & 0xf : 0; }
+// A source's swizzle (selection mode 1) as four components; false for a mask or select-1 operand.
+bool swizzle_of(const Op& op, int (&c)[4]) {
+    if (((op.token >> 2) & 3) != 1)
+        return false;
+    const uint32_t s = (op.token >> 4) & 0xff;
+    for (int k = 0; k < 4; ++k)
+        c[k] = (s >> (2 * k)) & 3;
+    return true;
+}
+// The components a source reads into a destination mask, in the mask's order (up to 4).
+std::vector<int> read_into(const Op& src, uint32_t mask) {
+    std::vector<int> r;
+    int c[4];
+    if (!swizzle_of(src, c))
+        return r;
+    for (int k = 0; k < 4; ++k)
+        if (mask & (1u << k))
+            r.push_back(c[k]);
+    return r;
+}
+
+}  // namespace
+
+OwnPixelLoads add_own_pixel_loads(const uint8_t* data, size_t size) {
+    OwnPixelLoads r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    Chunk* program = nullptr;
+    Chunk* signature = nullptr;
+    for (Chunk& c : chunks) {
+        if (c.fourcc == fourcc("SHDR") || c.fourcc == fourcc("SHEX"))
+            program = &c;
+        else if (c.fourcc == fourcc("ISGN"))
+            signature = &c;
+    }
+    if (!program || !signature || program->data.size() < 8) {
+        r.error = !program ? "no SHDR/SHEX" : "no ISGN";
+        return r;
+    }
+    std::vector<Element> inputs;
+    if (!read_signature(signature->data, inputs)) {
+        r.error = "unreadable input signature";
+        return r;
+    }
+    Element* position = nullptr;
+    for (Element& el : inputs)
+        if (el.systemValue == kNamePosition)
+            position = &el;
+    if (!position) {
+        r.error = "no SV_Position input";
+        return r;
+    }
+    const uint32_t posReg = position->reg;
+    const auto* tokens = reinterpret_cast<const uint32_t*>(program->data.data());
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 0) {
+        r.error = "not a pixel shader";
+        return r;
+    }
+    if (size_t{length} * 4 > program->data.size() || length < 2) {
+        r.error = "program length";
+        return r;
+    }
+    constexpr uint32_t kOpFtoi = 27;
+    struct Chain {
+        uint32_t mask = 0;   // rA's components holding the screen texel
+        int comps[2] = {};   // in the mask's order
+    };
+    struct Site {
+        size_t srcAt = 0;    // the ftoi's source operand, in program tokens
+        uint32_t dstReg = 0, dstMask = 0;
+        bool confirmed = false;
+    };
+    std::map<uint32_t, Chain> chains;  // temp -> its chain
+    std::vector<Site> sites, done;
+    size_t lastInputDcl = 0, firstOutputDcl = 0, tempsAt = 0, firstInstruction = 0, positionDclAt = 0;
+    std::vector<Op> ops;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(tokens + i, length - i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (is_declaration(op)) {
+            if (op == kOpDclInputPs || op == kOpDclInputPsSgv || op == kOpDclInputPsSiv) {
+                lastInputDcl = i + n;
+                Operand o;
+                if (read_operand(tokens + i + 1, n - 1, o) && o.type == kInput && o.index0Immediate && o.index0 == posReg)
+                    positionDclAt = i;
+            } else if ((op == kOpDclOutput || op == kOpDclOutputSgv || op == kOpDclOutputSiv) && !firstOutputDcl) {
+                firstOutputDcl = i;
+            } else if (op == kOpDclTemps) {
+                tempsAt = i;
+            } else if (op == kOpDclIndexRange) {
+                Operand o;
+                if (read_operand(tokens + i + 1, n - 1, o) && o.type == kInput && o.index0 <= posReg &&
+                    posReg < o.index0 + tokens[i + n - 1]) {
+                    r.error = "SV_Position in an index range";
+                    return r;
+                }
+            }
+            i += n;
+            continue;
+        }
+        if (!firstInstruction)
+            firstInstruction = i;
+        const bool parsed = operands_of(tokens + i, n, ops);
+        // An ld reading a pending site's register confirms it (the coordinate is its first source).
+        if (parsed && op == kOpLd && ops.size() >= 2 && plain(ops[1], kTemp))
+            for (Site& s : sites)
+                if (s.dstReg == ops[1].o.index0)
+                    s.confirmed = true;
+        // What this instruction writes (its first operand, a temp): chains and pending sites it breaks.
+        uint32_t wReg = ~0u, wMask = 0;
+        if (parsed && !ops.empty() && ops[0].o.type == kTemp && ops[0].o.index0Immediate) {
+            wReg = ops[0].o.index0;
+            wMask = mask_of(ops[0]);
+        }
+        bool keep = false;
+        if (parsed && op == kOpDiv && ops.size() == 3 && plain(ops[0], kTemp) && plain(ops[1], kInput) &&
+            plain(ops[2], kInput) && ops[1].o.index0 == ops[2].o.index0 && ops[1].o.index0 != posReg) {
+            const uint32_t m = mask_of(ops[0]);
+            const std::vector<int> num = read_into(ops[1], m), den = read_into(ops[2], m);
+            if (num.size() == 2 && den.size() == 2 && den[0] == den[1] && num[0] != den[0] && num[1] != den[0] &&
+                num[0] != num[1]) {
+                Chain c;
+                c.mask = m;
+                int k = 0;
+                for (int b = 0; b < 4; ++b)
+                    if (m & (1u << b))
+                        c.comps[k++] = b;
+                chains[wReg] = c;
+                keep = true;
+            }
+        } else if (parsed && op == kOpMul && ops.size() == 3 && wReg != ~0u && chains.count(wReg) &&
+                   wMask == chains[wReg].mask) {
+            // rA.ab = rA.ab * x (either order): the chain goes on.
+            for (int s = 1; s <= 2; ++s)
+                if (plain(ops[s], kTemp) && ops[s].o.index0 == wReg) {
+                    const std::vector<int> in = read_into(ops[s], wMask);
+                    const Chain& c = chains[wReg];
+                    if (in.size() == 2 && in[0] == c.comps[0] && in[1] == c.comps[1])
+                        keep = true;
+                }
+        } else if (parsed && op == kOpFtoi && ops.size() == 2 && plain(ops[0], kTemp) && plain(ops[1], kTemp) &&
+                   chains.count(ops[1].o.index0)) {
+            const Chain& c = chains[ops[1].o.index0];
+            const uint32_t m = mask_of(ops[0]);
+            const std::vector<int> in = read_into(ops[1], m);
+            if (in.size() == 2 && in[0] == c.comps[0] && in[1] == c.comps[1]) {
+                Site s;
+                s.srcAt = i + ops[1].at;
+                s.dstReg = wReg;
+                s.dstMask = m;
+                // A site on the same register replaced: the older one stands or falls as it is.
+                for (auto it = sites.begin(); it != sites.end();)
+                    if (it->dstReg == wReg) {
+                        if (it->confirmed)
+                            done.push_back(*it);
+                        it = sites.erase(it);
+                    } else {
+                        ++it;
+                    }
+                sites.push_back(s);
+                wReg = ~0u;  // the new site's own write
+            }
+        }
+        if (!keep && wReg != ~0u) {
+            if (auto it = chains.find(wReg); it != chains.end() && (it->second.mask & wMask))
+                chains.erase(it);
+            for (auto it = sites.begin(); it != sites.end();)
+                if (it->dstReg == wReg && (it->dstMask & wMask)) {
+                    if (it->confirmed)
+                        done.push_back(*it);
+                    it = sites.erase(it);
+                } else {
+                    ++it;
+                }
+        }
+        // Control flow ends a straight run: keep it simple (only what one block shows).
+        if (op == kOpRet || op == kOpRetc)
+            for (const Site& s : sites)
+                if (s.confirmed)
+                    done.push_back(s);
+        if (op == kOpRet || op == kOpRetc)
+            sites.clear();
+        i += n;
+    }
+    for (const Site& s : sites)
+        if (s.confirmed)
+            done.push_back(s);
+    if (done.empty()) {
+        r.error = "no ld at a projected screen position";
+        return r;
+    }
+    std::vector<uint32_t> prog(tokens, tokens + length);
+    std::set<size_t> patched;
+    for (const Site& s : done) {
+        if (!patched.insert(s.srcAt).second)
+            continue;
+        int sw[4] = {0, 0, 0, 0};
+        int k = 0;
+        for (int b = 0; b < 4; ++b)
+            if (s.dstMask & (1u << b))
+                sw[b] = k++;  // the mask's first component takes x, its second y
+        prog[s.srcAt] = operand(2, 1, swizzle(sw[0], sw[1], sw[2], sw[3]), kInput, 1);
+        prog[s.srcAt + 1] = posReg;
+        ++r.loads;
+    }
+    // SV_Position declared where the shader didn't (its mask gains x and y where it had none).
+    std::vector<uint32_t> positionDcl;
+    if (!positionDclAt) {
+        positionDcl.push_back(instruction(kOpDclInputPsSiv, 4) | (kInterpolationLinearNoPerspective << 11));
+        dst(positionDcl, kInput, posReg, 0x3);
+        positionDcl.push_back(kNamePosition);
+    }
+    const size_t positionAt = lastInputDcl ? lastInputDcl : firstOutputDcl ? firstOutputDcl : tempsAt ? tempsAt : firstInstruction;
+    std::vector<uint32_t> out(prog.begin(), prog.begin() + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == positionAt)
+            out.insert(out.end(), positionDcl.begin(), positionDcl.end());
+        const uint32_t n = length_of(prog.data() + i, length - i);
+        const size_t start = out.size();
+        out.insert(out.end(), prog.begin() + i, prog.begin() + i + n);
+        if (i == positionDclAt && ((prog[i + 1] >> 2) & 3) == 0)
+            out[start + 1] |= 0x3u << 4;
+        i += n;
+    }
+    out[1] = static_cast<uint32_t>(out.size());
+    position->neverWritten |= 0x3;
+    program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                         reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    signature->data = write_signature(inputs);
+    r.bytecode = write_chunks(chunks);
+    return r;
+}
+
 SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options) {
     SlotOutput r;
     std::vector<Chunk> chunks;
@@ -1398,6 +1670,53 @@ bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot
                     if (o.type == kConstantBuffer && o.dims == 2 && o.index0Immediate && o.index0 == slot &&
                         o.index1Representation == 0 && o.index1 < 4096)
                         rows[o.index1 / 64] |= 1ull << (o.index1 % 64);
+                    at += len;
+                }
+            }
+            i += n;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool constant_buffer_colour_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]) {
+    std::fill(std::begin(rows), std::end(rows), 0ull);
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks))
+        return false;
+    for (const Chunk& c : chunks) {
+        if (c.fourcc != fourcc("SHDR") && c.fourcc != fourcc("SHEX"))
+            continue;
+        const size_t words = c.data.size() / 4;
+        if (words < 2)
+            return false;
+        std::vector<uint32_t> t(words);
+        std::memcpy(t.data(), c.data.data(), words * 4);
+        for (size_t i = 2; i < words;) {
+            const uint32_t n = length_of(&t[i], words - i);
+            if (!n || i + n > words)
+                return false;
+            const uint32_t op = opcode_of(t[i]);
+            if (!is_declaration(op)) {
+                const size_t first = operands_at(&t[i], n);
+                if (!first)
+                    return false;
+                for (size_t at = i + first; at < i + n;) {
+                    Operand o;
+                    const size_t len = read_operand(&t[at], i + n - at, o);
+                    if (!len)
+                        return false;
+                    const uint32_t token = t[at];
+                    if (o.type == kConstantBuffer && o.dims == 2 && o.index0Immediate && o.index0 == slot &&
+                        o.index1Representation == 0 && o.index1 < 4096 && (token & 3) == 2 && ((token >> 2) & 3) == 1) {
+                        const uint32_t s = (token >> 4) & 0xff;
+                        unsigned seen = 0;
+                        for (int k = 0; k < 4; ++k)
+                            seen |= 1u << ((s >> (2 * k)) & 3);
+                        if (((seen & 1) + ((seen >> 1) & 1) + ((seen >> 2) & 1) + ((seen >> 3) & 1)) >= 3)
+                            rows[o.index1 / 64] |= 1ull << (o.index1 % 64);
+                    }
                     at += len;
                 }
             }

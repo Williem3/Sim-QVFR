@@ -955,6 +955,36 @@ void real_pixel_shaders(Gpu& g, const char* folder) {
     for (const std::string& f : failed)
         std::printf("     not created: %s\n", f.c_str());
     check(converted > 0 && created == converted, "focus mip bias: every converted game pixel shader is created");
+    // The same shaders through add_own_pixel_loads (the SCS games' signs): which convert, each created.
+    unsigned ownConverted = 0, ownCreated = 0, ownLoads = 0;
+    std::vector<std::string> ownNames;
+    for (const auto& entry : fs::directory_iterator(folder)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("PS_", 0) != 0 || entry.path().extension() != ".dxbc")
+            continue;
+        std::vector<uint8_t> code;
+        if (FILE* f = nullptr; _wfopen_s(&f, entry.path().c_str(), L"rb") == 0 && f) {
+            std::fseek(f, 0, SEEK_END);
+            code.resize(static_cast<size_t>(std::ftell(f)));
+            std::fseek(f, 0, SEEK_SET);
+            code.resize(std::fread(code.data(), 1, code.size(), f));
+            std::fclose(f);
+        }
+        const dxbc::OwnPixelLoads o = dxbc::add_own_pixel_loads(code.data(), code.size());
+        if (o.bytecode.empty())
+            continue;
+        ++ownConverted;
+        ownLoads += static_cast<unsigned>(o.loads);
+        ownNames.push_back(name);
+        ComPtr<ID3D11PixelShader> ps;
+        if (SUCCEEDED(g.device->CreatePixelShader(o.bytecode.data(), o.bytecode.size(), nullptr, &ps)))
+            ++ownCreated;
+    }
+    std::printf("     own pixel loads: %u game pixel shaders converted (%u ld coordinates), %u created\n", ownConverted,
+                ownLoads, ownCreated);
+    for (const std::string& n : ownNames)
+        std::printf("       %s\n", n.c_str());
+    check(ownCreated == ownConverted, "own pixel loads: every converted game pixel shader is created");
 }
 
 // A compiled shader's container with its program chunk replaced by `program` (its signatures kept): malformed programs
@@ -1000,6 +1030,117 @@ std::vector<uint8_t> with_program(const std::vector<uint8_t>& container, std::ve
 }
 
 // Malformed token streams: each refused with an error (the caller keeps the original shader), none read past its end.
+// ---- add_own_pixel_loads: ld at a projected screen position reads the pixel's own texel ----
+
+// A 64x32 R32_FLOAT texture whose texel (x, y) holds x + 100 y. The vertex shader hands every pixel the same "projected
+// position" (w 2, screen 0.25 and 0.75 times w), as an eye's interpolant reaches a focus view's pixels: the game's
+// shader then reads texel (16, 24) everywhere; converted, each pixel its own.
+const char* kOwnVs = R"(
+struct O { float4 pos : SV_Position; float3 s : TEXCOORD3; };
+O main(uint id : SV_VertexID) {
+    O o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    o.s = float3(2, 0.5, 1.5);
+    return o;
+}
+)";
+const char* kOwnPsHead = R"(
+Texture2D<float> t : register(t0);
+cbuffer C : register(b0) { float4 nt; float4 vsz; };
+struct O { float4 pos : SV_Position; float3 s : TEXCOORD3; };
+)";
+
+std::vector<float> own_draw(Gpu& g, const std::vector<uint8_t>& ps) {
+    std::vector<float> texels(64 * 32);
+    for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 64; ++x)
+            texels[y * 64 + x] = static_cast<float>(x + 100 * y);
+    const D3D11_SUBRESOURCE_DATA init = {texels.data(), 64 * 4, 0};
+    D3D11_TEXTURE2D_DESC td = {64, 32, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    ComPtr<ID3D11Texture2D> tex, target, staging;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> shader;
+    const std::vector<uint8_t> vsCode = compile(kOwnVs, "vs_5_0");
+    if (vsCode.empty() || FAILED(g.device->CreateTexture2D(&td, &init, &tex)) ||
+        FAILED(g.device->CreateShaderResourceView(tex.Get(), nullptr, &srv)) ||
+        FAILED(g.device->CreateVertexShader(vsCode.data(), vsCode.size(), nullptr, &vs)) ||
+        FAILED(g.device->CreatePixelShader(ps.data(), ps.size(), nullptr, &shader)))
+        return {};
+    td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (FAILED(g.device->CreateTexture2D(&td, nullptr, &target)) ||
+        FAILED(g.device->CreateRenderTargetView(target.Get(), nullptr, &rtv)))
+        return {};
+    td.Usage = D3D11_USAGE_STAGING;
+    td.BindFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(g.device->CreateTexture2D(&td, nullptr, &staging)))
+        return {};
+    // normalized_to_texture and viewport_size of a full view (the corner's would scale both the same way).
+    const float constants[8] = {1, 1, 1, 1, 64, 32, 1, 1};
+    ComPtr<ID3D11Buffer> cb = constant_buffer(g, constants, sizeof(constants));
+    const D3D11_VIEWPORT viewport = {0, 0, 64, 32, 0, 1};
+    g.context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+    g.context->RSSetViewports(1, &viewport);
+    g.context->IASetInputLayout(nullptr);
+    g.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g.context->VSSetShader(vs.Get(), nullptr, 0);
+    g.context->PSSetShader(shader.Get(), nullptr, 0);
+    g.context->PSSetShaderResources(0, 1, srv.GetAddressOf());
+    g.context->PSSetConstantBuffers(0, 1, cb.GetAddressOf());
+    g.context->Draw(3, 0);
+    g.context->CopyResource(staging.Get(), target.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
+        return {};
+    std::vector<float> out(64 * 32);
+    for (int y = 0; y < 32; ++y)
+        std::memcpy(out.data() + y * 64, static_cast<const uint8_t*>(map.pData) + y * map.RowPitch, 64 * 4);
+    g.context->Unmap(staging.Get(), 0);
+    return out;
+}
+
+void own_pixel_loads_cases(Gpu& g) {
+    // Prism's shape (PS 10395 of ats_signs_frame3536): screen = s.yz / s.x, times normalized_to_texture.xy, times
+    // viewport_size.xy / viewport_size.zw, to an int, ld.
+    const char* body =
+        "float4 main(O i) : SV_Target { float2 uv = i.s.yz / i.s.x; uv = uv * nt.xy; uv = uv * (vsz.xy / vsz.zw);"
+        " int2 p = (int2)uv; return float4(t.Load(int3(p, 0)), 0, 0, 1); }";
+    const std::vector<uint8_t> original = compile((std::string(kOwnPsHead) + body).c_str(), "ps_5_0");
+    const dxbc::OwnPixelLoads c = dxbc::add_own_pixel_loads(original.data(), original.size());
+    check(!original.empty() && !c.bytecode.empty() && c.loads == 1 && dxbc::checksum_ok(c.bytecode.data(), c.bytecode.size()),
+          ("own pixel loads: converted, one ld coordinate (" + c.error + ")").c_str());
+    if (c.bytecode.empty())
+        return;
+    const std::vector<float> before = own_draw(g, original), after = own_draw(g, c.bytecode);
+    const bool drawn = before.size() == 64 * 32 && after.size() == 64 * 32;
+    std::printf("     own pixel loads: pixel 10,20 before %.0f after %.0f; pixel 63,0 before %.0f after %.0f\n",
+                drawn ? before[20 * 64 + 10] : -1, drawn ? after[20 * 64 + 10] : -1, drawn ? before[63] : -1,
+                drawn ? after[63] : -1);
+    check(drawn && before[20 * 64 + 10] == 16 + 2400 && before[63] == 16 + 2400,
+          "own pixel loads: the game's shader reads the interpolant's texel (16, 24) everywhere");
+    bool own = drawn;
+    for (int y = 0; own && y < 32; ++y)
+        for (int x = 0; x < 64; ++x)
+            own = own && after[y * 64 + x] == static_cast<float>(x + 100 * y);
+    check(own, "own pixel loads: converted, every pixel reads its own texel");
+
+    // Refused: the coordinate gains an offset (a refraction's), and no ld at all.
+    const char* offset =
+        "float4 main(O i) : SV_Target { float2 uv = i.s.yz / i.s.x; uv = uv * nt.xy + 0.01;"
+        " int2 p = (int2)(uv * vsz.xy); return float4(t.Load(int3(p, 0)), 0, 0, 1); }";
+    const std::vector<uint8_t> shifted = compile((std::string(kOwnPsHead) + offset).c_str(), "ps_5_0");
+    check(!shifted.empty() && dxbc::add_own_pixel_loads(shifted.data(), shifted.size()).bytecode.empty(),
+          "own pixel loads: a coordinate with an offset is left alone");
+    const std::vector<uint8_t> none = compile((std::string(kOwnPsHead) +
+                                               "float4 main(O i) : SV_Target { return i.s.yzxx / i.s.x; }").c_str(),
+                                              "ps_5_0");
+    check(!none.empty() && dxbc::add_own_pixel_loads(none.data(), none.size()).bytecode.empty(),
+          "own pixel loads: a shader without such an ld is left alone");
+}
+
 void malformed_cases() {
     const std::vector<uint8_t> vs = compile(kPassThrough, "vs_4_0");
     const std::vector<uint8_t> ps = compile(
@@ -1159,6 +1300,27 @@ void position_remap_cases(Gpu& g) {
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
+    if (argc > 3 && std::strcmp(argv[1], "--own-pixel-loads") == 0) {  // <in.dxbc> <out.dxbc>: one shader converted
+        std::vector<uint8_t> code;
+        if (FILE* f = nullptr; fopen_s(&f, argv[2], "rb") == 0 && f) {
+            std::fseek(f, 0, SEEK_END);
+            code.resize(static_cast<size_t>(std::ftell(f)));
+            std::fseek(f, 0, SEEK_SET);
+            code.resize(std::fread(code.data(), 1, code.size(), f));
+            std::fclose(f);
+        }
+        const dxbc::OwnPixelLoads o = dxbc::add_own_pixel_loads(code.data(), code.size());
+        if (o.bytecode.empty()) {
+            std::printf("not converted: %s\n", o.error.c_str());
+            return 1;
+        }
+        if (FILE* f = nullptr; fopen_s(&f, argv[3], "wb") == 0 && f) {
+            std::fwrite(o.bytecode.data(), 1, o.bytecode.size(), f);
+            std::fclose(f);
+        }
+        std::printf("converted: %d loads\n", o.loads);
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--hardware") == 0) {  // this PC's GPU instead of WARP
         driverType = D3D_DRIVER_TYPE_HARDWARE;
         --argc;
@@ -1228,6 +1390,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     instanced_cases(g, plain, pixel);
     mip_bias_cases(g);
     position_remap_cases(g);
+    own_pixel_loads_cases(g);
     if (argc > 1) {  // a game's shaders: vertex ones (logs\shaders of a probe run with lmu_mvr_dump=1) both ways, pixel
         real_shaders(g, argv[1]);  // ones through the focus mip bias
         real_pixel_shaders(g, argv[1]);

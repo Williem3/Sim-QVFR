@@ -823,7 +823,12 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
     };
     const auto percent = [](double v) { return formatted(L"%.0f", v); };
     const SessionInfo& session = rt.session;
-    if (s.eyeTracking && rt.eyeTracker == EyeTracker::Missing)
+    if (s.eyeTracking && rt.eyeTracker == EyeTracker::Missing && rt.sessionFocus == 0)
+        add(I18N(L"Eye tracking is on, but the headset runtime never gave the game input focus"), {},
+            I18N(L"OpenXR sends the eye gaze only to the app in focus, so the focus area stayed in the centre. Close "
+                 L"the runtime's dashboard and any overlay or gaze app (OSC bridges, gaze viewers) before the game; "
+                 L"the session log says \"never FOCUSED\"."));
+    else if (s.eyeTracking && rt.eyeTracker == EyeTracker::Missing)
         add(I18N(L"Eye tracking is on, but the tracker sent nothing last session"), {},
             I18N(L"The focus area stayed in the centre. Start the headset's eye tracking (and calibrate it) "
                  L"before the game, or choose Fixed in Foveation."));
@@ -922,7 +927,7 @@ std::wstring issue_details(const IssueReport& r) {
          std::wstring(rt.eyeTracker == EyeTracker::Detected  ? L"detected"
                       : rt.eyeTracker == EyeTracker::Missing ? L"no samples"
                                                              : L"not known") +
-         L"\n";
+         (rt.sessionFocus == 0 ? L" (the session never got input focus from the runtime)" : L"") + L"\n";
     b += L"- **Method:** " + std::wstring(qvfr ? L"Quad View Foveated Rendering (QVFR)" : L"Two-loop Foveated Interlaced") +
          L", " + (s.eyeTracking ? L"eye tracked" : L"fixed") + L"\n";
     std::wstring res = qvfr ? L"outer " + number(s.outer) + L"%, focus density " + number(s.inner) + L"%"

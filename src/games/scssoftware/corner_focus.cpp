@@ -490,8 +490,57 @@ void focus_draw() {
     g.context->VSSetShader(twin, nullptr, 0);
     twin->Release();
     g.gameVs = vs;  // put back after the draw
+    own_pixel_loads();
     mark_bound_written();
     ++g.focusDraws;
+}
+
+// A pixel shader that reads the lit image and the G-buffer at its own pixel through the eye's projected position: its
+// twin reads them at SV_Position (dxbc::add_own_pixel_loads), the same texel in the eye view and the focus region's in
+// the focus view (the eye's corner before: ATS's regulatory signs a mosaic in the box at the periphery's resolution,
+// RenderDoc 2026-11-22). Only while every eye-sized input is full size: SV_Position addresses the targets' own pixels,
+// not a half-size texture's. Put back after the draw (on_draw_after).
+void own_pixel_loads() {
+    if (!g.ownPixelLoads || g.gamePs)
+        return;
+    ID3D11PixelShader* ps = nullptr;
+    g.context->PSGetShader(&ps, nullptr, nullptr);
+    if (!ps)
+        return;
+    ComPtr<ID3D11PixelShader> twin;
+    {
+        IUnknown* stored = nullptr;
+        UINT size = sizeof(stored);
+        if (SUCCEEDED(ps->GetPrivateData(lmu::kOwnPixelLoadsTwinGuid, &size, &stored)) && stored) {
+            stored->QueryInterface(IID_PPV_ARGS(twin.GetAddressOf()));
+            stored->Release();
+        }
+    }
+    if (!twin) {
+        ps->Release();
+        return;
+    }
+    constexpr UINT kSlots = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
+    ID3D11ShaderResourceView* views[kSlots] = {};
+    g.context->PSGetShaderResources(0, kSlots, views);
+    bool fullSize = true;
+    for (ID3D11ShaderResourceView* v : views) {
+        if (!v)
+            continue;
+        unsigned w = 0, h = 0;
+        size_of(v, w, h);
+        if (w && eye_shaped(w, h) && (w != g.eyeW || h != g.eyeH))
+            fullSize = false;
+        v->Release();
+    }
+    if (!fullSize) {
+        ++g.ownLoadSkips;
+        ps->Release();
+        return;
+    }
+    g.context->PSSetShader(twin.Get(), nullptr, 0);
+    g.gamePs = ps;  // put back after the draw (the reference kept)
+    ++g.ownLoadDraws;
 }
 
 // A draw whose shader focus_draw swapped for its instanced twin: drawn here with twice its instances, in the game's place.

@@ -109,7 +109,7 @@ constexpr MenuProfile kMenuProfiles[] = {
 }  // namespace
 
 // Gaze (and menu) actions. Also with gaze off at launch, so gaze can be turned on live.
-void gaze_init(XrInstance instance) {
+void gaze_init(XrInstance instance, bool extensionEnabled) {
     {
         // Handles and suggestions belong to one instance. ACE creates a short-lived instance before its
         // real one, and an action from the destroyed instance in the real one's suggestion made the
@@ -128,6 +128,7 @@ void gaze_init(XrInstance instance) {
         attachedAlone = false;
         gaze.appSyncs = 0;
         gaze.space = XR_NULL_HANDLE;
+        gaze.extensionEnabled = extensionEnabled;
     }
     if ((!experiment.quad && !experiment.composing() && !game->wants_gaze()) || !next.CreateActionSet)
         return;
@@ -283,6 +284,84 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
     return next.AttachSessionActionSets(session, info);
 }
 
+void gaze_session_created(XrInstance instance, XrSystemId system) {
+    bool extension = false;
+    {
+        std::lock_guard guard(gaze.mutex);
+        gaze.sessionState = XR_SESSION_STATE_UNKNOWN;
+        gaze.visibleQpc = 0;
+        gaze.everFocused = gaze.unfocusedLogged = false;
+        gaze.focusedQueries = 0;
+        gaze.wantedQueries = 0;
+        extension = gaze.extensionEnabled && gaze.set;
+    }
+    runtime_info(L"session_focus", L"");  // this launch's answer, not the last one's (VISIBLE: 0, FOCUSED: 1)
+    if (!extension)
+        return;
+    // The system's eye gaze support: a runtime can list the extension for a headset with no eye tracker.
+    PFN_xrVoidFunction function = nullptr;
+    if (!next.GetInstanceProcAddr ||
+        XR_FAILED(next.GetInstanceProcAddr(instance, "xrGetSystemProperties", &function)) || !function)
+        return;
+    XrSystemEyeGazeInteractionPropertiesEXT eyeGaze{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};
+    XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES};
+    properties.next = &eyeGaze;
+    const XrResult r = reinterpret_cast<PFN_xrGetSystemProperties>(function)(instance, system, &properties);
+    if (XR_SUCCEEDED(r))
+        logf("gaze: the system (%s) %s eye gaze interaction", properties.systemName,
+             eyeGaze.supportsEyeGazeInteraction ? "supports" : "does NOT support");
+    else
+        logf("gaze: the system's eye gaze support unknown (xrGetSystemProperties %d)", r);
+}
+
+namespace {
+
+constexpr int64_t kUnfocusedLogMs = 10'000;  // VISIBLE this long without FOCUSED: logged once
+
+// The session's state for the gaze: FOCUSED (actions active) or not. From layerPollEvent.
+void gaze_session_state(XrSessionState state) {
+    bool focusedFirst = false, visibleFirst = false;
+    {
+        std::lock_guard guard(gaze.mutex);
+        gaze.sessionState = state;
+        if (state == XR_SESSION_STATE_FOCUSED) {
+            focusedFirst = !gaze.everFocused;
+            if (focusedFirst)
+                gaze.focusedQueries = gaze.queries;
+            gaze.everFocused = true;
+            gaze.visibleQpc = 0;
+        } else if (state == XR_SESSION_STATE_VISIBLE) {
+            gaze.visibleQpc = qpc_now();
+            visibleFirst = !gaze.everFocused;
+        } else {
+            gaze.visibleQpc = 0;
+        }
+    }
+    if (focusedFirst)
+        runtime_info(L"session_focus", L"1");
+    else if (visibleFirst)
+        runtime_info(L"session_focus", L"0");
+}
+
+// Once: the session VISIBLE for kUnfocusedLogMs and never FOCUSED (checked at every xrPollEvent).
+void gaze_unfocused_check() {
+    bool log = false;
+    {
+        std::lock_guard guard(gaze.mutex);
+        if (gaze.everFocused || gaze.unfocusedLogged || !gaze.visibleQpc ||
+            qpc_now() - gaze.visibleQpc < qpc_ms(kUnfocusedLogMs))
+            return;
+        gaze.unfocusedLogged = log = true;
+    }
+    if (log)
+        logf("session state: VISIBLE for %lld s and never FOCUSED: the runtime keeps input focus from the game, so "
+             "OpenXR actions (the eye gaze among them) stay inactive and the focus area stays in the centre (a "
+             "dashboard, overlay or other app holding focus?)",
+             static_cast<long long>(kUnfocusedLogMs / 1000));
+}
+
+}  // namespace
+
 // Session state and interaction profile changes, for the log (actions are only active while the session is FOCUSED).
 XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event) {
     const XrResult r = next.PollEvent(instance, event);
@@ -292,10 +371,12 @@ XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event
                                                   "FOCUSED", "STOPPING", "LOSS_PENDING", "EXITING"};
             const auto state = reinterpret_cast<const XrEventDataSessionStateChanged*>(event)->state;
             logf("session state: %s", state >= 0 && state < 9 ? kStates[state] : "?");
+            gaze_session_state(state);
         } else if (event->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
             log_line("input: interaction profile changed");
         }
     }
+    gaze_unfocused_check();
     return r;
 }
 

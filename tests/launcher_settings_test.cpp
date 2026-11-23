@@ -431,6 +431,13 @@ int SIM_QVFR_TEST_MAIN() {
         const RuntimeInfo rt = load_runtime_info(runtimeIni);
         check(rt.known() && rt.width == 2584 && rt.height == 2160 && rt.maxWidth == 8192 && rt.eyeTracker == EyeTracker::Missing,
               "runtime report: recommended size, maximum and a missing eye tracker");
+        check(rt.sessionFocus == -1, "runtime report: input focus not known without session_focus");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nsession_focus=\r\n");
+        check(load_runtime_info(runtimeIni).sessionFocus == -1, "runtime report: an empty session_focus is not known (not 0)");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nsession_focus=0\r\n");
+        check(load_runtime_info(runtimeIni).sessionFocus == 0, "runtime report: a session that never got input focus");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nsession_focus=1\r\n");
+        check(load_runtime_info(runtimeIni).sessionFocus == 1, "runtime report: a session with input focus");
         const Readouts r = readouts(Settings{}, rt);
         check(r.centerPpd == 0, "readouts: no Center PPD before the layer reports it");
         RuntimeInfo withPpd = rt;

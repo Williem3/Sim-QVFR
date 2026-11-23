@@ -364,7 +364,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             add({MenuItem::ShapePoint, MenuItem::ShapePointY, MenuItem::ShapePointX});
         else
             items.push_back(MenuItem::Corners);
-        add({MenuItem::Feather, MenuItem::FocusOffset, MenuItem::FocusOffsetX});
+        items.push_back(MenuItem::Feather);
+        if (!l.runtimeComposes)  // the runtime places the focus area in its own focus region: the offsets do nothing
+            add({MenuItem::FocusOffset, MenuItem::FocusOffsetX});
         if (v.eyeTracking)
             items.push_back(MenuItem::GazeDeadzone);
         if (l.qvfr && l.focusQuads)  // focus_layer=2's test

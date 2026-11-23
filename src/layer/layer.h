@@ -29,7 +29,9 @@ bool gaze_skips_space(XrSpace space, XrTime time);
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space);
 XrResult XRAPI_CALL layerDestroySpace(XrSpace space);
 XrVector3f rotate(const XrQuaternionf& q, const XrVector3f& v);
-void gaze_init(XrInstance instance);
+void gaze_init(XrInstance instance, bool extensionEnabled = true);
+// At xrCreateSession: the session's focus state reset, and the system's eye gaze support logged (with the extension).
+void gaze_session_created(XrInstance instance, XrSystemId system);
 std::string path_name(XrInstance instance, XrPath path);
 XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested);
