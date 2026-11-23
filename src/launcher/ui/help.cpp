@@ -156,8 +156,8 @@ constexpr Help kHelp[] = {
      L"and the position doesn’t apply.")},
     {I18N(L"Road widening"),
      I18N(L"How much Road focus’s sharp road widens with distance, in degrees either side, so a bend curving away far "
-     L"ahead (Eau Rouge, a hairpin, the pit exit) stays in full detail. 0 keeps the road’s width all the way and saves "
-     L"the most, but a far bend can turn soft; higher catches tighter bends and brings more of the far scenery into "
+     L"ahead (Eau Rouge, a hairpin, the pit exit) stays in full detail. Lower saves more, but a far bend can turn soft; "
+     L"higher catches tighter bends and brings more of the far scenery into "
      L"the focus area, saving less. 15° suits most circuits. Changes while you drive.")},
     {I18N(L"Road edge blend"),
      I18N(L"How softly Road focus’s full detail fades into the periphery at its edges: this many metres near you, wider in "

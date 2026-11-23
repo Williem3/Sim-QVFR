@@ -1612,13 +1612,13 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         pick(r, MenuItem::FocusCorridorSpread);
         for (int i = 0; i < 40; ++i)
             menu_key(r, MenuKey::Right);
-        check(r.values.focusCorridorSpread == 30 && !menu_key(r, MenuKey::Right) &&
-                  line_of(r, MenuItem::FocusCorridorSpread).value == L"30°",
-              "road widening: up to 30 degrees, a degree a step");
+        check(r.values.focusCorridorSpread == 25 && !menu_key(r, MenuKey::Right) &&
+                  line_of(r, MenuItem::FocusCorridorSpread).value == L"25°",
+              "road widening: up to 25 degrees, a degree a step");
         for (int i = 0; i < 40; ++i)
             menu_key(r, MenuKey::Left);
-        check(r.values.focusCorridorSpread == 0, "road widening: down to 0 (straight)");
-        r.values.focusCorridorSpread = 7;
+        check(r.values.focusCorridorSpread == 10, "road widening: down to 10 (below it corners fall out)");
+        r.values.focusCorridorSpread = 12;
         pick(r, MenuItem::FocusCorridorShow);
         check(menu_key(r, MenuKey::Right) && r.values.focusCorridorShow, "show road focus area: switches on");
         r.values.focusCorridorBlend = kFocusCorridorBlend.def;
@@ -1736,7 +1736,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, true);
         const MenuValues back = read_menu_values(ini.c_str());
         check(!back.focusCorridor && back.focusCorridorWidth == 5 && back.focusCorridorHeight == 20 &&
-                  back.focusCorridorSpread == 7 &&
+                  back.focusCorridorSpread == 12 &&
                   GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == 0,
               "road focus: written for a game with it, and read back");
         DeleteFileW(ini.c_str());
