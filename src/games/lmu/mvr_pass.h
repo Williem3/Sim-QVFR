@@ -152,6 +152,9 @@ void mvr_corridor_car(float metres);
 // The corridor's widening with distance: past its start its half width grows by tan(`degrees`) a metre ahead, so the road
 // stays inside where it bends away from the head's line far ahead (0: a straight band). Between frames.
 void mvr_corridor_spread(float degrees);
+// Past a crest: what lies further on than the road seen beneath it may lie lower by `percent` of the distance between
+// them (the steepest downhill grade taken), so the road and cars beyond a dip stay inside. Between frames.
+void mvr_corridor_drop(float percent);
 // The corridor edge's blend growing with distance: `percent` of a point's distance added to the near blend (featherM),
 // so the far edge fades over a few degrees instead of a pixel or two. Between frames.
 void mvr_corridor_feather_growth(float percent);

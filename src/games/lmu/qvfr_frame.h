@@ -107,6 +107,8 @@ struct QvfrFrameRun {
     int corridorSpreadDeg = -1;
     // lmu_corridor_feather_growth_pct: the corridor edge's blend grows by that percent of the distance (far edges soft).
     int corridorFeatherGrowthPct = 3;
+    // lmu_corridor_drop_pct: past a crest, how steeply the road may fall out of sight (percent grade; 0 the old floor).
+    int corridorDropPct = 15;
     float corridorHalfM = 0, corridorTallM = 0, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
     float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
     // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)

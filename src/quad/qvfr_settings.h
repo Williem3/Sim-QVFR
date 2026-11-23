@@ -49,8 +49,9 @@ inline constexpr IniInt kFocusCorridorWidth{L"quad", L"focus_corridor_width", 10
 // and the grandstands' lower rows too, less saved).
 inline constexpr IniInt kFocusCorridorHeight{L"quad", L"focus_corridor_height", 35, 20, 80, 5};
 // Road widening: degrees either side the corridor opens by with distance past its start, so a bend leaving the head's
-// line far ahead (Eau Rouge, a hairpin, the pit exit) stays inside; 0 straight (saves the most, far bends go soft).
-inline constexpr IniInt kFocusCorridorSpread{L"quad", L"focus_corridor_spread", 15, 0, 30, 1};
+// line far ahead (Eau Rouge, a hairpin, the pit exit) stays inside. 10-25: below ~10 the corridor is a straight band
+// again and corners fall out (a 1-degree run at Spa, 2026-11-23); above 25 it takes in most of the far scenery.
+inline constexpr IniInt kFocusCorridorSpread{L"quad", L"focus_corridor_spread", 15, 10, 25, 1};
 // The cockpit preset Road focus sets when it's switched on (quad/road_focus_shape.h): 0 A, 1 B.
 inline constexpr IniInt kFocusCorridorPreset{L"quad", L"focus_corridor_preset", 0, 0, 1, 1};
 // Road edge blend: how soft its edges are, tenths of a metre near (growing with distance in proportion); 0 a hard edge.

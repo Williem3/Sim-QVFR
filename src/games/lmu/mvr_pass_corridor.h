@@ -169,7 +169,7 @@ bool corridor_constants(int p, float (&k)[kCorridorConstants], float (&upV)[3]) 
                                           g.appliedVps[1].TopLeftX, g.appliedVps[1].TopLeftY, 0,
                                           static_cast<float>(std::tan(std::clamp(c.spreadDeg, 0.0f, 60.0f) * 3.14159265 / 180)),
                                           0, 0, 0, 0,
-                                          c.coverage ? 1.0f : 0.0f, 0, 0, 0};
+                                          c.coverage ? 1.0f : 0.0f, (std::max)(c.dropTan, 0.0f), 0, 0};
     std::memcpy(k, k2, sizeof(k2));
     // The stamp the fill looks for: this pass's if its mask ran, else one no texel holds yet (the next).
     const uint32_t stamp = c.maskedThisPass[p] ? c.stamp[p] : c.stamp[p] + 1;
@@ -431,7 +431,7 @@ void corridor_copy(ID3D11DeviceContext* context, ID3D11DepthStencilView* dsv) {
                                          D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
         const D3D11_TEXTURE2D_DESC md = {w, h, 1, 1, DXGI_FORMAT_R16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                          D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
-        const D3D11_TEXTURE2D_DESC gd = {gw, gh, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+        const D3D11_TEXTURE2D_DESC gd = {gw, gh, 1, 1, DXGI_FORMAT_R32G32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
                                          D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0};
         const D3D11_BUFFER_DESC sd = {gw * 2 * sizeof(float), D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
                                       D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 2 * sizeof(float)};

@@ -155,6 +155,7 @@ public:
                 // Missing: the player's [quad] focus_corridor_spread (live).
                 run.corridorSpreadDeg = std::clamp(key(L"lmu_corridor_spread_deg", -1), -1, 60);
                 run.corridorFeatherGrowthPct = std::clamp(key(L"lmu_corridor_feather_growth_pct", 3), 0, 50);
+                run.corridorDropPct = std::clamp(key(L"lmu_corridor_drop_pct", 15), 0, 100);
                 run.corridorSlopeDeg = static_cast<float>(std::clamp(key(L"lmu_corridor_road_slope_deg", 35), 5, 75));
                 run.corridorCentreM = (std::max)(0, key(L"lmu_corridor_centre_cm", 600)) / 100.0f;
                 run.mvrTiming = run.mvrTiming || run.corridorAb > 0;
