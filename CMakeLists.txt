@@ -273,6 +273,15 @@ if(SIM_QVFR_NGX)
   target_compile_definitions(lmu_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(lmu_dlss_check PRIVATE /W4 /permissive- /utf-8)
   target_link_libraries(lmu_dlss_check PRIVATE sim_qvfr_core d3d11)
+  # The lights' glow under DLSS: bloom kept, strobe, spread (tests/lmu_glow_check.cpp), and what its lower exposure
+  # costs the rest of the picture (tests/dlss_exposure_check.cpp).
+  foreach(glow_check lmu_glow_check dlss_exposure_check)
+    sim_qvfr_test(${glow_check} tests/${glow_check}.cpp)
+    target_include_directories(${glow_check} PRIVATE src ${THIRD_PARTY}/openxr/include)
+    target_compile_definitions(${glow_check} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(${glow_check} PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(${glow_check} PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+  endforeach()
 endif()
 
 # Hardware check of DLSS-NR on the views (tests/nr_views_check.cpp): not in the suite, NGX SDK builds only; needs the

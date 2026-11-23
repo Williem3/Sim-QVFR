@@ -302,6 +302,8 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
                kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, e.textureSharpening, true)].name,
                kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, f.textureSharpening, true)].name);
         on_off(L"Other cars’ motion", e.carVectors, f.carVectors);
+        values(L"Light glow", kDlssLightGlow[dlss_choice_index(kDlssLightGlow, e.lightGlow, true)].name,
+               kDlssLightGlow[dlss_choice_index(kDlssLightGlow, f.lightGlow, true)].name);
     }
     // DLSS-NR on those views: the switch, and one line for its options (preset, style, the sliders, the periphery).
     on_off(L"Use DLSS-NR", a.nr.on, b.nr.on);

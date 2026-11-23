@@ -233,45 +233,6 @@ SamplerState linearClamp : register(s0);
 float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearClamp, pos.xy / js.zw, 0); }
 )";
 
-// Highlights kept (DlssRun::keepHighlights): DLSS's output with the drawn view's brightest texels put back where DLSS
-// averaged them down. js: the drawn view's width, height (xy) and the output's (zw); extra: the floor, the ratio, the
-// strength. The drawn texel is the output's own at DLAA, the nearest at super resolution; its 3x3 brightest is taken
-// (the jitter moves a light's peak by up to half a texel). Hue as drawn (each channel's max), alpha DLSS's.
-inline constexpr char kHighlightShader[] = R"(
-cbuffer C : register(b0) {
-    row_major float4x4 R;
-    row_major float4x4 R2;
-    float4 js;
-    float4 origin;
-    float4 extra;
-};
-Texture2D<float4> dlssOut : register(t0);
-Texture2D<float4> drawn : register(t1);
-float luma(float3 c) { return dot(max(c, 0), float3(0.2126, 0.7152, 0.0722)); }
-float4 ps(float4 pos : SV_Position) : SV_Target {
-    const int2 p = int2(pos.xy);
-    const float4 o = dlssOut.Load(int3(p, 0));
-    const int2 q = int2(pos.xy * js.xy / js.zw);
-    const int2 last = int2(js.xy) - 1;
-    float peakL = 0;
-    [unroll] for (int y = -1; y <= 1; ++y)
-        [unroll] for (int x = -1; x <= 1; ++x)
-            peakL = max(peakL, luma(drawn.Load(int3(clamp(q + int2(x, y), int2(0, 0), last), 0)).rgb));
-    const float3 r = drawn.Load(int3(q, 0)).rgb;  // this texel as drawn: what comes back
-    const float rL = luma(r);
-    const float oL = luma(o.rgb);
-    // Only a light's peak: bright in itself and well above what DLSS left, and the texel the neighbourhood's peak (or
-    // near it), not the dark side of an edge.
-    float w = saturate((rL - extra.x) / max(extra.x, 1e-4));
-    w *= saturate((rL - extra.y * oL) / max(extra.y * oL, 1e-4));
-    w *= saturate(rL / max(peakL, 1e-6) * 2 - 1);
-    w *= extra.z;
-    if (!(w > 0))  // NaN-safe
-        return o;
-    return float4(lerp(o.rgb, max(o.rgb, r), w), o.a);
-}
-)";
-
 // The focus view after DLSS where the game drew only part of it (DlssPass::focusKeep, focusBandTop): what isn't kept
 // takes the eye's image as DLSS made it, through the focus view's clip remap (unjittered both), bilinear from our copy
 // of the eye's region under the focus view; alpha the eye's share (blended over the focus view), kept texels discarded.

@@ -146,6 +146,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::DlssFocusPreset, I18N(L"Focus preset"), 0, 0, 1},
     {MenuItem::DlssEyePreset, I18N(L"Periphery preset"), 0, 0, 1},
     {MenuItem::DlssSharpening, I18N(L"Texture sharpening"), 0, 0, 1},
+    {MenuItem::DlssLightGlow, I18N(L"Light glow"), 0, 0, 1},
     // The DLSS-NR page (engine/nr_settings.h's ranges).
     {MenuItem::NrOn, I18N(L"Use DLSS-NR"), 0, 1, 1},
     {MenuItem::NrIntensity, I18N(L"Intensity"), 0, 100, 5},
@@ -399,9 +400,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             if (v.dlss.on && l.fsr && !l.fsrPc)
                 items.push_back(MenuItem::DlssUpscaler);
             if (v.dlss.on && fsr)
-                add({MenuItem::DlssFocusMode, MenuItem::DlssSharpening});
+                add({MenuItem::DlssFocusMode, MenuItem::DlssSharpening, MenuItem::DlssLightGlow});
             else if (v.dlss.on)
-                add({MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset, MenuItem::DlssSharpening});
+                add({MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset, MenuItem::DlssSharpening,
+                     MenuItem::DlssLightGlow});
             if (l.ownNr) {
                 add({MenuItem::HeadNr, MenuItem::NrOn});
                 if (v.nr.on) {
@@ -581,6 +583,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         const int before = dl.textureSharpening;
         dl.textureSharpening = dlss_choice_step(kDlssTextureSharpening, dl.textureSharpening, step);
         return dl.textureSharpening != before;
+    }
+    case MenuItem::DlssLightGlow: {  // off, low, high (no wrap)
+        const int before = dl.lightGlow;
+        dl.lightGlow = dlss_choice_step(kDlssLightGlow, dl.lightGlow, step);
+        return dl.lightGlow != before;
     }
     case MenuItem::CheekyProcessing: c.processing = !c.processing; return true;
     case MenuItem::CheekyOuterDlaa: c.outerDlaa = !c.outerDlaa; return true;
@@ -1151,6 +1158,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = w.t(dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset));
         else if (items[i] == MenuItem::DlssSharpening)
             line.value = w.t(dlss_choice_name(kDlssTextureSharpening, v.dlss.textureSharpening));
+        else if (items[i] == MenuItem::DlssLightGlow)
+            line.value = w.t(dlss_choice_name(kDlssLightGlow, v.dlss.lightGlow));
         else if (items[i] == MenuItem::FgOn)
             line.value = on_off(c.fg);
         else if (items[i] == MenuItem::FgMultiplier)

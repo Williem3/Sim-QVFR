@@ -78,14 +78,6 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1; focus 0 and 1 over a b
     unsigned long long beforeFrame = 0;
     bool haveBefore = false;
     unsigned beforeBandTop = 0;  // a band's top row in the frame before (its vectors carry the move)
-    // Highlights kept (DlssRun::keepHighlights, keep_highlights): the view as drawn (w x h), DLSS's output read, and the
-    // two merged (ow x oh), made for this size and format.
-    ComPtr<ID3D11Texture2D> hlDrawn, hlMerged;
-    ComPtr<ID3D11ShaderResourceView> hlDrawnSrv, hlOutputSrv;
-    ComPtr<ID3D11RenderTargetView> hlMergedRtv;
-    unsigned hlSize[4] = {};
-    DXGI_FORMAT hlFormat = DXGI_FORMAT_UNKNOWN;
-    bool hlRefused = false;
     unsigned long long runs = 0;  // frames this view went through DLAA at this size
     // A live size change waiting to settle (ensure): the size asked and since when (GetTickCount64), and whether this
     // frame's view was left as drawn for it (not a failure).
@@ -111,8 +103,9 @@ struct State {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch, bandOutside;
-    ComPtr<ID3D11PixelShader> highlights;  // keep_highlights' (null: not made; DLSS's output copied as it is)
-    unsigned long long highlightViews = 0;  // views merged with their highlights this launch
+    // Views evaluated at a lowered exposure (the lights' glow) since the last line, and since the module started.
+    unsigned long long glowViews = 0, glowViewsTotal = 0;
+    bool glowFsrSaid = false;  // the glow asked for while FSR runs the views (not under FSR), said once
     // The vectors with our single-sample depth copy beside multisample object slots; the copy's and the measurement's.
     ComPtr<ID3D11PixelShader> vectorsCopyMs, depthCopyMs, depthCopySs, measureMs, measureSs, keepFarMs, keepFarSs;
     ComPtr<ID3D11Buffer> constants;
@@ -269,15 +262,9 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
     const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
     const auto bandOutside = compile(kBandOutsideShader, "ps", "ps_5_0", nullptr);
-    if (d.cfg.keepHighlights) {  // optional: without it DLSS's output goes back as it is
-        const auto highlights = compile(kHighlightShader, "ps", "ps_5_0", nullptr);
-        if (!highlights || FAILED(d.device->CreatePixelShader(highlights->GetBufferPointer(), highlights->GetBufferSize(),
-                                                              nullptr, &d.highlights)))
-            say("highlights kept asked for, but its shader couldn't be made: off");
-        else
-            say("highlights kept: floor %.2f, ratio %.2f, strength %.2f", d.cfg.highlightFloor, d.cfg.highlightRatio,
-                d.cfg.highlightStrength);
-    }
+    say("the lights' glow: %d%% (DLSS's exposure x%.4f; low x%.4f, high x%.4f)", d.cfg.lightGlow,
+        dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh), d.cfg.glowScaleLow,
+        d.cfg.glowScaleHigh);
     const D3D_SHADER_MACRO bothMs[] = {{"MS", "1"}, {"DEPTH_MS", "1"}, {nullptr, nullptr}};
     const auto psBoth = compile(kVectorsShader, "ps", "ps_5_0", bothMs);
     const auto copyMs = compile(kDepthCopyShader, "ps", "ps_5_0", ms);
@@ -759,63 +746,6 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
                       d.frame, index, s.width, s.height, text[0], text[1]);
 }
 
-// DlssRun::keepHighlights: the view's DLSS output (s.output, ow x oh) merged with the view as the game drew it (w x h at
-// (x, y) of `resolved`, still there: DLSS wrote its own texture) and the merge put in the output's place. Inside
-// dlss_after_resolve's state guard, as run_view. False: not done (off, or its textures couldn't be made: the caller
-// copies the output as it is).
-bool keep_highlights(ID3D11DeviceContext* context, Slot& s, ID3D11Resource* resolved, DXGI_FORMAT format, unsigned x,
-                     unsigned y, unsigned w, unsigned h, unsigned ow, unsigned oh) {
-    if (!d.cfg.keepHighlights || !d.highlights || !s.output || d.cfg.highlightStrength <= 0)
-        return false;
-    const unsigned size[4] = {w, h, ow, oh};
-    if (std::memcmp(size, s.hlSize, sizeof(size)) != 0 || s.hlFormat != format) {
-        std::memcpy(s.hlSize, size, sizeof(size));
-        s.hlFormat = format;
-        s.hlDrawn.Reset();
-        s.hlMerged.Reset();
-        s.hlDrawnSrv.Reset();
-        s.hlOutputSrv.Reset();
-        s.hlMergedRtv.Reset();
-        s.hlRefused = !(make(s.hlDrawn, w, h, format, D3D11_BIND_SHADER_RESOURCE) &&
-                        make(s.hlMerged, ow, oh, format, D3D11_BIND_RENDER_TARGET) &&
-                        SUCCEEDED(d.device->CreateShaderResourceView(s.hlDrawn.Get(), nullptr, &s.hlDrawnSrv)) &&
-                        SUCCEEDED(d.device->CreateShaderResourceView(s.output.Get(), nullptr, &s.hlOutputSrv)) &&
-                        SUCCEEDED(d.device->CreateRenderTargetView(s.hlMerged.Get(), nullptr, &s.hlMergedRtv)));
-        if (s.hlRefused)
-            say("highlights kept: a view's textures (%ux%u to %ux%u, format %d) couldn't be made: copied as DLSS left it",
-                w, h, ow, oh, static_cast<int>(format));
-    }
-    if (s.hlRefused)
-        return false;
-    const D3D11_BOX box{x, y, 0, x + w, y + h, 1};
-    context->CopySubresourceRegion(s.hlDrawn.Get(), 0, 0, 0, 0, resolved, 0, &box);
-    Constants c{};
-    c.js[0] = static_cast<float>(w);
-    c.js[1] = static_cast<float>(h);
-    c.js[2] = static_cast<float>(ow);
-    c.js[3] = static_cast<float>(oh);
-    c.extra[0] = static_cast<float>(d.cfg.highlightFloor);
-    c.extra[1] = static_cast<float>(d.cfg.highlightRatio);
-    c.extra[2] = static_cast<float>(d.cfg.highlightStrength);
-    context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
-    context->RSSetState(nullptr);
-    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-    context->OMSetDepthStencilState(nullptr, 0);
-    context->GSSetShader(nullptr, nullptr, 0);
-    context->HSSetShader(nullptr, nullptr, 0);
-    context->DSSetShader(nullptr, nullptr, 0);
-    context->OMSetRenderTargets(1, s.hlMergedRtv.GetAddressOf(), nullptr);
-    ID3D11ShaderResourceView* srvs[2] = {s.hlOutputSrv.Get(), s.hlDrawnSrv.Get()};
-    context->PSSetShaderResources(0, 2, srvs);
-    draw_triangle(context, d.highlights.Get(), ow, oh);
-    context->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* none[2] = {};
-    context->PSSetShaderResources(0, 2, none);
-    context->CopySubresourceRegion(resolved, 0, x, y, 0, s.hlMerged.Get(), 0, nullptr);
-    ++d.highlightViews;
-    return true;
-}
-
 // One view: its depth and vectors drawn, its part of the resolved scene (w x h at (x, y)) through DLSS and back into
 // place at ow x oh (DLAA: the same). False: not done (the view as it was drawn).
 bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
@@ -952,6 +882,10 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         fe.fovY = camera.fovY;
         fe.frameMs = static_cast<float>(d.frameMs);
         done = fsr::evaluate(context, s.fsrView, fe, result);
+        if (d.cfg.lightGlow > 0 && !d.glowFsrSaid) {
+            d.glowFsrSaid = true;
+            say("the lights' glow: not under AMD FSR (its auto exposure has no scale): the views as FSR makes them");
+        }
     } else {
         ngx::Evaluation e;
         e.colour = resolved;
@@ -965,11 +899,15 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         e.jitterX = jx;
         e.jitterY = jy;
         e.reset = !history;
+        e.exposureScale = static_cast<float>(dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
         done = ngx::evaluate(context, s.feature, e, result);
+        if (done && e.exposureScale != 1) {
+            ++d.glowViews;
+            ++d.glowViewsTotal;
+        }
     }
     if (done) {
-        if (!keep_highlights(context, s, resolved, format, x, y, w, h, ow, oh))
-            context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
+        context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
         if (nr_view_wanted(index) && !nr_before_dlss())
             neural(ow, oh);
         ++d.evaluations;
@@ -1748,7 +1686,6 @@ void dlss_shutdown() {
     std::memset(d.stretchSize, 0, sizeof(d.stretchSize));
     d.constants.Reset();
     d.linearClamp.Reset();
-    d.highlights.Reset();
     for (int i = 0; i < 4; ++i) {
         d.checkTarget[i].Reset();
         d.checkRead[i].Reset();
@@ -1829,8 +1766,14 @@ bool live_remakes(const DlssLive& l) {
            l.upscaler != d.cfg.upscaler;
 }
 
-// Texture sharpening: no feature to make again, from the next pass.
+// Texture sharpening and the lights' glow: no feature to make again, from the next pass.
 void apply_live_sharpening(const DlssLive& l) {
+    const int glow = (std::max)(0, (std::min)(100, l.lightGlow));
+    if (glow != d.cfg.lightGlow) {
+        d.cfg.lightGlow = glow;
+        say("live: the lights' glow %d%% (DLSS's exposure x%.4f)", glow,
+            dlss_light_glow_scale(glow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
+    }
     if (l.textureSharpening == d.cfg.textureSharpening)
         return;
     d.cfg.textureSharpening = l.textureSharpening;
@@ -1888,6 +1831,15 @@ void apply_live(const DlssLive& l, unsigned changes) {
 
 void dlss_live_settle_for_tests(int ms) { kLiveSettle = std::chrono::milliseconds(ms < 0 ? 0 : ms); }
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
+unsigned long long dlss_light_glow_views_total() { return d.glowViewsTotal; }
+
+double dlss_light_glow_scale(int percent, double low, double high) {
+    if (percent <= 0 || !(low > 0) || !(high > 0))
+        return 1;
+    // Log-linear: 0 -> 1, 50 -> low, 100 -> high.
+    const double t = (std::min)(100, percent) / 50.0;
+    return t <= 1 ? std::pow(low, t) : low * std::pow(high / low, t - 1);
+}
 int dlss_upscaler_in_use() { return d.backend; }
 
 const wchar_t* dlss_upscaler_badge() {
@@ -1977,6 +1929,10 @@ void dlss_frame_end(unsigned long long frame) {
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+            if (d.cfg.lightGlow > 0 || d.glowViews)
+                say("the lights' glow %d%%: %llu views at DLSS's exposure x%.4f since the last line", d.cfg.lightGlow,
+                    d.glowViews, dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
+            d.glowViews = 0;
             if (d.bands || d.bandFallbacks || d.composed)
                 say("focus views over a band of their rows: %llu (%.0f%% of their rows each); %llu whose rest took the eye's "
                     "image after DLSS (%llu drawn into the scene itself), %llu that kept the pass's own (the band or the eye "
