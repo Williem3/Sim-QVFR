@@ -65,6 +65,7 @@ void take_frame_end() {
     g.finalPasses = 0;
     g.stage = 0;
     g.blits = 0;
+    g.blitEyes = 0;
     g.postPhase = false;
     g.remapEye = -1;
     g.frameImage = -1;
@@ -179,10 +180,11 @@ void take_frame_end() {
                 snprintf(table + n, sizeof(table) - n, " %d:%s", i, g.firstEyeByImage[i] ? "R" : "L");
             }
         simqvfr::logf("scs focus: the eye order: from the headset image %llu frames, from the frame before's %llu; first "
-                      "eye by image index%s; conflicts %llu; frames whose first scene was drawn for the other eye %llu",
+                      "eye by image index%s; conflicts %llu; frames whose first scene was drawn for the other eye %llu; "
+                      "full-screen draws over an eye's blit %llu",
                       static_cast<unsigned long long>(g.orderHits), static_cast<unsigned long long>(g.orderMisses),
                       table[0] ? table : " (none yet)", static_cast<unsigned long long>(g.orderConflicts),
-                      static_cast<unsigned long long>(g.orderChanges));
+                      static_cast<unsigned long long>(g.orderChanges), static_cast<unsigned long long>(g.overBlits));
     }
     if (const DWORD w = g.otherWriter.load(std::memory_order_relaxed); w && !g.otherWriterLogged) {
         g.otherWriterLogged = true;
@@ -529,7 +531,16 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
                 gpu_replay_end();
         }
     }
-    if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
+    // A full-screen draw onto an image whose eye's blit already counted this frame: drawn over it (the tiredness dim),
+    // not the other eye's blit.
+    const bool overBlit = entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active && g.boundChainEye >= 0 &&
+                          (g.blitEyes >> g.boundChainEye & 1u);
+    if (overBlit && g.overBlits++ == 0)
+        simqvfr::logf("scs focus: a full-screen draw over view %d's final blit (the tiredness dim): not counted as the other "
+                      "eye's blit", g.boundChainEye);
+    if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active && !overBlit) {
+        if (g.boundChainEye >= 0)
+            g.blitEyes |= 1u << g.boundChainEye;
         if (g.blits < 2 && g.boundChainEye >= 0) {
             // The first scene was drawn for the other eye's box: a frame whose focus view is the wrong one.
             if (g.blits == 0 && g.passEye[0] != g.boundChainEye) {
@@ -680,6 +691,7 @@ void release_all() {
     std::fill(std::begin(g.boundRt), std::end(g.boundRt), nullptr);
     g.gbufferTex.Reset();
     g.gbufferPasses = g.blits = 0;
+    g.blitEyes = 0;
     g.postPhase = false;
     g.remapEye = -1;
     // The eye order: new swapchains, learned again.

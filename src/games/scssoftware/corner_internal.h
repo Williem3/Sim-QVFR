@@ -249,6 +249,11 @@ struct State {
     float box[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}}, prevBox[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}};
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
     int blits = 0;           // final blits into the headset's images this frame
+    // The eyes (bit per view) whose final blit this frame has counted: a later full-screen draw onto the same image (the
+    // tiredness dim, 2026-11-22) is drawn over it, not the next eye's blit. Counted as one, it moved the eye order on
+    // mid-frame: the right eye's post passes ran through the left eye's box, its focus view flickering at every yawn.
+    unsigned blitEyes = 0;
+    uint64_t overBlits = 0;  // such draws over an eye's blit, all session
     int boundChainEye = -1;  // the eye of the swapchain image bound
     // The game's Scaling setting isn't 100%: its eye targets aren't the size of the headset's images, so its final blit
     // resamples (ETS2 at 75%: 3896x3128 into 5192x4168, 2026-11-15). The path doesn't handle that and stays off for the
