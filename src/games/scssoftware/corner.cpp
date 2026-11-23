@@ -144,6 +144,10 @@ void take_frame_end() {
                 std::memory_order_relaxed);
     if (g.stats.frames % 450 == 0)
         perf_line();
+    if (g.stats.frames % 900 == 0 && g.ownPixelLoads)
+        simqvfr::logf("scs focus: own-pixel loads (the signs' forward pass): %llu draws with the twin, %llu left as they were "
+                      "(a smaller eye-sized input bound)",
+                      static_cast<unsigned long long>(g.ownLoadDraws), static_cast<unsigned long long>(g.ownLoadSkips));
     if (g.stats.frames % 900 == 0 && g.doubled)
         simqvfr::logf("scs focus: instancing: %llu draws doubled so far, %llu of them with a per-instance layout's twin",
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
@@ -438,6 +442,11 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
 }
 
 void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT start) {
+    if (g.gamePs) {  // the game's pixel shader again (its own-pixel-loads twin drew)
+        g.context->PSSetShader(g.gamePs, nullptr, 0);
+        g.gamePs->Release();
+        g.gamePs = nullptr;
+    }
     if (g.gameVs) {
         g.context->VSSetShader(g.gameVs, nullptr, 0);
         g.gameVs->Release();
@@ -639,6 +648,10 @@ void release_all() {
     if (g.gameVs) {
         g.gameVs->Release();
         g.gameVs = nullptr;
+    }
+    if (g.gamePs) {
+        g.gamePs->Release();
+        g.gamePs = nullptr;
     }
     g.gameCb13.Reset();
     g.thread = 0;
@@ -893,6 +906,8 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
 
 void corner_mirror_diag(bool on) { mirror_diag_enable(on); }
+
+void corner_own_pixel_loads(bool on) { g.ownPixelLoads = on; }
 
 void corner_set_diag(bool noDraws, bool noReplays, uint64_t replaySkip, bool gpuTimes, bool skipLarge, bool dumpLarge,
                      bool rewriteRing, const std::vector<uint64_t>& skipPs, const std::vector<uint64_t>& dumpPs) {

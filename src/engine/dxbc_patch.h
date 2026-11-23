@@ -110,6 +110,27 @@ struct FocusMipBias {
 
 FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMipBiasOptions& options = {});
 
+// add_own_pixel_loads is for a scene draw's focus view in its eye's pass (the SCS games, 2026-11-22): a pixel shader that
+// reads the target's own lit image and G-buffer at its pixel through a texel it computes from an interpolant: the
+// vertex shader's projected position (x: w, yz: screen 0..1 times w), divided by its w and scaled by constants
+// (normalized_to_texture, viewport_size) into a texel, then `ftoi` and `ld`. With both views drawn in one pass the
+// interpolants are the eye's (NVIDIA's multi-view shares every output but the position), so the focus view's pixels
+// read the eye's corner at the periphery's resolution: ATS's regulatory and warning signs a mosaic in the focus box,
+// following the periphery's size (RenderDoc, ats_signs_frame3536: PS 10395's ld at the eye's texel). The texel those
+// loads want is the pixel being drawn, in either view (the eye's corner and the focus region sit where the targets'
+// own pixels are), so that `ftoi` reads SV_Position.xy instead.
+//
+// Matched strictly: `div rA.ab, vN.ab', vN.c` (an interpolant's two components over a third of the same one), then only
+// `mul`s of rA.ab by other values, then `ftoi rB.xy, rA.ab` whose rB is an `ld`'s coordinate before rB is written again.
+// Anything else touching rA.ab first (an add: a refraction offset) drops the match. Needs SV_Position in the input
+// signature (declared when the shader didn't read it). Everything else stays as the shader had it.
+struct OwnPixelLoads {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+    int loads = 0;  // ftoi coordinates now taken from SV_Position
+};
+OwnPixelLoads add_own_pixel_loads(const uint8_t* data, size_t size);
+
 // add_slot_output is for other cars' motion vectors (docs/recon-lmu.md "stage 3"): a pixel shader that also writes, to
 // render target `reg` (SV_Target1 by default, a uint), the first element of a uint buffer at `srvSlot`: the draw's car
 // part slot, bound per draw by the caller (unbound: 0, none). Everything the shader wrote it still writes.

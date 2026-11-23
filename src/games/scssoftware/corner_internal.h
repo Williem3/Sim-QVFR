@@ -319,6 +319,12 @@ struct State {
     bool instancedDraw = false;  // focus_draw bound an instanced twin: this draw goes out doubled
     uint64_t doubled = 0, doubledLayouts = 0;
     ID3D11VertexShader* gameVs = nullptr;  // the game's shader while its twin draws (a reference held)
+    // The game's pixel shader while its own-pixel-loads twin draws (a reference held; corner_own_pixel_loads): a scene
+    // draw that reads the lit image and G-buffer at its pixel through the eye's projected position, which in the focus
+    // view is the eye's corner (ATS's signs a mosaic at the periphery's resolution in the box, 2026-11-22).
+    ID3D11PixelShader* gamePs = nullptr;
+    bool ownPixelLoads = false;
+    uint64_t ownLoadDraws = 0, ownLoadSkips = 0;  // draws with the twin; with a smaller eye-sized input (left as they were)
     ComPtr<ID3D11Buffer> gameCb13;         // the game's vertex b13 while the remap is bound there (gameVs set)
     uint64_t focusDraws = 0, noTwin = 0;
     ComPtr<ID3D11Texture2D> gbufferTex;  // the G-buffer's first target while its pass runs
@@ -383,6 +389,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT);
 void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT start);
 bool make_resources();
 void release_all();
+void own_pixel_loads();  // corner_focus.cpp: a focus draw's pixel shader twin (gamePs)
 void service_lifecycle();  // the session start and end the main thread asked for, done at an xrEndFrame
 void restore_game_state();
 bool session_ending();  // at each observer's start: true, return at once (the session ended)
