@@ -15,6 +15,7 @@
 #include "../lang.h"
 #include "../log_prefix.h"
 #include "../text.h"
+#include "game_settings_snapshot.h"
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -159,6 +160,14 @@ uint64_t session_start(const std::wstring& name) {
     if (!TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) || !SystemTimeToFileTime(&utc, &ft))
         return 0;
     return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+}
+
+// The "<yyyymmdd>-<hhmmss>" of session-<stamp>.log: its launch's run folder is run-<stamp>. Empty for another name.
+std::wstring session_stamp(const std::wstring& name) {
+    constexpr size_t kStamp = 15;  // yyyymmdd-hhmmss
+    if (!session_start(name) || name.size() < 8 + kStamp)
+        return L"";
+    return name.substr(8, kStamp);
 }
 
 // FILETIME ticks as local "<yyyymmdd>-<hhmmss>", the session logs' style.
@@ -443,6 +452,12 @@ std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now)
             add(logs[i].path, logs[i].path.filename().wstring(), logs[i].size);
             if (const uint64_t start = session_start(logs[i].path.filename().wstring()))
                 sessions.emplace_back(start, logs[i].time);
+            // That launch's copy of the game's graphics settings (game_settings_snapshot.h), from the run folder of the
+            // same time: game-settings-<time>.txt.
+            const std::wstring stamp = session_stamp(logs[i].path.filename().wstring());
+            if (!stamp.empty())
+                add_file((fs::path(sources.logs) / (L"run-" + stamp) / kGameSettingsName).wstring(),
+                         (L"game-settings-" + stamp + L".txt").c_str());
         }
     // The game's crashes during those sessions (one that ended the session leaves the log's last line just before
     // it), redacted: CrashContext and the game's log name the player; the zip goes into a public issue.
@@ -960,8 +975,27 @@ std::wstring issue_details(const IssueReport& r) {
               : rt.quadViews == L"none"      ? L"not offered by the runtime"
                                              : L"not tried, another OpenXR layer between") +
              L")\n";
+    if (!r.gameSettings.empty())  // as the newest launch read them; game-settings-<time>.txt in the zip has each run's
+        b += L"- **Game graphics (last launch):** " + r.gameSettings + L"\n";
     b += L"\n**Last session**\n```text\n" + without_folders(session_summary_text(rt)) + L"```\n";
     return b;
+}
+
+std::wstring newest_game_settings(const std::wstring& logs) {
+    fs::path newest;
+    std::error_code ec;
+    for (fs::directory_iterator it(logs, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::wstring name = it->path().filename().wstring();
+        if (it->is_directory(ec) && starts_with(name, L"run-") && (newest.empty() || name > newest.filename().wstring()))
+            newest = it->path();
+    }
+    if (newest.empty())
+        return L"";
+    std::ifstream in(newest / kGameSettingsName, std::ios::binary);
+    if (!in)
+        return L"";
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return game_settings_summary(text);
 }
 
 namespace {

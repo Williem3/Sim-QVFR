@@ -58,6 +58,7 @@ void export_logs() {
     reload_runtime();
     IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name};
     report.causes = likely_causes(app.s, app.runtime);
+    report.gameSettings = newest_game_settings(logs);
     std::vector<ReportFile> files = logs_to_zip();
     files.push_back({L"details.md", L"", utf8(issue_details(report))});
     const std::wstring zip = logs + L"\\" + name;
@@ -87,6 +88,7 @@ void report_issue() {
     for (size_t at; (at = report.description.find(L"\r\n")) != std::wstring::npos;)  // the edit's line ends
         report.description.erase(at, 1);
     report.causes = likely_causes(app.s, app.runtime);
+    report.gameSettings = newest_game_settings(logs);
     std::vector<ReportFile> files = logs_to_zip();
     files.push_back({L"issue.md", L"", utf8(issue_body(report))});
     const std::wstring zip = logs + L"\\" + name;

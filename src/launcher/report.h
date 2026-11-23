@@ -52,7 +52,8 @@ struct ReportSources {
     std::wstring gameCrashes;  // the game's crash reports folder (game_crashes_folder); empty: none
 };
 
-// The files to zip from `sources`, as of `now` (FILETIME units): the newest kReportLogs session logs, the
+// The files to zip from `sources`, as of `now` (FILETIME units): the newest kReportLogs session logs (each with its
+// launch's copy of the game's graphics settings, game-settings-<time>.txt, where the launch made one), the
 // two ini files, the game's crash reports during those sessions (kReportGameCrashes), the newest
 // kReportCpuProfiles CPU captures and kReportDumps hang dumps (each under kReportMaxDumpBytes) of the last
 // kReportMaxAgeDays, Cheeky's snapshot; kReportMaxBytes in all.
@@ -131,7 +132,11 @@ struct IssueReport {
     int kind = 0;               // kIssueKinds
     std::wstring description;   // what happened, as typed in the launcher (may be empty)
     std::vector<Cause> causes;  // likely_causes
+    std::wstring gameSettings;  // the newest launch's game graphics (newest_game_settings); empty: none copied
 };
+// The newest run folder's copy of the game's graphics settings (game_settings_snapshot.h), its summary line; empty when
+// the newest launch made none (a game with no reader yet).
+std::wstring newest_game_settings(const std::wstring& logs);
 // "[Performance] <the description's first line, up to ~70 characters>", or "[Performance] Sim-QVFR
 // <version>: " when there is no description ("[Problem]" for "Not sure", as bug.yml's title).
 std::wstring issue_title(const IssueReport& report);

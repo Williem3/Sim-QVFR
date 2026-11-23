@@ -20,6 +20,10 @@ namespace simqvfr::launcher::ui::win {
 
 void activate(Ctl id, int option) {
     end_capture();  // any click ends catching a hotkey (one on a hotkey's button starts again)
+    if (lmu_game_ctl(id) || id == kLmuReload || id == kLmuOpenFolder || id == kLmuRestore || id == kLmuFovReset) {
+        lmu_game_activate(id, option);  // LMU's own files (pane_lmu_game.cpp)
+        return;
+    }
     switch (id) {
     case kPage:
         app.pane = static_cast<Pane>(option);
@@ -30,6 +34,8 @@ void activate(Ctl id, int option) {
         }
         if (app.pane == Pane::Headset)
             open_pads();
+        if (app.pane == Pane::LmuGame)  // the game may have written its files since
+            lmu_game_refresh();
         if (app.pane == Pane::Overview) {  // the profile in use, the last session, the layers below
             refresh_profiles();
             reload_runtime();
@@ -518,6 +524,8 @@ bool push_button(Ctl id) {
 
 // A switch or a pop-up button: Space toggles or opens it; Return, as on Windows, presses Launch.
 bool space_control(Ctl id) {
+    if (lmu_game_ctl(id))  // LMU's switches and pop-ups
+        return true;
     switch (id) {
     case kMethod:
     case kMode:
