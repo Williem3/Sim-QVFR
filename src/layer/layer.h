@@ -247,6 +247,10 @@ void native_quad_session_ended();
 // views with fixed foveation, the runtime's focus region within a box larger than it; else all of it. At the region's
 // first locate and at every live change of the box.
 void native_quad_focus_visible();
+// menu.cpp: the runtime's focus region (percent of the eye, the left eye's) known at its first locate: a Road focus
+// preset set before it was (road_focus_capped) is capped to it, in the run's ini and the player's; the live reload
+// resizes the box, the launcher follows the ini.
+void road_focus_region_known(int regionWidth, int regionHeight);
 
 // eye_off.cpp (quad/eye_off.h): one eye off at the runtime's xrEndFrame. Installed into `next` before native quad
 // views' wrappers, so it is the last of the layer's before the runtime.

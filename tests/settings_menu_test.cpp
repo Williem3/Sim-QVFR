@@ -1670,6 +1670,41 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             pick(r, MenuItem::FocusCorridor);
             menu_key(r, MenuKey::Right);
         }
+        {  // a preset set before the runtime's focus region was known, capped once it is (road_focus_capped)
+            FocusShape shape;
+            int width = kFocusPercent.def, height = kFocusHeightPercent.def;
+            FocusOffset offset;
+            road_focus_apply(0, shape, width, height, offset);  // no region known: preset A at its own size
+            check(width == kRoadFocusCockpitWidth && height == kRoadFocusCockpitHeight,
+                  "road focus cap: preset A uncapped with no region known");
+            check(!road_focus_capped(0, shape, width, height, 0, 0) && width == kRoadFocusCockpitWidth,
+                  "road focus cap: nothing while the region is unknown");
+            check(road_focus_capped(0, shape, width, height, 46, 52) && width == 46 && height == 52,
+                  "road focus cap: preset A capped to the runtime's region");
+            check(!road_focus_capped(0, shape, width, height, 46, 52), "road focus cap: once (already inside)");
+            int own = 72, ownH = 60;  // the player's own size on the preset's shape: theirs
+            check(!road_focus_capped(0, shape, own, ownH, 46, 52) && own == 72,
+                  "road focus cap: a size the player changed is left alone");
+            FocusShape rect;  // the player's own shape at preset A's size: theirs too
+            int rw = kRoadFocusCockpitWidth, rh = kRoadFocusCockpitHeight;
+            check(!road_focus_capped(0, rect, rw, rh, 46, 52), "road focus cap: another shape is left alone");
+            road_focus_apply(1, shape, width, height, offset);  // preset B (46 x 43) fits a 46 x 52 region
+            check(!road_focus_capped(1, shape, width, height, 46, 52) && width == 46 && height == 43,
+                  "road focus cap: preset B already inside the region");
+            // Through an ini, as the layer reads it: the preset's shape reads back equal.
+            const std::wstring capIni = temp_path(L"simqvfr-menu-corridor-cap.ini");
+            DeleteFileW(capIni.c_str());
+            MenuValues capValues;
+            road_focus_apply(0, capValues.shape, capValues.width, capValues.height, capValues.offset);
+            capValues.focusCorridor = true;
+            write_menu_values(capIni.c_str(), capValues, true, false, false, false, false, false, true);
+            int iw = ini_int(capIni.c_str(), kFocusPercent), ih = ini_int(capIni.c_str(), kFocusHeightPercent, iw);
+            check(road_focus_capped(ini_int(capIni.c_str(), kFocusCorridorPreset), read_focus_shape(capIni.c_str()), iw,
+                                    ih, 46, 52) &&
+                      iw == 46 && ih == 52,
+                  "road focus cap: the preset read back from an ini is capped");
+            DeleteFileW(capIni.c_str());
+        }
         const std::wstring ini = temp_path(L"simqvfr-menu-corridor.ini");
         DeleteFileW(ini.c_str());
         write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, false);

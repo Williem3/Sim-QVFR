@@ -95,6 +95,23 @@ inline void road_focus_apply(int index, FocusShape& shape, int& width, int& heig
     offset.fixedX = p.offsetX;
 }
 
+// A preset set before the runtime's focus region was known (switched on in the launcher before any session had
+// reported it: no runtime.ini yet), capped to that region once it is: only the preset's own shape at its own
+// uncapped size (anything the player changed since is theirs) and only when it's larger. True if it capped.
+inline bool road_focus_capped(int index, const FocusShape& shape, int& width, int& height, int maxWidth, int maxHeight) {
+    if (maxWidth <= 0 || maxHeight <= 0)
+        return false;
+    const RoadFocusPreset p = road_focus_preset(std::clamp(index, 0, kRoadFocusPresets - 1));
+    if (!(shape == p.shape) || width != p.width || height != p.height)
+        return false;
+    const int w = std::min(width, kFocusPercent.clamp(maxWidth)), h = std::min(height, kFocusHeightPercent.clamp(maxHeight));
+    if (w == width && h == height)
+        return false;
+    width = w;
+    height = h;
+    return true;
+}
+
 // Road focus switched (`on`: going on): on, the player's shape, size and place kept in `saved` and preset `index` set;
 // off, the kept ones put back (nothing kept: left as they are).
 inline void road_focus_switched(bool on, int index, FocusShape& shape, int& width, int& height, FocusOffset& offset,
