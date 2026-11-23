@@ -287,8 +287,16 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.layered = 0;
     }
     {
+        // No tracker: asked for ~10 s with the Foveation eye tracked, and neither the eye gaze extension nor the
+        // runtime's own foveation (runtime composition: it moved its focus views, native_quad.cpp wrote "1") tracked.
+        // Not after a Fixed session: its lookups run only for a live switch (issue 39's false "no samples").
+        bool runtimeMoved = false;
+        {
+            std::lock_guard guard(nativeQuad.gazeMutex);
+            runtimeMoved = nativeQuad.gazeMoves > 0;
+        }
         std::lock_guard guard(gaze.mutex);
-        if (gaze.queries > 900 && gaze.tracked == 0)  // asked for ~10 s, never tracked
+        if (gaze.wantedQueries > 900 && gaze.tracked == 0 && !runtimeMoved)
             runtime_info(L"eye_tracking", L"0");
     }
     {

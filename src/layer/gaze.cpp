@@ -41,6 +41,8 @@ bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& di
     }
     XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
     ++gaze.queries;
+    if (experiment.gaze)
+        ++gaze.wantedQueries;
     const bool ok = XR_SUCCEEDED(next.LocateSpace(gaze.space, base, time, &location)) &&
                     (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                     (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
@@ -167,6 +169,8 @@ void gaze_thread_run() {
             {
                 std::lock_guard guard(gaze.mutex);  // the counts the overlay and the log read
                 ++gaze.queries;
+                if (experiment.gaze)
+                    ++gaze.wantedQueries;
                 if (ok) {
                     ++gaze.tracked;
                     gaze.direction = direction;
