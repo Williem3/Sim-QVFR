@@ -52,6 +52,7 @@ void take_frame_end() {
     g.frameDraw = 0;
     ++g.stats.frames;
     mirror_diag_frame_end();
+    anomaly_frame_end();
     fixation_frame_end();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
@@ -64,6 +65,7 @@ void take_frame_end() {
     g.finalPasses = 0;
     g.stage = 0;
     g.blits = 0;
+    g.blitEyes = 0;
     g.postPhase = false;
     g.remapEye = -1;
     g.frameImage = -1;
@@ -144,6 +146,10 @@ void take_frame_end() {
                 std::memory_order_relaxed);
     if (g.stats.frames % 450 == 0)
         perf_line();
+    if (g.stats.frames % 900 == 0 && g.tintRows)
+        simqvfr::logf("scs corner: draws on a mirror's tinted copy (a constant row read as a colour, pairs' whites left "
+                      "white): %llu",
+                      static_cast<unsigned long long>(g.tintDraws));
     if (g.stats.frames % 900 == 0 && g.ownPixelLoads)
         simqvfr::logf("scs focus: own-pixel loads (the signs' forward pass): %llu draws with the twin, %llu left as they were "
                       "(a smaller eye-sized input bound)",
@@ -174,10 +180,11 @@ void take_frame_end() {
                 snprintf(table + n, sizeof(table) - n, " %d:%s", i, g.firstEyeByImage[i] ? "R" : "L");
             }
         simqvfr::logf("scs focus: the eye order: from the headset image %llu frames, from the frame before's %llu; first "
-                      "eye by image index%s; conflicts %llu; frames whose first scene was drawn for the other eye %llu",
+                      "eye by image index%s; conflicts %llu; frames whose first scene was drawn for the other eye %llu; "
+                      "full-screen draws over an eye's blit %llu",
                       static_cast<unsigned long long>(g.orderHits), static_cast<unsigned long long>(g.orderMisses),
                       table[0] ? table : " (none yet)", static_cast<unsigned long long>(g.orderConflicts),
-                      static_cast<unsigned long long>(g.orderChanges));
+                      static_cast<unsigned long long>(g.orderChanges), static_cast<unsigned long long>(g.overBlits));
     }
     if (const DWORD w = g.otherWriter.load(std::memory_order_relaxed); w && !g.otherWriterLogged) {
         g.otherWriterLogged = true;
@@ -350,6 +357,8 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     mirror_diag_draw();
+    tint_draw();     // a shader that reads a constant row as a colour: the mirror's copy with pairs' whites left white
+    anomaly_draw();  // (dev builds, scs_violet_log=1) which copy and range this draw reads
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         const bool focusDraw = focus_on() && !g.diagNoDraws && (g.mvr || g.instanced) && g.depthBound && g.fullSize;
         if (++g.frameDraw % kMarkEveryDraws == 1)  // sparse: one per draw slowed the frame enough to hide the hang (run 5)
@@ -522,7 +531,16 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
                 gpu_replay_end();
         }
     }
-    if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
+    // A full-screen draw onto an image whose eye's blit already counted this frame: drawn over it (the tiredness dim),
+    // not the other eye's blit.
+    const bool overBlit = entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active && g.boundChainEye >= 0 &&
+                          (g.blitEyes >> g.boundChainEye & 1u);
+    if (overBlit && g.overBlits++ == 0)
+        simqvfr::logf("scs focus: a full-screen draw over view %d's final blit (the tiredness dim): not counted as the other "
+                      "eye's blit", g.boundChainEye);
+    if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active && !overBlit) {
+        if (g.boundChainEye >= 0)
+            g.blitEyes |= 1u << g.boundChainEye;
         if (g.blits < 2 && g.boundChainEye >= 0) {
             // The first scene was drawn for the other eye's box: a frame whose focus view is the wrong one.
             if (g.blits == 0 && g.passEye[0] != g.boundChainEye) {
@@ -673,6 +691,7 @@ void release_all() {
     std::fill(std::begin(g.boundRt), std::end(g.boundRt), nullptr);
     g.gbufferTex.Reset();
     g.gbufferPasses = g.blits = 0;
+    g.blitEyes = 0;
     g.postPhase = false;
     g.remapEye = -1;
     // The eye order: new swapchains, learned again.
@@ -697,6 +716,7 @@ void release_all() {
     g.mirrors.clear();
     g.bigIn.Reset(), g.bigOut.Reset(), g.bigInView.Reset(), g.bigOutView.Reset();
     g.bigBytes = 0;
+    anomaly_release();
     // The focus view's.
     g.remapCb.Reset();
     g.lookCb.Reset();
@@ -906,6 +926,10 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
 void corner_set_force_ui_redraw(bool on) { g.forceUiRedraw = on; }
 
 void corner_mirror_diag(bool on) { mirror_diag_enable(on); }
+
+void corner_violet_log(bool on) { anomaly_enable(on); }
+
+void corner_tint_rows(bool on) { g.tintRows = on; }
 
 void corner_own_pixel_loads(bool on) { g.ownPixelLoads = on; }
 

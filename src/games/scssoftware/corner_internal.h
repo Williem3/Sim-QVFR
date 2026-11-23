@@ -53,6 +53,8 @@ inline d3s::Spec blit_state(uint32_t parts) {
 constexpr UINT kMirrorMin = 256 * 1024;
 struct Mirror {
     ComPtr<ID3D11Buffer> game, copy;
+    // With State::tintRows: the copy with every pair's (1,1,1,1) left white, for draws whose shader reads a row as a colour.
+    ComPtr<ID3D11Buffer> tinted;
     UINT bytes = 0;
     uint64_t refreshedFrame = ~0ull;
     uint64_t usedFrame = 0;  // the last frame a bind used it (evict_mirrors)
@@ -115,9 +117,9 @@ struct State {
     bool rewriteRing = true;
     ComPtr<ID3D11ComputeShader> patchCs, mirrorCs;
     std::vector<Mirror> mirrors;
-    ComPtr<ID3D11Buffer> bigIn, bigOut;  // the mirrors' scratch, as large as the largest
+    ComPtr<ID3D11Buffer> bigIn, bigOut, bigTinted;  // the mirrors' scratch, as large as the largest
     ComPtr<ID3D11ShaderResourceView> bigInView;
-    ComPtr<ID3D11UnorderedAccessView> bigOutView;
+    ComPtr<ID3D11UnorderedAccessView> bigOutView, bigTintedView;
     UINT bigBytes = 0;
     uint64_t mirrorRefreshes = 0, mirrorSwaps = 0, midFrameWrites = 0;
     // Writes (Unmap) to a mirrored buffer from a thread other than the one drawing the eyes: our copy is made on the
@@ -247,6 +249,11 @@ struct State {
     float box[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}}, prevBox[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}};
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
     int blits = 0;           // final blits into the headset's images this frame
+    // The eyes (bit per view) whose final blit this frame has counted: a later full-screen draw onto the same image (the
+    // tiredness dim, 2026-11-22) is drawn over it, not the next eye's blit. Counted as one, it moved the eye order on
+    // mid-frame: the right eye's post passes ran through the left eye's box, its focus view flickering at every yawn.
+    unsigned blitEyes = 0;
+    uint64_t overBlits = 0;  // such draws over an eye's blit, all session
     int boundChainEye = -1;  // the eye of the swapchain image bound
     // The game's Scaling setting isn't 100%: its eye targets aren't the size of the headset's images, so its final blit
     // resamples (ETS2 at 75%: 3896x3128 into 5192x4168, 2026-11-15). The path doesn't handle that and stays off for the
@@ -324,6 +331,11 @@ struct State {
     // view is the eye's corner (ATS's signs a mosaic at the periphery's resolution in the box, 2026-11-22).
     ID3D11PixelShader* gamePs = nullptr;
     bool ownPixelLoads = false;
+    // Draws whose shader reads a constant row as a colour read the mirror's tinted copy (pairs' whites left white) instead
+    // of the plain one (which rewrites a white tint before the viewport size as a pair: the violet flash, 2026-11-22; a
+    // per-draw rewrite of their ranges first cost the frame rate, 10 fps). [experiment] scs_tint_rows=0: off.
+    bool tintRows = false;
+    uint64_t tintDraws = 0;
     uint64_t ownLoadDraws = 0, ownLoadSkips = 0;  // draws with the twin; with a smaller eye-sized input (left as they were)
     ComPtr<ID3D11Buffer> gameCb13;         // the game's vertex b13 while the remap is bound there (gameVs set)
     uint64_t focusDraws = 0, noTwin = 0;
@@ -419,8 +431,18 @@ Mirror* mirror_of_game(ID3D11Buffer* b);
 ID3D11Buffer* game_of(ID3D11Buffer* b);
 bool big_scratch(UINT bytes);
 // ows: b1, the rows the rewritten shader reads by a fixed index (512 bytes), for kCornerPatchCs's flag 4.
+// corner_anomaly.cpp (dev builds, [experiment] scs_violet_log=1): the violet flash's anomaly log.
+void anomaly_enable(bool on);
+ID3D11UnorderedAccessView* anomaly_uav();  // the mirror pass's log this frame (null: off)
+uint32_t anomaly_tag(const Mirror& m);
+void anomaly_draw();       // a draw while our copies are bound (on_draw)
+void anomaly_frame_end();  // take_frame_end
+void anomaly_release();    // release_all
+uint64_t anomaly_entries();
+size_t anomaly_kinds();
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups, const void* rows = nullptr);
+            UINT groups, const void* rows = nullptr, ID3D11UnorderedAccessView* log = nullptr,
+            ID3D11UnorderedAccessView* tinted = nullptr);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
 // The game's object held by us alone: the game has let it go and will never bind it again (an unbound object's last
@@ -447,6 +469,9 @@ void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);
 // `position` (a focus replay's vertex range, its shader's position twin to be bound): the twin's rectangle and size rows.
 bool rewrite(Range& r, bool pixel, bool focus = false, const int* position = nullptr);
+// corner_mirrors.cpp: before each draw, slot 0 of each stage on the mirror's tinted copy when its shader reads a constant
+// row as a colour (kCb0TintRowsGuid), on the plain copy otherwise: a binding, no GPU work.
+void tint_draw();
 constexpr UINT kPositionAt = 4080;  // kCornerPatchCs's: where the position twin's two vectors go in our copy
 void put_back(Range& r, bool pixel);
 

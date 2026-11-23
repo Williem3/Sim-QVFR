@@ -22,7 +22,7 @@ Mirror* mirror_of_game(ID3D11Buffer* b) {
 // The game's buffer behind one of our copies (or `b` itself).
 ID3D11Buffer* game_of(ID3D11Buffer* b) {
     for (Mirror& m : g.mirrors)
-        if (m.copy.Get() == b)
+        if (m.copy.Get() == b || (m.tinted && m.tinted.Get() == b))
             return m.game.Get();
     return b;
 }
@@ -31,6 +31,7 @@ bool big_scratch(UINT bytes) {
     if (bytes <= g.bigBytes)
         return true;
     g.bigIn.Reset(), g.bigOut.Reset(), g.bigInView.Reset(), g.bigOutView.Reset();
+    g.bigTinted.Reset(), g.bigTintedView.Reset();
     const D3D11_BUFFER_DESC in = {bytes, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
                                   D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
     D3D11_BUFFER_DESC out = in;
@@ -47,16 +48,20 @@ bool big_scratch(UINT bytes) {
         FAILED(g.device->CreateShaderResourceView(g.bigIn.Get(), &sv, &g.bigInView)) ||
         FAILED(g.device->CreateUnorderedAccessView(g.bigOut.Get(), &uv, &g.bigOutView)))
         return false;
+    if (g.tintRows && (FAILED(g.device->CreateBuffer(&out, nullptr, &g.bigTinted)) ||
+                       FAILED(g.device->CreateUnorderedAccessView(g.bigTinted.Get(), &uv, &g.bigTintedView))))
+        return false;
     g.bigBytes = bytes;
     return true;
 }
 
 // Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back (b0 with its range).
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
-            UINT groups, const void* rows) {
+            UINT groups, const void* rows, ID3D11UnorderedAccessView* log, ID3D11UnorderedAccessView* tinted) {
     d3s::Spec spec;
     spec.parts = d3s::kCS;
-    spec.csSrv = spec.csUavs = {0, 1};
+    spec.csSrv = {0, 1};
+    spec.csUavs = {0, tinted ? 3u : log ? 2u : 1u};
     spec.csCb = {0, rows ? 2u : 1u};
     spec.instances = false;
     const simqvfr::D3D11StateGuard keep(g.context.Get(), spec);
@@ -67,6 +72,14 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetShader(cs, nullptr, 0);
     g.context->CSSetShaderResources(0, 1, ins);
     g.context->CSSetUnorderedAccessViews(0, 1, outs, nullptr);
+    if (log) {  // u1: the mirror pass's anomaly log (corner_anomaly.cpp)
+        ID3D11UnorderedAccessView* const logs[] = {log};
+        g.context->CSSetUnorderedAccessViews(1, 1, logs, nullptr);
+    }
+    if (tinted) {  // u2: the mirror's tinted copy (pairs' whites left white)
+        ID3D11UnorderedAccessView* const ts[] = {tinted};
+        g.context->CSSetUnorderedAccessViews(2, 1, ts, nullptr);
+    }
     g.context->CSSetConstantBuffers(0, 1, ps);
     if (rows) {  // b1: the shader's rows read by a fixed index (kCornerPatchCs)
         g.context->UpdateSubresource(g.rowsCb.Get(), 0, nullptr, rows, 0, 0);
@@ -87,16 +100,24 @@ void refresh(Mirror& m) {
     const Timed timed(State::kTimeMirrors);
     const D3D11_BOX box = {0, 0, 0, m.bytes, 1, 1};
     g.context->CopySubresourceRegion(g.bigIn.Get(), 0, 0, 0, 0, m.game.Get(), 0, &box);
-    const struct {
+    const bool tint = m.tinted && g.bigTintedView;
+    struct {  // (pad: the anomaly log's tag)
         float fx, fy;
         UINT count, pad;
-        float w, h, p0, p1;
+        float w, h;
+        UINT tint, p1;
         float unused[8];
-    } p = {g.fx, g.fy, m.bytes / 16, 0, static_cast<float>(g.eyeW), static_cast<float>(g.eyeH), 0, 0, {}};
+    } p = {g.fx, g.fy, m.bytes / 16, 0, static_cast<float>(g.eyeW), static_cast<float>(g.eyeH), tint ? 1u : 0u, 0, {}};
     static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
-    run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
+    ++m.serial;  // this copy's (the anomaly log's tag carries it, and the draws that read it)
+    ID3D11UnorderedAccessView* const log = anomaly_uav();
+    if (log)
+        p.pad = anomaly_tag(m);
+    run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64, nullptr, log,
+           tint ? g.bigTintedView.Get() : nullptr);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
-    ++m.serial;
+    if (tint)
+        g.context->CopySubresourceRegion(m.tinted.Get(), 0, 0, 0, 0, g.bigTinted.Get(), 0, &box);
     mirror_diag_refresh(m);
     ++g.mirrorRefreshes;
 }
@@ -139,7 +160,8 @@ Mirror* learn(ID3D11Buffer* b) {
     m.bytes = d.ByteWidth & ~15u;
     m.usedFrame = g.stats.frames;
     const D3D11_BUFFER_DESC cd = {m.bytes, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-    if (FAILED(g.device->CreateBuffer(&cd, nullptr, &m.copy))) {
+    if (FAILED(g.device->CreateBuffer(&cd, nullptr, &m.copy)) ||
+        (g.tintRows && FAILED(g.device->CreateBuffer(&cd, nullptr, &m.tinted)))) {
         simqvfr::logf("scs corner: a copy of the game's %u-byte constant buffer couldn't be made", d.ByteWidth);
         return nullptr;
     }
@@ -172,7 +194,7 @@ void evict_mirrors(bool orphans) {
     const auto held = [&](const Mirror& m) {
         for (const auto& stage : bound)
             for (ID3D11Buffer* b : stage)
-                if (b && b == m.copy.Get())
+                if (b && (b == m.copy.Get() || b == m.tinted.Get()))
                     return true;
         return false;
     };
@@ -410,6 +432,59 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
         g.context->VSSetConstantBuffers1(0, 1, &ours, &zero, &n);
     r.ours = true;
     return true;
+}
+
+// Before a draw while our copies are bound: slot 0 of each stage on its mirror's tinted copy when the stage's shader
+// reads a constant row as a colour, on the plain copy otherwise (the range as bound). A binding, no GPU work.
+void tint_draw() {
+    if (!g.tintRows || !g.mirrorsBound || g.mirrorsOff)
+        return;
+    const auto tinted = [](ID3D11DeviceChild* s) {
+        UINT size = 0;
+        return s && s->GetPrivateData(lmu::kCb0TintRowsGuid, &size, nullptr) != DXGI_ERROR_NOT_FOUND && size;
+    };
+    bool any = false;
+    for (int stage = 0; stage < 2; ++stage) {
+        if (stage ? g.ps.ours : g.vs.ours)
+            continue;  // rewritten for this draw already
+        ID3D11Buffer* buf = nullptr;
+        UINT first = 0, count = 0;
+        bool want = false;
+        if (stage) {
+            g.context->PSGetConstantBuffers1(0, 1, &buf, &first, &count);
+            ID3D11PixelShader* s = nullptr;
+            g.context->PSGetShader(&s, nullptr, nullptr);
+            want = tinted(s);
+            if (s)
+                s->Release();
+        } else {
+            g.context->VSGetConstantBuffers1(0, 1, &buf, &first, &count);
+            ID3D11VertexShader* s = nullptr;
+            g.context->VSGetShader(&s, nullptr, nullptr);
+            want = tinted(s);
+            if (s)
+                s->Release();
+        }
+        ComPtr<ID3D11Buffer> keep;
+        keep.Attach(buf);
+        if (!buf)
+            continue;
+        ID3D11Buffer* next = nullptr;
+        for (Mirror& m : g.mirrors)
+            if (m.tinted && (m.copy.Get() == buf || m.tinted.Get() == buf)) {
+                next = want ? m.tinted.Get() : m.copy.Get();
+                break;
+            }
+        any |= want && next;
+        if (!next || next == buf)
+            continue;
+        if (count)
+            stage ? g.context->PSSetConstantBuffers1(0, 1, &next, &first, &count)
+                  : g.context->VSSetConstantBuffers1(0, 1, &next, &first, &count);
+        else
+            stage ? g.context->PSSetConstantBuffers(0, 1, &next) : g.context->VSSetConstantBuffers(0, 1, &next);
+    }
+    g.tintDraws += any ? 1 : 0;
 }
 
 void put_back(Range& r, bool pixel) {

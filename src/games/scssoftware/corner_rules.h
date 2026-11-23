@@ -226,12 +226,20 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
 
 // The whole-buffer pass (corner.cpp's mirrors of the game's large constant buffers, each written once at the frame's
 // start): every normalized_to_texture / viewport_size pair whose size has the eye's shape (so a shadow map's or a
-// probe's size is left alone), in parallel, one thread per vector. cb0: f, count, the eye's size. (Measured on ETS2
-// 2026-11-15 over 10,800 frames: every pair it took was one of the eye's target sizes or their halvings.)
+// probe's size is left alone), in parallel, one thread per vector. cb0: f, count, a tag, the eye's size. (Measured on
+// ETS2 2026-11-15 over 10,800 frames: every pair it took was one of the eye's target sizes or their halvings.)
+// With a tag (its top bit set: corner_anomaly.cpp, dev builds), each pair rewritten is also appended to u1: a count at
+// byte 0, then 80-byte entries from byte 16 (the tag, the (1,1,1,1)'s index, two words free, the vectors before, at,
+// after it and the one after that).
 inline constexpr char kCornerMirrorCs[] = R"(
-cbuffer Params : register(b0) { float2 f; uint count; uint pad; float2 eye; float2 pad2; };
+cbuffer Params : register(b0) { float2 f; uint count; uint tag; float2 eye; uint tint; uint pad2; };
 ByteAddressBuffer src : register(t0);
 RWByteAddressBuffer dst : register(u0);
+RWByteAddressBuffer anomalies : register(u1);
+// tint != 0: the tinted copy too, every pair's size rewritten but its (1,1,1,1) left white: bound for the draws whose
+// shader reads a constant row as a colour (a material's white tint right before the viewport size: the violet flash).
+RWByteAddressBuffer tinted : register(u2);
+static const uint kAnomalyCapacity = 4096;
 float4 at(uint i) { return asfloat(src.Load4(i * 16)); }
 bool isOnes(float4 v) { return all(v == float4(1, 1, 1, 1)); }
 bool isEyeSize(float4 v) {
@@ -245,11 +253,27 @@ bool isEyeSize(float4 v) {
     if (i >= count)
         return;
     float4 v = at(i);
+    const float4 game = v;
     if (i > 0 && (i & 15) != 0 && isOnes(at(i - 1)) && isEyeSize(v))
         v = float4(f * v.xy, f);
-    else if (i + 1 < count && ((i + 1) & 15) != 0 && isOnes(v) && isEyeSize(at(i + 1)))
+    else if (i + 1 < count && ((i + 1) & 15) != 0 && isOnes(v) && isEyeSize(at(i + 1))) {
         v = float4(f, 1 / f);
+        if (tag & 0x80000000u) {
+            uint slot;
+            anomalies.InterlockedAdd(0, 1, slot);
+            if (slot < kAnomalyCapacity) {
+                const uint base = 16 + slot * 80;
+                anomalies.Store4(base, uint4(tag, i, 0, 0));
+                anomalies.Store4(base + 16, asuint(i > 0 ? at(i - 1) : float4(0, 0, 0, 0)));
+                anomalies.Store4(base + 32, asuint(at(i)));
+                anomalies.Store4(base + 48, asuint(at(i + 1)));
+                anomalies.Store4(base + 64, asuint(i + 2 < count ? at(i + 2) : float4(0, 0, 0, 0)));
+            }
+        }
+    }
     dst.Store4(i * 16, asuint(v));
+    if (tint)
+        tinted.Store4(i * 16, asuint(isOnes(game) ? game : v));
 }
 )";
 

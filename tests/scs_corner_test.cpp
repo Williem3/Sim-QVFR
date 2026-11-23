@@ -208,6 +208,7 @@ void warp_checks() {
     // The install is asked for at xrCreateSession and done at the session's first xrEndFrame (the render thread's).
     // The GPU timing on, as in dev builds: its queries run beside everything checked below.
     scs::corner_set_diag(false, false, 0, true);
+    scs::corner_violet_log(true);  // the anomaly log on too: every check below runs with its dispatch and draw records
     check(scs::corner_install(device.Get(), 50, 30) && !scs::corner_on(), "corner install asked for, nothing done yet");
     check(scs::corner_frame_end(nullptr, &fake_enumerate) == nullptr && scs::corner_on(),
           "corner installed (50%, focus 30%) on a WARP device at the first xrEndFrame");
@@ -533,6 +534,16 @@ void warp_checks() {
     check(boundPs == bigCb.Get() && bpFirst == bigPs, "after the frame, the game's own buffer is bound again");
     if (boundPs)
         boundPs->Release();
+    {  // the anomaly log: frame 2's mirrored pair read back a few frame ends later (the log is read without waiting)
+        for (int f = 0; f < 60 && scs::detail::anomaly_entries() == 0; ++f) {
+            context->Flush();
+            Sleep(15);  // WARP finishes the copy in its own time
+            scs::corner_frame_end(nullptr, &fake_enumerate);
+            context->OMSetRenderTargets(1, outs, nullptr);  // the next frame's first bind: its end taken
+        }
+        check(scs::detail::anomaly_entries() >= 1 && scs::detail::anomaly_kinds() >= 1,
+              "anomaly log: the mirrored pair of frame 2 logged and set against its draws, frames later");
+    }
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
 
     // The game remakes its large constant buffers (a load, a menu: ATS 2026-11-16 filled all 16 mirror slots and left
@@ -633,6 +644,9 @@ void warp_checks() {
     check(seen.Width == W, "then observing has stopped: a G-buffer bind starts no corner");
     scs::corner_frame_end(nullptr, &fake_enumerate);
     check(!scs::corner_on() && SUCCEEDED(device->GetDeviceRemovedReason()), "the last session's end done at its xrEndFrame");
+    std::printf("     anomaly log: %llu pairs logged, %zu kinds\n", static_cast<unsigned long long>(scs::detail::anomaly_entries()),
+                scs::detail::anomaly_kinds());
+    scs::corner_violet_log(false);
 }
 
 }  // namespace
@@ -849,11 +863,213 @@ Out main(float2 v : POSITION) {
     check(id && std::memcmp(id, identity, sizeof(identity)) == 0, "position: another shape gets the identity");
 }
 
+namespace {
+
+// The mirror pass's anomaly log (corner_anomaly.cpp): with a tag, each pair it rewrites is appended (tag, index, the
+// vectors around it); a (1,1,1,1) ending one 16-vector block before a size opening the next isn't a pair, nor logged;
+// without a tag nothing is logged.
+// The violet flash's fix: the shader analysis finds a material's colour row (cb0[6].xyz) apart from its scale row
+// (cb0[7].xy); the mirror pass's tinted copy rewrites every pair's size as the plain copy does but leaves its white
+// white (a tint before the viewport size), the plain copy unchanged.
+void tint_checks() {
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,
+                                 &context))) {
+        check(false, "tint: a WARP device");
+        return;
+    }
+    const ComPtr<ID3DBlob> ps = compile_blob(
+        "cbuffer C : register(b0) { float4 pad[6]; float4 tint; float4 vsz; };"
+        "float4 main(float4 c : COLOR0, float2 uv : TEXCOORD0) : SV_Target { return float4(c.xyz * tint.xyz, 1) +"
+        " float4(uv * vsz.xy, 0, 0); }",
+        "main", "ps_5_0");
+    uint64_t colour[64] = {}, rowsRead[64] = {};
+    const bool read = ps && simqvfr::dxbc::constant_buffer_colour_rows(static_cast<const uint8_t*>(ps->GetBufferPointer()),
+                                                                       ps->GetBufferSize(), 0, colour) &&
+                      simqvfr::dxbc::constant_buffer_static_rows(static_cast<const uint8_t*>(ps->GetBufferPointer()),
+                                                                 ps->GetBufferSize(), 0, rowsRead);
+    check(read && colour[0] == (1ull << 6) && (rowsRead[0] & (3ull << 6)) == (3ull << 6),
+          "tint: row 6 read as a colour (xyz), row 7 as a scale (xy): only 6 is a colour row");
+
+    const ComPtr<ID3DBlob> code = compile_blob(scs::kCornerMirrorCs, "main", "cs_5_0");
+    ComPtr<ID3D11ComputeShader> cs;
+    if (!code || FAILED(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &cs))) {
+        check(false, "tint: the mirror shader");
+        return;
+    }
+    constexpr UINT kVectors = 16;
+    std::vector<float> in(kVectors * 4, 0.0f);
+    const auto put = [&](UINT i, float x, float y, float z, float w) {
+        in[i * 4] = x, in[i * 4 + 1] = y, in[i * 4 + 2] = z, in[i * 4 + 3] = w;
+    };
+    put(5, 0.2f, 0.3f, 0.4f, 0.5f);
+    put(6, 1, 1, 1, 1);           // a material's white tint
+    put(7, 1280, 1024, 1, 1);     // the scene's viewport size
+    put(8, 3.7f, 4.6f, 6.1f, 0);  // its view ray
+    const D3D11_BUFFER_DESC raw = {kVectors * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+                                   0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+    const D3D11_BUFFER_DESC pd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const struct {
+        float fx, fy;
+        UINT count, tag;
+        float w, h;
+        UINT tint, p1;
+        float unused[8];
+    } p = {0.5f, 0.5f, kVectors, 0, 1280, 1024, 1, 0, {}};
+    const D3D11_SUBRESOURCE_DATA init = {in.data(), 0, 0}, pInit = {&p, 0, 0};
+    ComPtr<ID3D11Buffer> src, dst, tinted, params;
+    device->CreateBuffer(&raw, &init, &src);
+    device->CreateBuffer(&raw, nullptr, &dst);
+    device->CreateBuffer(&raw, nullptr, &tinted);
+    device->CreateBuffer(&pd, &pInit, &params);
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = DXGI_FORMAT_R32_TYPELESS;
+    sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+    sv.BufferEx = {0, kVectors * 4, D3D11_BUFFEREX_SRV_FLAG_RAW};
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uv{};
+    uv.Format = DXGI_FORMAT_R32_TYPELESS;
+    uv.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uv.Buffer = {0, kVectors * 4, D3D11_BUFFER_UAV_FLAG_RAW};
+    ComPtr<ID3D11ShaderResourceView> srcView;
+    ComPtr<ID3D11UnorderedAccessView> dstView, tintView;
+    device->CreateShaderResourceView(src.Get(), &sv, &srcView);
+    device->CreateUnorderedAccessView(dst.Get(), &uv, &dstView);
+    device->CreateUnorderedAccessView(tinted.Get(), &uv, &tintView);
+    ID3D11UnorderedAccessView* const uavs[] = {dstView.Get(), nullptr, tintView.Get()};
+    context->CSSetShader(cs.Get(), nullptr, 0);
+    context->CSSetShaderResources(0, 1, srcView.GetAddressOf());
+    context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+    context->CSSetConstantBuffers(0, 1, params.GetAddressOf());
+    context->Dispatch(1, 1, 1);
+    const auto read_back = [&](ID3D11Buffer* from) {
+        std::vector<float> out(kVectors * 4, 0.0f);
+        const D3D11_BUFFER_DESC sd = {kVectors * 16, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> s;
+        device->CreateBuffer(&sd, nullptr, &s);
+        context->CopyResource(s.Get(), from);
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(context->Map(s.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+            std::memcpy(out.data(), m.pData, kVectors * 16);
+            context->Unmap(s.Get(), 0);
+        }
+        return out;
+    };
+    const std::vector<float> plain = read_back(dst.Get()), tint = read_back(tinted.Get());
+    check(plain[6 * 4] == 0.5f && plain[6 * 4 + 2] == 2 && plain[7 * 4] == 640,
+          "tint: the plain copy rewrites the pair as before");
+    check(tint[6 * 4] == 1 && tint[6 * 4 + 1] == 1 && tint[6 * 4 + 2] == 1 && tint[6 * 4 + 3] == 1,
+          "tint: the tinted copy leaves the white tint white (no violet)");
+    check(tint[7 * 4] == 640 && tint[7 * 4 + 1] == 512 && tint[7 * 4 + 2] == 0.5f,
+          "tint: the tinted copy's viewport size takes the corner's");
+    check(tint[8 * 4] == 3.7f && tint[5 * 4] == 0.2f && plain[8 * 4] == 3.7f, "tint: the other rows as the game wrote them");
+}
+
+void anomaly_cs_checks() {
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,
+                                 &context))) {
+        check(false, "anomaly log: a WARP device");
+        return;
+    }
+    const ComPtr<ID3DBlob> code = compile_blob(scs::kCornerMirrorCs, "main", "cs_5_0");
+    ComPtr<ID3D11ComputeShader> cs;
+    if (!code || FAILED(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &cs))) {
+        check(false, "anomaly log: the mirror shader");
+        return;
+    }
+    constexpr UINT kVectors = 32;
+    std::vector<float> in(kVectors * 4, 0.0f);
+    const auto put = [&](UINT i, float x, float y, float z, float w) {
+        in[i * 4] = x, in[i * 4 + 1] = y, in[i * 4 + 2] = z, in[i * 4 + 3] = w;
+    };
+    put(0, 5, 6, 7, 8);
+    put(1, 1, 1, 1, 1);
+    put(2, 1280, 1024, 1, 1);
+    put(3, 9, 9, 9, 9);
+    put(15, 1, 1, 1, 1);  // a white closing a block
+    put(16, 1280, 1024, 1, 1);  // a size opening the next: not a pair
+    const auto run = [&](uint32_t tag, std::vector<float>& out, std::vector<uint32_t>& log) {
+        const D3D11_BUFFER_DESC raw = {kVectors * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+                                       0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+        const D3D11_BUFFER_DESC logd = {16 + 4 * 80, D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
+                                        D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+        const D3D11_BUFFER_DESC pd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        const struct {
+            float fx, fy;
+            UINT count, tag;
+            float w, h, p0, p1;
+            float unused[8];
+        } p = {0.5f, 0.5f, kVectors, tag, 1280, 1024, 0, 0, {}};
+        const D3D11_SUBRESOURCE_DATA init = {in.data(), 0, 0}, pInit = {&p, 0, 0};
+        ComPtr<ID3D11Buffer> src, dst, logBuf, params, stage;
+        device->CreateBuffer(&raw, &init, &src);
+        device->CreateBuffer(&raw, nullptr, &dst);
+        device->CreateBuffer(&logd, nullptr, &logBuf);
+        device->CreateBuffer(&pd, &pInit, &params);
+        D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = DXGI_FORMAT_R32_TYPELESS;
+        sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+        sv.BufferEx = {0, kVectors * 4, D3D11_BUFFEREX_SRV_FLAG_RAW};
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uv{};
+        uv.Format = DXGI_FORMAT_R32_TYPELESS;
+        uv.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        uv.Buffer = {0, kVectors * 4, D3D11_BUFFER_UAV_FLAG_RAW};
+        D3D11_UNORDERED_ACCESS_VIEW_DESC lv = uv;
+        lv.Buffer = {0, logd.ByteWidth / 4, D3D11_BUFFER_UAV_FLAG_RAW};
+        ComPtr<ID3D11ShaderResourceView> srcView;
+        ComPtr<ID3D11UnorderedAccessView> dstView, logView;
+        device->CreateShaderResourceView(src.Get(), &sv, &srcView);
+        device->CreateUnorderedAccessView(dst.Get(), &uv, &dstView);
+        device->CreateUnorderedAccessView(logBuf.Get(), &lv, &logView);
+        const UINT zero[4] = {};
+        context->ClearUnorderedAccessViewUint(logView.Get(), zero);
+        ID3D11UnorderedAccessView* const uavs[] = {dstView.Get(), logView.Get()};
+        context->CSSetShader(cs.Get(), nullptr, 0);
+        context->CSSetShaderResources(0, 1, srcView.GetAddressOf());
+        context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+        context->CSSetConstantBuffers(0, 1, params.GetAddressOf());
+        context->Dispatch(1, 1, 1);
+        const auto read = [&](ID3D11Buffer* b, UINT bytes, void* to) {
+            const D3D11_BUFFER_DESC sd = {bytes, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+            ComPtr<ID3D11Buffer> s;
+            device->CreateBuffer(&sd, nullptr, &s);
+            context->CopyResource(s.Get(), b);
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (SUCCEEDED(context->Map(s.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                std::memcpy(to, m.pData, bytes);
+                context->Unmap(s.Get(), 0);
+            }
+        };
+        out.assign(kVectors * 4, 0.0f);
+        log.assign((16 + 4 * 80) / 4, 0u);
+        read(dst.Get(), kVectors * 16, out.data());
+        read(logBuf.Get(), 16 + 4 * 80, log.data());
+    };
+    std::vector<float> out;
+    std::vector<uint32_t> log;
+    run(0x85000007u, out, log);
+    float v[4][4];
+    std::memcpy(v, log.data() + 4 + 4, sizeof(v));
+    check(log[0] == 1 && log[4] == 0x85000007u && log[5] == 1, "anomaly log: the one pair logged with its tag and index");
+    check(v[0][0] == 5 && v[1][0] == 1 && v[1][3] == 1 && v[2][0] == 1280 && v[3][0] == 9,
+          "anomaly log: the vectors before, at, after and past it, as the game wrote them");
+    check(out[4] == 0.5f && out[6] == 2 && out[8] == 640 && out[15 * 4] == 1 && out[16 * 4] == 1280,
+          "anomaly log: the pair rewritten as before, the white closing a block left alone");
+    run(0, out, log);
+    check(log[0] == 0 && out[4] == 0.5f, "anomaly log: without a tag nothing logged, the pair still rewritten");
+}
+
+}  // namespace
+
 int SIM_QVFR_TEST_MAIN() {
     eye_shape_checks();
     rules_checks();
     warp_checks();
     position_checks();
+    anomaly_cs_checks();
+    tint_checks();
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

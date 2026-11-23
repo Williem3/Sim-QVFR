@@ -186,6 +186,11 @@ uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot
 // The rows of constant buffer slot the program reads by a fixed index (bit r % 64 of rows[r / 64], rows below 4096);
 // rows read only through a relative index (an array: cb0[r0.x + 33]) aren't set. False: the program couldn't be read.
 bool constant_buffer_static_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]);
+// The rows of that slot the program reads by a fixed index with three or four distinct components in one operand
+// (cb0[6].xyzx: a colour, a direction), as opposed to a scale pair's .xy / .zw or a single component. ATS's material
+// shaders multiply their albedo by such a tint, which can sit right before the scene's viewport size (the violet flash,
+// 2026-11-22: a white tint taken for normalized_to_texture). False: the program couldn't be read.
+bool constant_buffer_colour_rows(const uint8_t* data, size_t size, uint32_t slot, uint64_t (&rows)[64]);
 
 // add_position_remap is for a full-screen pass drawn again over a region of its screen (the SCS focus view): a vertex
 // shader whose vertex position input v<reg>.xy (0..1 over the screen) reads instead v.xy * s + o, with (s, o) the

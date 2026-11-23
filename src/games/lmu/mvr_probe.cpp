@@ -93,10 +93,24 @@ int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
 std::atomic<bool> positionTwins{false};  // the SCS games' focus replays: full-screen shaders' position twins
 std::atomic<bool> ownLoadsTwins{false};  // the SCS games' scene draws: pixel shaders' own-pixel-loads twins
+std::atomic<bool> tintRows{false};       // the SCS games: shaders' colour rows (kCb0TintRowsGuid)
 std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11PixelShader>> ownLoadsByCode;  // (or null), under twinMutex
 std::atomic<bool> cbRows{false};  // the SCS mirror diagnostic: shader ids and slots 0-3's fixed rows
 
 // The SCS mirror diagnostic's tags (mvr_probe_cb_rows).
+// A shader that reads a row of constant buffer 0 as a colour: its rows read by a fixed index and those colour rows.
+void tag_tint_rows(ID3D11DeviceChild* shader, const void* code, SIZE_T size) {
+    if (!tintRows.load(std::memory_order_relaxed) || !shader || !code || size < 20)
+        return;
+    uint64_t rows[2][64];
+    const auto* bytes = static_cast<const uint8_t*>(code);
+    if (!dxbc::constant_buffer_colour_rows(bytes, size, 0, rows[1]) ||
+        std::all_of(std::begin(rows[1]), std::end(rows[1]), [](uint64_t w) { return w == 0; }) ||
+        !dxbc::constant_buffer_static_rows(bytes, size, 0, rows[0]))
+        return;
+    shader->SetPrivateData(kCb0TintRowsGuid, sizeof(rows), rows);
+}
+
 void tag_cb_rows(ID3D11DeviceChild* shader, const void* code, SIZE_T size) {
     if (!cbRows.load(std::memory_order_relaxed) || !shader || !code || size < 20)
         return;
@@ -501,6 +515,7 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
     if (SUCCEEDED(hr) && code && size && shader && *shader && dxbc::checksum_ok(static_cast<const uint8_t*>(code), size)) {
         const UINT vectors = dxbc::constant_buffer_vectors(static_cast<const uint8_t*>(code), size, 0);  // 0: none
         (*shader)->SetPrivateData(kCb0VectorsGuid, sizeof(vectors), &vectors);
+        tag_tint_rows(*shader, code, size);
     }
     if (SUCCEEDED(hr) && code && size && !inProbe)
         examine(device, static_cast<const uint8_t*>(code), size, shader ? *shader : nullptr);
@@ -637,6 +652,7 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
     if (code && size && dxbc::checksum_ok(static_cast<const uint8_t*>(code), size)) {
         const UINT vectors = dxbc::constant_buffer_vectors(static_cast<const uint8_t*>(code), size, 0);  // 0: none
         (*shader)->SetPrivateData(kCb0VectorsGuid, sizeof(vectors), &vectors);
+        tag_tint_rows(*shader, code, size);
     }
     const YebisRole role = noRoles ? YebisRole::none : yebis_role(code, size);
     if (role != YebisRole::none) {
@@ -934,6 +950,7 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 
 void mvr_probe_position_twins(bool on) { positionTwins.store(on, std::memory_order_relaxed); }
 void mvr_probe_own_pixel_loads(bool on) { ownLoadsTwins.store(on, std::memory_order_relaxed); }
+void mvr_probe_tint_rows(bool on) { tintRows.store(on, std::memory_order_relaxed); }
 void mvr_probe_cb_rows(bool on) { cbRows.store(on, std::memory_order_relaxed); }
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
