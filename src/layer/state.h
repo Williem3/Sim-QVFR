@@ -272,6 +272,7 @@ struct LiveSettings {
     bool focusCorridor = kFocusCorridor.def != 0;
     int focusCorridorWidth = kFocusCorridorWidth.def;  // [quad] focus_corridor_width, metres either side
     int focusCorridorHeight = kFocusCorridorHeight.def;  // [quad] focus_corridor_height, tenths of a metre
+    int focusCorridorSpread = kFocusCorridorSpread.def;  // [quad] focus_corridor_spread, degrees either side
     int focusCorridorBlend = kFocusCorridorBlend.def;    // [quad] focus_corridor_blend, tenths of a metre
     bool focusCorridorShow = kFocusCorridorShow.def != 0;  // [quad] focus_corridor_show
     // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames

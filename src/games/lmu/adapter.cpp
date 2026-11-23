@@ -67,6 +67,7 @@ public:
                                         !simqvfr::ini_flag(s.ini, simqvfr::kGaze),
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorWidth),
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorHeight),
+                                    simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorSpread),
                                     simqvfr::ini_int(s.ini, simqvfr::kFocusCorridorBlend),
                                     simqvfr::ini_flag(s.ini, simqvfr::kFocusCorridorShow));
         }
@@ -151,7 +152,8 @@ public:
                 run.corridorBandPct = std::clamp(key(L"lmu_corridor_dlss_band_pct", -1), -1, 100);
                 run.corridorBandPadPct = std::clamp(key(L"lmu_corridor_dlss_band_pad_pct", 6), 0, 50);
                 run.corridorCarCm = std::clamp(key(L"lmu_corridor_car_cm", -1), -1, 1000);
-                run.corridorSpreadDeg = std::clamp(key(L"lmu_corridor_spread_deg", 15), 0, 60);
+                // Missing: the player's [quad] focus_corridor_spread (live).
+                run.corridorSpreadDeg = std::clamp(key(L"lmu_corridor_spread_deg", -1), -1, 60);
                 run.corridorFeatherGrowthPct = std::clamp(key(L"lmu_corridor_feather_growth_pct", 3), 0, 50);
                 run.corridorSlopeDeg = static_cast<float>(std::clamp(key(L"lmu_corridor_road_slope_deg", 35), 5, 75));
                 run.corridorCentreM = (std::max)(0, key(L"lmu_corridor_centre_cm", 600)) / 100.0f;
@@ -277,9 +279,9 @@ public:
         if (qvfr_)
             qvfr_frame_set_focus_visible(visible);
     }
-    void qvfr_set_focus_corridor(bool on, int widthM, int heightDm, int blendDm, bool show) override {
+    void qvfr_set_focus_corridor(bool on, int widthM, int heightDm, int spreadDeg, int blendDm, bool show) override {
         if (qvfr_)
-            qvfr_frame_set_corridor(on, widthM, heightDm, blendDm, show);
+            qvfr_frame_set_corridor(on, widthM, heightDm, spreadDeg, blendDm, show);
     }
     static void qvfr_set_focus_mask_now(bool on, const simqvfr::FocusArea& area, int marginTexels) {
         qvfr_frame_set_focus_mask(on, area, marginTexels > 0 ? static_cast<unsigned>(marginTexels) : 0u);

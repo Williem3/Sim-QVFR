@@ -73,6 +73,7 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::FocusCorridorWidth, I18N(L"Road width"), kFocusCorridorWidth),
     spec_of(MenuItem::FocusCorridorHeight, I18N(L"Road height"), kFocusCorridorHeight),
     spec_of(MenuItem::FocusCorridorPreset, I18N(L"Cockpit preset"), kFocusCorridorPreset),
+    spec_of(MenuItem::FocusCorridorSpread, I18N(L"Road widening"), kFocusCorridorSpread),
     spec_of(MenuItem::FocusCorridorBlend, I18N(L"Road edge blend"), kFocusCorridorBlend),
     spec_of(MenuItem::FocusCorridorShow, I18N(L"Show Road focus area"), kFocusCorridorShow),
     spec_of(MenuItem::EyeTracking, I18N(L"Foveated mode"), kGaze),
@@ -239,6 +240,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::FocusCorridorWidth: return &v.focusCorridorWidth;
     case MenuItem::FocusCorridorHeight: return &v.focusCorridorHeight;
     case MenuItem::FocusCorridorPreset: return &v.focusCorridorPreset;
+    case MenuItem::FocusCorridorSpread: return &v.focusCorridorSpread;
     case MenuItem::FocusCorridorBlend: return &v.focusCorridorBlend;
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
@@ -375,7 +377,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             items.push_back(MenuItem::FocusCorridor);
             if (v.focusCorridor)
                 add({MenuItem::FocusCorridorPreset, MenuItem::FocusCorridorWidth, MenuItem::FocusCorridorHeight,
-                     MenuItem::FocusCorridorBlend, MenuItem::FocusCorridorShow});
+                     MenuItem::FocusCorridorSpread, MenuItem::FocusCorridorBlend, MenuItem::FocusCorridorShow});
         }
         items.push_back(MenuItem::Outline);
     } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
@@ -729,6 +731,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.focusCorridorWidth = ini_int(ini, kFocusCorridorWidth);
     v.focusCorridorHeight = ini_int(ini, kFocusCorridorHeight);
     v.focusCorridorPreset = ini_int(ini, kFocusCorridorPreset);
+    v.focusCorridorSpread = ini_int(ini, kFocusCorridorSpread);
     v.focusCorridorBlend = ini_int(ini, kFocusCorridorBlend);
     v.focusCorridorShow = ini_flag(ini, kFocusCorridorShow);
     v.roadSaved = read_road_focus_saved(ini);
@@ -762,6 +765,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
         ok &= write(ini, kFocusCorridorWidth, kFocusCorridorWidth.clamp(v.focusCorridorWidth));
         ok &= write(ini, kFocusCorridorHeight, kFocusCorridorHeight.clamp(v.focusCorridorHeight));
         ok &= write(ini, kFocusCorridorPreset, kFocusCorridorPreset.clamp(v.focusCorridorPreset));
+        ok &= write(ini, kFocusCorridorSpread, kFocusCorridorSpread.clamp(v.focusCorridorSpread));
         ok &= write(ini, kFocusCorridorBlend, kFocusCorridorBlend.clamp(v.focusCorridorBlend));
         ok &= write(ini, kFocusCorridorShow, v.focusCorridorShow ? 1 : 0);
         ok &= write_road_focus_saved(ini, v.roadSaved);
@@ -1193,6 +1197,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = std::to_wstring(v.focusCorridorWidth) + L" m";
         else if (items[i] == MenuItem::FocusCorridorPreset)
             line.value = w.t(v.focusCorridorPreset == 1 ? I18N(L"Preset B") : I18N(L"Preset A"));
+        else if (items[i] == MenuItem::FocusCorridorSpread)
+            line.value = std::to_wstring(v.focusCorridorSpread) + L"\u00b0";
         else if (items[i] == MenuItem::FocusCorridorBlend)
             line.value = std::to_wstring(v.focusCorridorBlend / 10) + L"." + std::to_wstring(v.focusCorridorBlend % 10) +
                          L" m";

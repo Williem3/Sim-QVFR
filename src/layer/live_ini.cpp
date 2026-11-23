@@ -136,8 +136,8 @@ void live_apply(const LiveSettings& l) {
                                   l.focusMaskMargin);
         native_quad_focus_visible();  // what the runtime shows of the box (its size may have changed)
         game->qvfr_set_focus_corridor(l.focusCorridor && !l.gaze,  // road focus, fixed foveation (the game logs a change)
-                                      l.focusCorridorWidth, l.focusCorridorHeight, l.focusCorridorBlend,
-                                      l.focusCorridorShow);
+                                      l.focusCorridorWidth, l.focusCorridorHeight, l.focusCorridorSpread,
+                                      l.focusCorridorBlend, l.focusCorridorShow);
     }
     if (game->shows_overlay()) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);

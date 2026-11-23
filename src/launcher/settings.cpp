@@ -67,6 +67,7 @@ Settings load_settings(const std::wstring& ini) {
     s.corridorWidth = ini_int(f, kFocusCorridorWidth);
     s.corridorHeight = ini_int(f, kFocusCorridorHeight);
     s.corridorPreset = ini_int(f, kFocusCorridorPreset);
+    s.corridorSpread = ini_int(f, kFocusCorridorSpread);
     s.corridorBlend = ini_int(f, kFocusCorridorBlend);
     s.corridorShow = ini_flag(f, kFocusCorridorShow);
     s.eyeTracking = ini_flag(f, kGaze);
@@ -217,6 +218,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, kFocusCorridorWidth, n(kFocusCorridorWidth.clamp(s.corridorWidth)));
         ok &= write(ini, kFocusCorridorHeight, n(kFocusCorridorHeight.clamp(s.corridorHeight)));
         ok &= write(ini, kFocusCorridorPreset, n(kFocusCorridorPreset.clamp(s.corridorPreset)));
+        ok &= write(ini, kFocusCorridorSpread, n(kFocusCorridorSpread.clamp(s.corridorSpread)));
         ok &= write(ini, kFocusCorridorBlend, n(kFocusCorridorBlend.clamp(s.corridorBlend)));
         ok &= write(ini, kFocusCorridorShow, s.corridorShow ? L"1" : L"0");
     }

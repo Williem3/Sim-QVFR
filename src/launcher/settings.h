@@ -74,6 +74,7 @@ struct Settings {
     int corridorWidth = kFocusCorridorWidth.def;  // [quad] focus_corridor_width, metres either side of the road
     int corridorHeight = kFocusCorridorHeight.def;  // [quad] focus_corridor_height, tenths of a metre above it
     int corridorPreset = kFocusCorridorPreset.def;  // [quad] focus_corridor_preset: the cockpit preset, 0 A, 1 B
+    int corridorSpread = kFocusCorridorSpread.def;  // [quad] focus_corridor_spread: its widening, degrees either side
     int corridorBlend = kFocusCorridorBlend.def;    // [quad] focus_corridor_blend: its edges' blend, tenths of a metre
     bool corridorShow = kFocusCorridorShow.def != 0;  // [quad] focus_corridor_show: its coverage tinted in the headset
     FocusOffset offset;       // [quad] fixed/gaze_offset_y, _x: the focus region's offset, degrees up and right
@@ -145,6 +146,7 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
     kCarHighlightsRange = range_of(kCarLightHighlights), kCarGlossRange = range_of(kCarLightGloss),
     kCarSmoothRange = range_of(kCarLightSmooth), kCorridorWidthRange = range_of(kFocusCorridorWidth),
     kCorridorHeightRange = range_of(kFocusCorridorHeight), kCorridorBlendRange = range_of(kFocusCorridorBlend),
+    kCorridorSpreadRange = range_of(kFocusCorridorSpread),
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusPointRange{-kFocusPointReach, kFocusPointReach};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its
