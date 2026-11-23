@@ -117,6 +117,8 @@ std::wstring row_label(const Hit& h) {
 
 // The pop-ups (input.cpp opens these with open_popup): a value and a menu of the others.
 bool popup_ctl(Ctl id) {
+    if (lmu_game_choice(id))
+        return true;
     switch (id) {
     case kMethod:
     case kCheekyOuterPreset:

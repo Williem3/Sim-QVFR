@@ -514,7 +514,8 @@ std::vector<FocusStop> focus_order() {
     case Pane::Overview:
     case Pane::Picture:
     case Pane::Headset:
-    case Pane::Game: {
+    case Pane::Game:
+    case Pane::LmuGame: {
         const std::vector<FocusStop> drawn = drawn_order();
         order.insert(order.end(), drawn.begin(), drawn.end());
         break;
