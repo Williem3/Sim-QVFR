@@ -205,13 +205,14 @@ short stutter, unless the table says otherwise. Costs are from an RTX 5070 Ti; s
 | **Periphery preset** | K, F | K is steadier; F flickers a little more on edges. | **F costs about half** of K. Fine with eye tracking; keep K with a fixed focus. |
 | **Texture sharpening** | Off, Focus only, Focus and periphery | Samples textures a little sharper where DLSS works. The gain is small, most in the periphery. | Almost nothing. Turned on from Off, it starts at the next launch. If fine patterns shimmer, go a step lower. |
 | **Other cars' motion** | On / Off | Keeps passing cars clean under DLSS. | About **0.5 ms CPU + 0.2-0.5 ms GPU** in a full field. Next launch. |
+| **Light glow** | Off, Low, High | At night DLSS smooths very bright lights (headlights, floodlights) away and the game's bloom fades. Light glow lowers the exposure DLSS works at so it keeps them. Lights a pixel or more across get their glow back; the tiniest distant points mostly don't. Very bright edges may get a faint halo, and glossy paint shows its highlights again. Experimental. DLSS only (not FSR). | None. Changes without a stutter. |
 | **DLSS-NR** | On / Off (own card) | NVIDIA's neural rendering: reworks lighting and materials. Experimental. Needs your own `nvngx_dlssnr.dll`. | **Heavy:** about 2 ms of GPU time and 130 MB of video memory per million pixels it works on, per view. **Periphery too** adds at least 2 ms per eye. |
 
 **Cheapest DLSS that still looks good:** DLSS on, LMU's MSAA off, **Focus views: Quality**, **Periphery preset: F**
 (with eye tracking), **Focus preset: Default**, **Other cars' motion** on unless you're CPU-limited.
 
 **Best-looking DLSS:** DLSS on, LMU's MSAA off, **Focus views: DLAA**, **Periphery preset: K**, **Texture sharpening:
-Focus and periphery**, **Other cars' motion** on.
+Focus and periphery**, **Other cars' motion** on, and at night **Light glow: High**.
 
 ---
 
@@ -226,6 +227,7 @@ Use these freely to make the picture look better:
 | **Sharpening** | Picture tab, Resolution | A little GPU time. Crisper edges in the focus area; too much makes it shimmer. |
 | **Show a helmet** | Picture tab, View & helmet | Nothing for the game; the headset composites one extra layer. |
 | **Show focus outline** | Picture tab, Foveation | None, but turn it off to drive. |
+| **Light glow** | Picture tab, DLSS | None. Night lights keep their glow under DLSS (section 5). |
 
 ---
 
@@ -268,6 +270,7 @@ and the session; use them to compare settings, not as promises.
 | DLSS Periphery preset F | About half of K | None | Live |
 | Texture sharpening | Almost nothing | About 0.03 ms | Live (from Off: next launch) |
 | Other cars' motion | +0.2 to 0.5 ms in a full field | About +0.5 ms | Next launch |
+| Light glow | None | None | Live |
 | DLSS-NR | About +2 ms per million pixels, per view | Small | Live |
 | Sim-QVFR's multi-view (SMVR) instead of NVIDIA's (MVR) | About +0.4 ms | About +0.1 ms | Automatic |
 | Sharpening | A little | None | Live |
