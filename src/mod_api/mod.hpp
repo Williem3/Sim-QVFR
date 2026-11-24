@@ -111,11 +111,44 @@ public:
     virtual void swapchain_destroyed(uint64_t) {}
     // Null: the frame as it was.
     virtual const void* adjust_frame_end(const void*, void*) { return nullptr; }
+    // A D3D12 game whose mod renders the focus views itself: its table (focus_images_table), for the process.
+    virtual const SqvfrFocusImages* focus_images() { return nullptr; }
+};
+
+// A D3D12 mod's own focus views (mod_api.h SqvfrFocusImages), the core composing them with the game's eyes: derive,
+// override, and return the table focus_images_table builds from Mod::focus_images.
+class FocusImages {
+public:
+    virtual ~FocusImages() = default;
+    virtual void early(const SqvfrFocusImagesStart&) {}
+    virtual bool start(const SqvfrFocusImagesStart&) { return false; }
+    virtual void frame_end() {}
+    virtual void set_gaze(const float (&)[2][2]) {}
+    virtual void set_size(double, double, double) {}
+    virtual void set_box(double, double) {}
+    virtual void set_eye_scale(double) {}
+    virtual void set_stock(bool) {}
+    virtual void set_eye_texture_match(double, double) {}
+    virtual bool focus_image(SqvfrFocusImage&) { return false; }
+    virtual bool eye_region(float&, float&) { return false; }
+    virtual void eye_allow(bool) {}
+    virtual void gpu_scope(bool) {}
+    virtual bool census(uint32_t) { return false; }
+    virtual void set_live_diag(uint32_t) {}
 };
 
 namespace detail {
 
 inline Mod& as_mod(void* self) { return *static_cast<Mod*>(self); }
+inline FocusImages& as_images(void* self) { return *static_cast<FocusImages*>(self); }
+// A start from an older core, its missing fields zero.
+inline SqvfrFocusImagesStart full_start(const SqvfrFocusImagesStart* s) {
+    SqvfrFocusImagesStart full = {};
+    if (s)
+        std::memcpy(&full, s, s->size < sizeof(full) ? s->size : sizeof(full));
+    full.size = sizeof(full);
+    return full;
+}
 inline int32_t b(bool v) { return v ? 1 : 0; }
 
 }  // namespace detail
@@ -233,6 +266,45 @@ inline SqvfrMod mod_table(Mod& mod, const char* gameId) {
     t.adjust_frame_end = [](void* s, const void* frameEnd, void* enumerate) {
         return as_mod(s).adjust_frame_end(frameEnd, enumerate);
     };
+    t.focus_images = [](void* s) { return as_mod(s).focus_images(); };
+    return t;
+}
+
+// The C table for `images` (which must outlive it), every entry a thunk to its virtual.
+inline SqvfrFocusImages focus_images_table(FocusImages& images) {
+    using detail::as_images;
+    using detail::b;
+    using detail::full_start;
+    SqvfrFocusImages t = {};
+    t.size = sizeof(SqvfrFocusImages);
+    t.self = &images;
+    t.early = [](void* s, const SqvfrFocusImagesStart* start) { as_images(s).early(full_start(start)); };
+    t.start = [](void* s, const SqvfrFocusImagesStart* start) {
+        return b(start && as_images(s).start(full_start(start)));
+    };
+    t.frame_end = [](void* s) { as_images(s).frame_end(); };
+    t.set_gaze = [](void* s, const float ndc[2][2]) {
+        as_images(s).set_gaze(*reinterpret_cast<const float(*)[2][2]>(ndc));
+    };
+    t.set_size = [](void* s, double k, double kY, double render) { as_images(s).set_size(k, kY, render); };
+    t.set_box = [](void* s, double box, double boxY) { as_images(s).set_box(box, boxY); };
+    t.set_eye_scale = [](void* s, double scale) { as_images(s).set_eye_scale(scale); };
+    t.set_stock = [](void* s, int32_t on) { as_images(s).set_stock(on != 0); };
+    t.set_eye_texture_match = [](void* s, double share, double mips) { as_images(s).set_eye_texture_match(share, mips); };
+    t.focus_image = [](void* s, SqvfrFocusImage* out) { return b(out && as_images(s).focus_image(*out)); };
+    t.eye_region = [](void* s, float* fx, float* fy) {
+        float x = 1, y = 1;
+        const bool ok = as_images(s).eye_region(x, y);
+        if (fx)
+            *fx = x;
+        if (fy)
+            *fy = y;
+        return b(ok);
+    };
+    t.eye_allow = [](void* s, int32_t composed) { as_images(s).eye_allow(composed != 0); };
+    t.gpu_scope = [](void* s, int32_t compositor) { as_images(s).gpu_scope(compositor != 0); };
+    t.census = [](void* s, uint32_t frames) { return b(as_images(s).census(frames)); };
+    t.set_live_diag = [](void* s, uint32_t bits) { as_images(s).set_live_diag(bits); };
     return t;
 }
 

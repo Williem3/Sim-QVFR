@@ -3,11 +3,14 @@
 // that a round trip keeps every field).
 #pragma once
 
+#include <cstring>
+
 #include "../xr.h"
 
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
 #include "../games/adapter.h"
+#include "../quad/focus_images.h"
 #include "../quad/focus_mask.h"
 #include "../quad/views4_layout.h"
 #include "mod_api.h"
@@ -283,6 +286,66 @@ inline XrView xr_view_from_c(const SqvfrView& c) {
     XrView x = {XR_TYPE_VIEW};
     from_c(c, x);
     return x;
+}
+
+inline SqvfrFocusImagesStart to_c(const FocusImagesStart& s) {
+    SqvfrFocusImagesStart c = {};
+    c.size = sizeof(SqvfrFocusImagesStart);
+    c.device = s.device;
+    c.queue = s.queue;
+    c.ini = s.ini;
+    c.mode = s.mode;
+    c.compose = to_c(s.compose);
+    c.apiPath = to_c(s.apiPath);
+    c.boxFraction = s.boxFraction;
+    c.boxFractionY = s.boxFractionY;
+    c.pixelScale = s.pixelScale;
+    c.pixelScaleY = s.pixelScaleY;
+    c.post = to_c(s.post);
+    c.dlss = s.dlss;
+    c.dlssScale = s.dlssScale;
+    return c;
+}
+
+// Fields beyond the core's `size` keep FocusImagesStart's defaults.
+inline FocusImagesStart from_c(const SqvfrFocusImagesStart& c) {
+    FocusImagesStart s;
+    SqvfrFocusImagesStart full = to_c(s);
+    std::memcpy(&full, &c, c.size < sizeof(full) ? c.size : sizeof(full));
+    s.device = static_cast<ID3D12Device*>(full.device);
+    s.queue = static_cast<ID3D12CommandQueue*>(full.queue);
+    s.ini = full.ini ? full.ini : L"";
+    s.mode = full.mode;
+    s.compose = full.compose != 0;
+    s.apiPath = full.apiPath != 0;
+    s.boxFraction = full.boxFraction;
+    s.boxFractionY = full.boxFractionY;
+    s.pixelScale = full.pixelScale;
+    s.pixelScaleY = full.pixelScaleY;
+    s.post = full.post != 0;
+    s.dlss = full.dlss;
+    s.dlssScale = full.dlssScale;
+    return s;
+}
+
+inline SqvfrFocusImage to_c(const FocusImage& f) {
+    SqvfrFocusImage c = {};
+    c.image = f.image;
+    c.state = f.state;
+    c.box = f.box;
+    c.boxY = f.boxY;
+    std::memcpy(c.offset, f.offset, sizeof(c.offset));
+    return c;
+}
+
+inline FocusImage from_c(const SqvfrFocusImage& c) {
+    FocusImage f;
+    f.image = static_cast<ID3D12Resource*>(c.image);
+    f.state = c.state;
+    f.box = c.box;
+    f.boxY = c.boxY;
+    std::memcpy(f.offset, c.offset, sizeof(f.offset));
+    return f;
 }
 
 }  // namespace simqvfr::mod_api

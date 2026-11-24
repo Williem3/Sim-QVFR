@@ -192,6 +192,58 @@ enum {
 };
 enum { SQVFR_MVS_BACKEND_NONE = 0, SQVFR_MVS_BACKEND_NVAPI = 1, SQVFR_MVS_BACKEND_INSTANCED = 2 };
 
+/* quad/focus_images.h FocusImagesStart: what the core settles at the session's start, for a mod that renders the
+ * focus views itself at the D3D12 level. `device` an ID3D12Device*, `queue` the ID3D12CommandQueue* that presents
+ * (both null in `early`). Booleans as int32_t. Starts with its own size (append-only, like the tables). */
+typedef struct SqvfrFocusImagesStart {
+    uint32_t size;
+    void* device;
+    void* queue;
+    const wchar_t* ini;  /* the launch's ini: the mod reads its own switches there */
+    int32_t mode;        /* [experiment] replay_probe: 1/2 cost probes, 3 the focus views */
+    int32_t compose;     /* the core composes the focus image with the game's eyes this launch */
+    int32_t apiPath;     /* the game's QVFR by this path (the mod's own switches default on) */
+    double boxFraction, boxFractionY; /* the focus box: half extent in each eye's NDC (Y 0: as X) */
+    double pixelScale, pixelScaleY;   /* focus pixels per eye pixel (Y 0: as X) */
+    int32_t post;        /* the focus views' own post (tonemap, bloom, fxaa): needed to compose */
+    int32_t dlss;        /* the focus views through the mod's DLSS */
+    double dlssScale;    /* their render share (1: DLAA) */
+} SqvfrFocusImagesStart;
+
+/* quad/focus_images.h FocusImage: the focus views' image as the core composes it. `image` an ID3D12Resource* (both
+ * eyes side by side, after the post, the swapchain's format), `state` its D3D12_RESOURCE_STATES. */
+typedef struct SqvfrFocusImage {
+    void* image;
+    int32_t state;
+    double box, boxY;     /* the focus box's half extent in each eye's NDC */
+    float offset[2][2];   /* each eye's box centre off its forward axis (the gaze this frame used) */
+} SqvfrFocusImage;
+
+/* quad/focus_images.h FocusImages: a D3D12 mod's own focus views (SqvfrMod::focus_images). Every entry takes the
+ * table's `self`; read each only where `size` covers it (null: not offered). Booleans as int32_t. */
+typedef struct SqvfrFocusImages {
+    uint32_t size; /* sizeof(SqvfrFocusImages) as the mod was built */
+    void* self;
+    /* xrCreateInstance, before the game makes its device, swap chain or renderer (no device or queue). */
+    void (*early)(void* self, const SqvfrFocusImagesStart* start);
+    int32_t (*start)(void* self, const SqvfrFocusImagesStart* start);
+    void (*frame_end)(void* self);
+    /* Where each eye's focus box sits, off its forward axis in the eye's NDC (x right, y up), for the next frame. */
+    void (*set_gaze)(void* self, const float ndc[2][2]);
+    /* Live: the output size as a share of the eye each way and the render share (0: unchanged). */
+    void (*set_size)(void* self, double k, double kY, double renderScale);
+    void (*set_box)(void* self, double box, double boxY);
+    void (*set_eye_scale)(void* self, double scale);  /* the live periphery: the game's eyes at `scale` (1: off) */
+    void (*set_stock)(void* self, int32_t on);        /* no focus views, the game's eyes at launch size */
+    void (*set_eye_texture_match)(void* self, double share, double mips);
+    int32_t (*focus_image)(void* self, SqvfrFocusImage* out);  /* 0 before the first focus image */
+    int32_t (*eye_region)(void* self, float* fx, float* fy);   /* the share of each eye's image in use */
+    void (*eye_allow)(void* self, int32_t composed);
+    void (*gpu_scope)(void* self, int32_t compositor);
+    int32_t (*census)(void* self, uint32_t frames);           /* development builds: the draw census */
+    void (*set_live_diag)(void* self, uint32_t bits);
+} SqvfrFocusImages;
+
 /* ---- core -> mod ---- */
 
 typedef struct SqvfrHost {
@@ -359,6 +411,9 @@ typedef struct SqvfrMod {
     void (*swapchain_destroyed)(void* self, uint64_t chain);
     /* Null: the frame as it was. */
     const void* (*adjust_frame_end)(void* self, const void* frameEnd, void* enumerate);
+    /* A D3D12 game whose mod renders the focus views itself (the core composes them): its table, for the process.
+     * Null: none (the core's own QVFR paths). */
+    const SqvfrFocusImages* (*focus_images)(void* self);
 } SqvfrMod;
 
 /* The mod's one export (SQVFR_MOD_ENTRY_NAME). `host` lives for the process. Null: the mod refuses this core (it logs

@@ -4,11 +4,44 @@
 // directly. The step before a game moves into its own DLL (docs/architecture/mod-manager-plan.md, phase 1).
 #pragma once
 
+#include <memory>
+
 #include "../games/adapter.h"
 #include "convert.h"
 #include "mod.hpp"
 
 namespace simqvfr::mod_api {
+
+// A first-party adapter's focus views (quad/focus_images.h) as the ABI's FocusImages.
+class FocusImagesMod final : public sqvfr::FocusImages {
+public:
+    explicit FocusImagesMod(simqvfr::FocusImages& images) : i_(images) {}
+
+    void early(const SqvfrFocusImagesStart& s) override { i_.early(from_c(s)); }
+    bool start(const SqvfrFocusImagesStart& s) override { return i_.start(from_c(s)); }
+    void frame_end() override { i_.frame_end(); }
+    void set_gaze(const float (&ndc)[2][2]) override { i_.set_gaze(ndc); }
+    void set_size(double k, double kY, double render) override { i_.set_size(k, kY, render); }
+    void set_box(double box, double boxY) override { i_.set_box(box, boxY); }
+    void set_eye_scale(double scale) override { i_.set_eye_scale(scale); }
+    void set_stock(bool on) override { i_.set_stock(on); }
+    void set_eye_texture_match(double share, double mips) override { i_.set_eye_texture_match(share, mips); }
+    bool focus_image(SqvfrFocusImage& out) override {
+        simqvfr::FocusImage f;
+        if (!i_.focus_image(f))
+            return false;
+        out = to_c(f);
+        return true;
+    }
+    bool eye_region(float& fx, float& fy) override { return i_.eye_region(fx, fy); }
+    void eye_allow(bool composed) override { i_.eye_allow(composed); }
+    void gpu_scope(bool compositor) override { i_.gpu_scope(compositor); }
+    bool census(uint32_t frames) override { return i_.census(frames); }
+    void set_live_diag(uint32_t bits) override { i_.set_live_diag(bits); }
+
+private:
+    simqvfr::FocusImages& i_;
+};
 
 class AdapterMod final : public sqvfr::Mod {
 public:
@@ -150,10 +183,22 @@ public:
         return a_.adjust_frame_end(static_cast<const XrFrameEndInfo*>(info),
                                    reinterpret_cast<PFN_xrEnumerateSwapchainImages>(enumerate));
     }
+    const SqvfrFocusImages* focus_images() override {
+        if (!images_) {
+            simqvfr::FocusImages* own = a_.focus_images();
+            if (!own)
+                return nullptr;
+            images_ = std::make_unique<FocusImagesMod>(*own);
+            imagesTable_ = sqvfr::focus_images_table(*images_);
+        }
+        return &imagesTable_;
+    }
 
 private:
     static constexpr uint32_t kViewsMax = 16;
     games::GameAdapter& a_;
+    std::unique_ptr<FocusImagesMod> images_;
+    SqvfrFocusImages imagesTable_ = {};
 };
 
 }  // namespace simqvfr::mod_api

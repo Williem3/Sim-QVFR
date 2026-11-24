@@ -893,12 +893,169 @@ void mod_reads_its_settings() {
     DeleteFileW(ini.c_str());
 }
 
+// A game's own focus views (quad/focus_images.h), recorded: what the core sends reaches it, what it answers comes back.
+class ImagesRecorder final : public simqvfr::FocusImages {
+public:
+    simqvfr::FocusImagesStart early_, start_;
+    float gaze[2][2] = {};
+    double k = 0, kY = 0, render = 0, box = 0, boxY = 0, eyeScale = 0, share = 0, mips = 0;
+    bool stock = false, allowed = false, scope = false;
+    unsigned censusFrames = 0, diag = 0;
+    int frameEnds = 0;
+
+    void early(const simqvfr::FocusImagesStart& s) override { early_ = s; }
+    bool start(const simqvfr::FocusImagesStart& s) override {
+        start_ = s;
+        return true;
+    }
+    void frame_end() override { ++frameEnds; }
+    void set_gaze(const float (&ndc)[2][2]) override { std::memcpy(gaze, ndc, sizeof(gaze)); }
+    void set_size(double a, double b, double c) override {
+        k = a;
+        kY = b;
+        render = c;
+    }
+    void set_box(double a, double b) override {
+        box = a;
+        boxY = b;
+    }
+    void set_eye_scale(double scale) override { eyeScale = scale; }
+    void set_stock(bool on) override { stock = on; }
+    void set_eye_texture_match(double a, double b) override {
+        share = a;
+        mips = b;
+    }
+    bool focus_image(simqvfr::FocusImage& out) override {
+        out.image = reinterpret_cast<ID3D12Resource*>(static_cast<uintptr_t>(0x1230));
+        out.state = 0x800;
+        out.box = 0.22;
+        out.boxY = 0.18;
+        out.offset[1][0] = -0.05f;
+        out.offset[0][1] = 0.07f;
+        return true;
+    }
+    bool eye_region(float& fx, float& fy) override {
+        fx = 0.75f;
+        fy = 0.5f;
+        return true;
+    }
+    void eye_allow(bool composed) override { allowed = composed; }
+    void gpu_scope(bool compositor) override { scope = compositor; }
+    bool census(unsigned frames) override {
+        censusFrames = frames;
+        return true;
+    }
+    void set_live_diag(unsigned bits) override { diag = bits; }
+};
+
+class ImagesAdapter final : public GameAdapter {
+public:
+    explicit ImagesAdapter(simqvfr::FocusImages* images) : images_(images) {}
+    simqvfr::FocusImages* focus_images() override { return images_; }
+
+private:
+    simqvfr::FocusImages* images_;
+};
+
+void focus_images_through_the_tables() {
+    {  // a game without its own focus views: none on either side
+        ImagesAdapter none(nullptr);
+        simqvfr::mod_api::AdapterMod mod(none);
+        const SqvfrMod t = sqvfr::mod_table(mod, "testgame");
+        std::string why;
+        auto a = PluginAdapter::create(&test_game(), &t, why);
+        check(a && !a->focus_images(), "no focus views when the game has none");
+        SqvfrMod old = t;
+        old.size = static_cast<uint32_t>(offsetof(SqvfrMod, focus_images));
+        auto o = PluginAdapter::create(&test_game(), &old, why);
+        check(o && !o->focus_images(), "an older mod's table offers no focus views");
+    }
+    ImagesRecorder rec;
+    ImagesAdapter game(&rec);
+    simqvfr::mod_api::AdapterMod mod(game);
+    const SqvfrMod t = sqvfr::mod_table(mod, "testgame");
+    std::string why;
+    auto a = PluginAdapter::create(&test_game(), &t, why);
+    simqvfr::FocusImages* images = a ? a->focus_images() : nullptr;
+    check(images != nullptr, "the game's focus views reach the core");
+    if (!images)
+        return;
+    check(a->focus_images() == images, "one focus-image bridge for the process");
+
+    simqvfr::FocusImagesStart s;
+    s.device = reinterpret_cast<ID3D12Device*>(static_cast<uintptr_t>(0x10));
+    s.queue = reinterpret_cast<ID3D12CommandQueue*>(static_cast<uintptr_t>(0x20));
+    s.ini = L"C:\\run\\sim-qvfr.ini";
+    s.mode = 2;
+    s.compose = true;
+    s.apiPath = true;
+    s.boxFraction = 0.21;
+    s.boxFractionY = 0.19;
+    s.pixelScale = 1.7;
+    s.pixelScaleY = 1.5;
+    s.post = true;
+    s.dlss = 1;
+    s.dlssScale = 0.67;
+    check(images->start(s), "start forwards");
+    const simqvfr::FocusImagesStart& r = rec.start_;
+    check(r.device == s.device && r.queue == s.queue && std::wcscmp(r.ini, s.ini) == 0 && r.mode == 2 && r.compose &&
+              r.apiPath && r.boxFraction == 0.21 && r.boxFractionY == 0.19 && r.pixelScale == 1.7 &&
+              r.pixelScaleY == 1.5 && r.post && r.dlss == 1 && r.dlssScale == 0.67,
+          "the focus views' start round-trips");
+    s.device = nullptr;
+    s.queue = nullptr;
+    images->early(s);
+    check(!rec.early_.device && rec.early_.compose && rec.early_.mode == 2, "early forwards without a device");
+
+    const float gaze[2][2] = {{0.1f, -0.2f}, {0.3f, 0.4f}};
+    images->set_gaze(gaze);
+    images->set_size(1.1, 0.9, 0.5);
+    images->set_box(0.25, 0.2);
+    images->set_eye_scale(0.8);
+    images->set_stock(true);
+    images->set_eye_texture_match(0.5, 1.5);
+    images->eye_allow(true);
+    images->gpu_scope(true);
+    images->set_live_diag(0x5);
+    images->frame_end();
+    check(std::memcmp(rec.gaze, gaze, sizeof(gaze)) == 0 && rec.k == 1.1 && rec.kY == 0.9 && rec.render == 0.5 &&
+              rec.box == 0.25 && rec.boxY == 0.2 && rec.eyeScale == 0.8 && rec.stock && rec.share == 0.5 &&
+              rec.mips == 1.5 && rec.allowed && rec.scope && rec.diag == 0x5 && rec.frameEnds == 1,
+          "the live calls reach the game's focus views");
+    check(images->census(4) && rec.censusFrames == 4, "the census forwards");
+
+    simqvfr::FocusImage f;
+    check(images->focus_image(f) && reinterpret_cast<uintptr_t>(f.image) == 0x1230 && f.state == 0x800 &&
+              f.box == 0.22 && f.boxY == 0.18 && f.offset[1][0] == -0.05f && f.offset[0][1] == 0.07f,
+          "the focus image comes back whole");
+    float fx = 0, fy = 0;
+    check(images->eye_region(fx, fy) && fx == 0.75f && fy == 0.5f, "the eye region comes back");
+
+    // A mod's focus-image table from before set_live_diag: the missing entry does nothing.
+    SqvfrFocusImages shortTable = *mod.focus_images();
+    shortTable.size = static_cast<uint32_t>(offsetof(SqvfrFocusImages, set_live_diag));
+    rec.diag = 0;
+    SqvfrMod withShort = t;
+    static const SqvfrFocusImages* shortPtr = nullptr;
+    shortPtr = &shortTable;
+    withShort.focus_images = [](void*) { return shortPtr; };
+    auto b = PluginAdapter::create(&test_game(), &withShort, why);
+    simqvfr::FocusImages* older = b ? b->focus_images() : nullptr;
+    check(older != nullptr, "a shorter focus-image table is taken");
+    if (older) {
+        older->set_live_diag(0x7);
+        older->frame_end();
+        check(rec.diag == 0 && rec.frameEnds == 2, "an entry beyond the focus-image table does nothing");
+    }
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     refuses_other_tables();
     defaults_beyond_the_table();
     structs_round_trip();
+    focus_images_through_the_tables();
     host_names_the_game();
     scs_through_the_tables();
     trust_rules();

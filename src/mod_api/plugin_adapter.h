@@ -83,6 +83,8 @@ public:
     void swapchain_destroyed(XrSwapchain chain) override;
     const XrFrameEndInfo* adjust_frame_end(const XrFrameEndInfo* info, PFN_xrEnumerateSwapchainImages enumerate) override;
 
+    FocusImages* focus_images() override;
+
     const SqvfrMod& table() const { return *mod_; }
 
 private:
@@ -93,6 +95,8 @@ private:
     const games::GameInfo* game_;
     const SqvfrMod* mod_;
     std::unique_ptr<SqvfrHost> host_;  // the table `load` passed to the mod
+    std::unique_ptr<FocusImages> images_;  // the mod's focus_images table as the core's FocusImages (first asked)
+    bool imagesAsked_ = false;
 };
 
 }  // namespace simqvfr::mod_api

@@ -375,4 +375,106 @@ const XrFrameEndInfo* PluginAdapter::adjust_frame_end(const XrFrameEndInfo* info
     return out ? static_cast<const XrFrameEndInfo*>(out) : info;
 }
 
+namespace {
+
+// A mod's SqvfrFocusImages table as the core's FocusImages: an entry beyond the table's size, or null, does nothing
+// (a query answers "none").
+class PluginFocusImages final : public FocusImages {
+public:
+    explicit PluginFocusImages(const SqvfrFocusImages* t) : t_(t) {}
+
+    void early(const FocusImagesStart& s) override {
+        const SqvfrFocusImagesStart c = to_c(s);
+        if (auto fn = entry(&SqvfrFocusImages::early))
+            fn(t_->self, &c);
+    }
+    bool start(const FocusImagesStart& s) override {
+        const SqvfrFocusImagesStart c = to_c(s);
+        auto fn = entry(&SqvfrFocusImages::start);
+        return fn && fn(t_->self, &c) != 0;
+    }
+    void frame_end() override {
+        if (auto fn = entry(&SqvfrFocusImages::frame_end))
+            fn(t_->self);
+    }
+    void set_gaze(const float (&ndc)[2][2]) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_gaze))
+            fn(t_->self, ndc);
+    }
+    void set_size(double k, double kY, double render) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_size))
+            fn(t_->self, k, kY, render);
+    }
+    void set_box(double box, double boxY) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_box))
+            fn(t_->self, box, boxY);
+    }
+    void set_eye_scale(double scale) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_eye_scale))
+            fn(t_->self, scale);
+    }
+    void set_stock(bool on) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_stock))
+            fn(t_->self, to_c(on));
+    }
+    void set_eye_texture_match(double share, double mips) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_eye_texture_match))
+            fn(t_->self, share, mips);
+    }
+    bool focus_image(FocusImage& out) override {
+        auto fn = entry(&SqvfrFocusImages::focus_image);
+        SqvfrFocusImage c = {};
+        if (!fn || !fn(t_->self, &c))
+            return false;
+        out = from_c(c);
+        return true;
+    }
+    bool eye_region(float& fx, float& fy) override {
+        auto fn = entry(&SqvfrFocusImages::eye_region);
+        if (!fn) {
+            fx = fy = 1;
+            return false;
+        }
+        return fn(t_->self, &fx, &fy) != 0;
+    }
+    void eye_allow(bool composed) override {
+        if (auto fn = entry(&SqvfrFocusImages::eye_allow))
+            fn(t_->self, to_c(composed));
+    }
+    void gpu_scope(bool compositor) override {
+        if (auto fn = entry(&SqvfrFocusImages::gpu_scope))
+            fn(t_->self, to_c(compositor));
+    }
+    bool census(unsigned frames) override {
+        auto fn = entry(&SqvfrFocusImages::census);
+        return fn && fn(t_->self, frames) != 0;
+    }
+    void set_live_diag(unsigned bits) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_live_diag))
+            fn(t_->self, bits);
+    }
+
+private:
+    template <class Fn> Fn entry(Fn SqvfrFocusImages::* field) const {
+        const auto offset =
+            static_cast<std::size_t>(reinterpret_cast<const char*>(&(t_->*field)) - reinterpret_cast<const char*>(t_));
+        return offset + sizeof(Fn) <= t_->size ? t_->*field : nullptr;
+    }
+
+    const SqvfrFocusImages* t_;
+};
+
+}  // namespace
+
+FocusImages* PluginAdapter::focus_images() {
+    if (!imagesAsked_) {
+        imagesAsked_ = true;
+        auto fn = entry(&SqvfrMod::focus_images);
+        const SqvfrFocusImages* t = fn ? fn(mod_->self) : nullptr;
+        if (t && t->size >= offsetof(SqvfrFocusImages, self) + sizeof(void*))
+            images_ = std::make_unique<PluginFocusImages>(t);
+    }
+    return images_.get();
+}
+
 }  // namespace simqvfr::mod_api
