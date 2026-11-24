@@ -93,6 +93,20 @@ Each phase leaves the app working.
 7. **Per-mod updates.** Release tags `mod-<id>-v<version>`, the `mods/<id>/` folder swapped whole, the old folder
    kept for rollback.
 
+## New games from mods (Willie, 2026-11-24: the SDK is mainly for the community to bring new games)
+
+- A `games` entry in mod.json with an `exe` adds a game (games/game.h `ModGame`, games.cpp): id, name, short name,
+  exe, Steam folder and app id, launch arguments, the QVFR image kind, anti-cheat processes, and the core features it
+  supports (live resolution, helmet, crop, sharpening, focus mask, eye off, multi-view). Features tied to one game's
+  code (Cheeky's DLSS, road focus, car lighting, object detail) aren't offered.
+- Read from `mods\` beside each module the first time the games are listed (the launcher and the core alike), and again
+  when a mod is added. Listed after Sim-QVFR's own games. A mod can't take a game Sim-QVFR has (its id or exe), nor
+  another mod's. A removed mod's game stays listed until the launcher restarts.
+- The core loads that mod's DLL for the game through the trust check (games/adapters.cpp). The launcher treats its
+  build as supported: the mod knows its builds.
+- The SDK (`sdk/`): AGENTS.md (the walkthrough for agents and people; CLAUDE.md imports it), the CMake helper, schemas,
+  and examples/hello.
+
 ## Phase 5, first step: Settings panel and mod settings
 
 Willie, 2026-11-24: mods are managed in one place, not per game. That place is a **Settings** button on the rail,

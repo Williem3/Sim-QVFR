@@ -132,6 +132,9 @@ void confirm_add(const StagedMod& staged) {
         app.modsMessage = r.ok ? trf(L"{mod} added.", {{L"mod", staged.name}}) : r.error;
         app.modsTone = r.ok ? 0 : 2;
         mods_refresh();
+        // A game it adds joins the rail now (games/game.h mod games).
+        if (r.ok && games::rescan_mod_games() > 0)
+            refresh_installed();
     };
     open_sheet(std::move(s));
 }

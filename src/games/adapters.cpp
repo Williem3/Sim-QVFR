@@ -109,6 +109,12 @@ GameAdapter& adapter_for(const GameInfo* game) {
         (void)logged;
         return off;
     }
+    // A game a community mod adds (game.h mod_game): that mod's DLL, through the trust check like any mod.
+    if (const ModGame* m = mod_game(game)) {
+        static GameAdapter& modded = through_mod_dll(game, m->modId.c_str(), m->dll.c_str(),
+                                                     mod_api::first_party_mod(m->modId), protectedLaunch);
+        return modded;
+    }
     // A new game adds its adapter here (src/games/README.md).
     if (game == &::ace::kGame)
         return ::ace::adapter();

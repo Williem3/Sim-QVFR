@@ -1,8 +1,13 @@
-# AGENTS.md: building a Sim-QVFR game mod
+# AGENTS.md: bringing a new game to Sim-QVFR
 
 This file is for coding agents (Codex, Cursor, Copilot, Gemini, Claude Code and others) and for the people who drive
-them. It is the one source of truth for how a Sim-QVFR mod should be built. `CLAUDE.md` only points here. Read all of
-it before writing code.
+them. Its main use is a walkthrough: **taking a VR game Sim-QVFR doesn't support yet and giving it QVFR as a
+community mod.** It is the one source of truth for how a mod is built. `CLAUDE.md` only points here. Read all of it
+before writing code.
+
+**What "done" looks like for a new game:** the launcher lists and starts it, the game draws a sharp focus view and a
+cheaper periphery for each eye, the two meet with no visible seam, and the overlay shows more GPU frame time than the
+same scene without Sim-QVFR.
 
 ## 1. What Sim-QVFR is for
 
@@ -45,7 +50,7 @@ The core owns everything that isn't game-specific. A mod supplies only what only
 - **Online play and anti-cheat.** Patching or hooking a game's code is what anti-cheat looks for. API-level work
   touches only what any overlay or capture tool touches. Players get banned for this, so treat it seriously.
 - **Relations with game makers.** Sim-QVFR stays welcome by not taking games apart.
-- **One renderer for everyone.** Features in section 3 work in every game once the mod reports where the views are.
+- **One renderer for everyone.** Features in section 5 work in every game once the mod reports where the views are.
 
 **Never:**
 
@@ -55,10 +60,50 @@ The core owns everything that isn't game-specific. A mod supplies only what only
 - put game-specific reverse-engineering details in public files (addresses, offsets, shader hashes, anti-cheat
   internals). Keep them out of the repository, out of logs and out of issues.
 
+**Stop and ask the human when:**
+
+- the game has an anti-cheat (it runs online, or ships EasyAntiCheat, BattlEye or similar);
+- a step seems to need the game's code or memory changed;
+- a test needs the headset on (the human runs it, and tells you what they saw);
+- the game is D3D12, Vulkan or OpenGL (below).
+
 **D3D12 games:** the core's compositor and its DLSS-NR and FSR backends already run on D3D12, but the per-draw services
 above are D3D11 only for now. For a D3D12 game, raise it with the maintainer before you start.
 
-## 3. Features the core provides, and what your mod must supply
+## 3. Triage a new game
+
+Before writing code, find out, and write down for the human:
+
+- **Graphics API:** D3D11, D3D12, Vulkan or OpenGL (which DLLs it loads; its settings files).
+- **VR path:** OpenXR of its own, OpenVR through OpenComposite, or a VR mod. Sim-QVFR is an OpenXR layer: the game
+  must reach OpenXR.
+- **Engine:** Unreal, Unity, an in-house one. It tells you how the game lays out its eyes.
+- **Stereo layout:** two passes (one per eye), instanced stereo (one pass, two views), or one double-wide target.
+- **Views:** does it render any number of views OpenXR gives it? Then section 2's first option (OpenXR only) may be enough.
+- **Anti-cheat and DRM:** see "Stop and ask" above.
+- **Store:** its Steam app id and install folder, for `mod.json`.
+
+The fit, best first: the game draws four views when asked (OpenXR only); the game's eye passes take a second view
+(D3D11 multi-view); anything else (ask the human first).
+
+## 4. The ladder: one step per test run
+
+Climb one rung at a time. Each rung ends with a launch, and the log or the human's eyes saying it works.
+
+1. **Identity.** `mod.json` with the game's entry (section 7), the DLL from `examples/hello`. Add the zip, approve it.
+   The launcher lists the game and starts it.
+2. **The core loads you in the game.** The game's log says your mod loaded, and your `instance_created` logs a line.
+   `has_qvfr` still answers 0.
+3. **Quad views running.** `has_qvfr` 1, `qvfr_start`, frames reported. Expect a fixed focus box in the middle.
+4. **The focus box in the right place.** It sits where the periphery says it should, at every distance: convergence
+   and depth agree, and moving the head doesn't make it swim.
+5. **Focus matches the periphery.** Same exposure, colour, bloom, glare and fog in both. Post-processing that reads the
+   whole screen is the usual culprit.
+6. **Eye tracking.** The box follows the eyes (`wants_gaze`, `qvfr_set_gaze`).
+7. **Live resolution.** Periphery and focus sizes change while playing (`qvfr_live_resolution`).
+8. **The extras** in section 5: focus mask, crop, helmet, upscalers.
+
+## 5. Features the core provides, and what your mod must supply
 
 Each feature lights up only when the mod gives the core what the feature needs. The names below are `sqvfr::Mod`
 methods (`mod.hpp`). Each one mirrors an entry of the C table in `mod_api.h`, and the comments there are the full
@@ -73,9 +118,9 @@ contract. Any method you don't override answers "the core's default".
 | **Foveated DLAA / DLSS (and FSR, DLSS-NR)** | DLAA on the periphery, DLAA or upscaling on the focus views | Your views need what the upscaler needs: colour, depth and motion vectors per view, and sub-pixel jitter. Apply `qvfr_jitter_views` to the cameras you draw with, and `qvfr_set_dlss` / `qvfr_set_nr` for the settings. `qvfr_target_sizes` reports render and output sizes. |
 | **Focus mask and corner radius** | The focus views skip pixels outside the focus shape (a rounded box, or a free-form outline) | Apply `qvfr_set_focus_mask` (the focus area and a margin): keep the focus views from rendering outside the area, for example with a depth mask drawn before the scene so its draws skip those pixels (early depth). Stay a margin outside the shape, so nothing that is shown, or that DLSS, sharpening or ambient occlusion read next to it, is lost. The rounding and the feather come with `qvfr_set_look`. |
 | **View crop** | The game stops drawing the edges a helmet would hide | Nothing extra when the game renders the field of view OpenXR gives it: the core narrows it. A game with fixed cameras has to apply the layout's `cropWidth` / `cropHeight`. |
-| **Helmet overlay** (racing-style games) | A visor round the view, lit by the scene | Nothing: the core draws it over the composed eyes. It is offered for games whose Sim-QVFR entry lists it; ask the maintainer to turn it on for yours. |
+| **Helmet overlay** (racing-style games) | A visor round the view, lit by the scene | Nothing: the core draws it over the composed eyes. Turn on `helmet` in your game's `features` (section 7) so the launcher offers it. |
 | **CAS sharpening, feather, colour correction** | A crisper focus area, a soft blend at its edge, exposure, contrast and saturation | Nothing when the core composes (the default). If your game composes the views itself (`qvfr_composable` 0), these are yours to match. |
-| **Headset menu, performance overlay, launcher tab** | Every core setting, live, in the headset; frame times | Nothing for the core's settings. Your own settings go in `settings.json` (section 5). |
+| **Headset menu, performance overlay, launcher tab** | Every core setting, live, in the headset; frame times | Nothing for the core's settings. Your own settings go in `settings.json` (section 7). |
 | **Hang watch, logs, captures** | A dump when the game hangs; one log per game | `hang_watch_s` (seconds of no frames before it fires) and `host->log`. |
 
 The less your mod does, the more of this works without extra code. The order to aim for:
@@ -86,7 +131,7 @@ The less your mod does, the more of this works without extra code. The order to 
 4. the focus mask;
 5. the upscalers.
 
-## 4. The ABI rules
+## 6. The ABI rules
 
 - **C only across the boundary.** `mod_api.h` is plain C. `mod.hpp` is a header-only C++ wrapper that builds the C
   table from a class. Don't pass C++ types, STL containers or exceptions through the table.
@@ -102,9 +147,29 @@ The less your mod does, the more of this works without extra code. The order to 
 - **Static C runtime.** A mod is loaded with only its own folder and System32 searched for DLLs, so link the runtime
   in. `sqvfr_add_mod` does this for you.
 
-## 5. Your mod's settings
+## 7. mod.json: your game, and your settings
 
-List your settings in `settings.json` (schema: `schemas/settings.schema.json`). It allows up to 16 settings, each a
+**Your game.** A `games` entry with an `exe` adds a new game (schema: `schemas/mod.schema.json`):
+
+```json
+{
+  "id": "spacesim-qvfr", "name": "Space Sim QVFR", "author": "you", "version": "0.1.0",
+  "dll": "sim-qvfr-spacesim-qvfr.dll",
+  "games": [{
+    "id": "spacesim", "name": "Space Sim", "short": "SPC",
+    "exe": "SpaceSim.exe", "steamFolder": "Space Sim", "exeFolder": "Binaries\\Win64",
+    "steamAppId": "123456", "launchArgs": "-vr",
+    "features": { "liveResolution": true, "helmet": false }
+  }]
+}
+```
+
+The launcher lists the game once the mod is added, and the core loads your DLL when that exe starts OpenXR (after the
+player approves it). Turn a feature on in `features` only once your mod supports it: the launcher and the headset menu
+offer it from there. A mod can't take a game Sim-QVFR already has (its id or its exe), nor another mod's. An entry
+with only an `id` (`{"id": "ats"}`) names a game Sim-QVFR has: your settings show on its tab.
+
+**Your settings.** List them in `settings.json` (schema: `schemas/settings.schema.json`). It allows up to 16 settings, each a
 toggle or a choice of 2 to 4 options. They show on the Game tab's **Mod settings** card for the games in your
 `mod.json`, and are saved in `[mod_<id>]` of `sim-qvfr.ini`.
 
@@ -113,7 +178,7 @@ Read them in the mod with `sqvfr::setting_on(host, "key", default)` and
 never changed a setting, or when the core is too old to have this service. Settings are read when the game starts, so
 a change applies at the next launch.
 
-## 6. Packaging: what "Add a mod" accepts
+## 8. Packaging: what "Add a mod" accepts
 
 A player adds a mod by dropping its zip on the launcher, or with **Settings > Mods > Add a mod…**. The zip must hold:
 
@@ -125,7 +190,7 @@ A player adds a mod by dropping its zip on the launcher, or with **Settings > Mo
 Put the files at the zip's root, or in one folder. Use one mod per zip, under 64 MB. `sqvfr_add_mod`'s
 `sqvfr_mod_zip_<name>` target makes this zip for you.
 
-## 7. Trust: what players see
+## 9. Trust: what players see
 
 - A mod not made by Sim-QVFR runs **only after the player approves** that exact file in Settings > Mods. A rebuilt
   DLL needs approving again.
@@ -133,18 +198,29 @@ Put the files at the zip's root, or in one folder. Use one mod per zip, under 64
   **and** the DLL carries a valid Authenticode signature of **your own**. Unsigned mods never run online.
 - Sim-QVFR's own signature never covers your mod. Logs and reports label it "third-party".
 
-## 8. Building and testing
+## 10. Building, testing and debugging
 
 - Build the example first (`examples/hello`, see `README.md`), add its zip through the launcher, approve it, and check
   the game's log for its line. That proves your tool chain, packaging and trust steps before any rendering work.
-- Then grow it one feature at a time (section 3's order). After each step, launch with **Game › Diagnostics › Next
+- Then grow it one feature at a time (section 4's ladder). After each step, launch with **Game › Diagnostics › Next
   launch without QVFR** and compare: frames gained, and nothing visibly worse.
 - Turn on **Detailed logs** for `SQVFR_LOG_DEBUG` lines. Check `host->log_debug_on()` before building costly ones.
 - Keep a mod's own tests runnable without the game: pure maths in headers, tested on their own.
+- **Measure before you change anything.** Capture a frame with RenderDoc and go pass by pass: which pass draws the
+  eyes, at what size, into which target, with which cameras. Write down what you found before you write code.
+- **Short headset runs, one question each.** "Is the box in the middle, sharp, and does it stay put when you turn
+  your head?" is a good run. "Does it work?" isn't.
+- **Common faults and their usual causes:**
+  - the focus area brighter, darker or blurrier than around it: a screen-wide pass (exposure, bloom, tone mapping)
+    sees only the focus view;
+  - black wedges or edges at the box's border: the focus view's cameras or scissor don't match its projection;
+  - the box swims or doubles: the eyes' boxes aren't converged (the core does this when you report the views it gives);
+  - one eye wrong or swapped: the eye index of the pass;
+  - flicker: a resource shared between the focus view and the eye, written by one and read by the other.
 
-## 9. When working on this as an agent
+## 11. When working on this as an agent
 
-- Follow sections 2 and 4 strictly. If a feature seems to need a code patch, stop and say so; don't write one.
+- Follow sections 2 and 6 strictly. If a feature seems to need a code patch, stop and say so; don't write one.
 - Keep public files free of game internals (section 2, "Never").
 - Change one thing at a time, and say what the player should see change.
 - Don't edit `mod_api.h` or `mod.hpp` in a mod. They are the core's contract: a change there is a change to

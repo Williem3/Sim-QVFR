@@ -42,7 +42,8 @@ You need Windows, Visual Studio 2022 (the "Desktop development with C++" workloa
    example writes `hello mod: running in ats, feeling calm`.
 6. **Change a setting** on the Game tab's **Mod settings** card, launch again, and watch the log line change.
 
-From there, follow AGENTS.md section 3 one feature at a time.
+From there, climb AGENTS.md's ladder (section 4) one rung at a time. For a new game, add its entry to `mod.json`
+(AGENTS.md section 7): the launcher then lists it.
 
 ## Shipping it
 

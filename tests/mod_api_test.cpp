@@ -781,6 +781,55 @@ void sdk_example_loads() {
           "sqvfr_add_mod puts mod.json and settings.json beside the DLL");
 }
 
+// A game a community mod adds (games/game.h mod games): listed after Sim-QVFR's own, found by id and exe, tied to its
+// mod; a mod can't take a game Sim-QVFR has, nor give an exe with a folder.
+void mod_adds_a_game() {
+    namespace games = simqvfr::games;
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring mods = std::wstring(temp) + L"sqvfr-mod-games-test";
+    const std::wstring folder = mods + L"\\newgame";
+    CreateDirectoryW(mods.c_str(), nullptr);
+    CreateDirectoryW(folder.c_str(), nullptr);
+    const std::string manifest = R"({"id":"newgame","dll":"sim-qvfr-newgame.dll","games":[
+        {"id":"spacesim","name":"Space Sim","short":"SPC","exe":"SpaceSim.exe","steamFolder":"Space Sim","steamAppId":"123456",
+         "launchArgs":"-openxr","features":{"liveResolution":true,"helmet":true,"carLighting":true},"image":"separateViews",
+         "antiCheat":["EasyAntiCheat.exe"]},
+        {"id":"ats"},
+        {"id":"lmu2","exe":"Le Mans Ultimate.exe"},
+        {"id":"evil","exe":"..\\x.exe"},
+        {"id":"farm","exe":"Farm.exe","steamFolder":"C:\\Windows","steamAppId":"12ab"}]})";
+    HANDLE f = CreateFileW((folder + L"\\mod.json").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD written = 0;
+    WriteFile(f, manifest.data(), static_cast<DWORD>(manifest.size()), &written, nullptr);
+    CloseHandle(f);
+
+    std::size_t before = 0;
+    games::all_games(before);
+    check(games::add_mod_games_from(mods) == 2, "a mod adds its new games (not one Sim-QVFR has, nor a bad exe)");
+    check(games::add_mod_games_from(mods) == 0, "read again, nothing is added twice");
+    std::size_t after = 0;
+    const games::GameInfo* const* all = games::all_games(after);
+    check(after == before + 2 && std::strcmp(all[before]->id, "spacesim") == 0, "listed after Sim-QVFR's own games");
+    const games::GameInfo* g = games::game_for_exe(L"spacesim.EXE");
+    check(g && g == games::game_by_id("spacesim") && std::wcscmp(g->name, L"Space Sim") == 0 &&
+              std::wcscmp(g->steamAppId, L"123456") == 0 && g->features.liveResolution && g->features.helmet &&
+              !g->features.carLighting && g->qvfrImage == games::QvfrImage::SeparateViews && g->anyBuild &&
+              g->antiCheat && std::wcscmp(g->antiCheat[0], L"EasyAntiCheat.exe") == 0 && !g->antiCheat[1],
+          "the game's entry as mod.json gives it (a feature of one game's own code isn't offered)");
+    const games::ModGame* m = games::mod_game(g);
+    check(m && m->modId == L"newgame" && m->dll == L"sim-qvfr-newgame.dll", "the game is tied to its mod");
+    check(!games::mod_game(&::ats::kGame) && games::game_for_exe(L"amtrucks.exe") == &::ats::kGame,
+          "Sim-QVFR's own games stay its own");
+    const games::GameInfo* farm = games::game_by_id("farm");
+    check(farm && std::wcslen(farm->steamFolder) == 0 && std::wcslen(farm->steamAppId) == 0,
+          "an absolute folder or an app id that isn't a number is dropped");
+
+    DeleteFileW((folder + L"\\mod.json").c_str());
+    RemoveDirectoryW(folder.c_str());
+    RemoveDirectoryW(mods.c_str());
+}
+
 // A mod reads its own settings ([mod_<id>] of the ini SIM_QVFR_INI names) through its copy of the host table, and
 // only its own: the section comes from the table's modId, never from the mod.
 void mod_reads_its_settings() {
@@ -832,6 +881,7 @@ int SIM_QVFR_TEST_MAIN() {
     host_table_filled();
     mod_reads_its_settings();
     sdk_example_loads();
+    mod_adds_a_game();
     if (failures) {
         std::printf("mod_api_test: %d failure(s)\n", failures);
         return 1;

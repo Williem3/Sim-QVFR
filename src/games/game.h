@@ -120,8 +120,24 @@ inline std::wstring wide_id(const GameInfo& game) {
 // [launcher] anticheat=1 in the ini (the launcher's Games pane): the user runs Sim-QVFR with the game's anti-cheat.
 bool anticheat_chosen(const wchar_t* ini);
 
-// The games Sim-QVFR supports, in the launcher's order.
+// The games Sim-QVFR supports, in the launcher's order: its own, then the games community mods add (below).
 const GameInfo* const* all_games(std::size_t& count);
+
+// A game a mod adds (a "games" entry of its mod.json with an "exe": docs/architecture/mod-manager-plan.md "New games
+// from mods"): found in the mods folder beside this module (mods\<id>\mod.json; the module's folder's parent when it is
+// "layer") the first time the games are listed, and again by rescan_mod_games. A mod can't take a game Sim-QVFR has
+// (its id or its exe), nor another mod's. Its GameInfo lives for the process: a removed mod's game stays listed until
+// the launcher restarts. The core loads that mod's DLL for it (games/adapters.cpp), through the trust check.
+struct ModGame {
+    std::wstring modId, dll;  // its mods\<modId>\<dll>
+    const GameInfo* game = nullptr;
+};
+// The mod that adds `game`; null for one of Sim-QVFR's own.
+const ModGame* mod_game(const GameInfo* game);
+// Looks in the mods folder again (the launcher, once a mod is added); how many games were added.
+int rescan_mod_games();
+// Reads one mod.json's new games (for tests: `modsFolder` instead of the one beside the module); how many were added.
+int add_mod_games_from(const std::wstring& modsFolder);
 // The game with this id ("ace", "acc"; any case); null for none.
 const GameInfo* game_by_id(const char* id);
 // The game the launcher starts: the one chosen (set_launcher_game, from [launcher] game), ACE until then.

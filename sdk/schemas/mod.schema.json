@@ -2,28 +2,134 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Sim-QVFR mod manifest (mod.json)",
   "type": "object",
-  "required": ["id", "dll"],
+  "required": [
+    "id",
+    "dll"
+  ],
   "properties": {
     "id": {
       "description": "The mod's id: its folder under mods\\ and the [mod_<id>] section its settings are saved in.",
       "type": "string",
       "pattern": "^[a-z0-9_-]{1,32}$"
     },
-    "name": { "description": "Shown in Settings > Mods (up to 60 characters).", "type": "string", "maxLength": 60 },
-    "author": { "description": "Shown in Settings > Mods (up to 60 characters).", "type": "string", "maxLength": 60 },
-    "version": { "description": "Shown in Settings > Mods, and compared on update (up to 24 characters).", "type": "string", "maxLength": 24 },
+    "name": {
+      "description": "Shown in Settings > Mods (up to 60 characters).",
+      "type": "string",
+      "maxLength": 60
+    },
+    "author": {
+      "description": "Shown in Settings > Mods (up to 60 characters).",
+      "type": "string",
+      "maxLength": 60
+    },
+    "version": {
+      "description": "Shown in Settings > Mods, and compared on update (up to 24 characters).",
+      "type": "string",
+      "maxLength": 24
+    },
     "dll": {
       "description": "The mod's DLL, a file name in the mod's folder.",
       "type": "string",
       "pattern": "^[^\\\\/:]{1,60}\\.[dD][lL][lL]$"
     },
     "games": {
-      "description": "The games it is for, by Sim-QVFR's game ids (ats, ets2, lmu, ace, acc, xplane). Its settings show on these games' Game tab.",
+      "description": "The games it is for. An entry with just an id names a game Sim-QVFR already has (ats, ets2, lmu, ace, acc, xplane): the mod's settings show there. An entry with an exe adds a NEW game: the launcher lists it, and the core loads this mod when that exe starts OpenXR. A mod can't take a game Sim-QVFR has (its id or exe), nor another mod's.",
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$",
+            "description": "The game's id: its settings folder games\\<id>\\ and its tab."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Shown in the launcher's rail and pages."
+          },
+          "short": {
+            "type": "string",
+            "maxLength": 8,
+            "description": "Its short name on the rail (\"SPC\")."
+          },
+          "exe": {
+            "type": "string",
+            "pattern": "^[^\\\\/:*?\"<>|]{1,60}\\.[eE][xX][eE]$",
+            "description": "The process the core recognises: a file name only."
+          },
+          "steamFolder": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Its folder under steamapps\\common (relative, no ..)."
+          },
+          "exeFolder": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "exe's folder under steamFolder; empty: steamFolder itself."
+          },
+          "steamAppId": {
+            "type": "string",
+            "pattern": "^[0-9]{1,12}$",
+            "description": "Its Steam app id, for a launch from outside Steam."
+          },
+          "launchArgs": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "The command line that starts it in VR (\"-vr\")."
+          },
+          "image": {
+            "enum": [
+              "doubleWide",
+              "eyeColumns",
+              "oneViewSize",
+              "separateViews"
+            ],
+            "description": "How the core offers the game its QVFR views, so the launcher checks the right size. Default doubleWide."
+          },
+          "antiCheat": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string"
+            },
+            "description": "The game's anti-cheat processes: while one runs, Sim-QVFR stays off in that launch and only logs."
+          },
+          "features": {
+            "type": "object",
+            "description": "The core features the launcher and headset menu offer for it, once the mod supports them.",
+            "properties": {
+              "liveResolution": {
+                "type": "boolean"
+              },
+              "helmet": {
+                "type": "boolean"
+              },
+              "fovCrop": {
+                "type": "boolean"
+              },
+              "sharpening": {
+                "type": "boolean"
+              },
+              "focusMask": {
+                "type": "boolean"
+              },
+              "eyeOff": {
+                "type": "boolean"
+              },
+              "multiView": {
+                "type": "boolean"
+              },
+              "layerMultiView": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       }
     }
   }

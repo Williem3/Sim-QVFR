@@ -95,6 +95,9 @@ std::wstring parent_process_name() {
 BuildState build_state(const std::string& sha, bool hashing) {
     if (sha.empty())
         return hashing ? BuildState::Hashing : BuildState::Unknown;
+    // A game a mod adds: the mod knows its builds, Sim-QVFR doesn't.
+    if (games::mod_game(&games::launcher_game()))
+        return BuildState::Supported;
     return games::supported_build(games::launcher_game(), sha) ? BuildState::Supported : BuildState::Unsupported;
 }
 
