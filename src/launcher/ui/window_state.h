@@ -507,6 +507,10 @@ struct App {
     // The cards' Mores: those open (by key: card title / its label), and this frame's keys (kMore's options).
     std::set<std::wstring> moreOpen;
     std::vector<std::wstring> moreKeys;
+    // The card grid's columns (card.cpp card_grid): each card's (by title) while the page, the game and the column count
+    // (cardGridKey) stay the same, so a card growing or appearing moves only the cards under it in its column.
+    std::wstring cardGridKey;
+    std::map<std::wstring, int> cardColumns;
     // Disclosures: when each parent (by Ctl) turned on, while its rows slide open, and its state as last drawn.
     std::map<int, unsigned long long> revealStart;
     std::map<int, bool> revealLast;

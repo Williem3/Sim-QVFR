@@ -33,6 +33,11 @@ constexpr t::TypeStyle kSegmentSmall = {10.5f, 14.0f, 600, false, t::Family::Int
 constexpr float kPanelW = 320, kPad = 20, kGap = 16, kTileMinW = 200, kTilePad = 16, kChartH = 96;
 constexpr int kChartBars = 5;
 
+// Chevrons (10 x 12): right on what opens a card, down on what opens a menu.
+constexpr const char* kChevronRight = "M4 2.5L7.5 6L4 9.5";
+constexpr const char* kChevronDown = "M1.5 4.5L5 8l3.5-3.5";
+constexpr float kChevronW = 14;  // a chevron and its gap
+
 std::wstring percent_of(int v) { return std::to_wstring(v) + L"%"; }
 
 std::wstring fixed(const wchar_t* format, double v) {
@@ -94,6 +99,8 @@ void profile_segments(const Rect& r) {
             widths.push_back(std::ceil(cv.measure(item, style)) + 12);  // 6 each side
             total += widths.back();
         }
+        widths.back() += kChevronW;  // Custom opens the profile menu: its chevron says so
+        total += kChevronW;
         return total;
     };
     std::vector<float> widths;
@@ -113,8 +120,16 @@ void profile_segments(const Rect& r) {
             cv.fill(item, col(app.c->segment_selected), t::kRadiusControl - 2);
         else if (pointer_in(item))
             cv.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
-        const std::wstring shown = fit(items[i], style, item.w - 8);
-        cv.text(shown, style, item, col(on ? app.c->on_segment : app.c->label), Align::Center);
+        const bool menu = i + 1 == items.size();
+        const std::wstring shown = fit(items[i], style, item.w - 8 - (menu ? kChevronW : 0));
+        const Color fg = col(on ? app.c->on_segment : app.c->label);
+        if (menu) {  // the name and its chevron centred together
+            const float tw = std::ceil(cv.measure(shown, style)), tx = item.x + (item.w - tw - kChevronW) / 2;
+            cv.text(shown, style, {tx, item.y, tw + 2, item.h}, fg);
+            cv.path(kChevronDown, {tx + tw + 4, item.y + (item.h - 12) / 2, 10, 12}, 10, fg, 1.5f);
+        } else {
+            cv.text(shown, style, item, fg, Align::Center);
+        }
         if (on && focused(kOverviewProfile))
             focus_ring(item, t::kRadiusControl - 2);
         app.hits.push_back({kOverviewProfile, item, static_cast<int>(i),
@@ -236,14 +251,19 @@ float game_panel(float x, float y, float w, bool draw) {
         int tone = 3;
         const std::wstring online = online_status(tone);
         if (draw) {
-            const float bw = std::min(inner, badge_width(online));
-            badge(x + kPad, by + 1, tone, online, inner);
+            // It opens a card, so it reads as a control: an outline round the badge and a chevron, always.
+            const float bw = std::min(inner - kChevronW - 4, badge_width(online));
             const int index = static_cast<int>(app.overviewTargets.size());
             // Its card, by its title as drawn.
             app.overviewTargets.push_back({tr(L"Online racing"), tr(L"Online racing"), Pane::Game});
-            const Rect r{x + kPad, by - 1, bw, 24};
-            if (pointer_in(r))  // it opens a card: the tiles' hover outline, round the badge
-                cv.stroke({x + kPad + 0.5f, by + 0.5f, bw - 1, 21}, col(app.c->control_border), 1, t::kRadiusControl);
+            const Rect r{x + kPad, by - 1, bw + kChevronW + 4, 24};
+            const bool over = pointer_in(r);
+            if (over)
+                cv.fill(r, col(app.c->control_hover), t::kRadiusControl);
+            badge(x + kPad, by + 1, tone, online, bw);
+            cv.stroke(r.inset(0.5f, 0.5f), col(over ? app.c->label_secondary : app.c->control_border), 1,
+                      t::kRadiusControl);
+            cv.path(kChevronRight, {x + kPad + bw + 3, by + 5, 10, 12}, 10, col(app.c->label_secondary), 1.5f);
             if (focused(kOverviewCard) && app.focusOption == index)
                 focus_ring(r, t::kRadiusControl);
             app.hits.push_back({kOverviewCard, r, index, tr(L"Online racing: open its card"),
@@ -548,12 +568,17 @@ void draw_tile(const Tile& tile, const Rect& r) {
     const std::wstring opens = tr(tile.opens);  // the card's title as it is drawn
     app.overviewTargets.push_back({opens, opens, tile.pane});
     cv.fill(r, col(app.c->surface), t::kRadiusGroup);
-    if (pointer_in(r))
+    const bool over = pointer_in(r);
+    if (over)
         cv.stroke(r.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusGroup);
     const float inner = r.w - 2 * kTilePad;
     float y = r.y + kTilePad;
-    cv.text(fit(tile.title, t::kTitle2, inner), t::kTitle2, {r.x + kTilePad, y, inner, t::kTitle2.lineHeight},
+    // The title, then a chevron at the end of its line: the tile opens its card.
+    const float titleW = std::max(0.0f, inner - kChevronW);
+    cv.text(fit(tile.title, t::kTitle2, titleW), t::kTitle2, {r.x + kTilePad, y, titleW, t::kTitle2.lineHeight},
             col(app.c->label));  // a longer language's title cut ("…"); its hit reads it whole
+    cv.path(kChevronRight, {r.right() - kTilePad - 10, y + (t::kTitle2.lineHeight - 12) / 2, 10, 12}, 10,
+            col(over ? app.c->label : app.c->label_secondary), 1.5f);
     y += t::kTitle2.lineHeight + 4;
     if (!tile.line1.empty()) {
         const float lh = cv.measure_height(tile.line1, t::kCallout, inner);
