@@ -64,15 +64,7 @@ bool valid_mod_name(const std::string& name, bool dash) {
     return true;
 }
 
-bool valid_source_link(const std::string& url) {
-    if (url.size() < 12 || url.size() > 200 || url.compare(0, 8, "https://") != 0)
-        return false;
-    for (char c : url)
-        if (static_cast<unsigned char>(c) <= 0x20 || c == '"' || c == '<' || c == '>' || c == '\\' || c < 0)
-            return false;
-    const size_t host = url.find('/', 8);
-    return host != std::string::npos && host > 8 && host + 1 < url.size();  // a host and a path: a project, not a site
-}
+bool valid_source_link(const std::string& url) { return mod_api::valid_source_link(url); }
 
 bool parse_mod_manifest(const std::string& text, ModEntry& mod, std::wstring& error) {
     json::Value root;
@@ -234,7 +226,7 @@ ModStatus mod_status(const ModEntry& mod, const std::wstring& ini, bool coreOffi
     in.mod = st.facts;
     in.approval = st.approval;
     in.coreOfficial = coreOfficial;
-    in.firstPartyPath = mod_api::first_party_mod(mod.id);
+    in.firstPartyPath = mod_api::first_party_mod(mod.id) && mod_api::shipped_by_package(mod.dllPath, st.facts.sha256);
     st.offline = mod_api::decide_mod_trust(in);
     in.onlineLaunch = true;
     st.online = mod_api::decide_mod_trust(in);

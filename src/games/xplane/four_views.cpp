@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "../../engine/code_patch.h"
-#include "MinHook.h"
 #include "../../log.h"
 #include "abi.h"
 #include "focus_projection.h"
@@ -571,32 +570,19 @@ bool four_views_copies_start() {
         logf("xplane: four views not started: the draw path code isn't this build's (nothing written)");
         return false;
     }
-    // View rects: set viewports' detour made before any write (MinHook writes the target only when enabled).
+    // View rects: set viewports detoured once the writes are in (the process's one MinHook: the core's, through
+    // simqvfr::hook_function, so this works as the X-Plane mod's own DLL too); a detour that fails puts them back.
     void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
-    if (viewRects) {
-        const MH_STATUS init = MH_Initialize();
-        const MH_STATUS made = init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED
-                                   ? MH_CreateHook(target, reinterpret_cast<void*>(&set_viewports),
-                                                   reinterpret_cast<void**>(&g_setViewportsOriginal))
-                                   : init;
-        if (made != MH_OK) {
-            logf("xplane: four views not started: set viewports' detour not made (%s; nothing written)",
-                 MH_StatusToString(made));
-            return false;
-        }
-    }
     if (!patches.apply()) {
-        if (viewRects)
-            MH_RemoveHook(target);
         logf("xplane: four views not started: a write failed (the sites written were put back)");
         return false;
     }
     if (viewRects) {
-        const MH_STATUS on = MH_EnableHook(target);
+        const bool on = simqvfr::hook_function(target, reinterpret_cast<void*>(&set_viewports),
+                                               reinterpret_cast<void**>(&g_setViewportsOriginal));
         logf("xplane: view rects: set viewports detoured (multiplier 4, one rect per view) at 0x%llx: %s",
-             static_cast<unsigned long long>(kSetViewports), on == MH_OK ? "patched" : MH_StatusToString(on));
-        if (on != MH_OK) {
-            MH_RemoveHook(target);
+             static_cast<unsigned long long>(kSetViewports), on ? "patched" : "the detour failed");
+        if (!on) {
             patches.undo();
             logf("xplane: four views not started: the edits were put back");
             return false;
@@ -616,8 +602,7 @@ bool four_views_copies_start() {
 void four_views_copies_undo() {
     if (g_setViewportsHooked) {
         void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
-        MH_DisableHook(target);
-        MH_RemoveHook(target);
+        simqvfr::unhook_function(target);
         g_setViewportsHooked = false;
     }
     g_copiesPatches.undo();

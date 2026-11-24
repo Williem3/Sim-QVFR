@@ -1,8 +1,10 @@
 // The layer DLL's entry. Normally the OpenXR loader loads the layer at xrCreateInstance and nothing happens here. For
 // a game the layer must set up before it starts OpenXR (GameInfo::earlyLoad: X-Plane, which creates its shaders
 // first), the launcher sets SIM_QVFR_EARLY=1 and enables the DLL as a Vulkan layer (vk_early_layer.cpp): the Vulkan
-// loader loads it at the game's first vkCreateInstance, before any shader module exists, and the game is set up now
-// (games::early_load). The OpenXR loader later gets this same, already loaded module.
+// loader loads it at the game's first vkCreateInstance, before any shader module exists. DllMain only notes it (and
+// pins the module): the game is set up (games::early_load) from the layer's vkCreateInstance, which the loader calls
+// right after, outside the loader lock, so the game's mod DLL can be loaded then (LoadLibrary under the loader lock
+// can deadlock). The OpenXR loader later gets this same, already loaded module.
 #include <windows.h>
 
 #include <atomic>
@@ -12,6 +14,16 @@
 
 namespace simqvfr::layer {
 extern std::atomic<bool> processTerminating;  // layer/state.h
+}
+
+namespace {
+std::atomic<bool> earlyPending{false};  // SIM_QVFR_EARLY=1 at load: the early start still to run
+}
+
+// The early start, once, if this load was an early one (vk_early_layer.cpp's vkCreateInstance).
+void sim_qvfr_run_early_load() {
+    if (earlyPending.exchange(false))
+        simqvfr::games::early_load();
 }
 
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
@@ -29,7 +41,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
             HMODULE pinned = nullptr;
             GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                                reinterpret_cast<LPCWSTR>(self), &pinned);
-            simqvfr::games::early_load();
+            earlyPending.store(true);
         }
     }
     return TRUE;

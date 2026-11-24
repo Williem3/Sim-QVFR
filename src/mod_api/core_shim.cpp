@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 
+#include "../engine/code_patch.h"
 #include "../engine/context_hooks.h"
 #include "../engine/nvapi_stereo.h"
 #include "../games/identity_adapter.h"
@@ -254,3 +255,28 @@ MvrBackend mvr_probe_backend() {
 }
 
 }  // namespace lmu
+
+// ---- engine/code_patch.h (the core's: one copy of each patch and hook in the process) ----
+
+namespace simqvfr {
+
+std::uintptr_t module_base() { return SQVFR_CALL(module_base, 0); }
+bool code_matches(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size) {
+    return SQVFR_CALL(code_matches, 0, rva, anchor, size) != 0;
+}
+bool code_write(std::uintptr_t rva, const void* bytes, std::size_t size) {
+    return SQVFR_CALL(code_write, 0, rva, bytes, size) != 0;
+}
+bool code_redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
+                   std::size_t stubSize) {
+    return SQVFR_CALL(code_redirect, 0, rva, anchor, size, stub, stubSize) != 0;
+}
+std::uintptr_t vtable_slot(std::uintptr_t slotRva) { return SQVFR_CALL(vtable_slot, 0, slotRva); }
+bool vtable_slot_replace(std::uintptr_t slotRva, std::uintptr_t expectedRva, const void* replacement) {
+    return SQVFR_CALL(vtable_slot_replace, 0, slotRva, expectedRva, replacement) != 0;
+}
+bool readable(const void* address, std::size_t size) { return SQVFR_CALL(readable, 0, address, size) != 0; }
+bool hook_function(void* target, void* detour, void** original) { return SQVFR_CALL(hook, 0, target, detour, original) != 0; }
+bool unhook_function(void* target) { return SQVFR_CALL(unhook, 0, target) != 0; }
+
+}  // namespace simqvfr

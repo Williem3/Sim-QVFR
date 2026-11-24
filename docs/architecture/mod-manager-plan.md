@@ -144,6 +144,13 @@ Willie chose option A (2026-11-24): community mods may run online, but only sign
 - **Official:** Windows trusts the signature, and the certificate is the pinned one (`kOfficialThumbprints`).
 - **First-party, unsigned build:** a dev or nightly core that isn't signed loads the package's own mods, offline
   only. Nothing is signed, so no signature is lent.
+  - "The package's own" means the file, not the id: its SHA-256 must be the one the package's root `SHA256.txt`
+    lists for `mods/<id>/<dll>` (`shipped_by_package`). A build tree has no `SHA256.txt`, so the path decides there.
+  - Add a mod refuses a zip that uses a first-party id (`scs`, `xplane`) unless its DLL carries the maintainer's
+    signature. Before this (found 2026-11-24), a zip saying `"id": "scs"` replaced the shipped mod and loaded on an
+    unsigned nightly with no approval.
+  - Still open: a first-party mod updated from a release on an unsigned build no longer matches the package's
+    `SHA256.txt`, so it needs the user's approval like a third-party one. Signed releases are not affected.
 - **Third-party:** needs the user's approval of that exact file (`[mods] <id>_sha256`).
   - Online (an anti-cheat running), it also needs the author's own trusted signature and `[mods] <id>_online=1`.
   - Unsigned never loads online.
@@ -234,6 +241,20 @@ Left for later:
   `SIM_QVFR_SCS_AS_MOD=ON`, 2026-11-24, ran fine for the user. The log shows the DLL loaded, the context hooks
   installed through the host (44 d3d11 functions), the multi-view shaders through the host (93 converted, none
   failed), and the corner and focus view on.
+
+## Phase 4, next: X-Plane as its own DLL
+
+- **The option.** `-DSIM_QVFR_XPLANE_AS_MOD=ON` (nightly: on). X-Plane's sources leave the core and become
+  `mods\xplane\sim-qvfr-xplane.dll` with its `mod.json`. Built in, the same entry (`xplane/mod_entry.cpp`) runs
+  through `through_mod`, so both builds use the mod ABI.
+- **Code patches through the host.** X-Plane's patches and its one MinHook detour now go through `simqvfr::code_*`,
+  `hook_function` and `unhook_function`, which `core_shim.cpp` forwards to the host table. One MinHook stays in the
+  core.
+- **Early start moved out of DllMain.** A mod DLL can't be loaded under the loader lock. DllMain now only notes the
+  early load. The Vulkan layer's `vkCreateInstance` runs `games::early_load()` once, before passing the call on. That
+  is still before X-Plane makes any shader module.
+- **Not yet checked in a headset.** First run: X-Plane 12 from a nightly build, with the log showing the mod loaded
+  and the patches in.
 
 ## What phase 4 has to solve first
 

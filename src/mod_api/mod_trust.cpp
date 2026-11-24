@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 
 #include "../sha256_file.h"
@@ -63,7 +65,41 @@ bool official_thumbprint(const std::wstring& thumbprint) {
     return false;
 }
 
-bool first_party_mod(const std::wstring& id) { return _wcsicmp(id.c_str(), L"scs") == 0; }
+bool first_party_mod(const std::wstring& id) {
+    return _wcsicmp(id.c_str(), L"scs") == 0 || _wcsicmp(id.c_str(), L"xplane") == 0;
+}
+
+bool shipped_by_package(const std::wstring& dllPath, const std::string& sha256) {
+    namespace fs = std::filesystem;
+    if (sha256.size() != 64)
+        return false;
+    const fs::path dll = dllPath, folder = dll.parent_path(), mods = folder.parent_path(), package = mods.parent_path();
+    if (_wcsicmp(mods.filename().c_str(), L"mods") != 0)
+        return false;
+    std::error_code ec;
+    const fs::path list = package / L"SHA256.txt";
+    if (!fs::exists(list, ec))
+        return !ec;  // a build tree (no package manifest): the path decides
+    std::ifstream in(list, std::ios::binary);
+    if (!in)
+        return false;
+    // Each line: "<64 hex>  <relative/path>", as package.ps1 writes it.
+    const std::wstring wanted = L"mods/" + folder.filename().wstring() + L"/" + dll.filename().wstring();
+    std::string line;
+    int lines = 0;
+    while (std::getline(in, line) && ++lines < 4096) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.size() < 67 || line.compare(64, 2, "  ") != 0)
+            continue;
+        std::wstring rel;
+        for (size_t i = 66; i < line.size(); ++i)
+            rel += static_cast<unsigned char>(line[i]) < 0x80 ? static_cast<wchar_t>(line[i]) : L'?';
+        if (_wcsicmp(rel.c_str(), wanted.c_str()) == 0)
+            return _strnicmp(line.c_str(), sha256.c_str(), 64) == 0;
+    }
+    return false;  // the package lists no such file: it isn't ours
+}
 
 TrustVerdict decide_mod_trust(const TrustInput& in) {
     TrustVerdict v;

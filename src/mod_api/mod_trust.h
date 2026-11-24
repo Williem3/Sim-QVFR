@@ -17,14 +17,24 @@
 
 #include <string>
 
+#include "source_link.h"
+
 namespace simqvfr::mod_api {
 
 // The maintainer's code-signing certificates (SHA-1 thumbprints, as package.ps1 -CertificateThumbprint): a renewed
 // certificate is added here, an old one kept while builds signed with it are in use.
 bool official_thumbprint(const std::wstring& thumbprint);
 
-// A mod the package itself ships (its folder under mods\): "scs".
+// A mod id the package itself ships (its folder under mods\): "scs", "xplane". The id alone proves nothing: anyone can
+// write it in a mod.json. A mod counts as first-party only when its file is the package's own (shipped_by_package) or
+// carries the maintainer's signature (Official).
 bool first_party_mod(const std::wstring& id);
+
+// Whether the mod DLL at `dllPath` (<package>\mods\<id>\<dll>) is the very file the package shipped: its SHA-256
+// (`sha256`) is the one the package's own SHA256.txt (<package>\SHA256.txt, which Add a mod never writes) lists for
+// mods/<id>/<dll>. A build tree has no SHA256.txt: there the path decides, as before.
+bool shipped_by_package(const std::wstring& dllPath, const std::string& sha256);
+
 
 // What the core found out about a mod's file.
 struct ModFacts {
@@ -44,7 +54,7 @@ struct TrustInput {
     ModFacts mod;
     ModApproval approval;
     bool coreOfficial = false;   // the core DLL itself is officially signed (a release), not a development build
-    bool firstPartyPath = false; // the mod's path is one the package ships (mods\scs\sim-qvfr-scs.dll)
+    bool firstPartyPath = false; // a first-party id and the package's own file (shipped_by_package)
     bool onlineLaunch = false;   // the game's anti-cheat protects this launch
 };
 

@@ -24,7 +24,9 @@
 #include "scssoftware/ats/game.h"
 #include "scssoftware/ets2/game.h"
 #include "lmu/game.h"
+#ifndef SIM_QVFR_XPLANE_AS_MOD
 #include "xplane/adapter.h"
+#endif
 #include "xplane/game.h"
 
 namespace simqvfr::games {
@@ -40,19 +42,16 @@ void IdentityAdapter::instance_created(const wchar_t* ini, const wchar_t*) {
 
 namespace {
 
-#ifndef SIM_QVFR_SCS_AS_MOD
 // `game`'s adapter from its mod's entry (mod_api/plugin_adapter.h), kept for the process; a mod the core refuses leaves
-// the game known by its identity alone (the layer only logs there), saying why.
-GameAdapter& through_mod(const GameInfo* game, SqvfrModEntry entry) {
+// the game known by its identity alone (the layer only logs there), saying why. Built in: the entry is in the core.
+[[maybe_unused]] GameAdapter& through_mod(const GameInfo* game, SqvfrModEntry entry) {
     std::string why;
     if (std::unique_ptr<mod_api::PluginAdapter> mod = mod_api::PluginAdapter::load(game, entry, why))
         return *mod.release();
     logf("game: %ls's mod refused (%s): Sim-QVFR only logs in this launch.", game->name, why.c_str());
     return *new IdentityAdapter(game);
 }
-#endif
 
-#ifdef SIM_QVFR_SCS_AS_MOD
 // The launch's ini, where the user's mod approvals are ([mods]): the launcher's run copy (SIM_QVFR_INI), else the
 // sim-qvfr.ini beside the core.
 std::wstring approvals_ini() { return mod_api::mods_ini(); }
@@ -74,7 +73,6 @@ GameAdapter& through_mod_dll(const GameInfo* game, const wchar_t* folder, const 
     logf("game: %ls's mod not loaded (%s): Sim-QVFR only logs in this launch.", game->name, why.c_str());
     return *new IdentityAdapter(game);
 }
-#endif
 
 }  // namespace
 
@@ -120,8 +118,17 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::ace::adapter();
     if (game == &::acc::kGame)
         return ::acc::adapter();
-    if (game == &::xplane::kGame)  // QVFR through the early load (docs/recon-xplane.md)
-        return ::xplane::adapter();
+    // X-Plane: QVFR through the early load (docs/recon-xplane.md), through the game-mod ABI (xplane/mod_entry.cpp): built
+    // in, or with SIM_QVFR_XPLANE_AS_MOD its own DLL, mods\xplane\sim-qvfr-xplane.dll.
+    if (game == &::xplane::kGame) {
+#ifdef SIM_QVFR_XPLANE_AS_MOD
+        static GameAdapter& xp = through_mod_dll(game, L"xplane", L"sim-qvfr-xplane.dll", mod_api::first_party_mod(L"xplane"),
+                                                 protectedLaunch);
+#else
+        static GameAdapter& xp = through_mod(game, &::xplane::mod_entry);
+#endif
+        return xp;
+    }
     if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
         return ::lmu::adapter();
     // SCS Software's: QVFR at the D3D11 level, through the game-mod ABI (mod_api.h), one mod for both games

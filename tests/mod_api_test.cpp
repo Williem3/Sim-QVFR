@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "games/scssoftware/adapter.h"
@@ -550,6 +552,30 @@ void trust_rules() {
     dev.mod.sha256.clear();
     dev.firstPartyPath = true;
     check(decide_mod_trust(dev).trust == ModTrust::Refused, "trust: a file that can't be read is refused");
+
+    // First-party is the package's own file, not the id: shipped_by_package checks the package's SHA256.txt.
+    {
+        namespace fs = std::filesystem;
+        wchar_t tmp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, tmp);
+        const fs::path package = fs::path(tmp) / L"sim-qvfr-shipped-test";
+        std::error_code ec;
+        fs::remove_all(package, ec);
+        fs::create_directories(package / L"mods" / L"scs", ec);
+        const std::wstring dll = (package / L"mods" / L"scs" / L"sim-qvfr-scs.dll").wstring();
+        check(simqvfr::mod_api::shipped_by_package(dll, hash), "shipped: a build tree (no SHA256.txt) goes by the path");
+        {
+            std::ofstream list(package / L"SHA256.txt", std::ios::binary);
+            list << "ABC" << std::string(61, '0') << "  sim-qvfr-launcher.exe\r\n" << hash << "  mods/scs/sim-qvfr-scs.dll\r\n";
+        }
+        check(simqvfr::mod_api::shipped_by_package(dll, hash), "shipped: the hash the package lists is ours");
+        check(!simqvfr::mod_api::shipped_by_package(dll, other), "shipped: another file in its place isn't");
+        check(!simqvfr::mod_api::shipped_by_package((package / L"mods" / L"scs" / L"other.dll").wstring(), hash),
+              "shipped: a file the package doesn't list isn't");
+        check(!simqvfr::mod_api::shipped_by_package((package / L"x" / L"scs" / L"sim-qvfr-scs.dll").wstring(), hash),
+              "shipped: only under mods\\");
+        fs::remove_all(package, ec);
+    }
 
     // Approvals in [mods].
     wchar_t temp[MAX_PATH] = {};

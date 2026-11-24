@@ -142,6 +142,23 @@ bool minhook_ready(const char* tag, const char* outcome) {
     return false;
 }
 
+bool hook_function(void* target, void* detour, void** original) {
+    if (!target || !detour || !original || !minhook_ready("hook"))
+        return false;
+    const MH_STATUS created = MH_CreateHook(target, detour, original);
+    if (created != MH_OK && created != MH_ERROR_ALREADY_CREATED)
+        return false;
+    const MH_STATUS enabled = MH_EnableHook(target);
+    return enabled == MH_OK || enabled == MH_ERROR_ENABLED;
+}
+
+bool unhook_function(void* target) {
+    if (!target)
+        return false;
+    const MH_STATUS s = MH_DisableHook(target);
+    return s == MH_OK || s == MH_ERROR_DISABLED;
+}
+
 bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
     const void* p = reinterpret_cast<const void*>(module_base() + rva);
     return readable(p, size) && std::memcmp(p, anchor, size) == 0;

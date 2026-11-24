@@ -54,4 +54,10 @@ std::string module_offset(const void* address);
 // failure it logs "<tag>: MH_Initialize failed<outcome>" (nothing when `tag` is null) and returns false.
 bool minhook_ready(const char* tag, const char* outcome = "");
 
+// A function hook, through the process's one MinHook (in a game mod's DLL: the core's, through its host table): `detour`
+// replaces `target`, `*original` gets the trampoline. Made and enabled in one step (also true when this target was
+// already hooked so). unhook_function turns it off again (the detour stays allocated: a thread may still be inside it).
+bool hook_function(void* target, void* detour, void** original);
+bool unhook_function(void* target);
+
 }  // namespace simqvfr

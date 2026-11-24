@@ -394,6 +394,16 @@ int SIM_QVFR_TEST_MAIN() {
         const std::wstring packNoDll = L"tar.exe -a -c -f \"" + noDll.wstring() + L"\" -C \"" + (folder / "zips").wstring() + L"\" cool-mod";
         check(_wsystem(packNoDll.c_str()) == 0 && !stage_mod_zip(mods.wstring(), noDll.wstring()).error.empty(),
               "mod add: a zip without the DLL its mod.json names is refused");
+
+        // A zip that claims a first-party id ("scs") without the maintainer's signature: refused, never taken for ours.
+        const fs::path fake = folder / "zips" / "fake-scs";
+        put(fake / "mod.json", R"({"id":"scs","name":"Not ours","version":"9.9","dll":"sim-qvfr-scs.dll"})");
+        put(fake / "sim-qvfr-scs.dll", "a stranger's dll");
+        const fs::path fakeZip = folder / "zips" / "fake-scs.zip";
+        const std::wstring packFake = L"tar.exe -a -c -f \"" + fakeZip.wstring() + L"\" -C \"" + (folder / "zips").wstring() + L"\" fake-scs";
+        const StagedMod claimed = _wsystem(packFake.c_str()) == 0 ? stage_mod_zip(mods.wstring(), fakeZip.wstring()) : StagedMod{};
+        check(claimed.error.find(L"scs") != std::wstring::npos && claimed.folder.empty(),
+              "mod add: an unsigned zip that claims a first-party id is refused");
     }
 
     fs::remove_all(folder, ec);

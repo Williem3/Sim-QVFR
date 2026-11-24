@@ -13,6 +13,7 @@
 
 #include "../json.h"
 #include "../lang.h"
+#include "../mod_api/mod_trust.h"
 #include "../sha256_file.h"
 #include "mod_catalog.h"
 #include "update_check.h"
@@ -289,6 +290,16 @@ StagedMod stage_mod_zip(const std::wstring& modsFolder, const std::wstring& zipT
     if (!fs::is_regular_file(root / m.dll, ec)) {
         s.error = trf(L"the zip has no {dll}, which its mod.json names", {{L"dll", m.dll}});
         return s;
+    }
+    // A zip that claims the id of a mod Sim-QVFR ships would replace it, and be taken for it: only the maintainer's
+    // signed DLL may (mod_api/mod_trust.h). A community mod picks its own id.
+    if (mod_api::first_party_mod(m.id)) {
+        const mod_api::ModFacts f = mod_api::read_mod_facts((root / m.dll).wstring());
+        if (!f.signatureTrusted || !mod_api::official_thumbprint(f.thumbprint)) {
+            s.error = trf(L"it uses the id “{id}” of a mod Sim-QVFR ships, and isn’t signed by Sim-QVFR",
+                          {{L"id", m.id}});
+            return s;
+        }
     }
     if (fs::is_regular_file(root / L"SHA256.txt", ec)) {
         s.error = check_staged_mod(root.wstring(), m.id);

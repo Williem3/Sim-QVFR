@@ -19,7 +19,7 @@
 # -Nightly packages the nightly line (docs/architecture/mod-manager-plan.md "Nightly channel"): the version becomes
 # <release>-nightly.<yyyyMMdd> (the release from -Version, else SIM_QVFR_RELEASE's numbers; the date in UTC), the
 # launcher's update channel nightly (it looks only at sqvfr-nightly-*.zip, and stable launchers never at those), the
-# SCS games their own mod (mods\scs\), and the zip dist\sqvfr-nightly-<release>.<yyyyMMdd>.zip.
+# SCS games and X-Plane their own mods (mods\scs\, mods\xplane\), and the zip dist\sqvfr-nightly-<release>.<yyyyMMdd>.zip.
 param([string]$Version = '',
       [string]$Commit = 'HEAD',
       [string]$OutputDirectory = '',
@@ -180,7 +180,8 @@ try {
         $env:SIM_QVFR_LOCAL_DIR = $null
         $configure = @('-S', $work, '-B', (Join-Path $work 'build'), '-G', 'Ninja Multi-Config', "-DSIM_QVFR_VERSION=$Version ($short)",
                        '-DSIM_QVFR_LOCAL_DIR=', "-DSIM_QVFR_CHANNEL=$channel",
-                       "-DSIM_QVFR_SCS_AS_MOD=$(if ($Nightly) { 'ON' } else { 'OFF' })")
+                       "-DSIM_QVFR_SCS_AS_MOD=$(if ($Nightly) { 'ON' } else { 'OFF' })",
+                       "-DSIM_QVFR_XPLANE_AS_MOD=$(if ($Nightly) { 'ON' } else { 'OFF' })")
         if ($NgxSdk) { $configure += "-DNGX_SDK_DIR=$NgxSdk" }
         $configure += "-DFFX_SDK_DIR=$FfxSdk"  # empty: no FSR (a local FFX_SDK_DIR never leaks in)
         Invoke-Native 'cmake configure' { cmake @configure } | Out-Null
@@ -232,7 +233,8 @@ try {
         Copy-Item -LiteralPath (Join-Path $work $source) -Destination (Join-Path $stage $files[$source])
     }
     # The nightly's game mods: first-party only, each from this build (mods\<id>\, src/mod_api). A stable package has none.
-    $firstPartyMods = @('mods\scs\sim-qvfr-scs.dll', 'mods\scs\mod.json')
+    $firstPartyMods = @('mods\scs\sim-qvfr-scs.dll', 'mods\scs\mod.json',
+                        'mods\xplane\sim-qvfr-xplane.dll', 'mods\xplane\mod.json')
     if ($Nightly) {
         foreach ($file in $firstPartyMods) {
             $target = Join-Path $stage $file

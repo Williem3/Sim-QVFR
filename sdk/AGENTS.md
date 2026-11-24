@@ -247,6 +247,8 @@ it:
 - It runs **in an online, anti-cheat-protected launch** only when the player also turns on **Allow online** for it,
   **and** the DLL carries a valid Authenticode signature of **your own**. Unsigned mods never run online.
 - Sim-QVFR's own signature never covers your mod. Logs and reports label it "third-party".
+- **Pick your own id.** The ids of mods Sim-QVFR ships (`scs`, `xplane`) are reserved: Add a mod refuses a zip that
+  uses one, and a file that isn't the package's own is never taken for first-party.
 
 ## 10. Building, testing and debugging
 

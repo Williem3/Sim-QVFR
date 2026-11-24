@@ -1,9 +1,10 @@
 // The early load's way in: sim-qvfr.dll as a pass-through Vulkan layer (VK_LAYER_SIM_qvfr_early). For a game with
 // GameInfo::earlyLoad (X-Plane, which creates its shader modules before it starts OpenXR) the launcher names this
 // layer in VK_INSTANCE_LAYERS and its manifest's folder in VK_ADD_LAYER_PATH. The Vulkan loader then loads the DLL at
-// the game's first vkCreateInstance, before any device or shader module exists, and DllMain does the early start
-// (early_load.cpp). The layer itself only passes every call on. This replaced loading the DLL into the suspended game
-// with a remote thread, which antivirus scanners take for code injection.
+// the game's first vkCreateInstance, before any device or shader module exists, and the layer's vkCreateInstance does
+// the early start (early_load.cpp) before passing the call on, outside DllMain's loader lock. Otherwise the layer only
+// passes every call on. This replaced loading the DLL into the suspended game with a remote thread, which antivirus
+// scanners take for code injection.
 //
 // Only the few loader-interface types the layer needs are declared here (vk_layer.h, interface version 2), so the
 // build needs no Vulkan SDK.
@@ -13,6 +14,8 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+
+void sim_qvfr_run_early_load();  // early_load.cpp
 
 namespace {
 
@@ -87,6 +90,7 @@ PFN_vkVoidFunction __stdcall get_instance_proc(void* instance, const char* name)
 PFN_vkVoidFunction __stdcall get_device_proc(void* device, const char* name);
 
 VkResult __stdcall create_instance(const void* createInfo, const void* allocator, void** instance) {
+    sim_qvfr_run_early_load();  // the first one: the game set up before it has a device or a shader module
     auto* chain = link_info<VkLayerInstanceCreateInfo>(createInfo, kLoaderInstanceCreateInfo);
     if (!chain || !chain->pLayerInfo)
         return VK_ERROR_INITIALIZATION_FAILED;

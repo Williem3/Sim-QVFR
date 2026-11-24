@@ -57,22 +57,9 @@ const wchar_t* host_captures_dir() {
     return dir.c_str();
 }
 
-int32_t host_hook(void* target, void* detour, void** original) {
-    if (!target || !detour || !original || !minhook_ready("mod hook"))
-        return 0;
-    const MH_STATUS created = MH_CreateHook(target, detour, original);
-    if (created != MH_OK && created != MH_ERROR_ALREADY_CREATED)
-        return 0;
-    const MH_STATUS enabled = MH_EnableHook(target);
-    return b(enabled == MH_OK || enabled == MH_ERROR_ENABLED);
-}
+int32_t host_hook(void* target, void* detour, void** original) { return b(hook_function(target, detour, original)); }
 
-int32_t host_unhook(void* target) {
-    if (!target)
-        return 0;
-    const MH_STATUS s = MH_DisableHook(target);
-    return b(s == MH_OK || s == MH_ERROR_DISABLED);
-}
+int32_t host_unhook(void* target) { return b(unhook_function(target)); }
 
 uintptr_t host_module_base() { return module_base(); }
 

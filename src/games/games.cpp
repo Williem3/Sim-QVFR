@@ -21,6 +21,7 @@
 #include "scssoftware/ets2/game.h"
 #include "xplane/game.h"
 #include "../json.h"
+#include "../mod_api/source_link.h"
 #include "../module_path.h"
 
 namespace simqvfr::games {
@@ -166,7 +167,7 @@ int add_games_of(const std::filesystem::path& modFolder) {
         return 0;
     // Only an open-source mod adds a game (launcher/mod_catalog.cpp parse_mod_manifest's rule).
     const std::string source = root.string_at("source");
-    if (source.size() < 12 || source.compare(0, 8, "https://") != 0 || root.string_at("license").empty())
+    if (!mod_api::valid_source_link(source) || root.string_at("license").empty())
         return 0;
     const json::Value* list = root.find("games");
     if (!list || list->type != json::Value::Type::Array)

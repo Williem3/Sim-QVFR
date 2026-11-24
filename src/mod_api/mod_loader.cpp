@@ -79,7 +79,8 @@ std::unique_ptr<PluginAdapter> load_checked_mod(const std::wstring& path, const 
     in.mod = read_mod_facts(path);
     in.approval = read_mod_approval(ini, id);
     in.coreOfficial = coreOfficial;
-    in.firstPartyPath = firstPartyPath;
+    // A first-party id with a file the package didn't ship (a zip that claims "scs") is judged as third-party.
+    in.firstPartyPath = firstPartyPath && shipped_by_package(path, in.mod.sha256);
     in.onlineLaunch = onlineLaunch;
     verdict = decide_mod_trust(in);
     std::unique_ptr<PluginAdapter> mod;
