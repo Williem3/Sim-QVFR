@@ -467,7 +467,8 @@ void topbar(float W) {
     x -= 16 + profileW;
     {
         const Rect pr{x, (H - 34) / 2, profileW, 34};
-        const bool open = app.popup.open && app.popup.owner == kProfileMenu;
+        // Open: the menu shows under this button (not under the Overview's Custom segment).
+        const bool open = app.popup.open && app.popup.owner == kProfileMenu && app.popup.opener == kProfileMenu;
         cv.fill(pr, col(open || pointer_in(pr) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
         float tx = pr.x + 12;
         if (withPrefix) {

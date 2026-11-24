@@ -49,7 +49,8 @@ int shown_game_count() {
     return shown;
 }
 
-// The game whose colour the colour row and panel edit: the one picked by its swatch, else the selected game.
+// The game whose colour the colour drop-down and panel edit: the one whose colour button opened it, else the selected
+// game.
 int color_game_index() {
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
@@ -136,7 +137,7 @@ void color_wheel(const Rect& r) {
 
 }  // namespace
 
-// A game's colour among the presets (the Games card's swatches; Custom… for any other): apart from the games' own colours
+// A game's colour among the presets (a game's colour drop-down on the Games card; Custom… for any other): apart from the games' own colours
 // (theme_tokens.h kGamePalettes) and the sections' blue, red and yellow, so a game given one stands out.
 const uint32_t kColorPresets[] = {0x7a3db8, 0xc0267a, 0x4d7c0f, 0x8b5e34, 0x0e7490, 0x4b5563};
 const wchar_t* const kColorPresetNames[] = {I18N(L"Purple"), I18N(L"Magenta"), I18N(L"Olive"),
@@ -178,7 +179,7 @@ float game_row_height(size_t i, float w) {
     return std::max(28.0f, t::kBody.lineHeight + (desc.empty() ? 0 : 2 + app.canvas.measure_height(desc, t::kCallout, tw)));
 }
 
-// A game's row on the Games card: its colour (click: its colour below), its name and where it stands, its switch.
+// A game's row on the Games card: its colour (click: the drop-down of its colours), its name and where it stands, its switch.
 void game_row(const Rect& r, size_t i) {
     std::size_t count = 0;
     const games::GameInfo* game = games::all_games(count)[i];
@@ -186,16 +187,12 @@ void game_row(const Rect& r, size_t i) {
     const std::wstring desc = game_note(*game);
     Canvas& cv = app.canvas;
     const t::Accent a = game_accent(*game);
-    // Its colour as a small pop-up button (popup_button's fill and edge): the dot, then a chevron down to the colour row
-    // it opens. The game the colour row edits: edged in the label's colour.
+    // Its colour as a small pop-up button (popup_button's fill and edge): the dot, then a chevron for the drop-down of
+    // its colours it opens (open_color_menu); hovered while that shows.
     const Rect swatch{r.x, r.y + (r.h - kSwatchH) / 2, kSwatchW, kSwatchH};
-    const bool editing = static_cast<int>(i) == color_game_index();
-    const bool down = app.pressed == kColorGame && swatch.contains(app.mouseX, app.mouseY);
-    cv.fill(swatch, col(down || pointer_in(swatch) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
-    if (down)  // a shade under the hover, as Btn::Secondary's
-        cv.fill(swatch, col(0x000000, 0.08f), t::kRadiusControl);
-    cv.stroke(swatch.inset(0.5f, 0.5f), col(editing ? app.c->label : app.c->control_border), editing ? 1.5f : 1.0f,
-              t::kRadiusControl);
+    const bool open = app.popup.open && app.popup.owner == kColorGame && static_cast<int>(i) == color_game_index();
+    cv.fill(swatch, col(open || pointer_in(swatch) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
+    cv.stroke(swatch.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
     cv.circle(swatch.x + 13, swatch.y + kSwatchH / 2, 7, col(a.accent_fill), true);
     cv.path("M1.5 4.5L5 8l3.5-3.5", {swatch.x + 25, swatch.y + (kSwatchH - 12) / 2, 10, 12}, 10, col(app.c->label_secondary),
             1.5f);
@@ -228,52 +225,69 @@ void game_row(const Rect& r, size_t i) {
         app.hits.push_back({kGameShown, hit, static_cast<int>(i), L"", tr(L"In the rail"), shown ? 1 : 0});
     }
     app.drawnLabels.push_back({game->name, app.drawingSection, r});
+    if (i == 0)  // Find a setting's "Colour": the games' rows, where each game's colour button is
+        app.drawnLabels.push_back({tr(L"Colour"), app.drawingSection, r});
 }
 
-// The colour row: the edited game's own colour (Default), the presets, Custom… (the panel with the wheel).
-void color_row(const Rect& r) {
-    Canvas& cv = app.canvas;
-    const games::GameInfo& game = color_game();
-    const auto custom = app.s.gameColors.find(games::wide_id(game));
-    const bool hasCustom = custom != app.s.gameColors.end();
-    const std::wstring label = trf(L"Colour for {game}", {{L"game", game.shortName}});
-    cv.text(fit(label, t::kBody, r.w), t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
-    app.drawnLabels.push_back({tr(L"Colour"), app.drawingSection, r});
-    // Every place fixed, whatever is chosen: the game's own, the presets, Custom…, then the colour of its own when it has
-    // one (after the button, so the button never moves). The gaps narrow (to 4) before anything overlaps in a narrow card.
-    const std::wstring customLabel = tr(L"Custom…");
-    const float y = r.y + 28, d = 26;
-    constexpr int kSlots = static_cast<int>(std::size(kColorPresets)) + 2;  // own, presets, its own colour
-    const float bw = std::min(button_width(customLabel), std::max(0.0f, r.w - kSlots * (d + 4)));
-    const float step = d + std::clamp((r.w - bw - kSlots * d) / kSlots, 4.0f, 10.0f);
-    float x = r.x;
-    const auto swatch = [&](Ctl id, int option, uint32_t rgb, bool chosen, const std::wstring& tip) {
-        const Rect s{x, y, d, d};
-        cv.circle(s.x + d / 2, s.y + d / 2, d / 2 - 2, col(rgb), true);
-        if (chosen)
-            cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label), false, 2);
-        else if (pointer_in(s.inset(-2, -2)))  // under the pointer: the chosen ring, faint
-            cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label_muted), false, 2);
-        if (focused(id) && (option < 0 || app.focusOption == option))
-            focus_ring(s, d / 2);
-        app.hits.push_back({id, s.inset(-2, -2), option, tip, tip, chosen ? 1 : 0});
-        x += step;
-    };
-    swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom,
-           trf(L"{game}’s own colour", {{L"game", game.shortName}}));
-    for (int p = 0; p < static_cast<int>(std::size(kColorPresets)); ++p)
-        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p],
-               tr(kColorPresetNames[p]));
-    const bool other = hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets);
-    button(kColorCustom, {x, y - 4, bw, t::kControlHeight}, customLabel, Btn::Secondary);
-    // Its edge as popup_button's (the fill alone is too close to the card to read as a button).
-    cv.stroke(Rect{x, y - 4, bw, t::kControlHeight}.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
-    x += bw + (step - d);
-    if (other)  // a colour of its own: after Custom…
-        swatch(kColorCustom, -1, custom->second, true, tr(L"Its own colour"));
-}
+// The colour drop-down's actions besides a preset (its index in kColorPresets, 0 and up).
+enum ColorAction { kColorActOwn = -1, kColorActCustom = -2 };
 
 }  // namespace
+
+// A game's colour button: the drop-down of its colours under it, the one it has checked: the game's own, the presets,
+// a colour of its own (from the wheel) when it has one, then Custom… (the colour panel). It edits that game's colour.
+void open_color_menu(int game) {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    if (game < 0 || static_cast<std::size_t>(game) >= count)
+        return;
+    app.colorGame = game;
+    app.colorLoaded = -2;
+    load_color_edit();
+    const games::GameInfo& g = *all[game];
+    const auto custom = app.s.gameColors.find(games::wide_id(g));
+    const bool hasCustom = custom != app.s.gameColors.end();
+    Popup& p = app.popup;
+    p = {};
+    p.owner = kColorGame;
+    for (const Hit& h : app.hits)
+        if (h.id == kColorGame && h.option == game)
+            p.anchor = h.r;
+    const auto add = [&p](PopupRow kind, const std::wstring& text, int action, uint32_t rgb, bool chosen) {
+        if (chosen)
+            p.selected = static_cast<int>(p.items.size());
+        p.items.push_back(text);
+        p.kinds.push_back(kind);
+        p.actions.push_back(action);
+        p.swatches.push_back(rgb);
+    };
+    p.selected = -1;
+    add(PopupRow::Item, trf(L"{game}’s own colour", {{L"game", g.shortName}}), kColorActOwn,
+        builtin_accent(g).accent_fill, !hasCustom);
+    for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i)
+        add(PopupRow::Item, tr(kColorPresetNames[i]), i, kColorPresets[i], hasCustom && custom->second == kColorPresets[i]);
+    if (hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets))
+        add(PopupRow::Item, tr(L"Its own colour"), kColorActCustom, custom->second, true);
+    add(PopupRow::Separator, L"", 0, kNoSwatch, false);
+    add(PopupRow::Item, tr(L"Custom…"), kColorActCustom, kNoSwatch, false);
+    p.hover = p.selected;
+    p.open = true;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// An item of the colour drop-down chosen: the game's own colour back (kColorReset), a preset, or the colour panel
+// (kColorCustom), each as its own control does; app.colorGame is the game.
+void choose_color_menu(int option) {
+    if (option < 0 || option >= static_cast<int>(app.popup.actions.size()))
+        return;
+    const int action = app.popup.actions[static_cast<size_t>(option)];
+    if (action == kColorActOwn)
+        activate(kColorReset, -1);
+    else if (action == kColorActCustom)
+        activate(kColorCustom, -1);
+    else
+        use_color_preset(action);
+}
 
 // The Games card: which games are in the rail, and each one's colour (its marker on the rail).
 Card games_card() {
@@ -284,8 +298,6 @@ Card games_card() {
         load_color_edit();
         for (size_t i = 0; i < count; ++i)
             b.custom(game_row_height(i, b.width()), [i](const Rect& r) { game_row(r, i); });
-        b.divider();
-        b.custom(28 + 26, color_row);
         b.note(tr(L"A game’s colour marks it on the rail. Installed games are in the rail unless you hide them."));
     };
     return c;

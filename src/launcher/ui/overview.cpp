@@ -116,11 +116,13 @@ void profile_segments(const Rect& r) {
         const float iw = natural > room ? room * widths[i] / natural : widths[i] + extra;
         const Rect item{x, r.y + 2, iw, r.h - 4};
         const bool on = static_cast<int>(i) == selected;
+        const bool menu = i + 1 == items.size();
+        // Custom with the profile menu open under it: drawn as hovered while the menu shows.
+        const bool open = menu && app.popup.open && app.popup.owner == kProfileMenu && app.popup.opener == kOverviewProfile;
         if (on)
             cv.fill(item, col(app.c->segment_selected), t::kRadiusControl - 2);
-        else if (pointer_in(item))
+        else if (open || pointer_in(item))
             cv.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
-        const bool menu = i + 1 == items.size();
         const std::wstring shown = fit(items[i], style, item.w - 8 - (menu ? kChevronW : 0));
         const Color fg = col(on ? app.c->on_segment : app.c->label);
         if (menu) {  // the name and its chevron centred together
@@ -684,14 +686,14 @@ int overview_profile(std::vector<std::wstring>& items) {
     return selected >= 0 ? selected : static_cast<int>(items.size()) - 1;
 }
 
-// A segment chosen: a preset is used (as Use in Manage profiles); Custom opens the profile menu.
+// A segment chosen: a preset is used (as Use in Manage profiles); Custom opens the profile menu under itself.
 void choose_overview_profile(int option) {
     const std::vector<Profile> presets = builtin_profiles(app.s.eyeTracking);
     if (option >= 0 && option < static_cast<int>(presets.size())) {
         use_profile(presets[static_cast<size_t>(option)].name);
         InvalidateRect(app.hwnd, nullptr, FALSE);
     } else {
-        open_profile_menu();
+        open_profile_menu(kOverviewProfile);
     }
 }
 

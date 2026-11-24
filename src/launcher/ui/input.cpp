@@ -350,12 +350,7 @@ void activate(Ctl id, int option) {
                 }
         return;
     }
-    case kColorGame:
-        app.colorGame = option;
-        app.colorLoaded = -2;
-        load_color_edit();
-        InvalidateRect(app.hwnd, nullptr, FALSE);
-        return;
+    case kColorGame: open_color_menu(option); return;
     case kColorReset:
         app.s.gameColors.erase(games::wide_id(color_game()));
         app.colorLoaded = -2;
@@ -483,6 +478,7 @@ bool push_button(Ctl id) {
     case kSupport:
     case kRestore:
     case kCardMenu:
+    case kColorGame:
     case kMore:
     case kHelmetFolder:
     case kThemeToggle:
@@ -595,8 +591,7 @@ bool space_control(Ctl id) {
     case kDiagKind:
     case kLanguage:
     case kGameShown:
-    case kAntiCheat:
-    case kColorGame: return true;
+    case kAntiCheat: return true;
     default: return false;
     }
 }
