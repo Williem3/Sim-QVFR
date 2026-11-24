@@ -60,4 +60,15 @@ bool minhook_ready(const char* tag, const char* outcome = "");
 bool hook_function(void* target, void* detour, void** original);
 bool unhook_function(void* target);
 
+// The same MinHook in its own steps, for hooks made first and turned on together (hook_queue_enable, then
+// hook_apply_queued). Each answers MinHook's status (kHookOk when done); hook_status_name names one for the log.
+constexpr int kHookOk = 0;
+int hook_create(void* target, void* detour, void** original);
+int hook_enable(void* target);
+int hook_disable(void* target);
+int hook_remove(void* target);
+int hook_queue_enable(void* target);
+int hook_apply_queued();
+const char* hook_status_name(int status);
+
 }  // namespace simqvfr

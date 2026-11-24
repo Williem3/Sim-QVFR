@@ -3,9 +3,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include <MinHook.h>
-
 #include "abi.h"
+#include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../xr.h"
 
@@ -67,9 +66,9 @@ bool double_render_start() {
         log_line("double_render: render_frame anchor mismatch; experiment refused");
         return false;
     }
-    if (MH_CreateHook(target, reinterpret_cast<void*>(&renderFrameHook), reinterpret_cast<void**>(&renderFrameOriginal)) !=
-            MH_OK ||
-        MH_EnableHook(target) != MH_OK) {
+    if (hook_create(target, reinterpret_cast<void*>(&renderFrameHook), reinterpret_cast<void**>(&renderFrameOriginal)) !=
+            kHookOk ||
+        hook_enable(target) != kHookOk) {
         log_line("double_render: hook failed; experiment refused");
         return false;
     }

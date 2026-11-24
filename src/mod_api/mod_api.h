@@ -351,6 +351,23 @@ typedef struct SqvfrHost {
      * set (the mod then uses its own default), the key isn't a setting name, or `size` is too small. `host` is this
      * table. sqvfr::setting (mod.hpp) wraps it. */
     int32_t (*mod_setting)(const struct SqvfrHost* host, const char* key, char* out, uint32_t size);
+    /* ---- Appended for game mods drawing at the D3D12 level (ACE's) ---- */
+    /* The core's MinHook in its own steps, for hooks made first and turned on together (engine/code_patch.h
+     * hook_create ... hook_apply_queued). Each answers MinHook's status, 0 when done. */
+    int32_t (*hook_create)(void* target, void* detour, void** original);
+    int32_t (*hook_enable)(void* target);
+    int32_t (*hook_disable)(void* target);
+    int32_t (*hook_remove)(void* target);
+    int32_t (*hook_queue_enable)(void* target);
+    int32_t (*hook_apply_queued)(void);
+    const char* (*hook_status_name)(int32_t status);
+    /* The core's D3D12 pass census (probe/pass_census.h): whether it runs, a barrier after the next dispatch, and the
+     * four views' columns (left edge and width each). */
+    int32_t (*pass_census_installed)(void);
+    void (*pass_census_barrier_after_next_dispatch)(void);
+    void (*pass_census_set_view_columns)(const int32_t left[4], const int32_t width[4]);
+    /* Developer probes on the game's exe (probe/probe.h): `fn(self)` at each entry to the named target. */
+    int32_t (*probe_set_observer)(const char* name, void (*fn)(void* self));
 } SqvfrHost;
 
 /* ---- mod -> core ---- */

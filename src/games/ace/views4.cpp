@@ -9,7 +9,6 @@
 #include <iterator>
 #include <vector>
 
-#include <MinHook.h>
 #include <intrin.h>
 
 #include "abi.h"
@@ -838,9 +837,9 @@ bool install_view_slots() {
 }
 
 bool create_hook(uintptr_t rva, void* detour, void** original, const char* name) {
-    const MH_STATUS s = MH_CreateHook(reinterpret_cast<void*>(base + rva), detour, original);
-    if (s != MH_OK) {
-        logf("views4: %s hook failed (MinHook %s)", name, MH_StatusToString(s));
+    const int s = hook_create(reinterpret_cast<void*>(base + rva), detour, original);
+    if (s != kHookOk) {
+        logf("views4: %s hook failed (MinHook %s)", name, hook_status_name(s));
         return false;
     }
     return true;
@@ -910,7 +909,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
     };
     const auto remove_all = [&] {
         for (const auto& h : hooks)
-            MH_RemoveHook(reinterpret_cast<void*>(base + h.rva));
+            hook_remove(reinterpret_cast<void*>(base + h.rva));
         restore_patches();
     };
     for (const auto& h : hooks)
@@ -1033,13 +1032,13 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
             log_line("views4: tile culling eye-structure probe not installed");
     }
     for (const auto& h : hooks)
-        MH_QueueEnableHook(reinterpret_cast<void*>(base + h.rva));
+        hook_queue_enable(reinterpret_cast<void*>(base + h.rva));
     if (normalHooked)
-        MH_QueueEnableHook(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
-    if (MH_ApplyQueued() != MH_OK) {
+        hook_queue_enable(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
+    if (hook_apply_queued() != kHookOk) {
         log_line("views4: enabling hooks failed");
         if (normalHooked)
-            MH_RemoveHook(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
+            hook_remove(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
         remove_all();
         return false;
     }

@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include <MinHook.h>
 
 #include "abi.h"
 #include "../../engine/code_patch.h"
@@ -178,12 +177,12 @@ bool batch_watch_start() {
     if (!minhook_ready("batch", "; batch watch off"))
         return false;
     void* target = reinterpret_cast<void*>(module_base() + ace::kBatchMergeRva);
-    MH_STATUS s = MH_CreateHook(target, reinterpret_cast<void*>(&mergeHook), reinterpret_cast<void**>(&mergeOriginal));
-    if (s == MH_OK)
-        s = MH_EnableHook(target);
-    if (s != MH_OK) {
-        logf("batch: merge hook failed (MinHook %s); batch watch off", MH_StatusToString(s));
-        MH_RemoveHook(target);
+    int s = hook_create(target, reinterpret_cast<void*>(&mergeHook), reinterpret_cast<void**>(&mergeOriginal));
+    if (s == kHookOk)
+        s = hook_enable(target);
+    if (s != kHookOk) {
+        logf("batch: merge hook failed (MinHook %s); batch watch off", hook_status_name(s));
+        hook_remove(target);
         return false;
     }
     installed = true;
@@ -195,8 +194,8 @@ void batch_watch_stop() {
     if (!installed)
         return;
     void* target = reinterpret_cast<void*>(module_base() + ace::kBatchMergeRva);
-    MH_DisableHook(target);
-    MH_RemoveHook(target);
+    hook_disable(target);
+    hook_remove(target);
     installed = false;
     AcquireSRWLockShared(&lock);
     if (peakPercent >= 0) {

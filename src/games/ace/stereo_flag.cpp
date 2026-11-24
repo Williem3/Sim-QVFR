@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,7 +106,20 @@ bool ace_known_build() {
     if (const int t = knownForTests.load(); t >= 0)
         return t != 0;
     static const bool known = [] {
-        if (games::current_game() != &ace::kGame) {
+        // ACE's exe by name and its builds by hash, from ACE's own GameInfo (the same in the core and in ACE's mod).
+        const auto ace_exe = [] {
+            wchar_t exe[MAX_PATH] = {};
+            const DWORD len = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            const wchar_t* slash = len && len < MAX_PATH ? wcsrchr(exe, L'\\') : nullptr;
+            return slash && _wcsicmp(slash + 1, ace::kGame.exeName) == 0;
+        };
+        const auto known_build = [](const std::string& sha) {
+            for (std::size_t i = 0; i < ace::kGame.buildCount; ++i)
+                if (sha == ace::kGame.builds[i])
+                    return true;
+            return false;
+        };
+        if (!ace_exe()) {
             log_line("ace build: not AssettoCorsaEVO.exe: no API path");
             return false;
         }
@@ -113,7 +127,7 @@ bool ace_known_build() {
         std::vector<wchar_t> path(32768);
         const DWORD n = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
         const std::string sha = n && n < path.size() ? sha256_file(path.data()) : std::string();
-        if (!games::supported_build(ace::kGame, sha)) {
+        if (!known_build(sha)) {
             logf("ace build: AssettoCorsaEVO.exe sha256=%s is not a known build (expected %s): no API path, the game "
                  "renders as it is",
                  sha.empty() ? "(unreadable)" : sha.c_str(), ace::kGame.builds[0]);

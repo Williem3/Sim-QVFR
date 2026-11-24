@@ -759,6 +759,11 @@ void host_table_filled() {
               h.hang_watch_on_fire && h.stock_wanted && h.set_stock_active && h.note_scene_frame && h.eye_off &&
               h.car_lighting_bits && h.mod_setting,
           "every appended host entry is filled");
+    check(h.hook_create && h.hook_enable && h.hook_disable && h.hook_remove && h.hook_queue_enable &&
+              h.hook_apply_queued && h.hook_status_name && h.pass_census_installed &&
+              h.pass_census_barrier_after_next_dispatch && h.pass_census_set_view_columns && h.probe_set_observer,
+          "the D3D12 mods' host entries are filled");
+    check(std::strcmp(h.hook_status_name(0), "MH_OK") == 0, "hook statuses are MinHook's");
     // The shared switches are the core's one copy.
     simqvfr::set_stock_wanted(true);
     check(h.stock_wanted() == 1, "stock_wanted through the host is the core's");

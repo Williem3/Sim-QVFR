@@ -13,7 +13,9 @@
 #include "../probe/local_analysis.h"
 #include "identity_adapter.h"
 
+#ifndef SIM_QVFR_ACE_AS_MOD
 #include "ace/adapter.h"
+#endif
 #include "ace/game.h"
 #include "acc/adapter.h"
 #include "acc/game.h"
@@ -114,8 +116,17 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return modded;
     }
     // A new game adds its adapter here (src/games/README.md).
-    if (game == &::ace::kGame)
-        return ::ace::adapter();
+    // ACE: QVFR by the API path (its focus views replayed at the D3D12 level, quad/focus_images.h), through the
+    // game-mod ABI (ace/mod_entry.cpp): built in, or with SIM_QVFR_ACE_AS_MOD its own DLL, mods\ace\sim-qvfr-ace.dll.
+    if (game == &::ace::kGame) {
+#ifdef SIM_QVFR_ACE_AS_MOD
+        static GameAdapter& ace = through_mod_dll(game, L"ace", L"sim-qvfr-ace.dll", mod_api::first_party_mod(L"ace"),
+                                                  protectedLaunch);
+#else
+        static GameAdapter& ace = through_mod(game, &::ace::mod_entry);
+#endif
+        return ace;
+    }
     if (game == &::acc::kGame)
         return ::acc::adapter();
     // X-Plane: QVFR through the early load (docs/recon-xplane.md), through the game-mod ABI (xplane/mod_entry.cpp): built

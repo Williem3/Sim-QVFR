@@ -25,7 +25,7 @@ namespace simqvfr::mod_api {
 // certificate is added here, an old one kept while builds signed with it are in use.
 bool official_thumbprint(const std::wstring& thumbprint);
 
-// A mod id the package itself ships (its folder under mods\): "scs", "xplane". The id alone proves nothing: anyone can
+// A mod id the package itself ships (its folder under mods\): "scs", "xplane", "ace". The id alone proves nothing: anyone can
 // write it in a mod.json. A mod counts as first-party only when its file is the package's own (shipped_by_package) or
 // carries the maintainer's signature (Official).
 bool first_party_mod(const std::wstring& id);

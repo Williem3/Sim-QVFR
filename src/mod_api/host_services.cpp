@@ -20,6 +20,8 @@
 #include "../module_path.h"
 #include "../probe/aftermath.h"
 #include "../probe/hang_watch.h"
+#include "../probe/pass_census.h"
+#include "../probe/probe.h"
 #include "../probe/run_exit.h"
 #include "../quad/car_lighting.h"
 #include "../quad/eye_off.h"
@@ -239,6 +241,24 @@ int32_t host_mod_setting(const SqvfrHost* host, const char* key, char* out, uint
 }
 
 
+int32_t host_hook_create(void* target, void* detour, void** original) { return hook_create(target, detour, original); }
+int32_t host_hook_enable(void* target) { return hook_enable(target); }
+int32_t host_hook_disable(void* target) { return hook_disable(target); }
+int32_t host_hook_remove(void* target) { return hook_remove(target); }
+int32_t host_hook_queue_enable(void* target) { return hook_queue_enable(target); }
+int32_t host_hook_apply_queued() { return hook_apply_queued(); }
+const char* host_hook_status_name(int32_t status) { return hook_status_name(status); }
+
+int32_t host_pass_census_installed() { return b(pass_census_installed()); }
+void host_pass_census_barrier() { pass_census_barrier_after_next_dispatch(); }
+void host_pass_census_set_view_columns(const int32_t left[4], const int32_t width[4]) {
+    if (!left || !width)
+        return;
+    const int l[4] = {left[0], left[1], left[2], left[3]}, w[4] = {width[0], width[1], width[2], width[3]};
+    pass_census_set_view_columns(l, w);
+}
+int32_t host_probe_set_observer(const char* name, void (*fn)(void* self)) { return b(name && probe_set_observer(name, fn)); }
+
 }  // namespace
 
 std::wstring mods_ini() {
@@ -300,6 +320,17 @@ const SqvfrHost& host_table() {
         h.car_lighting_bits = host_car_lighting_bits;
         h.modId = "";  // PluginAdapter::load names the mod in its own copy
         h.mod_setting = host_mod_setting;
+        h.hook_create = host_hook_create;
+        h.hook_enable = host_hook_enable;
+        h.hook_disable = host_hook_disable;
+        h.hook_remove = host_hook_remove;
+        h.hook_queue_enable = host_hook_queue_enable;
+        h.hook_apply_queued = host_hook_apply_queued;
+        h.hook_status_name = host_hook_status_name;
+        h.pass_census_installed = host_pass_census_installed;
+        h.pass_census_barrier_after_next_dispatch = host_pass_census_barrier;
+        h.pass_census_set_view_columns = host_pass_census_set_view_columns;
+        h.probe_set_observer = host_probe_set_observer;
         return h;
     }();
     return host;

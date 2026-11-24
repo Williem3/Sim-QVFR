@@ -5,7 +5,6 @@
 #include <atomic>
 #include <cstdint>
 
-#include <MinHook.h>
 
 #include "abi.h"
 #include "ngx_extent.h"
@@ -101,24 +100,24 @@ bool dlss_extent_start() {
         log_line("views4 dlss: NGX create/evaluate anchor mismatch; the DLSS output sizes are left to ACE");
         return false;
     }
-    // Its own MH_Initialize: views4 normally ran it first, but this start must not depend on that order.
+    // Its own MinHook start: views4 normally ran it first, but this start must not depend on that order.
     if (!minhook_ready("views4 dlss", "; the DLSS output sizes are left to ACE"))
         return false;
     void* create = reinterpret_cast<void*>(module_base() + ace::kNgxCreateFeatureRva);
     void* evaluate = reinterpret_cast<void*>(module_base() + ace::kNgxEvaluateFeatureRva);
-    MH_STATUS s = MH_CreateHook(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
-    if (s == MH_OK) {
-        s = MH_CreateHook(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
-        if (s != MH_OK)
-            MH_RemoveHook(create);
+    int s = hook_create(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
+    if (s == kHookOk) {
+        s = hook_create(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
+        if (s != kHookOk)
+            hook_remove(create);
     }
-    if (s == MH_OK && (s = MH_QueueEnableHook(create)) == MH_OK && (s = MH_QueueEnableHook(evaluate)) == MH_OK)
-        s = MH_ApplyQueued();
-    if (s != MH_OK) {
-        MH_RemoveHook(create);
-        MH_RemoveHook(evaluate);
+    if (s == kHookOk && (s = hook_queue_enable(create)) == kHookOk && (s = hook_queue_enable(evaluate)) == kHookOk)
+        s = hook_apply_queued();
+    if (s != kHookOk) {
+        hook_remove(create);
+        hook_remove(evaluate);
         logf("views4 dlss: NGX create/evaluate hooks failed (MinHook %s); the DLSS output sizes are left to ACE",
-             MH_StatusToString(s));
+             hook_status_name(s));
         return false;
     }
     installed = true;

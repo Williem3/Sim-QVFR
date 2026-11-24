@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include <MinHook.h>
 
+#include "../engine/code_patch.h"
 #include "../engine/ngx_common.h"
 #include "../log.h"
 
@@ -242,10 +242,10 @@ void hook_optimal(Bag* bag) {
         return;
     if (optimalHooked.exchange(true))
         return;
-    MH_STATUS s = MH_CreateHook(callback, reinterpret_cast<void*>(&optimalHook), reinterpret_cast<void**>(&optimalOriginal));
-    if (s == MH_OK)
-        s = MH_EnableHook(callback);
-    logf("focus dlss: NGX's DLSS optimal-settings query %s", s == MH_OK ? "detoured" : MH_StatusToString(s));
+    int s = hook_create(callback, reinterpret_cast<void*>(&optimalHook), reinterpret_cast<void**>(&optimalOriginal));
+    if (s == kHookOk)
+        s = hook_enable(callback);
+    logf("focus dlss: NGX's DLSS optimal-settings query %s", s == kHookOk ? "detoured" : hook_status_name(s));
 }
 
 NVSDK_NGX_Result capabilityHook(Bag** out) {
@@ -711,43 +711,42 @@ bool install() {
         log_line("focus dlss: _nvngx.dll lacks a D3D12 export (create / evaluate / parameters / release); no focus DLSS");
         return false;
     }
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        logf("focus dlss: MinHook: %s; no focus DLSS", MH_StatusToString(init));
+    if (!minhook_ready("focus dlss", "; no focus DLSS")) {
         return false;
     }
-    MH_STATUS s = MH_CreateHook(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
+    int s = hook_create(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
     {  // the parameter bags NGX hands out (for the optimal-settings query): not needed for the rest
         void* const allocate = reinterpret_cast<void*>(allocateFn);
         void* const capability = reinterpret_cast<void*>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_GetCapabilityParameters"));
-        if (MH_CreateHook(allocate, reinterpret_cast<void*>(&allocateHook), reinterpret_cast<void**>(&allocateFn)) == MH_OK)
-            MH_QueueEnableHook(allocate);
-        if (capability && MH_CreateHook(capability, reinterpret_cast<void*>(&capabilityHook),
-                                        reinterpret_cast<void**>(&capabilityOriginal)) == MH_OK)
-            MH_QueueEnableHook(capability);
+        if (hook_create(allocate, reinterpret_cast<void*>(&allocateHook), reinterpret_cast<void**>(&allocateFn)) == kHookOk)
+            hook_queue_enable(allocate);
+        if (capability && hook_create(capability, reinterpret_cast<void*>(&capabilityHook),
+                                        reinterpret_cast<void**>(&capabilityOriginal)) == kHookOk)
+            hook_queue_enable(capability);
         // NGX's shutdowns and the game's releases: our features do not outlive a shutdown
-        if (shutdown && MH_CreateHook(shutdown, reinterpret_cast<void*>(&shutdownHook),
-                                      reinterpret_cast<void**>(&shutdownOriginal)) == MH_OK)
-            MH_QueueEnableHook(shutdown);
-        if (shutdown1 && MH_CreateHook(shutdown1, reinterpret_cast<void*>(&shutdown1Hook),
-                                       reinterpret_cast<void**>(&shutdown1Original)) == MH_OK)
-            MH_QueueEnableHook(shutdown1);
+        if (shutdown && hook_create(shutdown, reinterpret_cast<void*>(&shutdownHook),
+                                      reinterpret_cast<void**>(&shutdownOriginal)) == kHookOk)
+            hook_queue_enable(shutdown);
+        if (shutdown1 && hook_create(shutdown1, reinterpret_cast<void*>(&shutdown1Hook),
+                                       reinterpret_cast<void**>(&shutdown1Original)) == kHookOk)
+            hook_queue_enable(shutdown1);
         void* const release = reinterpret_cast<void*>(releaseFn);
-        if (MH_CreateHook(release, reinterpret_cast<void*>(&releaseHook), reinterpret_cast<void**>(&releaseOriginal)) == MH_OK) {
+        if (hook_create(release, reinterpret_cast<void*>(&releaseHook), reinterpret_cast<void**>(&releaseOriginal)) == kHookOk) {
             releaseFn = releaseOriginal;  // our own releases go past the hook
-            MH_QueueEnableHook(release);
+            hook_queue_enable(release);
         }
     }
-    if (s == MH_OK) {
-        s = MH_CreateHook(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
-        if (s != MH_OK)
-            MH_RemoveHook(create);
+    if (s == kHookOk) {
+        s = hook_create(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
+        if (s != kHookOk)
+            hook_remove(create);
     }
-    if (s == MH_OK && (s = MH_QueueEnableHook(create)) == MH_OK && (s = MH_QueueEnableHook(evaluate)) == MH_OK)
-        s = MH_ApplyQueued();
-    if (s != MH_OK) {
-        MH_RemoveHook(create);
-        MH_RemoveHook(evaluate);
-        logf("focus dlss: could not detour NGX's exports (%s); no focus DLSS", MH_StatusToString(s));
+    if (s == kHookOk && (s = hook_queue_enable(create)) == kHookOk && (s = hook_queue_enable(evaluate)) == kHookOk)
+        s = hook_apply_queued();
+    if (s != kHookOk) {
+        hook_remove(create);
+        hook_remove(evaluate);
+        logf("focus dlss: could not detour NGX's exports (%s); no focus DLSS", hook_status_name(s));
         return false;
     }
     hooked = true;

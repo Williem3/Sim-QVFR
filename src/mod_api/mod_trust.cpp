@@ -66,7 +66,7 @@ bool official_thumbprint(const std::wstring& thumbprint) {
 }
 
 bool first_party_mod(const std::wstring& id) {
-    return _wcsicmp(id.c_str(), L"scs") == 0 || _wcsicmp(id.c_str(), L"xplane") == 0;
+    return _wcsicmp(id.c_str(), L"scs") == 0 || _wcsicmp(id.c_str(), L"xplane") == 0 || _wcsicmp(id.c_str(), L"ace") == 0;
 }
 
 bool shipped_by_package(const std::wstring& dllPath, const std::string& sha256) {

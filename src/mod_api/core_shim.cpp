@@ -19,6 +19,8 @@
 #include "../log.h"
 #include "../probe/aftermath.h"
 #include "../probe/hang_watch.h"
+#include "../probe/pass_census.h"
+#include "../probe/probe.h"
 #include "../quad/car_lighting.h"
 #include "../quad/eye_off.h"
 #include "../quad/showcase.h"
@@ -278,5 +280,30 @@ bool vtable_slot_replace(std::uintptr_t slotRva, std::uintptr_t expectedRva, con
 bool readable(const void* address, std::size_t size) { return SQVFR_CALL(readable, 0, address, size) != 0; }
 bool hook_function(void* target, void* detour, void** original) { return SQVFR_CALL(hook, 0, target, detour, original) != 0; }
 bool unhook_function(void* target) { return SQVFR_CALL(unhook, 0, target) != 0; }
+// MinHook's own "not initialized" when the core can't be reached.
+constexpr int kHookUnreached = 2;
+bool minhook_ready(const char*, const char*) { return entry(&SqvfrHost::hook_create) != nullptr; }
+int hook_create(void* target, void* detour, void** original) {
+    return SQVFR_CALL(hook_create, kHookUnreached, target, detour, original);
+}
+int hook_enable(void* target) { return SQVFR_CALL(hook_enable, kHookUnreached, target); }
+int hook_disable(void* target) { return SQVFR_CALL(hook_disable, kHookUnreached, target); }
+int hook_remove(void* target) { return SQVFR_CALL(hook_remove, kHookUnreached, target); }
+int hook_queue_enable(void* target) { return SQVFR_CALL(hook_queue_enable, kHookUnreached, target); }
+int hook_apply_queued() { return SQVFR_CALL(hook_apply_queued, kHookUnreached); }
+const char* hook_status_name(int status) { return SQVFR_CALL(hook_status_name, "MH_ERROR_NOT_INITIALIZED", status); }
+
+}  // namespace simqvfr
+
+// ---- probe/pass_census.h, probe/probe.h (the core's: one census and one probe table in the process) ----
+
+namespace simqvfr {
+
+bool pass_census_installed() { return SQVFR_CALL(pass_census_installed, 0) != 0; }
+void pass_census_barrier_after_next_dispatch() { SQVFR_DO(pass_census_barrier_after_next_dispatch); }
+void pass_census_set_view_columns(const int (&left)[4], const int (&width)[4]) {
+    SQVFR_DO(pass_census_set_view_columns, left, width);
+}
+bool probe_set_observer(const char* name, void (*fn)(void* self)) { return SQVFR_CALL(probe_set_observer, 0, name, fn) != 0; }
 
 }  // namespace simqvfr
