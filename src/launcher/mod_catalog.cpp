@@ -233,7 +233,9 @@ std::string mod_setting_value(const std::wstring& ini, const std::wstring& id, c
     GetPrivateProfileStringW(section_of(id).c_str(), ascii_wide(setting.key).c_str(), L"", buffer,
                              static_cast<DWORD>(std::size(buffer)), ini.c_str());
     const std::wstring w = buffer;
-    const std::string v(w.begin(), w.end());
+    std::string v;
+    for (wchar_t c : w)
+        v += c < 0x80 ? static_cast<char>(c) : '?';
     if (setting.kind == ModSetting::Kind::Toggle)
         return v == "1" || v == "0" ? v : setting.def;
     for (const ModOption& o : setting.options)
