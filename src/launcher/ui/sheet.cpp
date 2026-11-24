@@ -113,7 +113,7 @@ void sheet_card() {
     cv.fill({0, 0, W, H}, {0, app.dark ? 0.55f : 0.32f});
     app.hits.clear();
     app.drawingSheet = true;
-    const float w = std::min(460.0f, W - 32), pad = t::kSpace6, inner = w - 2 * pad;
+    const float w = std::min(s.width, W - 32), pad = t::kSpace6, inner = w - 2 * pad;
     const float textH = s.text.empty() ? 0 : cv.measure_height(s.text, t::kBody, inner);
     constexpr float kFieldH = 32;
     const float labelH = s.fieldLabel.empty() ? 0 : t::kCallout.lineHeight + t::kSpace2;

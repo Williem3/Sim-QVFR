@@ -41,6 +41,8 @@ struct ModEntry {
     std::wstring source;   // its source code (an https link; required of a mod not made by Sim-QVFR)
     std::wstring license;  // its source's licence (an SPDX id: "MIT", "GPL-3.0-only"; required with source)
     std::wstring dllPath;  // <folder>\<dll>
+    std::wstring sdk;      // the SDK it was built with (mod.json "sdk", stamped by SqvfrMod.cmake); empty: unknown
+    int abi = 0;           // the mod ABI it says it uses (mod.json "abi"); 0: unknown
     std::vector<std::wstring> games;  // the games it covers (their ids)
     std::vector<ModSetting> settings;
     std::wstring error;    // why the mod is unusable (mod.json missing or wrong); settings.json errors go to settingsError

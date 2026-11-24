@@ -1,6 +1,7 @@
 #include "mod_catalog.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -100,6 +101,11 @@ bool parse_mod_manifest(const std::string& text, ModEntry& mod, std::wstring& er
     const std::string source = root.string_at("source");
     mod.source = valid_source_link(source) ? ascii_wide(source) : std::wstring();
     mod.license = shown(root.string_at("license"), 40);
+    mod.sdk = shown(root.string_at("sdk"), 32);
+    mod.abi = 0;
+    if (const json::Value* abi = root.find("abi"); abi && abi->type == json::Value::Type::Number &&
+                                                   abi->text.size() <= 4 && abi->text.find_first_not_of("0123456789") == std::string::npos)
+        mod.abi = std::atoi(abi->text.c_str());
     if (!mod_api::first_party_mod(mod.id) && (mod.source.empty() || mod.license.empty())) {
         error = mod.source.empty() ? L"mod.json has no \"source\" link (https) to the mod's source code: Sim-QVFR mods must be open source"
                                    : L"mod.json has no \"license\" for its source code";

@@ -244,7 +244,7 @@ try {
         # Each mod's version is this package's (the launcher's Settings > Mods compares it with a mod release's).
         foreach ($manifest in ($firstPartyMods | Where-Object { $_ -like '*mod.json' })) {
             $path = Join-Path $stage $manifest
-            $text = [IO.File]::ReadAllText($path) -replace '"version"\s*:\s*"[^"]*"', ('"version": "' + $Version + '"')
+            $text = [IO.File]::ReadAllText($path) -replace '"version"\s*:\s*"[^"]*"', ('"version": "' + $Version + '", "sdk": "' + $Version + '"')
             [IO.File]::WriteAllText($path, $text)
         }
     }
@@ -357,6 +357,7 @@ try {
         foreach ($header in 'mod_api.h', 'mod.hpp') {
             Copy-Item -LiteralPath (Join-Path $work "src\mod_api\$header") -Destination (Join-Path $sdkStage 'include')
         }
+        Set-Content -LiteralPath (Join-Path $sdkStage 'VERSION') -Value $Version -Encoding ASCII  # stamped into each mod.json
         $sdkArchive = Join-Path (Split-Path -Parent $archive) "sqvfr-sdk-$Version.zip"
         Compress-Archive -Path $sdkStage -DestinationPath $sdkArchive
         Remove-Item -LiteralPath $sdkStage -Recurse -Force

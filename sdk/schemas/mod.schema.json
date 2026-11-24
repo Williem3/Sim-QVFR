@@ -9,6 +9,16 @@
     "license"
   ],
   "properties": {
+    "sdk": {
+      "description": "The SDK version the mod was built with. Written by sqvfr_add_mod (SqvfrMod.cmake); don't set it.",
+      "type": "string",
+      "maxLength": 32
+    },
+    "abi": {
+      "description": "The mod ABI (SQVFR_ABI_VERSION) of the SDK it was built with. Written by sqvfr_add_mod; don't set it.",
+      "type": "integer",
+      "minimum": 1
+    },
     "id": {
       "description": "The mod's id: its folder under mods\\ and the [mod_<id>] section its settings are saved in.",
       "type": "string",

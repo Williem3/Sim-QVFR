@@ -178,7 +178,9 @@ enum Ctl {
     // (kModRemove0 + its index).
     kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7,
     // Sim-QVFR's own mods' updates (mod_update.h): check them all, a mod's Install and Go back (+ its index).
-    kModsCheck, kModsAdd, kModSource0, kModSourceLast = kModSource0 + 7, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
+    kModsCheck, kModsAdd, kModSource0, kModSourceLast = kModSource0 + 7, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7,
+    // A mod's Details… (its window over the Settings panel: pane_mods.cpp show_details).
+    kModDetails0, kModDetailsLast = kModDetails0 + 7
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -325,6 +327,7 @@ struct Sheet {
     int focus = -1;   // the button with the focus when it opens; -1: the main one (the name field, with one)
     int cancel = 0;   // the button Escape presses
     bool danger = false;
+    float width = 460;   // a longer read (a mod's Details) is wider
     bool field = false;  // a name field above the buttons (Return in it presses the main button)
     std::wstring fieldLabel, fieldText;
     std::function<void(int button, const std::wstring& text)> done;  // the button pressed, and the field's text

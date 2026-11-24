@@ -714,6 +714,13 @@ void mod_catalog_checks() {
               m.id == L"demo" && m.name == L"Demo mod" && m.dll == L"demo.dll" && m.games.size() == 1,
           "mods: a good mod.json is read (a game with a bad id left out)");
     check(m.source == L"https://github.com/someone/demo" && m.license == L"MIT", "mods: its source link and licence");
+    check(m.sdk.empty() && m.abi == 0, "mods: no sdk or abi: unknown");
+    ModEntry stamped;
+    check(parse_mod_manifest(R"({"sdk":"1.2.3-nightly.20261124","abi":1,"id":"demo","dll":"demo.dll",
+                                "source":"https://github.com/someone/demo","license":"MIT"})",
+                             stamped, error) &&
+              stamped.sdk == L"1.2.3-nightly.20261124" && stamped.abi == 1,
+          "mods: the SDK it was built with (stamped by SqvfrMod.cmake)");
     for (const char* closed : {R"({"id":"demo","dll":"demo.dll"})", R"({"id":"demo","dll":"demo.dll","source":"https://github.com/a/b"})",
                                R"({"id":"demo","dll":"demo.dll","source":"http://github.com/a/b","license":"MIT"})",
                                R"({"id":"demo","dll":"demo.dll","source":"https://github.com","license":"MIT"})"}) {

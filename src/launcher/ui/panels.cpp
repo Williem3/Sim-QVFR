@@ -38,11 +38,12 @@ float panel_content(PanelKind kind, float x, float y, float w, bool draw) {
 
 namespace {
 
-// A panel's width: the forms' (Report, Manage profiles), About's text, the colour wheel's.
+// A panel's width: the forms' (Report, Manage profiles), About's text, the colour wheel's, Settings' list.
 float panel_width(PanelKind kind) {
     switch (kind) {
     case PanelKind::Color: return 440;
     case PanelKind::About: return 560;
+    case PanelKind::Settings: return 900;  // the mods list: a mod per line, its buttons beside it
     default: return 620;
     }
 }

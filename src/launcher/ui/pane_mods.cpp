@@ -141,29 +141,6 @@ void confirm_add(const StagedMod& staged) {
     open_sheet(std::move(s));
 }
 
-// The update rows of one of Sim-QVFR's own mods: the newest release as last checked, Install, Go back.
-void update_rows(Body& b, size_t i) {
-    const ModEntry& m = app.mods[i];
-    if (!mod_api::first_party_mod(m.id) || !m.error.empty())
-        return;
-    const auto it = app.modReleases.find(m.id);
-    const bool newer = it != app.modReleases.end() && compare_mod_versions(m.version, it->second.version) < 0;
-    if (newer)
-        b.action(trf(L"Version {version} is available", {{L"version", it->second.version}}),
-                 game_running() ? tr(L"Close the game first: its DLL is in use.")
-                                : trf(L"You have {version}. The version in place is kept, so you can go back.",
-                                      {{L"version", m.version.empty() ? std::wstring(L"?") : m.version}}),
-                 static_cast<Ctl>(kModInstall0 + static_cast<int>(i)), tr(L"Install"), -1, Btn::Primary);
-    else if (app.modsChecked && it != app.modReleases.end())
-        b.info(tr(L"Updates"), tr(L"Up to date"));
-    else if (app.modsChecked)
-        b.info(tr(L"Updates"), tr(L"None released yet"));
-    std::wstring folder, version;
-    if (find_mod_backup(mods_folder_path(), m.id, folder, version))
-        b.action(trf(L"Go back to {version}", {{L"version", version}}), tr(L"The version the last update replaced."),
-                 static_cast<Ctl>(kModRestore0 + static_cast<int>(i)), tr(L"Go back"));
-}
-
 void ensure_read() {
     if (!app.modsRead)
         mods_refresh();
@@ -188,54 +165,145 @@ std::wstring signed_line(const ModStatus& st) {
     return trf(L"Signed by {signer}.", {{L"signer", st.facts.signer}});
 }
 
-// A mod's card on the Mods page: who made it, what loads, its approval and Allow online, its folder and Remove.
-void trust_rows(Body& b, size_t i) {
+// A newer release of one of Sim-QVFR's own mods, as last checked.
+bool update_available(size_t i) {
+    const ModEntry& m = app.mods[i];
+    if (!mod_api::first_party_mod(m.id) || !m.error.empty())
+        return false;
+    const auto it = app.modReleases.find(m.id);
+    return it != app.modReleases.end() && compare_mod_versions(m.version, it->second.version) < 0;
+}
+
+// A mod's line in the list: its author, version and the SDK it was built with.
+std::wstring byline(const ModEntry& m) {
+    std::wstring line = m.author.empty() ? std::wstring(tr(L"Unknown author")) : m.author;
+    if (!m.version.empty())
+        line += L" · " + trf(L"v{version}", {{L"version", m.version}});
+    if (!m.sdk.empty())
+        line += L" · " + trf(L"SDK {version}", {{L"version", m.sdk}});
+    else if (m.abi > 0)
+        line += L" · " + trf(L"ABI {abi}", {{L"abi", std::to_wstring(m.abi)}});
+    return line;
+}
+
+// A mod in the Settings panel's list: name, status, author, version, SDK, and its quick buttons (Approve, Allow online,
+// Update); everything else is in its Details window (show_details).
+void mod_item(Body& b, size_t i) {
     const ModEntry& m = app.mods[i];
     const ModStatus& st = app.modStatus[i];
+    const int n = static_cast<int>(i);
+    std::vector<Body::ButtonSpec> buttons;
     if (!m.error.empty()) {
-        b.status(m.id, m.error, 2, tr(L"Won’t load"));
+        buttons.push_back({static_cast<Ctl>(kModDetails0 + n), tr(L"Details…")});
+        b.item(m.name.empty() ? m.id : m.name, 2, tr(L"Won’t load"), m.id, buttons);
         return;
     }
     const auto [tone, text] = chip_of(st);
-    std::wstring who = m.author.empty() ? tr(L"Unknown author") : m.author;
-    if (!m.version.empty())
-        who += L" · " + m.version;
-    b.status(who, signed_line(st) + L" " + (st.offline.trust == ModTrust::Community || st.approvable
-                                                  ? tr(L"Not made by Sim-QVFR.")
-                                                  : std::wstring()),
-             tone, text);
-    if (st.approvable) {
-        const bool approved = st.offline.trust == ModTrust::Community;
-        if (!approved && !st.approval.sha256.empty())
-            b.note(tr(L"Its file changed since you approved it: approve it again to use it."));
-        b.action(approved ? tr(L"Approved") : tr(L"Approve this mod"),
-                 approved ? trf(L"This exact file ({hash}…). If it changes, it stops loading until you approve it again.",
-                                {{L"hash", short_hash(st.facts.sha256)}})
-                          : tr(L"It runs inside the game. Approve it only if you trust who made it."),
-                 static_cast<Ctl>(kModApprove0 + static_cast<int>(i)), approved ? tr(L"Take back") : tr(L"Approve…"),
-                 -1, approved ? Btn::Secondary : Btn::Primary);
-        if (approved) {
-            const bool canOnline = st.facts.signatureTrusted;
-            b.toggle(static_cast<Ctl>(kModOnline0 + static_cast<int>(i)), tr(L"Allow online"), st.approval.online,
-                     !canOnline ? tr(L"Not signed by its author, so it never runs while a game’s anti-cheat runs.")
-                     : st.approval.online
-                         ? tr(L"On: it also runs while the game’s anti-cheat runs. The anti-cheat may kick or ban you for it.")
-                         : tr(L"Off: it stays off while the game’s anti-cheat runs."),
-                     !canOnline, Applies::NextLaunch);
+    const bool approved = st.offline.trust == ModTrust::Community;
+    if (update_available(i))
+        buttons.push_back({static_cast<Ctl>(kModInstall0 + n), tr(L"Update"), Btn::Primary});
+    if (st.approvable && approved && st.facts.signatureTrusted)
+        buttons.push_back({static_cast<Ctl>(kModOnline0 + n), st.approval.online ? tr(L"Online: on") : tr(L"Allow online…")});
+    if (st.approvable)
+        buttons.push_back({static_cast<Ctl>(kModApprove0 + n), approved ? tr(L"Take back") : tr(L"Approve…"),
+                           approved ? Btn::Secondary : Btn::Primary});
+    buttons.push_back({static_cast<Ctl>(kModDetails0 + n), tr(L"Details…")});
+    b.item(m.name, tone, text, byline(m), buttons);
+}
+
+// A mod's Details window, over the Settings panel: who made it, what loads and why, its approval, online, games, source,
+// settings, folder; and Remove, Go back, View source.
+void show_details(size_t i) {
+    const ModEntry& m = app.mods[i];
+    const ModStatus& st = app.modStatus[i];
+    Sheet s;
+    s.title = m.name.empty() ? m.id : m.name;
+    std::wstring t;
+    auto line = [&t](const std::wstring& label, const std::wstring& value) {
+        if (value.empty())
+            return;
+        t += (t.empty() ? L"" : L"\n\n") + label + L": " + value;
+    };
+    std::wstring folder, backupVersion;
+    const bool backup = m.error.empty() && mod_api::first_party_mod(m.id) &&
+                        find_mod_backup(mods_folder_path(), m.id, folder, backupVersion);
+    if (!m.error.empty()) {
+        line(tr(L"Won’t load"), m.error);
+    } else {
+        line(tr(L"Made by"), byline(m));
+        std::wstring built;
+        if (!m.sdk.empty())
+            built = trf(L"SDK {version}", {{L"version", m.sdk}});
+        if (m.abi > 0)
+            built += (built.empty() ? L"" : L", ") + trf(L"mod ABI {abi}", {{L"abi", std::to_wstring(m.abi)}});
+        line(tr(L"Built with"), built);
+        line(tr(L"Status"), chip_of(st).second + L". " + widen_reason(st.offline.why) + L".");
+        line(tr(L"Signature"), signed_line(st) + (st.offline.trust == ModTrust::Community || st.approvable
+                                                      ? L" " + std::wstring(tr(L"Not made by Sim-QVFR."))
+                                                      : std::wstring()));
+        if (st.approvable) {
+            const bool approved = st.offline.trust == ModTrust::Community;
+            if (approved)
+                line(tr(L"Approval"), trf(L"This exact file ({hash}…). If it changes, it stops loading until you approve it again.",
+                                          {{L"hash", short_hash(st.facts.sha256)}}));
+            else if (!st.approval.sha256.empty())
+                line(tr(L"Approval"), tr(L"Its file changed since you approved it: approve it again to use it."));
+            else
+                line(tr(L"Approval"), tr(L"Not approved. It runs inside the game: approve it only if you trust who made it."));
+            line(tr(L"Online"),
+                 !st.facts.signatureTrusted ? tr(L"Not signed by its author, so it never runs while a game’s anti-cheat runs.")
+                 : st.approval.online ? tr(L"On: it also runs while the game’s anti-cheat runs. The anti-cheat may kick or ban you for it.")
+                                      : tr(L"Off: it stays off while the game’s anti-cheat runs."));
         }
-    } else if (st.offline.trust == ModTrust::Refused) {
-        b.note(widen_reason(st.offline.why));
-    }
-    if (!m.games.empty()) {
         std::wstring games;
         for (const std::wstring& g : m.games)
             games += (games.empty() ? L"" : L", ") + g;
-        b.info(tr(L"Games"), games);
+        line(tr(L"Games"), games);
+        if (mod_api::first_party_mod(m.id)) {
+            const auto it = app.modReleases.find(m.id);
+            line(tr(L"Updates"), update_available(i) ? trf(L"Version {version} is available.", {{L"version", it->second.version}})
+                                 : !app.modsChecked ? std::wstring()
+                                 : it != app.modReleases.end() ? std::wstring(tr(L"Up to date."))
+                                                               : std::wstring(tr(L"None released yet.")));
+            if (backup)
+                line(tr(L"Previous version"), trf(L"{version}, kept by the last update.", {{L"version", backupVersion}}));
+        }
+        if (!m.source.empty())
+            line(tr(L"Source code"), m.source + (m.license.empty() ? L"" : L" (" + m.license + L")"));
+        if (!m.settings.empty())
+            line(tr(L"Settings"), tr(L"On the Game tab, with each game it covers."));
     }
-    if (!m.source.empty())
-        b.info(tr(L"Source code"), m.source + (m.license.empty() ? L"" : L" (" + m.license + L")"));
-    if (!m.settings.empty())
-        b.note(tr(L"Its settings are on the Game tab, with each game it covers."));
+    line(tr(L"Folder"), m.folder);
+    s.text = t;
+    s.width = 640;
+    // Buttons, left to right; the last (Close) is the main one and Escape's.
+    std::vector<int> kinds;  // 0 Remove, 1 Go back, 2 View source, 3 Close
+    s.buttons.push_back(tr(L"Remove…"));
+    kinds.push_back(0);
+    if (backup) {
+        s.buttons.push_back(tr(L"Go back"));
+        kinds.push_back(1);
+    }
+    if (!m.source.empty()) {
+        s.buttons.push_back(tr(L"View source"));
+        kinds.push_back(2);
+    }
+    s.buttons.push_back(tr(L"Close"));
+    kinds.push_back(3);
+    s.cancel = static_cast<int>(s.buttons.size()) - 1;
+    s.focus = s.cancel;
+    const int n = static_cast<int>(i);
+    s.done = [kinds, n](int button, const std::wstring&) {
+        if (button < 0 || button >= static_cast<int>(kinds.size()))
+            return;
+        switch (kinds[static_cast<size_t>(button)]) {
+        case 0: mods_press(static_cast<Ctl>(kModRemove0 + n), -1); break;
+        case 1: mods_press(static_cast<Ctl>(kModRestore0 + n), -1); break;
+        case 2: mods_press(static_cast<Ctl>(kModSource0 + n), -1); break;
+        default: break;
+        }
+    };
+    open_sheet(std::move(s));
 }
 
 // A mod's settings (its settings.json), on the Game tab of a game it covers.
@@ -477,6 +545,12 @@ bool mods_press(Ctl id, int option) {
             ShellExecuteW(app.hwnd, L"open", app.mods[i].source.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return true;
     }
+    if (id >= kModDetails0 && id <= kModDetailsLast) {
+        const size_t i = static_cast<size_t>(id - kModDetails0);
+        if (i < app.mods.size() && i < app.modStatus.size())
+            show_details(i);
+        return true;
+    }
     if (id >= kModRemove0 && id <= kModRemoveLast) {
         const size_t i = static_cast<size_t>(id - kModRemove0);
         if (i < app.mods.size())
@@ -522,31 +596,18 @@ float settings_pane(float x, float y, float w, bool draw) {
     ensure_read();
     Body b(x, y, w, draw);
     b.group(tr(L"Mods"));
-    b.note(app.mods.empty()
-               ? tr(L"No game mods are installed. A mod is a folder in the mods folder, with its mod.json.")
-               : trn(static_cast<int>(app.mods.size()), L"{count} mod in the mods folder.", L"{count} mods in the mods folder.",
-                     {{L"count", std::to_wstring(app.mods.size())}}));
-    b.note(tr(L"Sim-QVFR’s own mods are signed by Sim-QVFR. Any other mod runs only once you approve it, and online only "
-              L"if its author signed it and you allow it."));
+    b.note(app.mods.empty() ? tr(L"No game mods are installed. Add one with Add a mod…, or drop its zip on this window.")
+                            : tr(L"Add a mod with Add a mod…, or drop its zip on this window. A mod not made by Sim-QVFR "
+                                 L"runs only once you approve it."));
     if (app.modsBusy)
         b.note(tr(L"Working…"));
     else if (!app.modsMessage.empty())
         b.chip(app.modsTone, app.modsMessage);
-    b.note(tr(L"To add a mod, choose its zip with Add a mod…, or drop the zip on this window."));
     b.actions({{kModsAdd, tr(L"Add a mod…"), Btn::Primary}, {kModsCheck, tr(L"Check for updates")}, {kModsOpenFolder, tr(L"Open the mods folder")},
                {kModsReload, tr(L"Look again")}});
     for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i) {
         b.divider();
-        b.group(app.mods[i].name);
-        const auto [tone, text] = chip_of(app.modStatus[i]);
-        b.chip(tone, text);
-        trust_rows(b, i);
-        update_rows(b, i);
-        if (!app.mods[i].source.empty())
-            b.actions({{static_cast<Ctl>(kModSource0 + static_cast<int>(i)), tr(L"View source")},
-                       {static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
-        else
-            b.actions({{static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
+        mod_item(b, i);
     }
     return b.height();
 }

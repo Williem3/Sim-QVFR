@@ -62,6 +62,9 @@ public:
         int option = -1;  // which one of several (a check's index)
     };
     void actions(const std::vector<ButtonSpec>& list);
+    // A list item: its name with a status badge after it, one line under it, and buttons trailing (a mod).
+    void item(const std::wstring& label, int tone, const std::wstring& badgeText, const std::wstring& text,
+              const std::vector<ButtonSpec>& list);
     // Muted text, wrapped (a note, why something isn't available).
     void note(const std::wstring& text);
     // A status chip (badge's tones).

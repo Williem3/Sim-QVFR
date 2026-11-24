@@ -25,6 +25,17 @@ if(NOT SQVFR_SDK_INCLUDE)
   endif()
 endif()
 
+# The SDK's version (VERSION, written into the SDK zip by package.ps1; "dev" in the repository) and the mod ABI of its
+# mod_api.h: stamped into each mod's mod.json ("sdk", "abi"), which the launcher's mods list shows.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
+  file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" SQVFR_SDK_VERSION LIMIT_COUNT 1)
+endif()
+if(NOT SQVFR_SDK_VERSION)
+  set(SQVFR_SDK_VERSION "dev")
+endif()
+file(STRINGS "${SQVFR_SDK_INCLUDE}/mod_api.h" _sqvfr_abi_line REGEX "^#define SQVFR_ABI_VERSION [0-9]+")
+string(REGEX MATCH "[0-9]+" SQVFR_SDK_ABI "${_sqvfr_abi_line}")
+
 function(sqvfr_add_mod name)
   cmake_parse_arguments(MOD "" "ID;VERSION;MANIFEST;SETTINGS" "SOURCES;FILES" ${ARGN})
   if(NOT MOD_ID OR NOT MOD_VERSION OR NOT MOD_SOURCES OR NOT MOD_MANIFEST)
@@ -49,7 +60,14 @@ function(sqvfr_add_mod name)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     RUNTIME_OUTPUT_DIRECTORY "${folder}")
 
-  set(files "${MOD_MANIFEST}")
+  # mod.json with the SDK it was built with ("sdk", "abi") first; regenerated when the manifest changes.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MOD_MANIFEST}")
+  file(READ "${MOD_MANIFEST}" manifest)
+  string(REGEX REPLACE "\"(sdk|abi)\"[ \t]*:[ \t]*(\"[^\"]*\"|[0-9]+)[ \t]*,?" "" manifest "${manifest}")
+  string(REGEX REPLACE "^([ \t\r\n]*{)" "\\1\n  \"sdk\": \"${SQVFR_SDK_VERSION}\",\n  \"abi\": ${SQVFR_SDK_ABI}," manifest "${manifest}")
+  set(stamped "${CMAKE_CURRENT_BINARY_DIR}/sqvfr_mod_${name}/mod.json")
+  file(WRITE "${stamped}" "${manifest}")
+  set(files "${stamped}")
   if(MOD_SETTINGS)
     list(APPEND files "${MOD_SETTINGS}")
   endif()

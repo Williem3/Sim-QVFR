@@ -235,6 +235,8 @@ it:
 - `source`: an https link to the mod's repository (a host and a path). Players see it in Settings > Mods, with a
   **View source** button, and on the card that asks them to add the mod.
 - `license`: the source code's licence, as an SPDX id (`MIT`, `Apache-2.0`, `GPL-3.0-only`).
+- `sdk` and `abi`: the SDK version and mod ABI the mod was built with. `sqvfr_add_mod` writes them into the built
+  mod.json, and the launcher's mods list shows them. Don't set them yourself.
 - The repository holds everything needed to build the DLL you ship. The link is a promise the launcher can't check, so
   keep it true: players and reviewers rely on it.
 - Later, the launcher will check mods' own releases for updates. Publish yours as releases in that repository, each
