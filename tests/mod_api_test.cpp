@@ -758,6 +758,29 @@ void host_table_filled() {
     h.log(SQVFR_LOG_INFO, "mod_api_test: a line through the host table");
 }
 
+// The SDK's example mod (sdk/examples/hello), built by sdk/cmake/SqvfrMod.cmake: it loads through the loader under its
+// id, answers for the game it is asked for, and leaves the game alone.
+void sdk_example_loads() {
+    std::string why;
+    std::wstring path = SQVFR_HELLO_DLL;
+    for (wchar_t& c : path)
+        if (c == L'/')
+            c = L'\\';
+    auto a = simqvfr::mod_api::load_mod_dll(path, &::ats::kGame, why, "hello");
+    check(a != nullptr, "the SDK's example mod loads");
+    if (a) {
+        check(!a->has_qvfr() && std::strcmp(a->table().gameId, "ats") == 0,
+              "the example answers for ATS and leaves its rendering alone");
+        a->instance_created(L"", L"");
+    }
+    wchar_t folder[MAX_PATH] = {};
+    wcscpy_s(folder, path.c_str());
+    *wcsrchr(folder, L'\\') = L'\0';
+    check(GetFileAttributesW((std::wstring(folder) + L"\\mod.json").c_str()) != INVALID_FILE_ATTRIBUTES &&
+              GetFileAttributesW((std::wstring(folder) + L"\\settings.json").c_str()) != INVALID_FILE_ATTRIBUTES,
+          "sqvfr_add_mod puts mod.json and settings.json beside the DLL");
+}
+
 // A mod reads its own settings ([mod_<id>] of the ini SIM_QVFR_INI names) through its copy of the host table, and
 // only its own: the section comes from the table's modId, never from the mod.
 void mod_reads_its_settings() {
@@ -808,6 +831,7 @@ int SIM_QVFR_TEST_MAIN() {
     host_d3d11_hooks_on_warp();
     host_table_filled();
     mod_reads_its_settings();
+    sdk_example_loads();
     if (failures) {
         std::printf("mod_api_test: %d failure(s)\n", failures);
         return 1;

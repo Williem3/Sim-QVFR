@@ -1,0 +1,8 @@
+{
+  "id": "hello",
+  "name": "Hello mod (SDK example)",
+  "author": "Sim-QVFR SDK",
+  "version": "0.1.0",
+  "dll": "sim-qvfr-hello.dll",
+  "games": [{ "id": "ats" }, { "id": "ets2" }]
+}

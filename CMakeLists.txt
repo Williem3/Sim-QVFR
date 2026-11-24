@@ -467,7 +467,16 @@ target_compile_definitions(panel_upload_test PRIVATE UNICODE _UNICODE WIN32_LEAN
 target_link_libraries(panel_upload_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the game-mod ABI (src/mod_api): a fake mod driven through its C table by PluginAdapter.
+# The SDK's example mod (sdk/examples/hello), built with the SDK's own CMake helper against this repository's headers,
+# so the SDK stays buildable; mod_api_test loads it. Its output is beside the build, never in the package.
+set(SQVFR_SDK_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/mod_api)
+include(${CMAKE_CURRENT_SOURCE_DIR}/sdk/cmake/SqvfrMod.cmake)
+sqvfr_add_mod(hello ID hello VERSION 0.1.0 SOURCES sdk/examples/hello/hello.cpp
+  MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/sdk/examples/hello/mod.json
+  SETTINGS ${CMAKE_CURRENT_SOURCE_DIR}/sdk/examples/hello/settings.json)
 sim_qvfr_test(mod_api_test tests/mod_api_test.cpp)
+target_compile_definitions(mod_api_test PRIVATE "SQVFR_HELLO_DLL=L\"$<TARGET_FILE:sqvfr_mod_hello>\"")
+add_dependencies(mod_api_test sqvfr_mod_hello)
 target_include_directories(mod_api_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(mod_api_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(mod_api_test PRIVATE /W4 /permissive- /utf-8)

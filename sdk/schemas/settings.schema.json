@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sim-QVFR mod settings (settings.json, version 1)",
+  "description": "Up to 16 settings, shown on the Game tab's Mod settings card and read by the mod with sqvfr::setting_on / sqvfr::setting_choice (mod.hpp).",
+  "type": "object",
+  "required": ["settings"],
+  "properties": {
+    "settings": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["key", "type"],
+        "properties": {
+          "key": { "description": "Unique; the ini key.", "type": "string", "pattern": "^[a-z0-9_]{1,32}$" },
+          "label": { "type": "string", "maxLength": 60 },
+          "help": { "type": "string", "maxLength": 300 },
+          "type": { "enum": ["toggle", "choice"] },
+          "default": { "description": "A toggle: true or false. A choice: one option's value.", "type": ["boolean", "string"] },
+          "options": {
+            "description": "A choice's 2 to 4 options.",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "required": ["value"],
+              "properties": {
+                "value": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" },
+                "label": { "type": "string", "maxLength": 24 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

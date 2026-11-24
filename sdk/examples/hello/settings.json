@@ -1,0 +1,21 @@
+{
+  "settings": [
+    {
+      "key": "greet",
+      "type": "toggle",
+      "label": "Say hello in the log",
+      "help": "Writes one line to the game's Sim-QVFR log when the game starts.",
+      "default": true
+    },
+    {
+      "key": "mood",
+      "type": "choice",
+      "label": "Mood",
+      "options": [
+        { "value": "calm", "label": "Calm" },
+        { "value": "cheerful", "label": "Cheerful" }
+      ],
+      "default": "calm"
+    }
+  ]
+}
