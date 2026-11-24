@@ -10,6 +10,7 @@
 #include "../../quad/qvfr_settings.h"
 #include "batch_watch.h"
 #include "dlss_extent.h"
+#include "focus_images.h"
 #include "double_render.h"
 #include "game.h"
 #include "replay_probe.h"
@@ -95,6 +96,8 @@ public:
             simqvfr::batch_watch_start();
     }
     void session_destroyed() override { simqvfr::batch_watch_stop(); }
+    // The API path's focus views, drawn by the replay at the D3D12 level (focus_images.cpp).
+    simqvfr::FocusImages* focus_images() override { return &ace::focus_images(); }
     void frame_end() override { simqvfr::batch_watch_frame_end(); }
 
 private:

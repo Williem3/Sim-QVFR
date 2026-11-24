@@ -13,7 +13,6 @@
 #include "quad/fov_crop.h"
 #include "xr.h"
 #include "layer/layer.h"
-#include "games/ace/replay_probe.h"
 
 namespace simqvfr::layer {
 
@@ -301,7 +300,8 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                     ndc[e][1] = tan[e][1] / halfH;
                 }
             }
-            replay_probe_set_gaze(ndc);
+            if (FocusImages* images = focus_images())
+                images->set_gaze(ndc);
         }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);

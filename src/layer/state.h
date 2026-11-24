@@ -119,17 +119,6 @@ struct Experiment {
     int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (games/ace/replay_probe.h)
     UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
     UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
-    UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 0;  // replay_save_first/_every/_count
-    bool replayAllTargets = false;         // replay_targets=all: every stereo scene list (R2), else depth only (R1)
-    bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
-    int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)
-    int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
-    int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
-    int replayCull = 0;                    // replay_cull=1|2|3: focus culling (computed only, used, used in alternate windows)
-    bool replayCullProbe = false;          // replay_cull_probe=1 (diagnostic): focus replays without one kind of draw by window
-    bool replayRecordTiming = false;       // replay_record_timing=1 (diagnostic): the focus replays' recording by phase
-    bool replayMaskAb = false;             // replay_mask_ab=1 (diagnostic, with replay_gpu_steps): the focus mask by window
-    bool replayGpuSteps = false;           // replay_gpu_steps=1 (diagnostic): GPU time by step ("replay gpu:" lines)
     bool replayEyeCapture = false;         // replay_eye_capture=1 (diagnostic): PNGs after each live periphery change
     int replayDlssEyePreset = 0;           // replay_dlss_eye_preset=F|K|M..: the eyes' (periphery's) NGX preset (empty: ACE's)
     int replayDlssFocusPreset = 0;         // replay_dlss_focus_preset: our focus features' (empty: ACE's)
@@ -139,15 +128,6 @@ struct Experiment {
     double replayEyeShareX = 0, replayEyeShareY = 0;  // the API path: ACE's eye size as a share of the native eye (launch)
     int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
-    bool replayFlagsWidth = true;          // replay_flags_width=0: ACE's half-width flags viewports left as they are
-    bool replayDepthFade = true;          // replay_depth_fade=0: the focus views' particles fade against ACE's eye depth
-    bool replayTyres = true;              // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
-    bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
-    bool replayFixation = true;            // replay_fixation=0: no focus-depth read for the boxes' convergence
-    bool replayCostAb = false;
-    int replayDiagMode = 0;                // replay_diag=2: MSAA refraction-source A/B by sample
-    bool replayDiag = false;               // replay_diag=1: per-sample fog / atmosphere schedule (the haze band)             // replay_cost_ab=1: all focus replays on / off every 1800 frames
-    int replayAtmosphere = 0;              // replay_atmosphere=1: focus copies of the atmosphere maps (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
@@ -952,6 +932,10 @@ extern std::mutex chainMutex;
 extern std::map<XrSwapchain, std::pair<uint32_t, uint32_t>> chainSizes;
 extern Experiment experiment;
 extern games::GameAdapter* game;
+// The game's focus views drawn by its adapter at the D3D12 level (quad/focus_images.h; ACE's replay), or null.
+inline FocusImages* focus_images() { return game ? game->focus_images() : nullptr; }
+// Its start from the launch's settings (session.cpp); the early steps take it without the device and queue.
+FocusImagesStart focus_images_start(ID3D12Device* device, ID3D12CommandQueue* queue);
 extern bool focusLogged;
 extern HelmetSettings helmetSettings;
 extern Live live;

@@ -17,8 +17,6 @@
 #include "probe/dred.h"
 #include "probe/cpp_exceptions.h"
 #include "probe/pix_capture.h"
-#include "games/ace/replay_probe.h"
-#include "games/ace/stereo_flag.h"
 #include "probe/focus_ngx.h"
 #include "xr.h"
 #include "layer/layer.h"
@@ -293,15 +291,13 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     nativeQuad.foveated = foveatedAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
-    // ACE's API path draws its focus views from ACE's single-pass stereo lists: on before ACE makes its renderer.
-    if (experiment.replayCompose && std::strcmp(thisGame->id, "ace") == 0)
-        ace_single_pass_stereo_on();
     if (experiment.logCppExceptions)
         cpp_exceptions_log_start();
-    if (experiment.replayProbe == 3 && std::strcmp(thisGame->id, "ace") == 0)
-        replay_probe_early_swap_chain();  // before the game makes its window swap chain
-    if (experiment.replayProbe == 3 && ((experiment.replaySky && experiment.replayTiles) || experiment.replayTyres))
-        replay_probe_early_sky();  // before the game makes its device and loads its pipelines
+    // A game whose adapter draws the focus views at the D3D12 level (ACE's API path): its early steps, before the game
+    // makes its renderer, swap chain or device (single-pass stereo, the sky's pipelines).
+    if (experiment.replayProbe)
+        if (FocusImages* images = focus_images())
+            images->early(focus_images_start(nullptr, nullptr));
     if (experiment.replayProbe == 3 && experiment.replayDlss)
         focus_ngx::set_presets(experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
     if (experiment.replayProbe == 3 && experiment.replayDlss)

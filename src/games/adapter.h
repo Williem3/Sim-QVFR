@@ -9,6 +9,7 @@
 #include "../engine/dlss_settings.h"
 #include "../engine/nr_settings.h"
 #include "../quad/focus_mask.h"
+#include "../quad/focus_images.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -279,6 +280,8 @@ public:
         (void)enumerate;
         return info;
     }
+    // The focus views drawn by the adapter at the D3D12 level (quad/focus_images.h: ACE's replay); null: not this way.
+    virtual FocusImages* focus_images() { return nullptr; }
 };
 
 // The adapter for `game` (null: the one that does nothing). Lives for the process.

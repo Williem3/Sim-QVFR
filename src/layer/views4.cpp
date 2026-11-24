@@ -13,7 +13,6 @@
 #include "probe/d3d11_compose_timer.h"
 #include "probe/d3d11_capture.h"
 #include "probe/gpu_frame_timer.h"
-#include "games/ace/replay_probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_shape.h"
 #include "quad/focus_quad.h"
@@ -154,17 +153,20 @@ void replay_compose() {
     quad.v4Composed = false;
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
-    ID3D12Resource* focusImage = nullptr;
-    D3D12_RESOURCE_STATES focusState{};
-    double box = 0;
-    float gazeNdc[2][2] = {};  // each eye's box centre off its forward axis, as this frame's focus image was drawn
-    double boxY = 0;
-    replay_probe_eye_allow(false);  // until this frame is composed: the uncomposed fallback shows ACE's whole image
-    if (!replay_probe_focus_image(focusImage, focusState, box, gazeNdc, &boxY))
+    FocusImages* images = focus_images();
+    if (!images)
+        return;
+    images->eye_allow(false);  // until this frame is composed: the uncomposed fallback shows ACE's whole image
+    FocusImage focus;
+    if (!images->focus_image(focus))
         return;  // no focus image yet: ACE's eyes go to the headset as they are
+    ID3D12Resource* focusImage = focus.image;
+    const D3D12_RESOURCE_STATES focusState = static_cast<D3D12_RESOURCE_STATES>(focus.state);
+    const double box = focus.box, boxY = focus.boxY;
+    const float (&gazeNdc)[2][2] = focus.offset;  // each eye's box centre off its forward axis, as this frame was drawn
     // The live periphery: the share of ACE's eye image this frame was drawn into (its top left).
     float eyeX = 1, eyeY = 1;
-    replay_probe_eye_region(eyeX, eyeY);
+    images->eye_region(eyeX, eyeY);
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
@@ -216,9 +218,9 @@ void replay_compose() {
         return;
     }
     ID3D12Resource* out = quad.outImages[outIndex];
-    replay_probe_gpu_scope(true);
+    images->gpu_scope(true);
     const bool ok = quad.compositor.capture_outer(app) && quad.compositor.compose(focusImage, out, eyes, focusState);
-    replay_probe_gpu_scope(false);
+    images->gpu_scope(false);
     int burstIndex = 0;
     if (frame_census_take_capture(burstIndex) && ok)  // the draw census hotkey: ACE's eyes, the focus views, the output
         views4_census_capture(app, focusImage, focusState, out, burstIndex);
@@ -243,7 +245,7 @@ void replay_compose() {
     }
     quad.v4Composed = true;
     quad.fallbackRun = 0;
-    replay_probe_eye_allow(true);
+    images->eye_allow(true);
     views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
     if (quad.composed++ == 0)
         logf("replay compose: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f "

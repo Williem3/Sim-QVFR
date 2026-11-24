@@ -12,7 +12,6 @@
 #include "probe/d3d12_trace.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
-#include "games/ace/replay_probe.h"
 #include "probe/pix_capture.h"
 #include "probe/probe.h"
 #include "xr.h"
@@ -95,7 +94,8 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     if (experiment.passCensus)
         pass_census_frame_end();
     if (experiment.replayProbe)
-        replay_probe_frame_end();
+        if (FocusImages* images = focus_images())
+            images->frame_end();
     {
         FramePartTimer part(FramePart::gameEnd);
         game->frame_end();

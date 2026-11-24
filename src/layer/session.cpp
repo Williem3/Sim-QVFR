@@ -22,7 +22,6 @@
 #include "probe/gpu_load.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
-#include "games/ace/replay_probe.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/session_graphics.h"
@@ -30,6 +29,42 @@
 #include "layer/layer.h"
 
 namespace simqvfr::layer {
+
+FocusImagesStart focus_images_start(ID3D12Device* device, ID3D12CommandQueue* queue) {
+    FocusImagesStart s;
+    s.device = device;
+    s.queue = queue;
+    s.ini = live.ini.c_str();
+    s.mode = experiment.replayProbe;
+    s.compose = experiment.replayCompose;
+    s.apiPath = experiment.apiPath;
+    s.post = experiment.replayPost;
+    s.dlss = experiment.replayDlss;
+    s.dlssScale = experiment.replayDlssFocusScale / 100.0;
+    s.boxFraction = experiment.replayFocusPercent / 100.0;
+    s.pixelScale = experiment.replayFocusScalePercent / 100.0;
+    if (experiment.replayCompose) {
+        // The API path takes [quad]'s sizes: the box a share of the (cropped) view the game renders, the focus views
+        // focus_percent x focus_density of the native eye wide, against the game's eye at periphery_scale.
+        const double box = std::clamp(experiment.box_x(), 0.05, 0.6);
+        const double eye = experiment.eyeScale * experiment.crop().kept_width();
+        const double k = eye > 0 ? experiment.views4Layout.focus / eye : box * 2;
+        s.boxFraction = box;
+        s.pixelScale = std::clamp(k / box, 0.5, 12.0);
+        // The same vertically: a crop keeps different shares of the eye's width and height, and the focus height may be
+        // set on its own.
+        const double boxY = std::clamp(experiment.box_y(), 0.05, 0.6);
+        const double eyeY = experiment.eyeScale * experiment.crop().kept_height();
+        const double kY = eyeY > 0 ? experiment.views4Layout.focusHeight / eyeY : boxY * 2;
+        s.boxFractionY = boxY;
+        s.pixelScaleY = std::clamp(kY / boxY, 0.5, 12.0);
+        if (device) {  // the session's start: for the live sizes (live_ini)
+            experiment.replayEyeShareX = eye;
+            experiment.replayEyeShareY = eyeY;
+        }
+    }
+    return s;
+}
 
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
@@ -159,55 +194,10 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     pass_census_arm(experiment.passCensusFrame, 10);
                 }
             }
-            if (experiment.replayProbe) {  // API-level QVFR probes: G5 re-emission cost (1/2), R1 focus depth replay (3)
-                ReplayFocusSettings focusSettings;
-                focusSettings.boxFraction = experiment.replayFocusPercent / 100.0;
-                focusSettings.pixelScale = experiment.replayFocusScalePercent / 100.0;
-                if (experiment.replayCompose) {
-                    // The API path takes [quad]'s sizes: the box a share of the (cropped) view ACE renders, the focus
-                    // views focus_percent x focus_density of the native eye wide, against ACE's eye at periphery_scale.
-                    const double box = std::clamp(experiment.box_x(), 0.05, 0.6);
-                    const double eye = experiment.eyeScale * experiment.crop().kept_width();
-                    const double k = eye > 0 ? experiment.views4Layout.focus / eye : box * 2;
-                    focusSettings.boxFraction = box;
-                    focusSettings.pixelScale = std::clamp(k / box, 0.5, 12.0);
-                    // The same vertically: a crop keeps different shares of the eye's width and height, and the focus
-                    // height may be set on its own.
-                    const double boxY = std::clamp(experiment.box_y(), 0.05, 0.6);
-                    const double eyeY = experiment.eyeScale * experiment.crop().kept_height();
-                    const double kY = eyeY > 0 ? experiment.views4Layout.focusHeight / eyeY : boxY * 2;
-                    focusSettings.boxFractionY = boxY;
-                    focusSettings.pixelScaleY = std::clamp(kY / boxY, 0.5, 12.0);
-                    experiment.replayEyeShareX = eye;  // for the live sizes (live_ini)
-                    experiment.replayEyeShareY = eyeY;
-                }
-                focusSettings.saveFirst = experiment.replaySaveFirst;
-                focusSettings.saveEvery = experiment.replaySaveEvery;
-                focusSettings.saveCount = experiment.replaySaveCount;
-                focusSettings.allTargets = experiment.replayAllTargets;
-                focusSettings.tiles = experiment.replayTiles;
-                focusSettings.fog = experiment.replayFog;
-                focusSettings.shadows = experiment.replayShadows;
-                focusSettings.transparents = experiment.replayTransparents;
-                focusSettings.atmosphere = experiment.replayAtmosphere;
-                focusSettings.costAb = experiment.replayCostAb;
-                focusSettings.sky = experiment.replaySky;
-                focusSettings.tyres = experiment.replayTyres;
-                focusSettings.depthFade = experiment.replayDepthFade;
-                focusSettings.flagsWidth = experiment.replayFlagsWidth;
-                focusSettings.fixation = experiment.replayFixation;
-                focusSettings.gpuSteps = experiment.replayGpuSteps;
-                focusSettings.maskAb = experiment.replayMaskAb && experiment.replayGpuSteps;
-                focusSettings.recordTiming = experiment.replayRecordTiming;
-                focusSettings.cullProbe = experiment.replayCullProbe;
-                focusSettings.cull = experiment.replayCull;
-                focusSettings.diag = experiment.replayDiag;
-                focusSettings.diagMode = experiment.replayDiagMode;
-                focusSettings.post = experiment.replayPost;
-                focusSettings.dlss = experiment.replayDlss;
-                focusSettings.dlssScale = experiment.replayDlssFocusScale / 100.0;
-                replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
-            }
+            // The focus views drawn by the game's adapter at the D3D12 level (quad/focus_images.h; ACE's API path):
+            // cost probes (1/2) or the focus views (3).
+            if (FocusImages* images = experiment.replayProbe ? focus_images() : nullptr)
+                images->start(focus_images_start(d3d12->device, d3d12->queue));
             if (experiment.d3d12Debug)
                 d3d12_debug_attach(d3d12->device);
             std::lock_guard guard(quad.mutex);

@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "games/ace/replay_probe.h"
 #include "input/hotkeys.h"
 #include "lang.h"
 #include "log.h"
@@ -220,7 +219,8 @@ void frame_capture_poll() {
     frameCaptureHotkeyHeld = held;
     // replay_census_hotkey (ACE's API path, development builds): the next two frames' draws by pipeline into the log,
     // and ACE's eye image with the composed output into the logs folder's captures.
-    if (pressed && experiment.replayCensusHotkey && replay_probe_census(2)) {
+    FocusImages* images = pressed && experiment.replayCensusHotkey ? focus_images() : nullptr;
+    if (images && images->census(2)) {
         frameCensusCapture = frameCensusBurst;
         profile_notice(L"Draw census: written to the log, eye images to captures", 2500);
     }

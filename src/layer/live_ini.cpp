@@ -29,7 +29,6 @@
 #include "layer/layer.h"
 #include "layer/config.h"
 #include "probe/focus_ngx.h"
-#include "games/ace/replay_probe.h"
 
 namespace simqvfr::layer {
 
@@ -133,7 +132,8 @@ void live_apply(const LiveSettings& l) {
             logf("live: showcase: %s", stock ? "Stock (the eyes at the native size, no focus views)" : "QVFR");
         }
         if (experiment.replayCompose)
-            replay_probe_set_stock(stock);
+            if (FocusImages* images = focus_images())
+                images->set_stock(stock);
     }
     if (experiment.focusLayer == 2 && experiment.focusQuadDistance.exchange(l.focusQuadDistance) != l.focusQuadDistance)
         logf("live: focus_layer=2: the focus quads %d m out", l.focusQuadDistance);
@@ -176,7 +176,7 @@ void live_apply(const LiveSettings& l) {
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.offset.fixedX, l.offset.gazeX, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
-    if (experiment.replayCompose) {
+    if (FocusImages* images = experiment.replayCompose ? focus_images() : nullptr) {
         // The API path: the focus views' pixels (focus density x box) and the box's size are live; ACE's eye size (the
         // periphery) is live from its launch size down to a quarter of it, above that at the next launch.
         const double boxX = experiment.box_x(l.focusFraction),
@@ -184,17 +184,17 @@ void live_apply(const LiveSettings& l) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
         if (experiment.replayEyeShareX > 0 && experiment.replayEyeShareY > 0) {
             const double bx = std::clamp(boxX, 0.05, 0.6), by = std::clamp(boxY, 0.05, 0.6);
-            replay_probe_set_size(std::clamp(wanted.focus / experiment.replayEyeShareX / bx, 0.5, 12.0) * bx,
-                                  std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
+            images->set_size(std::clamp(wanted.focus / experiment.replayEyeShareX / bx, 0.5, 12.0) * bx,
+                             std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
         }
-        replay_probe_set_box(boxX, boxY);
+        images->set_box(boxX, boxY);
         // Periphery texture match; [experiment] replay_periphery_mip_bias (development builds) sets the mip levels
         // itself, in hundredths (-130: 1.3 levels sharper).
-        replay_probe_set_eye_texture_match(
+        images->set_eye_texture_match(
             l.textureMatch / 100.0,
             simqvfr::kDevBuild ? ini_signed(live.ini.c_str(), L"experiment", L"replay_periphery_mip_bias", 0) / 100.0 : 0.0);
         if (simqvfr::kDevBuild)  // diagnostic switches: development builds only (dev_build.h)
-            replay_probe_set_live_diag(GetPrivateProfileIntW(L"experiment", L"replay_live_diag", 0, live.ini.c_str()));
+            images->set_live_diag(GetPrivateProfileIntW(L"experiment", L"replay_live_diag", 0, live.ini.c_str()));
         if (simqvfr::kDevBuild) {  // the self-test's fixed head pose and capture burst (development builds)
             const wchar_t* ini = live.ini.c_str();
             dev_pose_set(GetPrivateProfileIntW(L"experiment", L"dev_pose", 0, ini) != 0,
@@ -205,7 +205,7 @@ void live_apply(const LiveSettings& l) {
         // The periphery: live below its launch size (ACE's eyes drawn into a smaller region of its launch-size targets).
         const double launchOuter = experiment.eyeScale > 0 ? experiment.eyeScale : 1.0;
         const double share = std::clamp(wanted.outer / launchOuter, 0.25, 1.0);
-        replay_probe_set_eye_scale(share);
+        images->set_eye_scale(share);
         logf("live: API path: the focus box and focus density apply now; the periphery at %.0f%% of its launch size (%.0f%% of "
              "the native eye, launched at %.0f%%)%s",
              share * 100, wanted.outer * 100, launchOuter * 100,
@@ -432,7 +432,8 @@ void live_reload() {
         if (scaleSent != s->menu.dlss.focusScale) {
             scaleSent = s->menu.dlss.focusScale;
             experiment.replayDlssFocusScale = scaleSent;
-            replay_probe_set_size(0, 0, scaleSent / 100.0);
+            if (FocusImages* images = focus_images())
+                images->set_size(0, 0, scaleSent / 100.0);
         }
     }
     menu_values_changed(*s);
