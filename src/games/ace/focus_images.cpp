@@ -87,9 +87,13 @@ public:
             // ACE's own DLSS switches: the share of ACE's x jitter NGX is told, and the eyes at DLAA in every mode.
             const double jitterX = std::clamp(read_uint(ini, L"replay_dlss_jitter_x_percent", 50), 10u, 200u) / 100.0;
             const bool dlaa = read_uint(ini, L"replay_dlss_periphery_dlaa", 0) != 0;
-            simqvfr::focus_ngx::set_options(static_cast<float>(jitterX), dlaa);
+            // A live eye preset change remakes ACE's feature only with replay_dlss_eye_remake=1 (a remade K feature
+            // smeared the right eye, 2026-11-24); otherwise it applies when ACE next makes its DLSS.
+            const bool remake = read_uint(ini, L"replay_dlss_eye_remake", 0) != 0;
+            simqvfr::focus_ngx::set_options(static_cast<float>(jitterX), dlaa, remake);
             simqvfr::logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every "
-                          "in-game mode %s", jitterX * 100, dlaa ? "on" : "off");
+                          "in-game mode %s; a live eye preset %s", jitterX * 100, dlaa ? "on" : "off",
+                          remake ? "remakes ACE's feature" : "waits for ACE's next feature");
             simqvfr::focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
         }
     }

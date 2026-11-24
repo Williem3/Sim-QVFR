@@ -43,9 +43,10 @@ bool install();
 void preload();
 bool installed();
 // NGX render presets by number (0: the game's own): `eye` for the game's own feature (its eyes, the periphery), set at its
-// creation in place of the game's; `focus` for our focus features. While running too: the eyes' feature is then
-// replaced at its next evaluation by one of ours with the same sizes, mode and flags and the new preset (the game's
-// own handle stays the game's), and the focus features are made again by their owner (focus_preset).
+// creation in place of the game's; `focus` for our focus features. While running, the eyes' preset waits for the game's
+// next feature, unless set_options' remakeEyes: the eyes' feature is then replaced at its next evaluation by one of ours
+// with the same sizes, mode and flags and the new preset (the game's own handle stays the game's). The focus features
+// are made again by their owner (focus_preset).
 void set_presets(int eye, int focus);
 // The focus features' preset as last set: a change while running has the caller make its features again.
 int focus_preset();
@@ -53,7 +54,7 @@ int focus_preset();
 // single-pass stereo applies half the horizontal jitter it reports (its NDC jitter is over the double-wide target):
 // 0.5 tells NGX the shift really drawn; 1 leaves the game's value. peripheryDlaa: the game's eyes at DLAA in every
 // in-game DLSS mode (its optimal-settings query answered with render = output, its feature made as DLAA).
-void set_options(float jitterX, bool peripheryDlaa);
+void set_options(float jitterX, bool peripheryDlaa, bool remakeEyes = false);
 float jitter_x();
 // What runs, for the headset menu. Not seen until the game has made its DLSS feature.
 struct State {
