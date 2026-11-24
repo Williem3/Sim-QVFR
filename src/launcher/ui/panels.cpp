@@ -95,7 +95,8 @@ void panel_overlay() {
     cv.fill(card, col(app.panel == PanelKind::Color ? app.c->surface : app.c->bg), t::kRadiusGroup);  // forms: their sections on it
     cv.stroke(card, col(app.c->field_border), 1, t::kRadiusGroup);
     reader_text({card.x + pad, card.y + 20, inner - 40, t::kTitle3.lineHeight}, panel_title(app.panel), 1);
-    cv.text(panel_title(app.panel), t::kTitle3, {card.x + pad, card.y + 20, inner - 40, t::kTitle3.lineHeight}, col(app.c->label));
+    cv.text(fit(panel_title(app.panel), t::kTitle3, inner - 40), t::kTitle3,
+            {card.x + pad, card.y + 20, inner - 40, t::kTitle3.lineHeight}, col(app.c->label));
     // Its close button: an ✕.
     const Rect close{card.right() - pad - 28, card.y + 16, 28, 28};
     if (pointer_in(close))

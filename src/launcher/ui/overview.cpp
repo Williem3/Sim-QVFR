@@ -242,6 +242,8 @@ float game_panel(float x, float y, float w, bool draw) {
             // Its card, by its title as drawn.
             app.overviewTargets.push_back({tr(L"Online racing"), tr(L"Online racing"), Pane::Game});
             const Rect r{x + kPad, by - 1, bw, 24};
+            if (pointer_in(r))  // it opens a card: the tiles' hover outline, round the badge
+                cv.stroke({x + kPad + 0.5f, by + 0.5f, bw - 1, 21}, col(app.c->control_border), 1, t::kRadiusControl);
             if (focused(kOverviewCard) && app.focusOption == index)
                 focus_ring(r, t::kRadiusControl);
             app.hits.push_back({kOverviewCard, r, index, tr(L"Online racing: open its card"),
@@ -550,7 +552,8 @@ void draw_tile(const Tile& tile, const Rect& r) {
         cv.stroke(r.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusGroup);
     const float inner = r.w - 2 * kTilePad;
     float y = r.y + kTilePad;
-    cv.text(tile.title, t::kTitle2, {r.x + kTilePad, y, inner, t::kTitle2.lineHeight}, col(app.c->label));
+    cv.text(fit(tile.title, t::kTitle2, inner), t::kTitle2, {r.x + kTilePad, y, inner, t::kTitle2.lineHeight},
+            col(app.c->label));  // a longer language's title cut ("…"); its hit reads it whole
     y += t::kTitle2.lineHeight + 4;
     if (!tile.line1.empty()) {
         const float lh = cv.measure_height(tile.line1, t::kCallout, inner);

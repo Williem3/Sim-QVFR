@@ -188,6 +188,8 @@ void game_row(const Rect& r, size_t i) {
     cv.circle(swatch.x + 11, swatch.y + 11, 9, col(a.accent_fill), true);
     if (static_cast<int>(i) == color_game_index())  // the game the colour row edits
         cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
+    else if (pointer_in(swatch.inset(-4, -4)))  // under the pointer: the ring it would get, faint
+        cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label_muted), false, 1.5f);
     if (focused(kColorGame) && app.focusOption == static_cast<int>(i))
         focus_ring(swatch, 11);
     app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i),
@@ -195,9 +197,10 @@ void game_row(const Rect& r, size_t i) {
     const float tx = r.x + kGameTextX, tw = r.w - kGameTextX - kSwitchW - t::kSpace4;
     const float dh = desc.empty() ? 0 : cv.measure_height(desc, t::kCallout, tw);
     const float ty = r.y + (r.h - t::kBody.lineHeight - (dh > 0 ? 2 + dh : 0)) / 2;
-    cv.text(game->name, t::kBody, {tx, ty, tw, t::kBody.lineHeight}, col(app.c->label));
+    const std::wstring name = fit(game->name, t::kBody, tw);  // a long name in a narrow card: cut before the switch
+    cv.text(name, t::kBody, {tx, ty, tw, t::kBody.lineHeight}, col(app.c->label));
     if (!found) {
-        const float nx = tx + std::ceil(cv.measure(game->name, t::kBody)) + t::kSpace2;
+        const float nx = tx + std::ceil(cv.measure(name, t::kBody)) + t::kSpace2;
         badge(nx, ty, 3, tr(L"Not found"), std::max(0.0f, tx + tw - nx));
     }
     if (dh > 0)
@@ -220,7 +223,7 @@ void color_row(const Rect& r) {
     const auto custom = app.s.gameColors.find(games::wide_id(game));
     const bool hasCustom = custom != app.s.gameColors.end();
     const std::wstring label = trf(L"Colour for {game}", {{L"game", game.shortName}});
-    cv.text(label, t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
+    cv.text(fit(label, t::kBody, r.w), t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
     app.drawnLabels.push_back({tr(L"Colour"), app.drawingSection, r});
     float x = r.x;
     const float y = r.y + 28, d = 26;
@@ -229,6 +232,8 @@ void color_row(const Rect& r) {
         cv.circle(s.x + d / 2, s.y + d / 2, d / 2 - 2, col(rgb), true);
         if (chosen)
             cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label), false, 2);
+        else if (pointer_in(s.inset(-2, -2)))  // under the pointer: the chosen ring, faint
+            cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label_muted), false, 2);
         if (focused(id) && (option < 0 || app.focusOption == option))
             focus_ring(s, d / 2);
         app.hits.push_back({id, s.inset(-2, -2), option, tip, tip, chosen ? 1 : 0});
@@ -323,7 +328,8 @@ float color_panel(float x, float y, float w, bool draw) {
         app.canvas.fill(block, col(app.c->rail));
         app.canvas.fill({block.x, block.y, 4, block.h}, col(a.accent_fill));
         app.canvas.text(rail_abbreviation(game), t::kRailAbbrev, {block.x + 16, block.y + 10, pw - 20, 24}, col(app.c->rail_text));
-        app.canvas.text(game.name, t::kRailName, {block.x + 16, block.y + 36, pw - 20, 16}, col(app.c->rail_text_muted));
+        app.canvas.text(fit(game.name, t::kRailName, pw - 20), t::kRailName, {block.x + 16, block.y + 36, pw - 20, 16},
+                        col(app.c->rail_text_muted));
     });
     b.slider({kColorValue, tr(L"Accent brightness"), app.colorValue});
     b.actions({{kColorReset, tr(L"Use its own colour")}, {kPanelClose, tr(L"Done"), Btn::Primary}});

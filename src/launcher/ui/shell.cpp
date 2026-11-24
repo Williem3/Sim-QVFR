@@ -295,7 +295,7 @@ void rail(float H) {
         const float ty = y + (blockH - textH) / 2;
         const Rect abbr = compact ? Rect{4, ty, W - 4, t::kRailAbbrev.lineHeight} : Rect{pad, ty, W - pad - 8, t::kRailAbbrev.lineHeight};
         const t::TypeStyle abbrStyle = compact ? t::TypeStyle{16, 24, 900, false, t::Family::Jost} : t::kRailAbbrev;
-        cv.text(rail_abbreviation(game), abbrStyle, abbr, ink, compact ? Align::Center : Align::Leading);
+        cv.text(fit(rail_abbreviation(game), abbrStyle, abbr.w), abbrStyle, abbr, ink, compact ? Align::Center : Align::Leading);
         if (names)
             cv.text(game.name, t::kRailName, {pad, ty + t::kRailAbbrev.lineHeight + 2, W - pad - 10, 2 * t::kRailName.lineHeight},
                     col(selected ? app.c->ink : app.c->rail_text_muted), Align::Leading, false, true);
@@ -311,6 +311,8 @@ void rail(float H) {
     const float cx = W / 2;
     const Rect kofi{0, by, W, 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight)};
     cv.circle(cx, by + heartR, heartR, col(app.c->red), true);
+    if (app.pressed == kSupport && kofi.contains(app.mouseX, app.mouseY))  // held: a shade darker, as a button's
+        cv.circle(cx, by + heartR, heartR, col(0, 0.12f), true);
     const float hs = heartR;
     cv.path("M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 "
             "14 9.9 8 13.5 8 13.5Z",
@@ -333,10 +335,11 @@ void rail(float H) {
     if (compact)  // the number alone ("v1.0.5")
         version = version.substr(0, std::min(version.find(L'-'), version.find(L' ')));
     const Rect vr{0, by, W, versionH};
-    cv.text(compact ? fit(version, t::kRailName, W - 8) : version, t::kRailName, vr,
-            col(pointer_in(vr) ? app.c->rail_text : app.c->rail_text_muted), Align::Center);
+    const std::wstring versionShown = fit(version, t::kRailName, W - 8);  // a long development version cut too
+    cv.text(versionShown, t::kRailName, vr, col(pointer_in(vr) ? app.c->rail_text : app.c->rail_text_muted), Align::Center);
     if (app.update == Update::Available)
-        cv.circle(cx + std::min(W / 2 - 6, cv.measure(version, t::kRailName) / 2 + 6), by + versionH / 2, 3, col(app.c->yellow), true);
+        cv.circle(cx + std::min(W / 2 - 6, cv.measure(versionShown, t::kRailName) / 2 + 6), by + versionH / 2, 3,
+                  col(app.c->yellow), true);
     if (focused(kVersion))
         cv.stroke(vr.inset(6, -2), col(app.c->rail_text), 2, t::kRadiusControl);
     app.hits.push_back({kVersion, vr.inset(0, -4), -1,  // 24 high: the smallest target (WCAG 2.5.8)
@@ -471,8 +474,8 @@ void topbar(float W) {
         tab_shape(tab, r.x + tabPad + 5, H / 2, 10);
         cv.text(label, t::kTabLabel, {r.x + tabPad + 18, 0, lw + 4, H},
                 col(selected || over ? app.c->text : app.c->text_muted));
-        if (selected)
-            cv.fill({r.x + tabPad - 4, H - 3, r.w - 2 * tabPad + 8, 3}, col(tab_color(tab)));
+        if (selected || over)  // under the pointer, a faint rule: the selected one's in full
+            cv.fill({r.x + tabPad - 4, H - 3, r.w - 2 * tabPad + 8, 3}, col(tab_color(tab), selected ? 1.0f : 0.3f));
         if (selected && focused(kTopTab))
             focus_ring(r.inset(4, 12), t::kRadiusControl);
         app.hits.push_back({kTopTab, r, i, label != full ? full : std::wstring(), full, selected ? 1 : 0});
@@ -501,8 +504,8 @@ float page_strip(float x, float W) {
         const Rect r{px, y, lw + 24, H};
         const bool over = pointer_in(r);
         cv.text(label, style, {r.x + 12, y, lw + 4, H}, col(selected || over ? app.c->text : app.c->text_muted));
-        if (selected)
-            cv.fill({r.x + 12, y + H - 3, lw, 3}, col(tab_color(tab)));
+        if (selected || over)  // as the top bar's tabs: a faint rule under the pointer
+            cv.fill({r.x + 12, y + H - 3, lw, 3}, col(tab_color(tab), selected ? 1.0f : 0.3f));
         if (selected && focused(kPage))
             focus_ring(r.inset(2, 8), t::kRadiusControl);
         app.hits.push_back({kPage, r, static_cast<int>(p)});
@@ -526,7 +529,7 @@ void undo_bar(float W, float H) {
     const Rect bar{std::round(left + (W - left - w) / 2), H - h - 24, w, h};
     const uint32_t bg = app.dark ? app.c->surface_3 : app.c->ink, fg = app.dark ? app.c->label : app.c->rail_text;
     cv.fill(bar, col(bg), t::kRadiusGroup);
-    cv.text(app.undoText, t::kBody, {bar.x + pad, bar.y, tw, h}, col(fg));
+    cv.text(fit(app.undoText, t::kBody, tw), t::kBody, {bar.x + pad, bar.y, tw, h}, col(fg));  // narrow: cut, read whole
     reader_text(bar, app.undoText);
     if (canUndo) {
         const Rect u{bar.right() - pad - uw, bar.y + 6, uw, h - 12};

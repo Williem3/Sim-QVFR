@@ -26,6 +26,47 @@ namespace simqvfr::launcher::ui::win {
 
 namespace {
 
+// The pointer's shape at (x, y): a hand over what a click acts on, left-right arrows over a slider and while one is
+// dragged, an I-beam over a drawn text field, the arrow elsewhere (text, tips, what a sheet or the search covers).
+HCURSOR pointer_cursor(float x, float y) {
+    static const HCURSOR arrow = LoadCursorW(nullptr, IDC_ARROW), hand = LoadCursorW(nullptr, IDC_HAND),
+                         sizeWe = LoadCursorW(nullptr, IDC_SIZEWE), ibeam = LoadCursorW(nullptr, IDC_IBEAM);
+    if (app.dragging != kNone)
+        return slider_value(app.dragging) ? sizeWe : hand;
+    if (app.pressed != kNone)
+        return hand;
+    if (app.popup.open)
+        return popup_item_at(x, y) >= 0 ? hand : arrow;
+    const Hit* h = hit_at(x, y);
+    if (!h || h->id == kNone || h->id == kHelpIcon)
+        return arrow;
+    if (app.sheet.open)  // only its buttons and its field take the pointer
+        return h->id == kSheetButton ? hand : h->id == kSheetField ? ibeam : arrow;
+    if (app.searchOpen)  // only a result does
+        return h->id == kSearchResult ? hand : arrow;
+    if (h->id == kSearchField)
+        return arrow;
+    if (h->id == kDiagDescription)
+        return ibeam;
+    return slider_value(h->id) ? sizeWe : hand;
+}
+
+// The pointer's shape where it is now, if it is over the window's own client area (not a child's field, not another
+// window): after a paint, the shape follows what moved under a still pointer (a scroll, a pane opened).
+void refresh_cursor(HWND hwnd) {
+    POINT screen{};
+    if (app.mouseX < 0 || GetCapture() || !GetCursorPos(&screen) || WindowFromPoint(screen) != hwnd)
+        return;
+    POINT p = screen;
+    ScreenToClient(hwnd, &p);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    if (!PtInRect(&client, p))
+        return;
+    const float scale = app.canvas.dpi_scale();
+    SetCursor(pointer_cursor(static_cast<float>(p.x) / scale, static_cast<float>(p.y) / scale));
+}
+
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
@@ -162,8 +203,19 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         BeginPaint(hwnd, &ps);
         paint();
         EndPaint(hwnd, &ps);
+        refresh_cursor(hwnd);  // this frame's hit rectangles under a pointer that may not have moved
         return 0;
     }
+    case WM_SETCURSOR:  // the client area's own; a child's field and the frame's borders keep theirs
+        if (reinterpret_cast<HWND>(wParam) == hwnd && LOWORD(lParam) == HTCLIENT) {
+            POINT p{};
+            GetCursorPos(&p);
+            ScreenToClient(hwnd, &p);
+            const float scale = app.canvas.dpi_scale();
+            SetCursor(pointer_cursor(static_cast<float>(p.x) / scale, static_cast<float>(p.y) / scale));
+            return TRUE;
+        }
+        break;
     case WM_ERASEBKGND:
         return 1;
     case WM_SIZE:
@@ -283,6 +335,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         const float x = dip(lParam, false), y = dip(lParam, true);
         app.mouseX = x;
         app.mouseY = y;
+        if (GetCapture() == hwnd)  // captured (a drag, a held button): no WM_SETCURSOR comes, so the shape is set here
+            SetCursor(pointer_cursor(x, y));
         if (app.dragging == kMenuPanel || app.dragging == kOsdPanel || app.dragging == kClockPanel)
             set_panel_from(x, y);
         else if (app.dragging == kColorWheel)

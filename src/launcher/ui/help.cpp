@@ -481,7 +481,7 @@ void help_tip() {
     Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 8, w, th + 2 * pad + fh};
     card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);
     if (card.bottom() > app.canvas.height() - 8)  // no room under it: above
-        card.y = app.tipAnchor.y - 8 - card.h;
+        card.y = std::max(8.0f, app.tipAnchor.y - 8 - card.h);  // nor above the window's top
     app.canvas.fill(card, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
     app.canvas.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
     if (figure)
