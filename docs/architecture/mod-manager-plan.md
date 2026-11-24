@@ -256,6 +256,30 @@ Left for later:
 - **Not yet checked in a headset.** First run: X-Plane 12 from a nightly build, with the log showing the mod loaded
   and the patches in.
 
+## Phase 4, next: ACE as its own DLL (map, 2026-11-24)
+
+ACE's QVFR is the D3D12 "replay" (`games/ace/replay_*`): it re-draws the game's own stereo lists into the focus views.
+Today the layer drives it directly, not through ACE's adapter. What the core reaches into:
+
+| Core file | What it uses from ACE | Where it goes |
+| --- | --- | --- |
+| `layer/session.cpp` | `replay_probe_start` (device, queue, `ReplayFocusSettings`) | a D3D12 session entry on the mod table |
+| `layer/frame.cpp` | `replay_probe_frame_end` | `qvfr_frame_end` (exists) |
+| `layer/views.cpp` | `replay_probe_set_gaze` | `qvfr_set_gaze` (exists) |
+| `layer/live_ini.cpp` | size, box, eye scale, Stock, texture match, live diag | `qvfr_set_live` (exists) + new live-periphery entries |
+| `layer/views4.cpp` | focus image, eye region, eye allow, GPU scope | new D3D12 compose entries |
+| `layer/optimizer.cpp` | the draw census hotkey | dev only: a mod diagnostic entry |
+| `layer/state.h` | ~25 `replay_*` switches | the mod's own `[mod_ace]` settings and `[experiment]` reads |
+| `xr_layer.cpp` | single-pass stereo flag, early sky, early swap chain | `instance_created` (exists) |
+| `probe/probe.cpp`, `probe/cpu_profile.cpp` | `ace/abi.h` probe targets and labels | developer tools: from the mod, or left out of nightly |
+
+Most of the steering already has an entry in `SqvfrMod` (gaze, live size, focus mask, frame end). The gap is D3D12:
+a session with the game's device and queue, the focus image (resource, state, box, offsets) for the compositor, the
+eye region in use, and the live periphery. Recommended (pending Willie's choice): append these as a general D3D12
+"focus image" interface, so community mods for D3D12 games can use the same path.
+
+ACE's address patches (`ace/abi.h`) move with it unchanged; update resilience is separate work.
+
 ## What phase 4 has to solve first
 
 Found while sizing the boundary:
