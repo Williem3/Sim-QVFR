@@ -213,11 +213,11 @@ int SIM_QVFR_TEST_MAIN() {
         // [quad] stock written only where asked, and [osd] ab_table with the overlay's place.
         const std::wstring ini = (std::filesystem::temp_directory_path() / L"simqvfr_showcase_test.ini").wstring();
         DeleteFileW(ini.c_str());
-        check(write_menu_values(ini.c_str(), menu.values, true, false, false, false, false, false, false, false, true), "written");
+        check(write_menu_values(ini.c_str(), menu.values, false, false, false, false, false, false, false, true), "written");
         const MenuValues back = read_menu_values(ini.c_str());
         check(back.stock && back.overlay.abTable && back.overlay.enabled, "[quad] stock and [osd] ab_table read back");
         DeleteFileW(ini.c_str());
-        check(write_menu_values(ini.c_str(), menu.values, true, false, false, false, false, false) &&
+        check(write_menu_values(ini.c_str(), menu.values, false, false, false, false, false) &&
                   GetPrivateProfileIntW(L"quad", L"stock", -1, ini.c_str()) == -1,
               "without the showcase (the launcher's ini): [quad] stock not written");
         DeleteFileW(ini.c_str());

@@ -256,11 +256,8 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
         items = {tr(L"1 pass"), tr(L"2 passes"), tr(L"3 passes")};
         selected = app.s.cheeky.nrPasses - 1;
     } else {
-        if (owner == kMethod)
-            add_all(kMethodNames);
-        else
-            add_all(kModeNames);
-        selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
+        add_all(kModeNames);
+        selected = app.s.eyeTracking ? 0 : 1;
     }
     return selected;
 }
@@ -461,9 +458,7 @@ void choose(Ctl owner, int option) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
-    if (owner == kMethod)
-        app.s.mode = option == 0 ? RenderMode::Qvfr : RenderMode::TwoLoop;
-    else if (owner == kMode)
+    if (owner == kMode)
         app.s.eyeTracking = option == 0;
     else if (owner == kCheekyFocusPreset)
         app.s.cheeky.focusPreset = kCheekyPresets[option].value;

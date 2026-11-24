@@ -1,5 +1,5 @@
-// The quad pipeline's shared pieces: the session's graphics, the helmet set, the views4 outline, failing or
-// readying the pipeline, and turning a view toward the focus.
+// The composition's shared pieces: the session's graphics, the helmet set, the views4 outline, a failed composition,
+// and the bounded wait for the layer's own images.
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -93,36 +93,9 @@ void views4_outline_draw(XrSwapchain swapchain) {
 
 void quad_fail(const char* why) {
     ++quad.fallbacks;
-    ++quad.fallbackRun;
     if (!quad.failureLogged)
-        logf("quad: showing ACE's frame B unchanged: %s", why);
+        logf("quad: not composed, the game's own eyes go out: %s", why);
     quad.failureLogged = true;
-}
-
-// two_loops arms only once ACE's eye swapchain is adopted: unarmed, ACE renders its normal full view.
-bool quad_ready() {
-    std::lock_guard guard(quad.mutex);
-    return quad.outChain != XR_NULL_HANDLE;
-}
-
-// Quad frame B: instead of an off-centre window of the eye's view (a strongly asymmetric projection,
-// which ACE's screen-space clouds and other effects get wrong: dark skies when the box is far from
-// the centre), the eye camera is turned to face tangent (cx, cy) of the eye's view, without roll,
-// and given a centred projection of the same tangent size.
-void turn_view(XrView& view, double fractionX, double fractionY, double tanX, double tanY) {
-    const double l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
-    const double d = std::tan(view.fov.angleDown), u = std::tan(view.fov.angleUp);
-    const double hw = (r - l) * fractionX / 2, hh = (u - d) * fractionY / 2;
-    view.pose.orientation = qmul(view.pose.orientation, focus_turn(view.fov, fractionX, fractionY, tanX, tanY));
-    view.fov = {static_cast<float>(-std::atan(hw)), static_cast<float>(std::atan(hw)),
-                static_cast<float>(std::atan(hh)), static_cast<float>(-std::atan(hh))};
-}
-
-// Where frame B's camera points, as tangents of frame A's view (for logs).
-void focus_centre(const EyeComposition& eye, float& tanX, float& tanY) {
-    // B's forward (0,0,-1) in A's frame is the transpose applied: -(row 2) = (-m6, -m7, -m8).
-    tanX = -eye.rotation[6] / eye.rotation[8];
-    tanY = -eye.rotation[7] / eye.rotation[8];
 }
 
 bool sampled(uint64_t count) { return count <= kDetailedFrames || count % kSampleEveryFrames == 0; }

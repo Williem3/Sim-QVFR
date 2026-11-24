@@ -158,13 +158,10 @@ struct MenuValues {
 
 // What the running game launched with: the outer and focus views' sizes, percent of the native eye
 // (views4_layout.h), which live resolution cannot exceed, and the native eye in pixels (0: unknown).
-// Two-loop: no live resolution.
 struct MenuLaunch {
-    bool qvfr = true;
     double outer = 100, focusWidth = 100, focusHeight = 100;
     int nativeWidth = 0, nativeHeight = 0;
     double nativePpd = 0;       // pixels per degree at the centre at 100% density (0: unknown)
-    double twoLoopScale = 100;  // Two-loop: eye_scale, percent (both frames' resolution, fixed at launch)
     bool dlssHeld = false;      // QVFR with DLSS on: the views keep their launch sizes (resolution: next launch)
     double cropWidth = 100, cropHeight = 100;  // the FOV crop launched with: the outer views' kept share of the eye, percent
     bool helmetPieces = false;  // the helmet draws its images (helmet.h): visor, size and height instead of rim and corners
@@ -274,14 +271,14 @@ std::vector<std::wstring> menu_tabs(const SettingsMenu& menu);
 // the profile. The notes and the line under the title follow it.
 MenuItem menu_section(const SettingsMenu& menu);
 
-// The items for the method: QVFR also resizes its views live (and the settings page ends with Optimize).
-std::vector<MenuItem> menu_items(bool qvfr);
+// QVFR's items: the resolution, then the focus area.
+std::vector<MenuItem> menu_items();
 // The current page's items: the page switch first, then the page's.
 std::vector<MenuItem> menu_page_items(const SettingsMenu& menu);
 // The current page's name, as its tab shows it ("Picture", "View & DLSS", "Headset", "Game"): in the player's language
 // (lang.h), or with `shown` false in English (the log's "settings menu: ..." lines).
 std::wstring menu_page_name(const SettingsMenu& menu, bool shown = true);
-// The panel's title ("Headset menu", the method added for Two-loop and the API path), and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
+// The panel's title ("Headset menu", the method added for the API path), and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
 // the settings page the optimizer's detail while it has one; else empty.
 std::wstring menu_title(const SettingsMenu& menu);
 std::wstring menu_subtitle(const SettingsMenu& menu);
@@ -290,10 +287,10 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
-// Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
+// Writes the menu's keys (resolution, the crop and the helmet; object detail only with `objectDetail`,
 // sharpening and colour correction only with `sharpening`, periphery texture match only with `textureMatch`, a game
 // that has it). False if the file cannot be written.
-bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
+bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool objectDetail = false,
                        bool focusQuads = false, bool sharpening = false, bool eyeOff = false, bool carLighting = false,
                        bool focusCorridor = false, bool textureMatch = false, bool showcase = false);
 
@@ -326,7 +323,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown = true);
 std::vector<std::wstring> menu_notes(const SettingsMenu& menu);
 
 // ACE's render target (QVFR): the most the launch allows, what renders now and, when a value did not
-// fit, what the values ask for ("4775x1250 (6.0 MP)"). `shown` false for Two-loop.
+// fit, what the values ask for ("4775x1250 (6.0 MP)"). `shown` false off the pages that show it.
 struct MenuResolution {
     bool shown = false, capped = false;
     std::wstring max, current, asked;

@@ -212,9 +212,8 @@ Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstrin
     const bool dlss = game.features.foveatedDlss;  // Cheeky only in a game that has it
     // Through the game's anti-cheat ([launcher] anticheat=1): Cheeky's layer off (games/game.h antiCheatStart).
     const bool antiCheat = game.antiCheatStart && games::anticheat_chosen(ini.c_str());
-    return launch_options(read_launcher_layers(ini),
-                          false,  // Two-Loop is deprecated: the layer runs QVFR (VectorXR stays on below it)
-                          dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment), antiCheat);
+    return launch_options(read_launcher_layers(ini), dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment),
+                          antiCheat);
 }
 
 std::wstring stamp_now() {
@@ -769,8 +768,8 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.build = build;
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
     const simqvfr::IniRenderMode iniMode = simqvfr::parse_render_mode(mode.c_str());
-    // Two-Loop is deprecated: the layer runs an ini still set to it as QVFR.
-    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off : LaunchMode::Qvfr;  // views4, the research modes
+    // views4, the research modes, and the removed Two-Loop (the layer runs an ini still set to it as QVFR).
+    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off : LaunchMode::Qvfr;
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();

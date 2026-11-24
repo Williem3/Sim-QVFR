@@ -42,8 +42,6 @@ bool own_upscaler_available(std::wstring* why) {
     std::wstring reason;
     if (!game_has(&games::GameFeatures::sideLoadedDlss))
         reason = not_yet();
-    else if (app.s.mode != RenderMode::Qvfr)
-        reason = tr(L"Available in Quad View Foveated Rendering.");
     if (why)
         *why = reason;
     return reason.empty();
@@ -95,17 +93,13 @@ bool own_nr_available(std::wstring* why) {
 
 namespace {
 
-bool qvfr() { return app.s.mode == RenderMode::Qvfr; }
-
-std::wstring percent(double v) { return std::to_wstring(static_cast<int>(std::lround(v * 100))) + L"%"; }
-
 // What the running game started with in QVFR: live resolution goes down from it and back up to it, not above (its
 // periphery and focus view sizes, percent of the native eye). False without a QVFR game running with Sim-QVFR.
 bool running_launch(LaunchSizes& launch) {
     if (running_live_ini(runtime_info_path()).empty())
         return false;
     launch = load_launch_sizes(runtime_info_path());
-    return launch.known && launch.mode == RenderMode::Qvfr && launch.outer > 0 && launch.focusWidth > 0 &&
+    return launch.known && launch.outer > 0 && launch.focusWidth > 0 &&
            launch.focusHeight > 0;
 }
 
@@ -135,39 +129,31 @@ Card resolution_card() {
     // The truck simulators' QVFR (the D3D11 layer's, GameFeatures::layerMultiView): every size live, inside the game's
     // own render size (scssoftware/corner.h corner_set_live), no launch ceiling.
     const bool layerSizes = game_has(&games::GameFeatures::layerMultiView);
-    Card c{Tab::Picture, tr(L"Resolution"), !qvfr() ? Applies::NextLaunch : layerSizes ? Applies::Live : Applies::LiveLowered};
+    Card c{Tab::Picture, tr(L"Resolution"), layerSizes ? Applies::Live : Applies::LiveLowered};
     c.body = [](Body& b) {
         const Readouts ro = readouts(app.s, app.runtime);
         const bool known = app.runtime.known();
         b.slider({kOuter, tr(L"Periphery resolution"), app.s.outer, L"%", known ? px(ro.outer) : L""});
-        if (qvfr()) {
-            b.slider({kInner, tr(L"Focus density"), app.s.inner, L"%", known ? px(ro.focus) : L""});
-            if (game_has(&games::GameFeatures::sharpening))
-                b.slider({kSharpen, tr(L"Sharpening"), app.s.sharpen, L"%", app.s.sharpen == 0 ? tr(L"Off") : L""});
-            if (game_has(&games::GameFeatures::peripheryTextureMatch))
-                b.slider({kTextureMatch, tr(L"Periphery texture match"), app.s.textureMatch, L"%",
-                          app.s.textureMatch == 0 ? tr(L"Off") : L""});
-            if (game_has(&games::GameFeatures::objectDetail))
-                b.slider({kObjectDetail, tr(L"Object detail"), app.s.objectDetail});
-        } else {
-            b.note(trf(L"In Two-loop the focus density ({density}) follows from Periphery resolution and the focus "
-                       L"size. Focus density, sharpening and object detail are set in Quad View Foveated Rendering.",
-                       {{L"density", percent(ro.focusDensity)}}));
-            b.hidden(tr(L"Periphery resolution"), tr(L"Quad View Foveated Rendering"),
-                     {tr(L"Focus density"), tr(L"Sharpening"), tr(L"Object detail")});
-        }
+        b.slider({kInner, tr(L"Focus density"), app.s.inner, L"%", known ? px(ro.focus) : L""});
+        if (game_has(&games::GameFeatures::sharpening))
+            b.slider({kSharpen, tr(L"Sharpening"), app.s.sharpen, L"%", app.s.sharpen == 0 ? tr(L"Off") : L""});
+        if (game_has(&games::GameFeatures::peripheryTextureMatch))
+            b.slider({kTextureMatch, tr(L"Periphery texture match"), app.s.textureMatch, L"%",
+                      app.s.textureMatch == 0 ? tr(L"Off") : L""});
+        if (game_has(&games::GameFeatures::objectDetail))
+            b.slider({kObjectDetail, tr(L"Object detail"), app.s.objectDetail});
         b.note(known ? trf(L"Percent of the headset’s {width} × {height} per eye; the periphery and the focus are set "
                            L"apart.",
                            {{L"width", std::to_wstring(app.runtime.width)},
                             {L"height", std::to_wstring(app.runtime.height)}})
                      : std::wstring(tr(L"Percent of the headset’s resolution; pixel sizes appear after the first "
                                        L"launch.")));
-        if (qvfr() && game_has(&games::GameFeatures::layerMultiView)) {
+        if (game_has(&games::GameFeatures::layerMultiView)) {
             b.note(tr(L"Changes apply while you drive, inside the game’s own render size: the focus and the periphery "
                       L"share it, so a large focus at a high Focus density leaves less room for the periphery."));
             return;
         }
-        if (!qvfr() || !game_has(&games::GameFeatures::liveResolution))
+        if (!game_has(&games::GameFeatures::liveResolution))
             return;
         // The live ceiling (its badge's "Now when lowered"): said before the launch, with numbers while it runs.
         LaunchSizes launch;
@@ -204,10 +190,6 @@ Card resolution_card() {
 Card color_card() {
     Card c{Tab::Picture, tr(L"Color"), Applies::Live};
     c.body = [](Body& b) {
-        if (!qvfr()) {
-            b.note(tr(L"Color correction is available in Quad View Foveated Rendering."));
-            return;
-        }
         const ColorGrade& g = app.s.grade;
         b.toggle(kGradeOn, tr(L"Color correction"), g.on,
                  g.on ? tr(L"The headset image’s exposure, brightness, contrast and saturation.") : tr(L"Off"));
@@ -236,10 +218,6 @@ Card color_card() {
 Card night_cars_card() {
     Card c{Tab::Picture, tr(L"Game Lighting Enhancement (experimental)"), Applies::Live};
     c.body = [](Body& b) {
-        if (!qvfr()) {
-            b.note(tr(L"Game Lighting Enhancement is available in Quad View Foveated Rendering."));
-            return;
-        }
         const CarLighting& l = app.s.carLight;
         b.toggle(kNightOn, tr(L"Game Lighting Enhancement"), l.on,
                  l.on ? tr(L"Relights the cars at night: highlights from the floodlights and headlights, shading in the "
@@ -305,7 +283,7 @@ Card foveation_card() {
             b.note(tr(L"The focus region stays centred until a tracker connects."));
         b.sliders({kWidth, tr(L"Focus width"), s.width}, {kHeight, tr(L"Focus height"), s.height});
         // A focus larger than the running game's launch renders at a lower density until the next launch.
-        if (LaunchSizes launch; qvfr() && game_has(&games::GameFeatures::liveResolution) && running_launch(launch) &&
+        if (LaunchSizes launch; game_has(&games::GameFeatures::liveResolution) && running_launch(launch) &&
                                 (s.inner * s.width > launch.focusWidth * 100 + 50 ||
                                  s.inner * s.height > launch.focusHeight * 100 + 50))
             b.note(tr(L"Larger than this launch allows at your Focus density: it renders less dense until the next "
@@ -332,8 +310,7 @@ Card foveation_card() {
         b.note(tr(L"See the edge of the sharp area? Raise Feather, or make the focus larger."));
         // The headset's runtime composed the views at the last launch (Pimax, Varjo; native quad views): it places the
         // focus area in its own focus region, so the position sliders would do nothing. The custom shape still shows.
-        const bool runtimePlaces =
-            qvfr() && game_has(&games::GameFeatures::nativeQuadViews) && app.runtime.quadViewsUsed;
+        const bool runtimePlaces = game_has(&games::GameFeatures::nativeQuadViews) && app.runtime.quadViewsUsed;
         if (runtimePlaces)
             b.note(tr(L"Your headset’s software composes the views (Quad-Views Foveated Rendering in Pimax Play or Varjo "
                       L"Base) and places the focus area itself, so the position sliders aren’t offered. The shape and "
@@ -351,7 +328,7 @@ Card foveation_card() {
             b.hidden(tr(L"Foveated mode"), tr(L"Eye tracked"),
                      {tr(L"Gaze dead-zone"), tr(L"Gaze offset"), tr(L"Horizontal gaze offset")});
         }
-        if (qvfr() && game_has(&games::GameFeatures::focusCorridor)) {  // road focus (LMU), fixed foveation only
+        if (game_has(&games::GameFeatures::focusCorridor)) {  // road focus (LMU), fixed foveation only
             b.divider();
             if (s.eyeTracking) {
                 b.note(tr(L"Road focus is for fixed foveation: it’s off while the focus follows your eyes."));
@@ -447,10 +424,6 @@ Card view_card() {
     Card c{Tab::Picture, tr(L"View & helmet"), Applies::Live};
     c.body = [](Body& b) {
         const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
-        if (!qvfr()) {
-            b.note(tr(L"The crop and the helmet are available in Quad View Foveated Rendering."));
-            return;
-        }
         if (crop) {
             const Settings& s = app.s;
             b.toggle(kCropOn, tr(L"Crop the view"), s.crop,
@@ -499,37 +472,18 @@ Card view_card() {
 
 // ---- Rendering ---------------------------------------------------------------------------------
 
-// The method (Two-loop only) and how a multi-view game (LMU, ATS, ETS2) draws its focus views; DLSS and Foveated DLSS
-// are their own cards, each with its switch. The runtime composing the views (Pimax, Varjo) has no switch: it is
-// automatic ([experiment] native_quad_views, the report bundle says what the last launch did).
-bool rendering_shown() {
-    return method_shown() || multi_view_game();
-}
+// How a multi-view game (LMU, ATS, ETS2) draws its focus views; DLSS and Foveated DLSS are their own cards, each with
+// its switch. The runtime composing the views (Pimax, Varjo) has no switch: it is automatic ([experiment]
+// native_quad_views, the report bundle says what the last launch did).
+bool rendering_shown() { return multi_view_game(); }
 
 Card rendering_card() {
     Card c{Tab::Picture, tr(L"Rendering")};
     c.body = [](Body& b) {
-        if (method_shown()) {  // Two-loop is legacy: the method shows only to leave it
-            b.popup(kMethod, tr(L"Rendering method"), tr(kMethodNames[qvfr() ? 0 : 1]), items_of(kMethod),
-                    Applies::NextLaunch);
-            b.note(tr(L"Two-loop renders each headset frame twice. Switch to Quad View Foveated Rendering; Two-loop "
-                      L"won’t be offered again."));
-        }
-        if (multi_view_game()) {
-            if (!qvfr()) {
-                b.note(tr(L"The focus view is drawn in Quad View Foveated Rendering."));
-            } else {
-                b.note(trf(L"Each eye’s pass also draws its focus view, by {way}.",
-                           {{L"way", multi_view_way(true)}}));
-                if (game_has(&games::GameFeatures::layerMultiView))  // ATS, ETS2: the path starts with the first eye pass
-                    b.note(tr(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the "
-                              L"first frame that draws the world for each eye."));
-            }
-        }
-    };
-    c.reset = [](Settings& s) {
-        const Settings d;
-        s.mode = d.mode;
+        b.note(trf(L"Each eye’s pass also draws its focus view, by {way}.", {{L"way", multi_view_way(true)}}));
+        if (game_has(&games::GameFeatures::layerMultiView))  // ATS, ETS2: the path starts with the first eye pass
+            b.note(tr(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the first frame "
+                      L"that draws the world for each eye."));
     };
     return c;
 }

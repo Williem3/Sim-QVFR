@@ -54,12 +54,10 @@ enum class TurboBlock {
     BaselineRun,      // a baseline or log-only run: the game's frame pacing left as it is
     FrameGeneration,  // Cheeky's frame generation (fg=1): the game crashed with OpenXR Toolkit's Turbo mode and it
     VectorXr,         // VectorXR's frame generation: its layer loaded, or xrEndFrame outnumbering xrBeginFrame
-    TwoLoops,         // the deprecated two_loops experiment already armed (never mixed mid-pair)
     Chained,          // the game chains structures into xrWaitFrame, which a wait on the worker can't carry
 };
 
-inline TurboBlock turbo_block(bool wanted, bool cpuSettings, bool frameGeneration, bool vectorXr, bool twoLoopsActive,
-                              bool chained) {
+inline TurboBlock turbo_block(bool wanted, bool cpuSettings, bool frameGeneration, bool vectorXr, bool chained) {
     if (!wanted)
         return TurboBlock::Off;
     if (!cpuSettings)
@@ -68,8 +66,6 @@ inline TurboBlock turbo_block(bool wanted, bool cpuSettings, bool frameGeneratio
         return TurboBlock::FrameGeneration;
     if (vectorXr)
         return TurboBlock::VectorXr;
-    if (twoLoopsActive)
-        return TurboBlock::TwoLoops;
     if (chained)
         return TurboBlock::Chained;
     return TurboBlock::None;
@@ -84,7 +80,6 @@ inline const char* turbo_log_line(TurboBlock b) {
     case TurboBlock::BaselineRun: return "turbo: off (a baseline or log-only run)";
     case TurboBlock::FrameGeneration: return "turbo: off (frame generation on)";
     case TurboBlock::VectorXr: return "turbo: off (VectorXR frame generation)";
-    case TurboBlock::TwoLoops: return "turbo: off (the two_loops experiment is armed)";
     case TurboBlock::Chained: return "turbo: off (the game chains structures into xrWaitFrame)";
     }
     return "turbo: off";

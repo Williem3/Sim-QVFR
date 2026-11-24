@@ -52,7 +52,7 @@ struct Check {
 enum class BuildState { Unknown, Hashing, Supported, Unsupported };
 // The game's openvr_api.dll (GameInfo::openComposite): OpenComposite's, Valve's, missing, or not looked at.
 enum class OpenComposite { Unknown, Installed, Valve, Missing };
-enum class LaunchMode { Off, Qvfr, TwoLoop };
+enum class LaunchMode { Off, Qvfr };
 
 struct PreflightInput {
     std::wstring gameExe;  // empty: not found

@@ -157,12 +157,13 @@ endif()
 set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtables.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-# The layer (src/xr_layer.cpp and src/layer/), for the DLL and for two_loops_test and quad_flow_test. An OBJECT
-# library, not a static one: every object is linked in, including xr_layer.cpp's exported
-# xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
+# The layer (src/xr_layer.cpp and src/layer/), for the DLL and for the tests that link it (layer_hooks_test,
+# quad_flow_test and others). An OBJECT library, not a static one: every object is linked in, including xr_layer.cpp's
+# exported xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
-  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
+  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/captures.cpp src/layer/visibility_mask.cpp
+  src/layer/views.cpp src/layer/live_ini.cpp
   src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp src/layer/native_quad.cpp
   src/layer/eye_off.cpp src/layer/submit_trace.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -424,11 +425,12 @@ sim_qvfr_test(frame_records_test tests/frame_records_test.cpp)
 target_include_directories(frame_records_test PRIVATE src)
 target_compile_options(frame_records_test PRIVATE /W4 /permissive- /utf-8)
 
-# Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
-sim_qvfr_test(two_loops_test tests/two_loops_test.cpp)
-target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
-target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(two_loops_test PRIVATE sim_qvfr_layer)
+# Offline checks of the layer's hooks against fake runtime calls: its own swapchain images' waits, the game's swapchains
+# and spaces going, live settings and the settings menu's ini writes (tests/layer_hooks_test.cpp).
+sim_qvfr_test(layer_hooks_test tests/layer_hooks_test.cpp)
+target_include_directories(layer_hooks_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(layer_hooks_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(layer_hooks_test PRIVATE sim_qvfr_layer)
 
 # Offline check of turbo mode's frame loop (layer/turbo.h) against fake runtimes, alone and through the layer's
 # xrWaitFrame and xrBeginFrame (tests/turbo_test.cpp).

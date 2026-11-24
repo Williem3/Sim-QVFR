@@ -95,15 +95,12 @@ int SIM_QVFR_TEST_MAIN() {
               std::vector<std::string>{"XR_APILAYER_Plain-1.2"},
           "a plain layer name with dots and dashes is taken");
 
-    // mode=quad: frame generation off; off_layers: Toolkit off.
-    Options quad;
-    quad.frameGenerationOff = true;
-    quad.offLayers = {"XR_APILAYER_MBUCCHIA_toolkit"};
-    const LayerPlan quadPlan = plan_layers(registrations, quad);
-    check(quadPlan.below.empty() && quadPlan.off.size() == 2 &&
-              quadPlan.off[0].second == L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit" &&
-              quadPlan.off[1].second == L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR",
-          "mode=quad turns VectorXR off and off_layers turns Toolkit off");
+    // off_layers: Toolkit off, VectorXR left as Windows has it.
+    Options toolkitOff;
+    toolkitOff.offLayers = {"XR_APILAYER_MBUCCHIA_toolkit"};
+    const LayerPlan toolkitPlan = plan_layers(registrations, toolkitOff);
+    check(toolkitPlan.off.size() == 1 && toolkitPlan.off[0].second == L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit",
+          "off_layers turns Toolkit off, and only Toolkit");
 
     // The launcher's layer profile (layer_order.h): order, on/off either way, and what a launch locks.
     {
@@ -111,7 +108,7 @@ int SIM_QVFR_TEST_MAIN() {
         regs.push_back({layer("cheeky", kCheekyLayer, "CHEEKY_OPENXR_LAYER_DISABLE"), false});  // off in Windows
         check(plan.above == std::vector<std::string>{"XR_APILAYER_NO_SWITCH"}, "profile: a layer that cannot be silenced stays above");
         LauncherLayers profile;
-        Options o = launch_options(profile, false, false, false);
+        Options o = launch_options(profile, false, false);
         LayerPlan p = plan_layers(regs, o);
         check(p.layers.size() == 4 && p.layers[0].name == "XR_APILAYER_MBUCCHIA_toolkit" && p.layers[0].on &&
                   p.layers[1].name == "XR_APILAYER_MBUCCHIA_quadviews" && !p.layers[1].on && !p.layers[1].systemOn &&
@@ -120,16 +117,16 @@ int SIM_QVFR_TEST_MAIN() {
         check(move_launcher_layer(profile, p, kFrameGenerationLayer, -1) && profile.order.size() == 4 &&
                   profile.order[1] == kFrameGenerationLayer,
               "profile: a layer moves up; the whole order is the profile's from then on");
-        p = plan_layers(regs, launch_options(profile, false, false, false));
+        p = plan_layers(regs, launch_options(profile, false, false));
         check(p.layers[1].name == kFrameGenerationLayer && !move_launcher_layer(profile, p, "XR_APILAYER_MBUCCHIA_toolkit", -1) &&
                   move_launcher_layer(profile, p, "XR_APILAYER_MBUCCHIA_toolkit", 1),
               "profile: the top layer cannot move further up, and moves down");
-        p = plan_layers(regs, launch_options(profile, false, false, false));
+        p = plan_layers(regs, launch_options(profile, false, false));
         check(names(p) == std::vector<std::string>{kFrameGenerationLayer, "XR_APILAYER_MBUCCHIA_toolkit"},
               "profile: the launch loads the profile's order below the Sim-QVFR layer");
         set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_quadviews", true, false);
         set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_toolkit", false, true);
-        p = plan_layers(regs, launch_options(profile, false, false, false));
+        p = plan_layers(regs, launch_options(profile, false, false));
         const auto pv = launch_variables(p, L"C:\\run", L"i", L"l", L"r");
         check(names(p) == std::vector<std::string>{kFrameGenerationLayer, "XR_APILAYER_MBUCCHIA_quadviews"} &&
                   value_of(pv, L"DISABLE_QUADVIEWS") == L"<unset>" &&
@@ -137,10 +134,10 @@ int SIM_QVFR_TEST_MAIN() {
               "profile: a layer off in Windows loads for ACE alone (nothing to silence); one on in Windows is silenced");
         set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_toolkit", true, true);
         check(profile.off.empty(), "profile: back to its Windows state, the layer is no longer listed");
-        // Locks: Cheeky loaded keeps its layer on; its frame generation, or Two-loop, keeps VectorXR off.
+        // Locks: Cheeky loaded keeps its layer on; its frame generation keeps VectorXR off.
         LauncherLayers against = profile;
         set_launcher_layer(against, kCheekyLayer, false, false);
-        p = plan_layers(regs, launch_options(against, false, true, true));
+        p = plan_layers(regs, launch_options(against, true, true));
         const auto locked = [&](const char* n) {
             return *std::find_if(p.layers.begin(), p.layers.end(), [&](const PlannedLayer& l) { return l.name == n; });
         };
@@ -148,20 +145,17 @@ int SIM_QVFR_TEST_MAIN() {
                   !locked(kFrameGenerationLayer).lock.empty() &&
                   std::find(names(p).begin(), names(p).end(), std::string(kCheekyLayer)) != names(p).end(),
               "locks: Cheeky on keeps its layer on, its frame generation keeps VectorXR off");
-        p = plan_layers(regs, launch_options(LauncherLayers{}, true, false, false));
-        check(!locked(kFrameGenerationLayer).on && locked(kFrameGenerationLayer).lock.find("Two-loop") != std::string::npos,
-              "locks: Two-loop keeps VectorXR off");
         // Run with anti-cheat: Cheeky's layer off, over [cheeky] load and on_layers alike.
         LauncherLayers wantsCheeky;
         set_launcher_layer(wantsCheeky, kCheekyLayer, true, false);
-        p = plan_layers(regs, launch_options(wantsCheeky, false, true, true, {}, true));
+        p = plan_layers(regs, launch_options(wantsCheeky, true, true, {}, true));
         const std::vector<std::string> loaded = names(p);
         check(!locked(kCheekyLayer).on && locked(kCheekyLayer).lock.find("anti-cheat") != std::string::npos &&
                   std::find(loaded.begin(), loaded.end(), std::string(kCheekyLayer)) == loaded.end(),
               "locks: Run with anti-cheat keeps Cheeky's layer off, whatever [cheeky] and the profile say");
         std::vector<Registration> cheekyOn = registrations;
         cheekyOn.push_back({layer("cheeky-on", kCheekyLayer, "CHEEKY_OPENXR_LAYER_DISABLE"), true});  // on in Windows
-        p = plan_layers(cheekyOn, launch_options(LauncherLayers{}, false, false, false, {}, true));
+        p = plan_layers(cheekyOn, launch_options(LauncherLayers{}, false, false, {}, true));
         const auto pc = launch_variables(p, L"C:\run", L"i", L"l", L"r");
         check(!locked(kCheekyLayer).on && value_of(pc, L"CHEEKY_OPENXR_LAYER_DISABLE") == L"1",
               "locks: Run with anti-cheat silences Cheeky's layer switched on in Windows");
@@ -272,10 +266,10 @@ int SIM_QVFR_TEST_MAIN() {
               value_of(vars, L"SIM_QVFR_INI") == L"C:\\run\\sim-qvfr.ini" && value_of(vars, L"SteamAppId") == L"3058630" &&
               value_of(vars, L"SIM_QVFR_RUNTIME_INFO") == L"C:\\runtime.ini",
           "variables: layer order, silenced implicit copies, settings, Steam app id, runtime report");
-    const auto quadVars = launch_variables(quadPlan, L"C:\\run", L"i", L"l", L"r");
-    check(value_of(quadVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr" &&
-              value_of(quadVars, L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR") == L"1",
-          "mode=quad: only the Sim-QVFR layer, VectorXR silenced");
+    const auto toolkitVars = launch_variables(toolkitPlan, L"C:\\run", L"i", L"l", L"r");
+    check(value_of(toolkitVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr;XR_APILAYER_DIENERTECH_VECTORXR" &&
+              value_of(toolkitVars, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1",
+          "off_layers: Toolkit left out of the list and silenced, VectorXR loaded below Sim-QVFR");
     // An OpenComposite game (ACC): its loader keeps only the first and last of a list, so the loader gets the
     // Sim-QVFR layer alone and the layer chains the rest (SIM_QVFR_CHAIN), still silenced as implicit copies.
     const auto chainVars = launch_variables(plan, L"C:\\run", L"i", L"l", L"r", {}, true);
@@ -283,7 +277,10 @@ int SIM_QVFR_TEST_MAIN() {
               value_of(chainVars, L"SIM_QVFR_CHAIN") == L"XR_APILAYER_MBUCCHIA_toolkit;XR_APILAYER_DIENERTECH_VECTORXR" &&
               value_of(chainVars, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1",
           "chained: the loader gets the Sim-QVFR layer alone; SIM_QVFR_CHAIN lists the rest in order");
-    check(value_of(launch_variables(quadPlan, L"C:\\run", L"i", L"l", L"r", {}, true), L"SIM_QVFR_CHAIN") == L"<unset>" &&
+    Options allOff;  // nothing left below the Sim-QVFR layer
+    allOff.offLayers = {"XR_APILAYER_MBUCCHIA_toolkit", "XR_APILAYER_DIENERTECH_VECTORXR"};
+    const LayerPlan nothingBelow = plan_layers(registrations, allOff);
+    check(value_of(launch_variables(nothingBelow, L"C:\\run", L"i", L"l", L"r", {}, true), L"SIM_QVFR_CHAIN") == L"<unset>" &&
               value_of(vars, L"SIM_QVFR_CHAIN") == L"<unset>",
           "chained: nothing to chain, or a game whose loader takes the list: no SIM_QVFR_CHAIN");
 

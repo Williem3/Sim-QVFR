@@ -19,6 +19,16 @@ namespace simqvfr::layer {
 
 namespace {
 
+// Narrows [lo, hi] (angles) to `fraction` of its tangent-space width, centred straight ahead and shifted inwards
+// where the view ends (focus_only).
+void narrow(float& loAngle, float& hiAngle, double fraction) {
+    const double lo = std::tan(loAngle), hi = std::tan(hiAngle);
+    const double half = (hi - lo) * fraction / 2;
+    const double centre = std::clamp(0.0, lo + half, hi - half);
+    loAngle = static_cast<float>(std::atan(centre - half));
+    hiAngle = static_cast<float>(std::atan(centre + half));
+}
+
 // The convergence now and then in the log: the distance, where from, and the boxes' horizontal tangents.
 void convergence_note(double distance, bool fromGame, const float (&tan)[2][2]) {
     static std::uint64_t calls = 0;
@@ -304,34 +314,11 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             replay_probe_set_gaze(ndc);
         }
     }
-    const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
-    if (narrowThisFrame && capacity > 0 && XR_SUCCEEDED(r)) {
-        XrVector3f direction{0, 0, -1};
-        const bool gazing = experiment.quad && experiment.gaze &&
-                            gaze_direction(session, info->space, info->displayTime, direction);
-        if (experiment.quad)
-            steady_gaze(gazing, direction);
+    if (experiment.focusOnly && capacity > 0 && XR_SUCCEEDED(r)) {  // each eye's view narrowed straight ahead
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             const XrFovf before = views[i].fov;
-            double tanX = 0, tanY = 0;
-            if (gazing) {  // gaze ray direction in this eye's frame (canted displays rotate each eye)
-                const XrQuaternionf& q = views[i].pose.orientation;
-                const XrVector3f d = rotate({-q.x, -q.y, -q.z, q.w}, direction);
-                if (d.z < -0.1f) {
-                    tanX = d.x / -d.z;
-                    tanY = d.y / -d.z;
-                }
-            }
-            if (experiment.quad) {  // the offset (focus_offset.h), on the gaze or the fixed box
-                tanX = offset_tan_x(tanX, gazing ? experiment.gazeOffsetX : experiment.fixedOffsetX);
-                tanY = offset_tan_y(tanY, gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY);
-            }
-            if (experiment.quad) {
-                turn_view(views[i], experiment.focusFraction, experiment.focus_y(), tanX, tanY);
-            } else {
-                narrow(views[i].fov.angleLeft, views[i].fov.angleRight, experiment.focusFraction, tanX);
-                narrow(views[i].fov.angleDown, views[i].fov.angleUp, experiment.focus_y(), tanY);
-            }
+            narrow(views[i].fov.angleLeft, views[i].fov.angleRight, experiment.focusFraction);
+            narrow(views[i].fov.angleDown, views[i].fov.angleUp, experiment.focus_y());
             if (!focusLogged)
                 logf("experiment focus_only view=%u fov %.4f/%.4f/%.4f/%.4f -> %.4f/%.4f/%.4f/%.4f", i,
                      before.angleLeft, before.angleRight, before.angleUp, before.angleDown, views[i].fov.angleLeft,

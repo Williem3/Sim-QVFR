@@ -283,10 +283,8 @@ bool write(const wchar_t* ini, const IniInt& k, int value) { return ini_put(ini,
 
 }  // namespace
 
-std::vector<MenuItem> menu_items(bool qvfr) {
-    std::vector<MenuItem> items;
-    if (qvfr)
-        items = {MenuItem::Periphery, MenuItem::Density};
+std::vector<MenuItem> menu_items() {
+    std::vector<MenuItem> items = {MenuItem::Periphery, MenuItem::Density};
     items.insert(items.end(), {MenuItem::Width, MenuItem::Height, MenuItem::Feather, MenuItem::Corners,
                                MenuItem::Outline, MenuItem::EyeTracking, MenuItem::FocusOffset, MenuItem::GazeDeadzone});
     return items;
@@ -295,9 +293,9 @@ std::vector<MenuItem> menu_items(bool qvfr) {
 namespace {
 
 // The View page: the launcher's View & helmet card, as the game has it.
-bool view_section(const SettingsMenu& menu) { return menu.launch.qvfr && (menu.launch.cropPage || menu.launch.helmetPage); }
-// The Colour page: QVFR in a game whose compositor runs (as sharpening).
-bool color_section(const SettingsMenu& menu) { return menu.launch.qvfr && menu.launch.sharpening; }
+bool view_section(const SettingsMenu& menu) { return menu.launch.cropPage || menu.launch.helmetPage; }
+// The Colour page: a game whose compositor runs (as sharpening).
+bool color_section(const SettingsMenu& menu) { return menu.launch.sharpening; }
 
 }  // namespace
 
@@ -379,9 +377,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             add({MenuItem::FocusOffset, MenuItem::FocusOffsetX});
         if (v.eyeTracking)
             items.push_back(MenuItem::GazeDeadzone);
-        if (l.qvfr && l.focusQuads)  // focus_layer=2's test
+        if (l.focusQuads)  // focus_layer=2's test
             items.push_back(MenuItem::FocusQuadDistance);
-        if (l.qvfr && l.focusCorridor && !v.eyeTracking) {  // road focus: fixed foveation only
+        if (l.focusCorridor && !v.eyeTracking) {  // road focus: fixed foveation only
             items.push_back(MenuItem::FocusCorridor);
             if (v.focusCorridor)
                 add({MenuItem::FocusCorridorPreset, MenuItem::FocusCorridorWidth, MenuItem::FocusCorridorHeight,
@@ -391,20 +389,18 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
         if (!menu.profiles.empty())
             items.push_back(MenuItem::Profile);
-        if (l.qvfr) {
-            add({MenuItem::HeadResolution, MenuItem::Periphery, MenuItem::Density});
-            if (l.objectDetail)  // only a game with it (X-Plane)
-                items.push_back(MenuItem::ObjectDetail);
-            if (l.sharpening)
-                items.push_back(MenuItem::Sharpening);
-            if (l.textureMatch)
-                items.push_back(MenuItem::TextureMatch);
-            if (l.optimize)
-                items.push_back(MenuItem::Optimize);
-        }
+        add({MenuItem::HeadResolution, MenuItem::Periphery, MenuItem::Density});
+        if (l.objectDetail)  // only a game with it (X-Plane)
+            items.push_back(MenuItem::ObjectDetail);
+        if (l.sharpening)
+            items.push_back(MenuItem::Sharpening);
+        if (l.textureMatch)
+            items.push_back(MenuItem::TextureMatch);
+        if (l.optimize)
+            items.push_back(MenuItem::Optimize);
         if (l.apiDlss)  // the API path's DLSS: the focus views' mode and preset, live (the periphery: F, fixed)
             add({MenuItem::HeadDlss, MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});
-        if (l.qvfr && l.ownDlss) {
+        if (l.ownDlss) {
             add({MenuItem::HeadDlss, MenuItem::DlssOn});
             // AMD FSR has no NGX presets: their rows go while it runs the views. The Upscaler row is the RTX test's only.
             const bool fsr = fsr_runs(menu);
@@ -475,9 +471,7 @@ std::vector<std::wstring> menu_tabs(const SettingsMenu& menu) {
 
 std::wstring menu_title(const SettingsMenu& menu) {
     // The launcher's name for the panel; the method where it isn't plain QVFR. The page: the tabs under it.
-    return lang::tr(menu.launch.apiPath ? I18N(L"Headset menu \u00b7 QVFR (API path)")
-                    : menu.launch.qvfr  ? I18N(L"Headset menu")
-                                        : I18N(L"Headset menu \u00b7 Two-loop (legacy)"));
+    return lang::tr(menu.launch.apiPath ? I18N(L"Headset menu \u00b7 QVFR (API path)") : I18N(L"Headset menu"));
 }
 
 std::wstring menu_page_name(const SettingsMenu& menu, bool shown) {
@@ -776,14 +770,14 @@ MenuValues read_menu_values(const wchar_t* ini) {
     return v;
 }
 
-bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
+bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool objectDetail, bool focusQuads,
                        bool sharpening, bool eyeOff, bool carLighting, bool focusCorridor, bool textureMatch, bool showcase) {
     bool ok = true;
     if (showcase)
         ok &= write(ini, kStock, v.stock ? 1 : 0);
-    if (qvfr && textureMatch)
+    if (textureMatch)
         ok &= write(ini, kPeripheryTextureMatch, kPeripheryTextureMatch.clamp(v.textureMatch));
-    if (qvfr && focusCorridor) {
+    if (focusCorridor) {
         ok &= write(ini, kFocusCorridor, v.focusCorridor ? 1 : 0);
         ok &= write(ini, kFocusCorridorWidth, kFocusCorridorWidth.clamp(v.focusCorridorWidth));
         ok &= write(ini, kFocusCorridorHeight, kFocusCorridorHeight.clamp(v.focusCorridorHeight));
@@ -793,28 +787,26 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
         ok &= write(ini, kFocusCorridorShow, v.focusCorridorShow ? 1 : 0);
         ok &= write_road_focus_saved(ini, v.roadSaved);
     }
-    if (qvfr && carLighting)
+    if (carLighting)
         ok &= write_car_lighting(ini, v.carLight);
-    if (eyeOff)  // QVFR or not: the layer shows the eye black either way
+    if (eyeOff)
         ok &= write(ini, kEyeOff, kEyeOff.clamp(v.eyeOff));
-    if (qvfr && sharpening) {
+    if (sharpening) {
         ok &= write(ini, kSharpenPercent, kSharpenPercent.clamp(v.sharpen));
         ok &= write_color_grade(ini, v.color);
     }
-    if (qvfr && focusQuads)
+    if (focusQuads)
         ok &= write(ini, L"experiment", L"focus_quad_distance", focus_quad_metres(v.focusQuadStep));
-    if (qvfr && objectDetail)
+    if (objectDetail)
         ok &= write(ini, kObjectDetail, kObjectDetail.clamp(v.objectDetail));
-    if (qvfr) {
-        ok &= write(ini, kPeripheryScale, v.periphery);
-        ok &= write(ini, kFocusDensity, v.density);
-        ok &= write(ini, kCropEnabled, v.crop ? 1 : 0);
-        ok &= write(ini, kCropTop, v.cropTop);
-        ok &= write(ini, kCropBottom, v.cropBottom);
-        ok &= write(ini, kCropOuter, v.cropOuter);
-        ok &= write(ini, kCropInner, v.cropInner);
-        ok &= write_helmet_settings(ini, v.helmet);
-    }
+    ok &= write(ini, kPeripheryScale, v.periphery);
+    ok &= write(ini, kFocusDensity, v.density);
+    ok &= write(ini, kCropEnabled, v.crop ? 1 : 0);
+    ok &= write(ini, kCropTop, v.cropTop);
+    ok &= write(ini, kCropBottom, v.cropBottom);
+    ok &= write(ini, kCropOuter, v.cropOuter);
+    ok &= write(ini, kCropInner, v.cropInner);
+    ok &= write_helmet_settings(ini, v.helmet);
     ok &= write(ini, kFocusPercent, v.width);
     ok &= write(ini, kFocusHeightPercent, v.height);
     ok &= write(ini, kFeatherPercent, v.feather);
@@ -850,8 +842,6 @@ MenuFit menu_fit(const SettingsMenu& menu) {
     f.focusWidth = f.wantFocusWidth;
     f.focusHeight = f.wantFocusHeight;
     f.densityX = f.densityY = v.density;
-    if (!menu.launch.qvfr)
-        return f;
     if (menu.launch.cornerFit) {  // the corner path's own rule, the one it draws by
         const CornerFit c = corner_fit(v.periphery, v.width, v.height, v.density);
         f.periphery = c.periphery;
@@ -924,7 +914,7 @@ MenuResolution menu_resolution(const SettingsMenu& menu) {
     const MenuLaunch& l = menu.launch;
     const MenuPage page = menu_page(menu);
     const MenuItem section = menu_section(menu);
-    if (!l.qvfr || (section != MenuItem::HeadResolution && page != MenuPage::Foveation && section != MenuItem::HeadView))
+    if ((section != MenuItem::HeadResolution && page != MenuPage::Foveation && section != MenuItem::HeadView))
         return r;
     const MenuFit f = menu_fit(menu);
     const MenuValues& v = menu.values;
@@ -941,17 +931,16 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     MenuStats s;
     const MenuLaunch& l = menu.launch;
     const MenuFit f = menu_fit(menu);
-    // Density in effect (QVFR: the fit's, horizontal; Two-loop: eye_scale over the box's share).
-    const double density = l.qvfr ? f.densityX : l.twoLoopScale * 100 / menu.values.width;
+    const double density = f.densityX;  // in effect: the fit's, horizontal
     if (l.nativePpd > 0)
         s.centerPpd = static_cast<int>(std::lround(l.nativePpd * (l.outputCap > 0 ? std::min(density, l.outputCap) : density) / 100));
-    if (l.nativePpd > 0 && l.qvfr)
+    if (l.nativePpd > 0)
         s.peripheryPpd = static_cast<int>(std::lround(l.nativePpd * f.periphery / 100));
     // Rendered against both native eyes, in pixels when the native size is known (as the launcher).
     // The focus mask (a game with it, QVFR): the share of the focus views' pixels it skips, at their size in pixels (a
     // nominal 2000-wide native eye while the native size is unknown: only the margin depends on it).
     double masked = 0;
-    if (l.qvfr && l.focusMask && menu.values.focusMask) {
+    if (l.focusMask && menu.values.focusMask) {
         const int nw = l.nativeWidth > 0 ? l.nativeWidth : 2000, nh = l.nativeHeight > 0 ? l.nativeHeight : 2000;
         masked = focus_mask_share(focus_area_of(menu.values.shape, menu.values.corners),
                                   static_cast<unsigned>(std::max(px(nw, f.focusWidth), 1)),
@@ -963,16 +952,14 @@ MenuStats menu_stats(const SettingsMenu& menu) {
         const auto area = [&](double w, double h) {
             return static_cast<double>(px(l.nativeWidth, w)) * px(l.nativeHeight, h);
         };
-        rendered = l.qvfr ? 2 * (area(f.periphery * menu.values.crop_width() / 100, f.periphery * menu.values.crop_height() / 100) +
-                                 area(f.focusWidth, f.focusHeight) * (1 - masked))
-                          : 4 * area(l.twoLoopScale, l.twoLoopScale);
+        rendered = 2 * (area(f.periphery * menu.values.crop_width() / 100, f.periphery * menu.values.crop_height() / 100) +
+                        area(f.focusWidth, f.focusHeight) * (1 - masked));
         native = 2.0 * l.nativeWidth * l.nativeHeight;
         s.renderedPixels = rendered;
         s.nativePixels = native;
     } else {
-        rendered = l.qvfr ? 2 * (f.periphery * f.periphery * menu.values.crop_width() * menu.values.crop_height() / 1e4 +
-                                 f.focusWidth * f.focusHeight * (1 - masked))
-                          : 4 * l.twoLoopScale * l.twoLoopScale;
+        rendered = 2 * (f.periphery * f.periphery * menu.values.crop_width() * menu.values.crop_height() / 1e4 +
+                        f.focusWidth * f.focusHeight * (1 - masked));
         native = 2 * 100.0 * 100.0;
     }
     s.savedPercent = static_cast<int>(std::lround((1 - rendered / native) * 100));
@@ -1076,7 +1063,7 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     }
     if (!menu.dlssState.empty())  // in the player's language already (layer/menu.cpp)
         notes.push_back(menu.dlssState);
-    if (menu.launch.qvfr && menu.launch.dlssHeld)
+    if (menu.launch.dlssHeld)
         notes.push_back(lang::tr(L"DLSS is on: resolution changes apply at the next launch"));
     else if (menu.launch.apiPath) {
         // The API path's periphery is live from its launch value down to a quarter of it (the game's eye targets are
@@ -1094,7 +1081,7 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
                 lang::trf(L"Periphery applies now up to its launch value ({percent}); focus density and mode too",
                           {{L"percent", percent(top)}}));
     }
-    else if (menu.launch.qvfr && !menu.launch.liveResolution)
+    else if (!menu.launch.liveResolution)
         notes.push_back(lang::tr(L"Resolution changes apply at the next launch in this game"));
     const MenuFit f = menu_fit(menu);
     const MenuLaunch& l = menu.launch;

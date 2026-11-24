@@ -1,6 +1,6 @@
 // XR_APILAYER_SIM_qvfr: logs what the game asks for (views, swapchains, frame submission) and starts the
 // log-only engine probes (probe/probe.cpp) at xrCreateSession. With mode=off nothing alters rendering; the
-// experiments and the quad pipeline are selected in sim-qvfr.ini. This file has the loader side:
+// experiments and QVFR are selected in sim-qvfr.ini. This file has the loader side:
 // GetInstanceProcAddr, the layer order and gaze extension checks, CreateApiLayerInstance and the exported
 // negotiation; the rest is in src/layer/ (layer.h).
 #include <cstring>

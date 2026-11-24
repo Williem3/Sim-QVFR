@@ -79,20 +79,25 @@ int SIM_QVFR_TEST_MAIN() {
     write_ini(ini, "[experiment]\r\nmode=views4\r\nfocus_percent=50\r\neye_scale=150\r\n[quad]\r\ndebug_border_color=teal\r\n");
     check_agree(ini, "eye_scale 150", 50, 50, 100, 200, 10, 0, launcher::OutlineColor::Teal);
 
-    // [experiment] mode: one parse. two_loops is Two-loop in the launcher too (it showed as QVFR before).
-    check(parse_render_mode(L"views4") == IniRenderMode::Qvfr && parse_render_mode(L"quad") == IniRenderMode::TwoLoop &&
-              parse_render_mode(L"Two_Loops") == IniRenderMode::TwoLoop && parse_render_mode(L"") == IniRenderMode::Off &&
+    // [experiment] mode: one parse. quad and two_loops, the removed Two-Loop, are Deprecated: run as QVFR.
+    check(parse_render_mode(L"views4") == IniRenderMode::Qvfr && parse_render_mode(L"quad") == IniRenderMode::Deprecated &&
+              parse_render_mode(L"Two_Loops") == IniRenderMode::Deprecated && parse_render_mode(L"") == IniRenderMode::Off &&
               parse_render_mode(L"off") == IniRenderMode::Off && parse_render_mode(L"views3") == IniRenderMode::Other &&
               parse_render_mode(nullptr) == IniRenderMode::Off,
-          "mode: views4 QVFR, quad and two_loops Two-loop, empty or off Off, the research modes Other");
+          "mode: views4 QVFR, quad and two_loops Deprecated, empty or off Off, the research modes Other");
+    // The launcher reads an ini still set to Two-Loop as QVFR: eye_scale its periphery (no periphery_scale), and its
+    // save writes views4.
     write_ini(ini, "[experiment]\r\nmode=two_loops\r\neye_scale=60\r\n");
     const launcher::Settings loop = launcher::load_settings(ini);
-    check(loop.mode == launcher::RenderMode::Qvfr, "mode=two_loops (deprecated) reads as QVFR in the launcher");
-    const std::wstring runtimeIni = temp_path(L"sim-qvfr-qvfr-settings-runtime.ini");
-    write_ini(runtimeIni, "[runtime]\r\nlaunch_mode=two_loops\r\nlaunch_outer=60\r\n");
-    check(launcher::load_launch_sizes(runtimeIni).mode == launcher::RenderMode::TwoLoop,
-          "a two_loops launch is Two-loop in the launcher's live fit");
+    launcher::save_settings(ini, loop);
+    wchar_t saved[32] = {};
+    GetPrivateProfileStringW(L"experiment", L"mode", L"", saved, 32, ini.c_str());
+    check(loop.outer == 60 && parse_render_mode(saved) == IniRenderMode::Qvfr,
+          "mode=two_loops (removed) reads as QVFR in the launcher, saved as views4");
+    write_ini(ini, "[experiment]\r\nmode=quad\r\n");
+    launcher::save_settings(ini, launcher::load_settings(ini));
+    GetPrivateProfileStringW(L"experiment", L"mode", L"", saved, 32, ini.c_str());
+    check(parse_render_mode(saved) == IniRenderMode::Qvfr, "mode=quad (removed) too");
     DeleteFileW(ini.c_str());
-    DeleteFileW(runtimeIni.c_str());
     return test_result();
 }

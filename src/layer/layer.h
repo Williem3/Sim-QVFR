@@ -21,10 +21,6 @@
 
 namespace simqvfr::layer {
 
-// two_loops.cpp
-double ms_between(const LARGE_INTEGER& from, const LARGE_INTEGER& to);
-void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0);
-
 // gaze_actions.cpp
 bool gaze_skips_space(XrSpace space, XrTime time);
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space);
@@ -55,9 +51,6 @@ HelmetPieceSet& helmet_set();
 bool views4_outline_on();
 void views4_outline_draw(XrSwapchain swapchain);
 void quad_fail(const char* why);
-bool quad_ready();
-void turn_view(XrView& view, double fractionX, double fractionY, double tanX, double tanY);
-void focus_centre(const EyeComposition& eye, float& tanX, float& tanY);
 bool sampled(uint64_t count);
 // An image of the layer's own swapchain `chain` to write: the next one acquired (or the one a timed-out wait left
 // acquired, `pending`) and waited for, up to `tries` waits of `timeout` each (`stage`: the hang watch's name for the
@@ -120,15 +113,15 @@ void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (
 // views4.cpp
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info);
 
-// two_loops.cpp
-void quad_record_a(const XrFrameEndInfo* info);
+// captures.cpp
 bool quad_capture_due();
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
 // The draw census hotkey's capture (development builds): ACE's eye image, the focus views and the composed output, all
 // of each (both eyes), as frame `index` of a burst (v4censNN-hhmmss-fK-*.png).
 void views4_census_capture(ID3D12Resource* views, ID3D12Resource* focus, D3D12_RESOURCE_STATES focusState,
                            ID3D12Resource* output, int index);
-XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info);
+
+// visibility_mask.cpp
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask);
 

@@ -66,7 +66,7 @@ bool has_page(const SettingsMenu& m, MenuPage page) {
 int render_pages(const char* folder, const char* code, const char* out) {
     lang::select(folder, std::wstring(code, code + std::strlen(code)));  // an ASCII code: de, pl, pt-BR
     SettingsMenu m;
-    m.launch = {true, 50, 39, 39};
+    m.launch = {50, 39, 39};
     std::filesystem::create_directories(out);
     for (int page = 0; page < static_cast<int>(menu_pages(m).size()); ++page) {
         m.page = page;
@@ -102,10 +102,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     if (argc >= 5 && std::strcmp(argv[1], "--render") == 0)
         return render_pages(argv[2], argv[3], argv[4]);
     SettingsMenu m;
-    m.launch = {true, 50, 39, 39};
-    check(menu_items(true).size() == 10 && menu_items(false).size() == 8 &&
-              menu_items(false).front() == MenuItem::Width,
-          "QVFR lists resolution; Two-loop starts at the focus width");
+    m.launch = {50, 39, 39};
+    check(menu_items().size() == 10 && menu_items().front() == MenuItem::Periphery, "QVFR lists resolution first");
     // The tabs (the user's layout, 2026-11-16): Picture, Foveation, View, Headset, Game; their sections the launcher's cards.
     check(menu_pages(m) == std::vector<MenuPage>{MenuPage::Picture, MenuPage::Foveation, MenuPage::View, MenuPage::Headset,
                                                  MenuPage::Game} &&
@@ -131,17 +129,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   menu_page_name(f) == L"Foveation" && line_of(f, MenuItem::HeadFoveation).label == L"Foveation",
               "Foveation: its own tab, the launcher's Foveation card in its order");
     }
-    {
-        SettingsMenu loop;
-        loop.launch.qvfr = false;
-        go(loop, MenuPage::Foveation);
-        check(menu_page_items(loop).back() == MenuItem::Outline && menu_title(loop) == L"Headset menu · Two-loop (legacy)" &&
-                  menu_pages(loop) == std::vector<MenuPage>{MenuPage::Picture, MenuPage::Foveation, MenuPage::Headset,
-                                                            MenuPage::Game},
-              "Two-loop: no View page; Foveation as in QVFR");
-        go(loop, MenuPage::Picture);
-        check(!has(loop, MenuItem::Optimize) && !has(loop, MenuItem::HeadResolution), "Two-loop: no Resolution card or Auto-fit");
-    }
+    check(menu_title(m) == L"Headset menu", "the title: the panel's name");
 
     // Up and Down skip the headings.
     menu_key(m, MenuKey::Down);
@@ -190,17 +178,15 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
 
     // Launch-size note: periphery or focus pixels above the launch.
     SettingsMenu over;
-    over.launch = {true, 50, 39, 39};
+    over.launch = {50, 39, 39};
     check(!menu_over_launch(over), "the default values fit a launch at the defaults");
     over.values.density = 120;
     check(menu_over_launch(over), "more density than the launch is flagged");
-    over.launch.qvfr = false;
-    check(!menu_over_launch(over), "Two-loop never flags (no live resolution)");
 
     // The 14:19 run: launched at periphery 10%, density 120% over 30% x 25% (focus views 36% x 30% of
     // a 5190x4168 eye); then periphery 30% and density 100% over 43% x 42%.
     SettingsMenu run;
-    run.launch = {true, 10, 36, 30, 5190, 4168};
+    run.launch = {10, 36, 30, 5190, 4168};
     run.values.periphery = 30;
     run.values.density = 100;
     run.values.width = 43;
@@ -260,7 +246,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "corner fit: no focus view, the corner as asked");
 
         SettingsMenu scs;
-        scs.launch = {true, 40, 35, 35, 6240, 6280};
+        scs.launch = {40, 35, 35, 6240, 6280};
         scs.launch.cornerFit = true;
         scs.values.periphery = 20;
         scs.values.density = 140;
@@ -294,12 +280,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     const MenuStats st = menu_stats(stats);
     check(st.centerPpd == 38 && st.savedPercent == 88,
           "Center PPD follows the density in effect (45.32 x 84% = 38); 88% of the native pixels saved");
-    SettingsMenu loop;
-    loop.launch = {false, 100, 100, 100, 5190, 4168, 45.32, 50};
-    loop.values.width = 39;
-    const MenuStats loopStats = menu_stats(loop);
-    check(loopStats.centerPpd == 58 && loopStats.savedPercent == 50,
-          "Two-loop: density eye_scale / width (128%: 58 PPD); two frames at 50% save 50%");
     SettingsMenu unknownPpd = stats;
     unknownPpd.launch.nativePpd = 0;
     check(menu_stats(unknownPpd).centerPpd == 0, "no PPD before ACE has rendered");
@@ -332,7 +312,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(menu_notes(run).size() == 1 && menu_notes(run)[0].find(L"px") == std::wstring::npos,
           "without the native size the note has no pixels");
 
-    // The ini: written keys read back; Two-loop writes no resolution.
+    // The ini: written keys read back.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
     const std::wstring ini = std::wstring(temp) + L"sim-qvfr-menu-test.ini";
@@ -352,26 +332,20 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     v.outline = true;
     v.eyeTracking = false;
     v.overlay = {true, -12, 20, 30};
-    check(write_menu_values(ini.c_str(), v, true), "the menu's keys are written");
+    check(write_menu_values(ini.c_str(), v), "the menu's keys are written");
     const MenuValues back = read_menu_values(ini.c_str());
     check(back.periphery == 35 && back.density == 110 && back.width == 30 && back.height == 25 && back.feather == 12 &&
               back.corners == 60 && back.outline && !back.eyeTracking && back.overlay == v.overlay,
           "and read back");
-    const std::wstring loopIni = std::wstring(temp) + L"sim-qvfr-menu-test-loop.ini";
-    DeleteFileW(loopIni.c_str());
-    write_menu_values(loopIni.c_str(), v, false);
-    check(GetPrivateProfileIntW(L"experiment", L"periphery_scale", -1, loopIni.c_str()) == -1 &&
-              GetPrivateProfileIntW(L"experiment", L"focus_percent", -1, loopIni.c_str()) == 30,
-          "Two-loop writes foveation but no resolution");
     check(GetPrivateProfileIntW(L"experiment", L"object_detail", -1, ini.c_str()) == -1,
           "object detail isn't written for a game without it");
     v.objectDetail = 40;
-    write_menu_values(ini.c_str(), v, true, true);
+    write_menu_values(ini.c_str(), v, true);
     check(read_menu_values(ini.c_str()).objectDetail == 40, "object detail is written for a game with it, and read back");
     check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == -1 && read_menu_values(ini.c_str()).sharpen == 0,
           "sharpening: not written for a game without it; unset reads as off");
     v.sharpen = 35;
-    write_menu_values(ini.c_str(), v, true, false, false, true);
+    write_menu_values(ini.c_str(), v, false, false, true);
     check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == 35 && read_menu_values(ini.c_str()).sharpen == 35,
           "sharpening: written for a game with it ([quad] sharpen_percent), and read back");
     v.sharpen = 0;
@@ -379,7 +353,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               read_menu_values(ini.c_str()).textureMatch == 100,
           "periphery texture match: not written for a game without it; unset reads as 100%");
     v.textureMatch = 40;
-    write_menu_values(ini.c_str(), v, true, false, false, false, false, false, false, true);
+    write_menu_values(ini.c_str(), v, false, false, false, false, false, false, true);
     check(GetPrivateProfileIntW(L"quad", L"periphery_texture_match", -1, ini.c_str()) == 40 &&
               read_menu_values(ini.c_str()).textureMatch == 40,
           "periphery texture match: written for a game with it ([quad] periphery_texture_match), and read back");
@@ -388,12 +362,11 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               read_menu_values(ini.c_str()).focusQuadStep == kFocusQuadSteps - 1,
           "focus quad distance: not written without focus_layer=2; unset reads as 100 m");
     v.focusQuadStep = focus_quad_step(5);
-    write_menu_values(ini.c_str(), v, true, false, true);
+    write_menu_values(ini.c_str(), v, false, true);
     check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == 5 &&
               focus_quad_metres(read_menu_values(ini.c_str()).focusQuadStep) == 5,
           "focus quad distance: written in metres with focus_layer=2, and read back");
     DeleteFileW(ini.c_str());
-    DeleteFileW(loopIni.c_str());
 
     // Lines and the panel image: the launcher's names and values.
     SettingsMenu shown;
@@ -432,7 +405,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(!menu_key(o, MenuKey::Right) && o.values.offset.gaze == kFocusOffsetMax, "clamped at the most");
         const std::wstring offsetIni = std::wstring(temp) + L"sim-qvfr-menu-test-offset.ini";
         DeleteFileW(offsetIni.c_str());
-        check(write_menu_values(offsetIni.c_str(), o.values, true), "offsets written");
+        check(write_menu_values(offsetIni.c_str(), o.values), "offsets written");
         const FocusOffset read = read_menu_values(offsetIni.c_str()).offset;
         check(read.fixed == -2 && read.gaze == kFocusOffsetMax, "negative and positive offsets read back");
         WritePrivateProfileStringW(L"quad", L"fixed_offset_y", L"-99", offsetIni.c_str());
@@ -461,7 +434,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         DeleteFileW(deadzoneIni.c_str());
         check(read_gaze_deadzone(deadzoneIni.c_str()) == kGazeDeadzoneDefault, "unset reads as the default");
         d.values.gazeDeadzone = 25;
-        write_menu_values(deadzoneIni.c_str(), d.values, true);
+        write_menu_values(deadzoneIni.c_str(), d.values);
         wchar_t text[16] = {};
         GetPrivateProfileStringW(L"quad", L"gaze_deadzone", L"", text, 16, deadzoneIni.c_str());
         check(std::wstring(text) == L"2.5" && read_menu_values(deadzoneIni.c_str()).gazeDeadzone == 25,
@@ -515,7 +488,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     pick(moving, MenuItem::MenuWidth);
     menu_key(moving, MenuKey::Right);
     const auto movingIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_moving.ini").wstring();
-    write_menu_values(movingIni.c_str(), moving.values, true);
+    write_menu_values(movingIni.c_str(), moving.values);
     const MenuPlacement moved = read_menu_placement(movingIni.c_str());
     const OsdPlacement overlayMoved = read_osd_placement(movingIni.c_str());
     const ClockPlacement clockMoved = read_clock_placement(movingIni.c_str());
@@ -596,7 +569,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // Foveated DLSS (Cheeky running): its cards on the View page, with Frame generation's.
     {
         SettingsMenu c;
-        c.launch = {true, 50, 39, 39};
+        c.launch = {50, 39, 39};
         check(menu_pages(c).size() == 5 && menu_subtitle(c).empty(), "without Cheeky: five pages, nothing under the title");
         {
             // A game without the FOV crop, the helmet or live resolution (ACC without Cheeky): no View page, and a note
@@ -654,9 +627,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             for (int i = 0; i < 12; ++i)
                 menu_key(x, MenuKey::Left);
             check(x.values.objectDetail == 0, "Object detail: down to 0%, no lower");
-            SettingsMenu loop = x;
-            loop.launch.qvfr = false;
-            check(!has_detail(loop), "Object detail: QVFR only (not in Two-loop)");
         }
         {
             // Sharpening: a game whose GameFeatures has it (all four), after Focus density (and Object detail).
@@ -690,9 +660,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             for (int i = 0; i < 30; ++i)
                 menu_key(l, MenuKey::Right);
             check(l.values.sharpen == 100, "Sharpening: up to 100%, no higher");
-            SettingsMenu loop = l;
-            loop.launch.qvfr = false;
-            check(!shown(loop), "Sharpening: QVFR only (not in Two-loop)");
             {  // Periphery texture match: only a game with it (ACE), after Sharpening, 100% down to Off in tens
                 SettingsMenu m = l;
                 check(find(m, MenuItem::TextureMatch) == static_cast<std::ptrdiff_t>(menu_page_items(m).size()), "Periphery texture match: not without the game's feature");
@@ -916,7 +883,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // [crop]; the outer views shrink with it in the fit and the pixels saved. Then the helmet under it.
     {
         SettingsMenu v;
-        v.launch = {true, 50, 39, 39, 2000, 2000};
+        v.launch = {50, 39, 39, 2000, 2000};
         v.values.width = v.values.height = 39;  // the launch's box
         go(v, MenuPage::View);
         check(menu_page_name(v) == L"View" &&
@@ -943,7 +910,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(menu_notes(v).front().find(L"DLSS is on") == 0, "the crop with DLSS: the savings wait for the next launch");
         const auto cropIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_crop.ini").wstring();
         DeleteFileW(cropIni.c_str());
-        write_menu_values(cropIni.c_str(), v.values, true);
+        write_menu_values(cropIni.c_str(), v.values);
         const MenuValues back = read_menu_values(cropIni.c_str());
         DeleteFileW(cropIni.c_str());
         check(back.crop && back.cropTop == 40 && back.cropOuter == 10 && back.cropBottom == 0, "the crop: [crop] round-trips");
@@ -962,7 +929,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         menu_key(v, MenuKey::Left);
         pick(v, MenuItem::HelmetDebug);  // the light diagnostic
         menu_key(v, MenuKey::Right);
-        write_menu_values(cropIni.c_str(), v.values, true);
+        write_menu_values(cropIni.c_str(), v.values);
         const HelmetSettings helmetBack = read_helmet_settings(cropIni.c_str());
         DeleteFileW(cropIni.c_str());
         check(helmetBack.on && helmetBack.rim == kHelmetRimMax && helmetBack.light == 60 && helmetBack.corners == 40 &&
@@ -1014,7 +981,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // Left/Right), a percent of the box a step, written to [quad] and read back.
     {
         SettingsMenu f;
-        f.launch.qvfr = false;
         go(f, MenuPage::Foveation);
         pick(f, MenuItem::Shape);
         check(line_of(f, MenuItem::Shape).value == L"Rectangle" && has(f, MenuItem::Corners) && !has(f, MenuItem::ShapePoint) &&
@@ -1055,7 +1021,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "Adjust point: Left from the first point to Whole shape, then wraps to the last");
         const auto shapeIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_shape.ini").wstring();
         DeleteFileW(shapeIni.c_str());
-        write_menu_values(shapeIni.c_str(), f.values, false);
+        write_menu_values(shapeIni.c_str(), f.values);
         const FocusShape back = read_focus_shape(shapeIni.c_str());
         wchar_t text[64] = {};
         GetPrivateProfileStringW(L"quad", L"shape_points", L"", text, 64, shapeIni.c_str());
@@ -1080,7 +1046,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // Whole shape: Up/Down and Left/Right move every point together, as far as the box allows, the shape kept.
     {
         SettingsMenu w;
-        w.launch.qvfr = false;
         w.values.shape = focus_shape_of({{-30, 40}, {30, 40}, {40, -20}, {-40, -20}});  // a windscreen, 80 x 60
         go(w, MenuPage::Foveation);
         check(line_of(w, MenuItem::ShapePoint).value == L"Whole shape" && line_of(w, MenuItem::ShapePointY).value == L"10" &&
@@ -1125,7 +1090,6 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // The horizontal offset: on the Foveation page under the vertical one, its label by the mode, right and left.
     {
         SettingsMenu h;
-        h.launch.qvfr = false;
         go(h, MenuPage::Foveation);
         check(at(h, MenuItem::FocusOffsetX) == at(h, MenuItem::FocusOffset) + 1 &&
                   line_of(h, MenuItem::FocusOffsetX).label == L"Horizontal gaze offset" &&
@@ -1144,14 +1108,14 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "Horizontal position: the fixed box's own, left");
         const auto offsetIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_offset_x.ini").wstring();
         DeleteFileW(offsetIni.c_str());
-        write_menu_values(offsetIni.c_str(), h.values, false);
+        write_menu_values(offsetIni.c_str(), h.values);
         const FocusOffset read = read_focus_offset(offsetIni.c_str());
         DeleteFileW(offsetIni.c_str());
         check(read.fixedX == -1 && read.gazeX == 2, "Horizontal offsets: written to [quad] and read back");
     }
     {  // The Profile line (profile/profiles.h): first on the Picture page, stepping through and asking the layer.
         SettingsMenu p;
-        p.launch = {true, 50, 39, 39};
+        p.launch = {50, 39, 39};
         check(menu_page_items(p)[1] != MenuItem::Profile, "Profile: no line without profiles");
         p.profiles = {L"Performance", L"Balanced", L"Quality", L"Night"};
         p.selected = 1;
@@ -1174,7 +1138,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     {  // The longest page scrolls: the page switch pinned, the list from menu_first_visible, three notes, the footer and
        // the hint, none over another.
         SettingsMenu full;
-        full.launch = {true, 50, 39, 39, 4000, 3400};
+        full.launch = {50, 39, 39, 4000, 3400};
         full.launch.sharpening = true;
         full.profiles = {L"Performance", L"Balanced", L"Quality"};
         full.values.shape.custom = true;  // Custom shape: three lines in the radius's place
@@ -1237,7 +1201,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_MENU_SAVE", path, MAX_PATH)) {
             save(path, page);
             SettingsMenu lmu;
-            lmu.launch = {true, 40, 40, 40, 5190, 4168, 36.95};
+            lmu.launch = {40, 40, 40, 5190, 4168, 36.95};
             lmu.launch.sharpening = lmu.launch.ownDlss = lmu.launch.ownNr = lmu.launch.eyeOff = true;
             lmu.profiles = {L"Performance", L"Balanced", L"Quality"};
             lmu.values.dlss.on = true;
@@ -1255,7 +1219,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     }
     {  // The hotkeys footer ([menu] hotkey_footer): on by default, on the Headset menu card, read and written.
         SettingsMenu f;
-        f.launch = {true, 50, 39, 39};
+        f.launch = {50, 39, 39};
         go(f, MenuPage::Headset);
         pick(f, MenuItem::HotkeyFooter);
         check(menu_page(f) == MenuPage::Headset && f.values.hotkeyFooter &&
@@ -1266,14 +1230,14 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "the hotkeys footer: Right or Left turns it off and on");
         const std::wstring ini = temp_path(L"simqvfr-menu-footer.ini");
         DeleteFileW(ini.c_str());
-        check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
+        check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,
               "the hotkeys footer: unset is on; written and read back");
         DeleteFileW(ini.c_str());
     }
     {  // The main thread's core ([cpu] isolate_main_thread): every game, the Game page's CPU card, off by default.
         SettingsMenu f;
-        f.launch = {true, 50, 39, 39};
+        f.launch = {50, 39, 39};
         check(menu_pages(f).back() == MenuPage::Game && go(f, MenuPage::Game) && menu_page_name(f) == L"Game" &&
                   menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadCpu, MenuItem::CpuIsolateMain,
                                                          MenuItem::Turbo} &&
@@ -1287,9 +1251,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
               "a step gives it its own core");
         const std::wstring ini = temp_path(L"simqvfr-menu-cpu.ini");
         DeleteFileW(ini.c_str());
-        check(!read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values, false) &&
+        check(!read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values) &&
                   read_menu_values(ini.c_str()).cpuIsolateMain,
-              "the main thread's core: unset is off; written (Two-loop too) and read back");
+              "the main thread's core: unset is off; written and read back");
         DeleteFileW(ini.c_str());
         SettingsMenu headset;
         go(headset, MenuPage::Headset);
@@ -1302,7 +1266,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(menu_key(f, MenuKey::Right) && f.values.turbo && line_of(f, MenuItem::Turbo).value == L"On",
               "a step turns turbo on");
         DeleteFileW(ini.c_str());
-        check(!read_menu_values(ini.c_str()).turbo && write_menu_values(ini.c_str(), f.values, false) &&
+        check(!read_menu_values(ini.c_str()).turbo && write_menu_values(ini.c_str(), f.values) &&
                   read_menu_values(ini.c_str()).turbo,
               "turbo: unset is off; written and read back");
         DeleteFileW(ini.c_str());
@@ -1347,11 +1311,11 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         // rewrite keeps a key's own spacing ("focus_percent =32" above).
         DeleteFileW(ini.c_str());
         MenuValues v = read_menu_values(ini.c_str());
-        write_menu_values(ini.c_str(), v, true);
+        write_menu_values(ini.c_str(), v);
         const std::string before = bytes();
-        check(write_menu_values(ini.c_str(), v, true) && bytes() == before, "menu step: the same values again leave the ini as it is");
+        check(write_menu_values(ini.c_str(), v) && bytes() == before, "menu step: the same values again leave the ini as it is");
         v.width = 33;
-        write_menu_values(ini.c_str(), v, true);
+        write_menu_values(ini.c_str(), v);
         std::string expected = before;
         const size_t at = expected.find("focus_percent=35");
         if (at != std::string::npos)
@@ -1366,7 +1330,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         const auto start = std::chrono::steady_clock::now();
         for (int i = 0; i < 20; ++i) {
             d.width = 50 + i;
-            write_menu_values(documented.c_str(), d, true);
+            write_menu_values(documented.c_str(), d);
         }
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::printf("     20 menu steps on the documented ini: %.0f ms (%.1f ms a step)\n", ms, ms / 20);
@@ -1380,14 +1344,11 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // its own.
     {
         SettingsMenu dm;
-        dm.launch = {true, 50, 39, 39};
+        dm.launch = {50, 39, 39};
         const auto has_dlss = [](SettingsMenu s) { return go(s, MenuPage::Picture) && has(s, MenuItem::DlssOn); };
         check(!has_dlss(dm), "DLSS card: none without a launch that can run it");
         dm.launch.ownDlss = true;
         check(has_dlss(dm), "DLSS card: shown for the launch, on the Picture page");
-        dm.launch.qvfr = false;
-        check(!has_dlss(dm), "DLSS card: none in Two-loop");
-        dm.launch.qvfr = true;
         go(dm, MenuPage::Picture);
         check(at(dm, MenuItem::HeadDlss) == at(dm, MenuItem::Optimize) + 1 && at(dm, MenuItem::DlssOn) == at(dm, MenuItem::HeadDlss) + 1 &&
                   menu_page_items(dm).back() == MenuItem::DlssOn && line_of(dm, MenuItem::DlssOn).label == L"Use DLSS" &&
@@ -1513,7 +1474,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     // nvngx_dlssnr.dll there), its switches and sliders stepped within their ranges, [dlss_nr] read with the menu's values.
     {
         SettingsMenu nm;
-        nm.launch = {true, 50, 39, 39};
+        nm.launch = {50, 39, 39};
         nm.launch.ownDlss = true;
         const auto has_nr = [](SettingsMenu s) { return go(s, MenuPage::Picture) && has(s, MenuItem::NrOn); };
         check(!has_nr(nm), "DLSS-NR card: none without the player's DLL at launch");
@@ -1586,7 +1547,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     }
     {  // Road focus ([quad] focus_corridor): the Foveation page's switch for a game with it, fixed foveation only
         SettingsMenu r;
-        r.launch = {true, 50, 39, 39};
+        r.launch = {50, 39, 39};
         r.values.eyeTracking = false;
         go(r, MenuPage::Foveation);
         check(!has(r, MenuItem::FocusCorridor), "road focus: not on the Foveation page of a game without it");
@@ -1671,7 +1632,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   "road focus on: the cockpit shape at its size, the player's own kept");
             const std::wstring savedIni = temp_path(L"simqvfr-menu-road-saved.ini");
             DeleteFileW(savedIni.c_str());
-            write_menu_values(savedIni.c_str(), r.values, true, false, false, false, false, false, true);
+            write_menu_values(savedIni.c_str(), r.values, false, false, false, false, false, true);
             check(read_menu_values(savedIni.c_str()).roadSaved == r.values.roadSaved,
                   "road focus: the player's own shape and size kept in the ini");
             DeleteFileW(savedIni.c_str());
@@ -1733,7 +1694,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             MenuValues capValues;
             road_focus_apply(0, capValues.shape, capValues.width, capValues.height, capValues.offset);
             capValues.focusCorridor = true;
-            write_menu_values(capIni.c_str(), capValues, true, false, false, false, false, false, true);
+            write_menu_values(capIni.c_str(), capValues, false, false, false, false, false, true);
             int iw = ini_int(capIni.c_str(), kFocusPercent), ih = ini_int(capIni.c_str(), kFocusHeightPercent, iw);
             check(road_focus_capped(ini_int(capIni.c_str(), kFocusCorridorPreset), read_focus_shape(capIni.c_str()), iw,
                                     ih, 46, 52) &&
@@ -1743,10 +1704,10 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         }
         const std::wstring ini = temp_path(L"simqvfr-menu-corridor.ini");
         DeleteFileW(ini.c_str());
-        write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, false);
+        write_menu_values(ini.c_str(), r.values, false, false, false, false, false, false);
         check(GetPrivateProfileIntW(L"quad", L"focus_corridor", -1, ini.c_str()) == -1,
               "road focus: not written for a game without it");
-        write_menu_values(ini.c_str(), r.values, true, false, false, false, false, false, true);
+        write_menu_values(ini.c_str(), r.values, false, false, false, false, false, true);
         const MenuValues back = read_menu_values(ini.c_str());
         check(!back.focusCorridor && back.focusCorridorWidth == 5 && back.focusCorridorHeight == 20 &&
                   back.focusCorridorSpread == 12 &&

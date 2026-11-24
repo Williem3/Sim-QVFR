@@ -35,7 +35,7 @@ headers here.
   `session_created`, `session_destroyed` and `frame_end`, each reading the game's own `[experiment]`
   ini keys.
 
-Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game supports QVFR or nothing.
+A new game supports QVFR or nothing.
 
 ## Adding a game
 

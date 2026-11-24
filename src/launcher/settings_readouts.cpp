@@ -98,29 +98,18 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksF
     const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
     // QVFR's FOV crop: the outer views keep their density over the kept share of the eye.
     r.outer = {scaled(runtime.width, s.outer / 100.0 * s.crop_width()), scaled(runtime.height, s.outer / 100.0 * s.crop_height())};
-    if (s.mode == RenderMode::Qvfr) {
-        // The kit's QVFR.viewPixels: focus px = recommended x inner % x foveated size %.
-        r.focus = {scaled(runtime.width, s.inner / 100.0 * s.width / 100.0),
-                   scaled(runtime.height, s.inner / 100.0 * s.height / 100.0)};
-        r.target = {2 * (r.outer.width + r.focus.width), std::max(r.outer.height, r.focus.height)};
-        r.focusDensity = s.inner / 100.0;
-    } else {
-        // Two frames per headset frame, both at the outer size; frame B spans the foveated size.
-        r.focus = r.outer;
-        r.target = {2 * r.outer.width, r.outer.height};
-        r.focusDensity = static_cast<double>(s.outer) / s.width;
-    }
+    // The kit's QVFR.viewPixels: focus px = recommended x inner % x foveated size %.
+    r.focus = {scaled(runtime.width, s.inner / 100.0 * s.width / 100.0),
+               scaled(runtime.height, s.inner / 100.0 * s.height / 100.0)};
+    r.target = {2 * (r.outer.width + r.focus.width), std::max(r.outer.height, r.focus.height)};
+    r.focusDensity = s.inner / 100.0;
     // The eye image the layer offers must fit the runtime's maximum: half its width each in a double-wide target (ACE,
-    // ACC, X-Plane, Two-loop), all of it where each view is an image of its own (LMU). Measured as the layer does:
+    // ACC, X-Plane), all of it where each view is an image of its own (LMU). Measured as the layer does:
     // recommended x the layout's scale, truncated.
-    int eyeWidth = r.target.width / 2, eyeHeight = r.target.height;
-    bool doubleWide = true;
-    if (s.mode == RenderMode::Qvfr) {
-        const OfferedEye eye = offered_eye(s, image, multiView);
-        eyeWidth = static_cast<int>(runtime.width * eye.width);
-        eyeHeight = static_cast<int>(runtime.height * eye.height);
-        doubleWide = eye.doubleWide;
-    }
+    const OfferedEye eye = offered_eye(s, image, multiView);
+    const int eyeWidth = static_cast<int>(runtime.width * eye.width);
+    const int eyeHeight = static_cast<int>(runtime.height * eye.height);
+    const bool doubleWide = eye.doubleWide;
     const int maxEyeWidth = runtime.maxWidth > 0 ? std::max(64, runtime.maxWidth / (doubleWide ? 2 : 1)) : 0;
     const int maxEyeHeight = runtime.maxHeight > 0 ? std::max(64, runtime.maxHeight) : 0;
     const double sx = maxEyeWidth > 0 && eyeWidth > maxEyeWidth ? static_cast<double>(maxEyeWidth) / eyeWidth : 1.0;
@@ -134,13 +123,13 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksF
         r.focus = shrink(r.focus);
         r.target = shrink(r.target);
     }
-    // QVFR: two outer and two focus views, less what the focus mask skips in the focus views (outside the focus shape,
-    // in a game that masks them). Two-loop: two frames of two outer-sized eyes.
-    if (s.mode == RenderMode::Qvfr && gameMasksFocus && s.focusMask && r.focus.width > 0 && r.focus.height > 0)
+    // Two outer and two focus views, less what the focus mask skips in the focus views (outside the focus shape, in a
+    // game that masks them).
+    if (gameMasksFocus && s.focusMask && r.focus.width > 0 && r.focus.height > 0)
         r.focusMasked = focus_mask_share(focus_area_of(s.shape, s.corner), static_cast<unsigned>(r.focus.width),
                                          static_cast<unsigned>(r.focus.height),
                                          static_cast<unsigned>(std::max(s.focusMaskMargin, 0)));
-    r.pixels = s.mode == RenderMode::Qvfr ? 2.0 * (area(r.outer) + area(r.focus) * (1 - r.focusMasked)) : 4.0 * area(r.outer);
+    r.pixels = 2.0 * (area(r.outer) + area(r.focus) * (1 - r.focusMasked));
     r.runtime = {runtime.width, runtime.height};
     r.runtimePixels = 2.0 * area(r.runtime);
     r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
@@ -148,10 +137,10 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksF
     return r;
 }
 
-VramEstimate vram_estimate(const Settings& s, const Readouts& r, const RuntimeInfo& runtime) {
+VramEstimate vram_estimate(const Settings&, const Readouts& r, const RuntimeInfo& runtime) {
     VramEstimate e;
     const double launchArea = static_cast<double>(runtime.vramTarget.width) * runtime.vramTarget.height;
-    if (s.mode != RenderMode::Qvfr || runtime.vramUsedMb <= 0 || launchArea <= 0)
+    if (runtime.vramUsedMb <= 0 || launchArea <= 0)
         return e;
     const double area = static_cast<double>(r.target.width) * r.target.height;
     const double scaled = std::min(runtime.vramScaledMb, runtime.vramUsedMb);

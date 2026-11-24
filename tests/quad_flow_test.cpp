@@ -1,8 +1,7 @@
-// Offline check of the quad pipeline's frame flow on a WARP device. A fake runtime enforces
-// OpenXR's frame and swapchain rules (wait/begin/end order, acquire/release pairing, only released
-// images submitted); a fake ACE renders red when it sees the full FOV and green when it sees the
-// narrowed focus FOV. After arming, every submitted frame must be this layer's native-size output
-// with ACE's full FOV, showing red around a green focus box placed where the focus FOV lies.
+// Offline check of the composition's frame flow on a WARP device. A fake runtime enforces OpenXR's frame and
+// swapchain rules (wait/begin/end order, acquire/release pairing, only released images submitted); a fake ACE draws
+// its four views (views4) or its two eyes, and every submitted frame must be this layer's output, composed as the
+// layout and the focus box say.
 #include "layer/layer.h"
 #include "quad/output_density.h"
 #include "quad/focus_turn.h"
@@ -327,57 +326,6 @@ XrResult XRAPI_CALL fakeLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* l
     return XR_SUCCESS;
 }
 
-// Fake ACE: one complete frame, red for the full FOV and green for a narrowed one.
-XrResult game_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
-    using namespace simqvfr;
-    using namespace simqvfr::layer;
-    XrFrameState state{XR_TYPE_FRAME_STATE};
-    layerWaitFrame(nullptr, nullptr, &state);
-    layerBeginFrame(nullptr, nullptr);
-    const XrActiveActionSet active{kGameSet, XR_NULL_PATH};
-    XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
-    sync.countActiveActionSets = 1;
-    sync.activeActionSets = &active;
-    layerSyncActions(nullptr, &sync);
-    XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
-    uint32_t count = 0;
-    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
-    locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    XrViewState viewState{XR_TYPE_VIEW_STATE};
-    layerLocateViews(nullptr, &locate, &viewState, 2, &count, views);
-
-    uint32_t index = 0;
-    layerAcquireSwapchainImage(chain, nullptr, &index);
-    const bool narrowed = views[0].fov.angleLeft > kFullFov.angleLeft + 0.01f;
-    const float red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1};
-    D3D12_RENDER_TARGET_VIEW_DESC v = {};
-    v.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-    v.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = gpu.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    gpu.device->CreateRenderTargetView(chain_of(chain)->images[index].Get(), &v, rtv);
-    gpu.list->ClearRenderTargetView(rtv, narrowed ? green : red, 0, nullptr);
-    gpu.flush();
-    layerReleaseSwapchainImage(chain, nullptr);
-
-    XrCompositionLayerProjectionView pv[2];
-    for (int e = 0; e < 2; ++e) {
-        pv[e] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
-        pv[e].pose = views[e].pose;
-        pv[e].fov = views[e].fov;
-        pv[e].subImage = {chain, {{static_cast<int32_t>(e * eyeW), 0}, {static_cast<int32_t>(eyeW),
-                                                                        static_cast<int32_t>(eyeH)}}, 0};
-    }
-    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    layer.viewCount = 2;
-    layer.views = pv;
-    const XrCompositionLayerBaseHeader* layers[] = {reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer)};
-    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
-    end.displayTime = state.predictedDisplayTime;
-    end.layerCount = 1;
-    end.layers = layers;
-    return layerEndFrame(nullptr, &end);
-}
-
 // Fake ACE in views4: one frame drawing the four views where the layout puts them (outer views red
 // and blue, focus views green and yellow, the unused rest of the target magenta), submitted as ACE
 // does: the two halves of its double-wide target.
@@ -590,7 +538,8 @@ int SIM_QVFR_TEST_MAIN() {
     next.SyncActions = fakeSync;
     next.CreateActionSpace = fakeCreateActionSpace;
     next.LocateSpace = fakeLocateSpace;
-    experiment.quad = experiment.twoLoops = experiment.focusInB = experiment.gaze = true;
+    // Composing (the gaze set is made, ACE's eye chain adopted), before views4 itself below.
+    experiment.views4Compose = experiment.gaze = true;
     experiment.eyeScale = 0.5;
     experiment.focusFraction = 0.35;
     experiment.feather = 0.0;
@@ -658,63 +607,39 @@ int SIM_QVFR_TEST_MAIN() {
           "only the second instance's gaze action is suggested (none left from the first instance)");
     check(XR_SUCCEEDED(attachResult) && input.attachedSets == 2, "gaze action set attached with ACE's");
 
-    int endErrors = 0;
-    for (int i = 0; i < 130; ++i)
-        endErrors += XR_FAILED(game_frame(gameChain, eyeW, eyeH)) ? 1 : 0;
-    std::printf("runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d composed=%llu fallbacks=%llu\n",
-                rt.waits, rt.begins, rt.ends, rt.violations, endErrors,
-                static_cast<unsigned long long>(quad.composed), static_cast<unsigned long long>(quad.fallbacks));
-    check(rt.waits == 80 && rt.begins == 80 && rt.ends == 80 && rt.violations == 0 && endErrors == 0,
-          "runtime frame and swapchain rules held (30 single + 50 paired frames)");
-    check(quad.composed == 50 && quad.fallbacks == 0, "every paired frame composed");
-    check(input.syncs == 130 && input.syncedSets == 2, "gaze action set synced with ACE's, once per ACE frame");
-    check(gaze.queries == 50 && gaze.tracked == 50, "gaze located once per frame B");
-    check(rt.submittedChain == quad.outChain, "submitted image is the layer's output");
-    const XrRect2Di& r1 = rt.submittedViews[1].subImage.imageRect;
-    check(r1.offset.x == static_cast<int32_t>(kNativeW) && r1.extent.width == static_cast<int32_t>(kNativeW) &&
-              r1.extent.height == static_cast<int32_t>(kNativeH),
-          "submitted rects are native-size eye halves");
-    check(rt.submittedViews[0].fov.angleLeft == kFullFov.angleLeft &&
-              rt.submittedViews[0].fov.angleDown == kFullFov.angleDown,
-          "submitted FOV is the full FOV");
+    {  // ACE's xrSyncActions: the gaze set rides along with ACE's own.
+        const XrActiveActionSet active{kGameSet, XR_NULL_PATH};
+        XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+        sync.countActiveActionSets = 1;
+        sync.activeActionSets = &active;
+        for (int i = 0; i < 3; ++i)
+            layerSyncActions(nullptr, &sync);
+        check(input.syncs == 3 && input.syncedSets == 2, "gaze action set synced with ACE's, once per ACE sync");
+    }
 
-    // Pixels: the focus box is centred on the gaze; straight ahead is now outside it.
     UINT pitch = 0;
-    FakeChain* out = &output_chain(quad.outChain, "quad pixels");
-    const auto px = read_back(out->images[rt.submittedImage].Get(), pitch);
-    auto at = [&](int eye, double u, double v) {
-        const UINT x = static_cast<UINT>((eye + u) * kNativeW), y = static_cast<UINT>(v * kNativeH);
-        return &px[y * pitch + x * 4];
-    };
     const double l = std::tan(kFullFov.angleLeft), r = std::tan(kFullFov.angleRight);
     const double u = std::tan(kFullFov.angleUp), d = std::tan(kFullFov.angleDown);
-    const double ahead_u = -l / (r - l), ahead_v = u / (u - d);
-    const double gaze_u = (kGazeX - l) / (r - l), gaze_v = (u - kGazeY) / (u - d);
-    for (int eye = 0; eye < 2; ++eye) {
-        const uint8_t* g = at(eye, gaze_u, gaze_v);
-        const uint8_t* ahead = at(eye, ahead_u, ahead_v);
-        std::printf("     eye %d gaze (%.2f,%.2f) = %u,%u,%u, straight ahead (%.2f,%.2f) = %u,%u,%u\n", eye, gaze_u, gaze_v,
-                    g[0], g[1], g[2], ahead_u, ahead_v, ahead[0], ahead[1], ahead[2]);
-        check(g[0] == 0 && g[1] == 255 && ahead[0] == 255 && ahead[1] == 0, "focus box follows the gaze");
-    }
+    const double ahead_u = -l / (r - l), ahead_v = u / (u - d);  // straight ahead in the eye's view
 
     // views4 with unequal views: periphery 50% of native, focus views 25% of the native eye size.
     // The layer must offer an eye of 0.75 x 0.5 native, compose outer = view e and focus = view e + 2
     // from wherever the layout puts them (never the unused rows), and without composition submit
     // views 0 and 1 at their own size.
     {
-        experiment.quad = experiment.twoLoops = experiment.focusInB = experiment.gaze = false;
+        experiment.gaze = false;
         experiment.views4 = experiment.views4Compose = true;
         experiment.views4Layout = views4_layout(0.5, 0.25);
         experiment.focusFraction = 0.35;
         experiment.feather = 0.0;
-        {
+        {  // the first chain's adoption undone, as xrDestroySwapchain does
             std::lock_guard guard(quad.mutex);
             quad.compositor.shutdown();
             quad.appChain = quad.outChain = XR_NULL_HANDLE;
             quad.appImages.clear();
             quad.outImages.clear();
-            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.outDensity = {};
+            quad.composed = quad.fallbacks = 0;
             quad.v4Composed = quad.v4FovValid = false;
         }
         layerEnumerateViewConfigurationViews(nullptr, 0, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, cfg);
@@ -870,7 +795,7 @@ int SIM_QVFR_TEST_MAIN() {
             quad.appChain = quad.outChain = XR_NULL_HANDLE;
             quad.appImages.clear();
             quad.outImages.clear();
-            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.composed = quad.fallbacks = 0;
             quad.v4Composed = quad.v4FovValid = false;
         }
         QuadCompositor::failInitialize = true;
@@ -894,7 +819,7 @@ int SIM_QVFR_TEST_MAIN() {
             quad.appChain = quad.outChain = XR_NULL_HANDLE;
             quad.appImages.clear();
             quad.outImages.clear();
-            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.composed = quad.fallbacks = 0;
             quad.v4Composed = quad.v4FovValid = false;
             for (int p = 0; p < 3; ++p)
                 quad.helmetPiecesTried[p].clear();

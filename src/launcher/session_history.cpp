@@ -197,14 +197,10 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         if (x != y)
             out.push_back(label + (y ? L" on" : L" off"));
     };
-    const bool qvfr = b.mode == RenderMode::Qvfr;
-    if (a.mode != b.mode)
-        values(L"Method", a.mode == RenderMode::Qvfr ? L"QVFR" : L"Two-loop", qvfr ? L"QVFR" : L"Two-loop");
     if (a.eyeTracking != b.eyeTracking)
         values(L"Foveated mode", a.eyeTracking ? L"Eye tracked" : L"Fixed", b.eyeTracking ? L"Eye tracked" : L"Fixed");
     values(L"Periphery", percent(a.outer), percent(b.outer));
-    if (qvfr && a.mode == RenderMode::Qvfr)  // Two-loop's follows from the outer resolution and the foveated size
-        values(L"Focus density", percent(a.inner), percent(b.inner));
+    values(L"Focus density", percent(a.inner), percent(b.inner));
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
     values(L"Sharpening", percent(a.sharpen), percent(b.sharpen));
     values(L"Periphery texture match", percent(a.textureMatch), percent(b.textureMatch));
