@@ -297,38 +297,6 @@ void Body::actions(const std::vector<ButtonSpec>& list) {
     h_ += y + t::kControlHeight;
 }
 
-void Body::item(const std::wstring& label, int tone, const std::wstring& badgeText, const std::wstring& text,
-                const std::vector<ButtonSpec>& list) {
-    gap();
-    float bw = 0;
-    for (const ButtonSpec& b : list)
-        bw += button_width(b.label) + (bw > 0 ? t::kSpace2 : 0);
-    const float tw = std::max(80.0f, w_ - bw - 12);
-    const float th = text.empty() ? 0 : app.canvas.measure_height(text, t::kCallout, tw);
-    const float h = std::max(kLineH + (th > 0 ? 2 + th : 0), t::kControlHeight), y = y_ + h_;
-    if (draw_) {
-        reader_text({x_, y, w_, h}, label + (badgeText.empty() ? L"" : L": " + badgeText) + (text.empty() ? L"" : L". " + text));
-        app.canvas.text(label, t::kBody, {x_, y, tw, kLineH}, col(app.c->label));
-        const float lw = std::ceil(app.canvas.measure(label, t::kBody));
-        if (!badgeText.empty() && tw - lw - 8 > 24)
-            badge(x_ + lw + 8, y + (kLineH - 20) / 2, tone, badgeText, tw - lw - 8);
-        if (th > 0)
-            app.canvas.text(text, t::kCallout, {x_, y + kLineH + 2, tw, th + 2}, col(app.c->label_secondary), Align::Leading,
-                            false, true);
-        float bx = x_ + w_ - bw;
-        for (const ButtonSpec& b : list) {
-            const float w = button_width(b.label);
-            const Rect r{bx, y + (h - t::kControlHeight) / 2, w, t::kControlHeight};
-            button(b.id, r, b.label, b.style, b.icon, b.option);
-            if (b.style == Btn::Secondary)
-                app.canvas.stroke(r.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
-            bx += w + t::kSpace2;
-        }
-        record(label, {x_, y, w_, h});
-    }
-    h_ += h;
-}
-
 void Body::note(const std::wstring& text) {
     gap();
     const float th = app.canvas.measure_height(text, t::kCallout, w_);

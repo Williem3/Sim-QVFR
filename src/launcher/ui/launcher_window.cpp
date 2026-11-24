@@ -430,6 +430,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             return 0;
         }
         app.tip = -1;  // its ⓘ moves away
+        if (app.panel != PanelKind::None && app.modDetail >= 0) {  // a mod's Details over the panel scrolls
+            if (app.modDetailScrollMax > 0) {
+                app.modDetailScroll = std::clamp(app.modDetailScroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f,
+                                                 app.modDetailScrollMax);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (app.panel != PanelKind::None) {  // an open panel's content scrolls, not the page under it
             if (app.panelScrollMax > 0) {
                 app.panelScroll = std::clamp(app.panelScroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f,

@@ -639,6 +639,10 @@ void on_key(WPARAM key) {
         close_search();
         return;
     }
+    if (key == VK_ESCAPE && app.panel != PanelKind::None && app.modDetail >= 0) {  // a mod's Details first
+        close_mod_details();
+        return;
+    }
     if (key == VK_ESCAPE && app.panel != PanelKind::None) {
         close_panel();
         return;

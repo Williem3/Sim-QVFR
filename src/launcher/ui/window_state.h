@@ -180,7 +180,11 @@ enum Ctl {
     // Sim-QVFR's own mods' updates (mod_update.h): check them all, a mod's Install and Go back (+ its index).
     kModsCheck, kModsAdd, kModSource0, kModSourceLast = kModSource0 + 7, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7,
     // A mod's Details… (its window over the Settings panel: pane_mods.cpp show_details).
-    kModDetails0, kModDetailsLast = kModDetails0 + 7
+    kModDetails0, kModDetailsLast = kModDetails0 + 7,
+    // The Details window's own: close (and Done), Technical details, Copy the hash, Show in Explorer, View Source,
+    // Remove Mod…, Approve…, Open on the Game tab.
+    kModDetailClose, kModDetailTech, kModDetailCopy, kModDetailFolder, kModDetailSource, kModDetailRemove, kModDetailApprove,
+    kModDetailSettings
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -569,6 +573,9 @@ struct App {
     // install running; what the last one said (tone 2: an error).
     std::map<std::wstring, ModRelease> modReleases;
     bool modsChecked = false, modsBusy = false;
+    int modDetail = -1;           // the mod whose Details are open over the Settings panel (pane_mods.cpp); -1 none
+    bool modDetailTech = false;   // its Technical details shown
+    float modDetailScroll = 0, modDetailScrollMax = 0;
     std::wstring modsMessage;
     int modsTone = 3;
     bool lmuGameRead = false;
@@ -766,6 +773,8 @@ float panel_content(PanelKind kind, float x, float y, float w, bool draw);
 void open_panel(PanelKind kind);
 void close_panel();
 void panel_overlay();
+void mod_details_overlay();  // a mod's Details over the Settings panel (pane_mods.cpp)
+void close_mod_details();
 
 // accessibility.cpp: UI Automation (screen readers): the window's provider (WM_GETOBJECT), the focus and state events
 // after each paint, and letting go of it when the window closes.

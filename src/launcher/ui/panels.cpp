@@ -43,7 +43,7 @@ float panel_width(PanelKind kind) {
     switch (kind) {
     case PanelKind::Color: return 440;
     case PanelKind::About: return 560;
-    case PanelKind::Settings: return 900;  // the mods list: a mod per line, its buttons beside it
+    case PanelKind::Settings: return 720;  // the mods list (Willie's mockup)
     default: return 620;
     }
 }
@@ -74,6 +74,7 @@ void close_panel() {
     if (app.panel == PanelKind::None)
         return;
     app.panel = PanelKind::None;
+    app.modDetail = -1;
     app.panelBody = {};
     if (app.reportEdit && GetFocus() == app.reportEdit)
         SetFocus(app.hwnd);
@@ -118,6 +119,7 @@ void panel_overlay() {
     cv.push_clip(body);
     panel_content(app.panel, body.x, body.y - app.panelScroll, body.w, true);
     cv.pop_clip();
+    mod_details_overlay();  // over the Settings panel; only it answers while open
 }
 
 }  // namespace simqvfr::launcher::ui::win
