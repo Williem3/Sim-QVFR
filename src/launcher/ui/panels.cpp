@@ -20,6 +20,7 @@ std::wstring panel_title(PanelKind kind) {
     case PanelKind::Color: return trf(L"Colour for {game}", {{L"game", color_game().name}});
     case PanelKind::Profiles: return tr(L"Manage profiles");
     case PanelKind::About: return tr(L"About");
+    case PanelKind::Settings: return tr(L"Settings");
     default: return L"";
     }
 }
@@ -30,6 +31,7 @@ float panel_content(PanelKind kind, float x, float y, float w, bool draw) {
     case PanelKind::Color: return color_panel(x, y, w, draw);
     case PanelKind::Profiles: return profiles_pane(x, y, w, draw);
     case PanelKind::About: return about_pane(x, y, w, draw);
+    case PanelKind::Settings: return settings_pane(x, y, w, draw);
     default: return 0;
     }
 }
@@ -56,6 +58,8 @@ void open_panel(PanelKind kind) {
         reload_runtime();  // the causes and the report from the latest session
     if (kind == PanelKind::Color)
         load_color_edit();
+    if (kind == PanelKind::Settings)
+        mods_refresh();  // a mod may have been added, removed or updated
     if (kind == PanelKind::Profiles) {
         app.profileMessage.clear();
         refresh_profiles();

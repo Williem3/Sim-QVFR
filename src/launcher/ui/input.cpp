@@ -51,6 +51,7 @@ void activate(Ctl id, int option) {
     case kSearch: open_search(); return;
     case kProfileMenu: open_profile_menu(); return;
     case kVersion: open_panel(PanelKind::About); return;
+    case kSettings: open_panel(PanelKind::Settings); return;
     case kSearchResult:
         if (option >= 0 && option < static_cast<int>(app.searchResults.size()))
             jump_to(app.searchIndex[static_cast<size_t>(app.searchResults[static_cast<size_t>(option)])]);
@@ -478,6 +479,7 @@ bool push_button(Ctl id) {
     case kLayerUp:
     case kLayerDown:
     case kSupport:
+    case kSettings:
     case kRestore:
     case kCardMenu:
     case kColorGame:

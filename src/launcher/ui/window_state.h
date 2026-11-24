@@ -172,11 +172,14 @@ enum Ctl {
     // kModOnline0 + the mod's index in app.mods), and a mod's setting (kModSetting0 + the mod's index * 16 + the
     // setting's; option: a choice's item), then the list read again.
     kModApprove0, kModApproveLast = kModApprove0 + 7, kModOnline0, kModOnlineLast = kModOnline0 + 7,
-    kModSetting0, kModSettingLast = kModSetting0 + 8 * 16 - 1, kModsReload
+    kModSetting0, kModSettingLast = kModSetting0 + 8 * 16 - 1, kModsReload,
+    // The Settings panel (the rail's Settings button, kSettings): the mods folder opened, a mod's Remove
+    // (kModRemove0 + its index).
+    kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
-enum class PanelKind { None, Report, Color, Profiles, About };
+enum class PanelKind { None, Report, Color, Profiles, About, Settings };
 
 // A stop in the keyboard's Tab order: a control, and which one of several (a card's menu), or -1.
 struct FocusStop {
@@ -720,6 +723,7 @@ float game_page(float x, float y, float w, bool draw);
 // pane_mods.cpp: the Mods card on the Game tab; the mods read again; a control of its own used (true: handled).
 void mods_refresh();
 bool mods_press(Ctl id, int option);
+float settings_pane(float x, float y, float w, bool draw);  // the Settings panel: the Mods section
 
 // pane_lmu_game.cpp: Le Mans Ultimate's own graphics settings (lmu_game_settings.h). The page; its files read again (the
 // page opened, the window back in front); whether a control is one of its own, a choice's items and the one chosen, a

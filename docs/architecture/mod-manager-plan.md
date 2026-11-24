@@ -93,21 +93,25 @@ Each phase leaves the app working.
 7. **Per-mod updates.** Release tags `mod-<id>-v<version>`, the `mods/<id>/` folder swapped whole, the old folder
    kept for rollback.
 
-## Phase 5, first step: the Mods card
+## Phase 5, first step: Settings panel and mod settings
 
-- The Game tab now has a Mods card (`src/launcher/ui/pane_mods.cpp`). It reads `mods/*/mod.json`,
-  `settings.json` and the DLL's hash and signature, using `src/launcher/mod_catalog.h`. The launcher never loads a
-  mod's DLL.
-- Each mod shows its author, version and signer, plus a label: Official, Built in (unsigned build), Third-party
-  approved, or not approved. The label comes from the same `decide_mod_trust` the core runs.
-- A third-party mod gets **Approve…** (a warning first) and **Take back**. Once approved, it gets **Allow online**
-  (a ban-risk warning). Allow online is greyed out when the mod isn't signed by its author.
-- `settings.json` v1 supports two setting types:
-  - `toggle`
-  - `choice` (2 to 4 options)
-- Values go to `[mod_<id>]` in sim-qvfr.ini, which every launch passes on. They are shared by every game, not per
-  game.
-- Not yet: number or slider settings, and a mod reading its `[mod_<id>]` values through the host table.
+Willie, 2026-11-24: mods are managed in one place, not per game. That place is a **Settings** button on the rail,
+between Ko-fi and About.
+
+- **Settings panel → Mods** (`src/launcher/ui/pane_mods.cpp`, `src/launcher/mod_catalog.h`)
+  - Lists every installed mod with its author, version, signer and games.
+  - Each mod gets a label from the same `decide_mod_trust` the core runs: Official, Built in (unsigned build),
+    Third-party approved, or not approved.
+  - Third-party mods get **Approve…** (with a warning) and **Take back**. Once approved, they get **Allow online**
+    (with a ban-risk warning). Allow online is greyed out unless the mod is signed by its author.
+  - **Remove…** sends the mod's folder to the Recycle Bin. **Open the mods folder** and **Look again** are there too.
+  - The launcher never loads a mod's DLL.
+- **Game tab → Mod settings:** the `settings.json` controls of the mods that cover the shown game.
+  - `settings.json` v1 has two setting types: `toggle`, and `choice` (2 to 4 options).
+  - Values go to `[mod_<id>]` in sim-qvfr.ini and are shared by every game.
+- **Next:** first-party mods get Check for updates and Install, from GitHub releases tagged `mod-<id>-v<version>`.
+  The old folder is kept for rollback.
+- **Not yet:** sliders, and a mod reading its `[mod_<id>]` values through the host table.
 
 ## Phase 3, first step: the trust check (option A)
 

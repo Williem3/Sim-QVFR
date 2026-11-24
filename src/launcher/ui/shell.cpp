@@ -268,7 +268,7 @@ void rail(float H) {
     // The About button: the kit's small control height; compact, two lines (the icon over the version number).
     const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;
     const float bottomH = t::kSpace4 + 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight) + t::kSpace3 + aboutH +
-                          t::kSpace4;
+                          t::kSpace2 + aboutH + t::kSpace4;  // Settings, then About
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
     std::vector<int> shown;
@@ -329,6 +329,34 @@ void rail(float H) {
         cv.stroke(kofi.inset(6, -3), col(app.c->rail_text), 2, t::kRadiusControl);
     app.hits.push_back({kSupport, kofi, -1, tr(L"Support Sim-QVFR on Ko-fi")});
     by += kofi.h + t::kSpace3;
+    // The Settings button (the app's own settings, not a game's: the installed mods), as About's: a gear and its name.
+    {
+        const Rect sr{6, by, W - 12, aboutH};
+        const Rect hit{0, by, W, aboutH};
+        const bool hover = pointer_in(hit);
+        cv.fill(sr, col(0xffffff, hover ? 0.12f : 0.05f), t::kRadiusControl);
+        cv.stroke(sr.inset(0.5f, 0.5f), col(0xffffff, hover ? 0.36f : 0.18f), 1, t::kRadiusControl);
+        if (app.pressed == kSettings && hit.contains(app.mouseX, app.mouseY))
+            cv.fill(sr, col(0, 0.16f), t::kRadiusControl);
+        const float iconS = compact ? 12.0f : 14.0f, gap = 4.0f;
+        const std::wstring name = tr(L"Settings");
+        const bool showName = !compact && cv.measure(name, t::kRailName) <= sr.w - 14 - iconS - gap;
+        const float nameW = showName ? cv.measure(name, t::kRailName) : 0.0f;
+        const float gx = sr.x + (sr.w - iconS - (showName ? gap + nameW : 0.0f)) / 2;
+        const float my = sr.y + sr.h / 2;
+        const Color ink = col(app.c->rail_text);
+        // A gear: a ring and eight teeth.
+        cv.circle(gx + iconS / 2, my, iconS * 0.22f, ink, false, 1.4f);
+        cv.path("M8 1.5V4M8 12V14.5M1.5 8H4M12 8H14.5M3.4 3.4L5.2 5.2M10.8 10.8L12.6 12.6M3.4 12.6L5.2 10.8M10.8 5.2L12.6 3.4",
+                {gx, my - iconS / 2, iconS, iconS}, 16, ink, 1.6f);
+        if (showName)
+            cv.text(name, t::kRailName, {gx + iconS + gap, my - t::kRailName.lineHeight / 2, nameW + 2, t::kRailName.lineHeight},
+                    ink, Align::Leading);
+        if (focused(kSettings))
+            cv.stroke(sr.inset(-3, -3), col(app.c->rail_text), 2, t::kRadiusControl + 2);
+        app.hits.push_back({kSettings, hit, -1, tr(L"Settings: installed mods")});
+        by += aboutH + t::kSpace2;
+    }
     // The About button: an info icon and the version ("About · v1.2.3-beta" where it fits), a dot when an update is
     // available. A release's version without its commit ("1.0.5-beta (a78fc1f)"); a development build the release it is
     // headed for.

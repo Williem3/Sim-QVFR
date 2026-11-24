@@ -476,7 +476,7 @@ namespace {
 // hits: each once, a card's menu once per card. What a disclosure hides was not drawn, so it isn't in the order.
 // In a panel only its own hits were drawn, and its Ko-fi button (About) is one of them.
 std::vector<FocusStop> drawn_order(bool panel = false) {
-    static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
+    static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kSettings, kThemeToggle,
                                     kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
                                     kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip, kText};
     std::vector<FocusStop> out;
@@ -521,7 +521,7 @@ std::vector<FocusStop> focus_order() {
         break;
     }
     }
-    order.insert(order.end(), {{kThemeToggle}, {kSearch}, {kProfileMenu}, {kLaunch}, {kVersion}});  // the top bar, the rail's foot
+    order.insert(order.end(), {{kThemeToggle}, {kSearch}, {kProfileMenu}, {kLaunch}, {kSettings}, {kVersion}});  // the top bar, the rail's foot
     return order;
 }
 

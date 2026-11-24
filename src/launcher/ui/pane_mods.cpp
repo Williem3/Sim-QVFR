@@ -7,9 +7,11 @@
 #include <vector>
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include "../launcher.h"
 #include "../mod_catalog.h"
+#include "../../games/game.h"
 #include "../../mod_api/mod_trust.h"
 #include "window_state.h"
 #include "card.h"
@@ -64,10 +66,10 @@ std::wstring signed_line(const ModStatus& st) {
     return trf(L"Signed by {signer}.", {{L"signer", st.facts.signer}});
 }
 
-void mod_rows(Body& b, size_t i) {
+// A mod's card on the Mods page: who made it, what loads, its approval and Allow online, its folder and Remove.
+void trust_rows(Body& b, size_t i) {
     const ModEntry& m = app.mods[i];
     const ModStatus& st = app.modStatus[i];
-    b.group(m.name);
     if (!m.error.empty()) {
         b.status(m.id, m.error, 2, tr(L"Won’t load"));
         return;
@@ -102,6 +104,19 @@ void mod_rows(Body& b, size_t i) {
     } else if (st.offline.trust == ModTrust::Refused) {
         b.note(widen_reason(st.offline.why));
     }
+    if (!m.games.empty()) {
+        std::wstring games;
+        for (const std::wstring& g : m.games)
+            games += (games.empty() ? L"" : L", ") + g;
+        b.info(tr(L"Games"), games);
+    }
+    if (!m.settings.empty())
+        b.note(tr(L"Its settings are on the Game tab, with each game it covers."));
+}
+
+// A mod's settings (its settings.json), on the Game tab of a game it covers.
+void settings_rows(Body& b, size_t i) {
+    const ModEntry& m = app.mods[i];
     if (!m.settingsError.empty())
         b.note(m.settingsError);
     for (size_t k = 0; k < m.settings.size() && k < static_cast<size_t>(kModSettingsMax); ++k) {
@@ -123,6 +138,36 @@ void mod_rows(Body& b, size_t i) {
         if (!s.help.empty())
             b.note(s.help);
     }
+}
+
+// The mod's folder to the Recycle Bin, after asking (Windows asks too on a drive without one).
+void remove_mod(size_t i) {
+    const ModEntry& m = app.mods[i];
+    Sheet s;
+    s.title = trf(L"Remove {mod}?", {{L"mod", m.name}});
+    s.text = trf(L"Its folder ({folder}) goes to the Recycle Bin, so you can get it back from there. Its settings and "
+                 L"approval stay in sim-qvfr.ini.",
+                 {{L"folder", m.folder}});
+    s.buttons = {tr(L"Cancel"), tr(L"Remove")};
+    s.focus = 0;
+    s.danger = true;
+    const std::wstring folder = m.folder;
+    s.done = [folder](int button, const std::wstring&) {
+        if (button != 1)
+            return;
+        std::wstring list = folder;  // double-null terminated
+        list += L'\0';
+        list += L'\0';
+        SHFILEOPSTRUCTW op{};
+        op.hwnd = app.hwnd;
+        op.wFunc = FO_DELETE;
+        op.pFrom = list.c_str();
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_SILENT;
+        if (SHFileOperationW(&op) != 0 || op.fAnyOperationsAborted)
+            notify(tr(L"Not removed"), tr(L"The mod’s folder couldn’t be moved to the Recycle Bin (is the game running?)."));
+        mods_refresh();
+    };
+    open_sheet(std::move(s));
 }
 
 void approve(size_t i) {
@@ -201,6 +246,19 @@ bool mods_press(Ctl id, int option) {
         mods_refresh();
         return true;
     }
+    if (id == kModsOpenFolder) {
+        const std::wstring folder = mods_folder_path();
+        std::error_code ec;
+        fs::create_directories(folder, ec);
+        ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
+    if (id >= kModRemove0 && id <= kModRemoveLast) {
+        const size_t i = static_cast<size_t>(id - kModRemove0);
+        if (i < app.mods.size())
+            remove_mod(i);
+        return true;
+    }
     if (id >= kModApprove0 && id <= kModApproveLast) {
         const size_t i = static_cast<size_t>(id - kModApprove0);
         if (i < app.mods.size() && i < app.modStatus.size())
@@ -234,20 +292,52 @@ bool mods_press(Ctl id, int option) {
     return false;
 }
 
+// The Settings panel (the rail's Settings button): the app's own settings, not a game's. Its Mods section lists every
+// installed mod, whichever games it covers.
+float settings_pane(float x, float y, float w, bool draw) {
+    ensure_read();
+    Body b(x, y, w, draw);
+    b.group(tr(L"Mods"));
+    b.note(app.mods.empty()
+               ? tr(L"No game mods are installed. A mod is a folder in the mods folder, with its mod.json.")
+               : trn(static_cast<int>(app.mods.size()), L"{count} mod in the mods folder.", L"{count} mods in the mods folder.",
+                     {{L"count", std::to_wstring(app.mods.size())}}));
+    b.note(tr(L"Sim-QVFR’s own mods are signed by Sim-QVFR. Any other mod runs only once you approve it, and online only "
+              L"if its author signed it and you allow it."));
+    b.actions({{kModsOpenFolder, tr(L"Open the mods folder")}, {kModsReload, tr(L"Look again")}});
+    for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i) {
+        b.divider();
+        b.group(app.mods[i].name);
+        const auto [tone, text] = chip_of(app.modStatus[i]);
+        b.chip(tone, text);
+        trust_rows(b, i);
+        b.actions({{static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
+    }
+    return b.height();
+}
+
+// The Game tab's card: the settings of the mods that cover the shown game (none: no rows, a pointer to the Mods tab).
 Card mods_card() {
     ensure_read();
-    Card c{Tab::Game, tr(L"Mods")};
+    Card c{Tab::Game, tr(L"Mod settings")};
     c.body = [](Body& b) {
-        if (app.mods.empty()) {
-            b.note(tr(L"No game mods are installed (the mods folder beside the layer folder is empty)."));
-        } else {
-            for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i) {
-                if (i > 0)
-                    b.divider();
-                mod_rows(b, i);
-            }
+        const std::wstring game = games::wide_id(games::launcher_game());
+        bool any = false;
+        for (size_t i = 0; i < app.mods.size(); ++i) {
+            const ModEntry& m = app.mods[i];
+            if (m.settings.empty() && m.settingsError.empty())
+                continue;
+            if (std::none_of(m.games.begin(), m.games.end(),
+                             [&](const std::wstring& g) { return _wcsicmp(g.c_str(), game.c_str()) == 0; }))
+                continue;
+            if (any)
+                b.divider();
+            any = true;
+            b.group(m.name);
+            settings_rows(b, i);
         }
-        b.actions({{kModsReload, tr(L"Look again")}});
+        if (!any)
+            b.note(tr(L"No installed mod has settings for this game. Settings (in the rail) lists every mod."));
     };
     return c;
 }
