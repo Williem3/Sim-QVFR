@@ -122,7 +122,9 @@ bool unpack_zip(const std::wstring& zipText, const std::wstring& intoText, std::
     wchar_t system[MAX_PATH] = {};
     GetSystemDirectoryW(system, MAX_PATH);
     const fs::path tar = fs::path(system) / L"tar.exe";
-    std::wstring command = L"\"" + tar.wstring() + L"\" -xf \"" + zip.wstring() + L"\" -C \"" + into.wstring() + L"\"";
+    // -m: the files' times aren't restored. On an exFAT or FAT32 drive tar can't set them, and exits 1 although every
+    // file was written.
+    std::wstring command = L"\"" + tar.wstring() + L"\" -m -xf \"" + zip.wstring() + L"\" -C \"" + into.wstring() + L"\"";
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, into.c_str(), &si, &pi)) {
