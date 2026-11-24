@@ -5,6 +5,7 @@
 #include <string>
 
 #include "../log.h"
+#include "../mod_api/plugin_adapter.h"
 #include "../probe/local_analysis.h"
 #include "identity_adapter.h"
 
@@ -30,6 +31,20 @@ void IdentityAdapter::instance_created(const wchar_t* ini, const wchar_t*) {
     (void)ini;
 #endif
 }
+
+namespace {
+
+// `game`'s adapter from its mod's entry (mod_api/plugin_adapter.h), kept for the process; a mod the core refuses leaves
+// the game known by its identity alone (the layer only logs there), saying why.
+GameAdapter& through_mod(const GameInfo* game, SqvfrModEntry entry) {
+    std::string why;
+    if (std::unique_ptr<mod_api::PluginAdapter> mod = mod_api::PluginAdapter::load(game, entry, why))
+        return *mod.release();
+    logf("game: %ls's mod refused (%s): Sim-QVFR only logs in this launch.", game->name, why.c_str());
+    return *new IdentityAdapter(game);
+}
+
+}  // namespace
 
 GameAdapter& adapter_for(const GameInfo* game) {
     static IdentityAdapter none(nullptr);
@@ -71,8 +86,16 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::xplane::adapter();
     if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
         return ::lmu::adapter();
-    if (game == &::ats::kGame || game == &::ets2::kGame)  // SCS Software's: QVFR at the D3D11 level
-        return ::scs::adapter(game);
+    // SCS Software's: QVFR at the D3D11 level, through the game-mod ABI (mod_api.h; still built in, one mod for both:
+    // scssoftware/mod_entry.cpp).
+    if (game == &::ats::kGame) {
+        static GameAdapter& ats = through_mod(game, &::scs::mod_entry);
+        return ats;
+    }
+    if (game == &::ets2::kGame) {
+        static GameAdapter& ets2 = through_mod(game, &::scs::mod_entry);
+        return ets2;
+    }
     return none;
 }
 
