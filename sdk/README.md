@@ -20,21 +20,24 @@ to fill in for each feature. It is written for coding agents and people alike.
 | `schemas/` | JSON schemas for `mod.json` and `settings.json` |
 | `examples/hello/` | The smallest mod: it identifies the game, reads its settings and logs a line |
 
-In the Sim-QVFR repository the headers are in `src/mod_api/`. The packaged SDK copies them to `include/`.
+Get the SDK as `sqvfr-sdk-<version>.zip`, built with each nightly: it has the headers in `include/`. In the Sim-QVFR
+repository they are in `src/mod_api/`, and `SqvfrMod.cmake` finds them there.
 
 ## Making a mod, step by step
 
-You need Windows, Visual Studio 2022 (the "Desktop development with C++" workload) and CMake 3.21 or newer.
+You need Windows, Visual Studio 2022 or newer (the Build Tools are enough, with the C++ workload) and CMake 3.21 or
+newer.
 
 1. **Copy `examples/hello`** to a folder of your own and rename it. In `mod.json`, set your own `id`, `name`,
    `author`, `version`, `dll` (`sim-qvfr-<id>.dll`) and `games`. In `CMakeLists.txt`, point `include(...)` at this
    SDK's `cmake/SqvfrMod.cmake`.
 2. **Build it and make the zip:**
    ```
-   cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+   cmake -S . -B build -A x64
    cmake --build build --config Release --target sqvfr_mod_zip_hello
    ```
-   This writes `build/sqvfr-mod-<id>-<version>.zip`.
+   CMake picks the newest Visual Studio installed. The target is `sqvfr_mod_zip_<name>`, after the name you pass to
+   `sqvfr_add_mod` in `CMakeLists.txt`. This writes `build/sqvfr-mod-<id>-<version>.zip`.
 3. **Add it.** Drop the zip on the Sim-QVFR launcher window, or use **Settings > Mods > Add a mod…**. Confirm.
 4. **Approve it.** In **Settings > Mods**, press **Approve** on your mod. Approval covers this exact file, so each
    rebuild needs approving again.
@@ -42,7 +45,7 @@ You need Windows, Visual Studio 2022 (the "Desktop development with C++" workloa
    (**Mod settings**). It doesn't run in them: Sim-QVFR's own mod serves those games.
 6. **Point it at your game.** Replace `games` with your game's entry (AGENTS.md section 7: its `exe`, Steam folder
    and app id). Build and add it again, and approve it. The launcher lists your game; launch it from there, then
-   open the game's log (**Game › Get help › Open the logs folder**). The example writes
+   open the game's log (**Game › Get help › Open logs folder**). The example writes
    `hello mod: running in <your game>, feeling calm`.
 
 From there, climb AGENTS.md's ladder (section 4) one rung at a time. For a new game, add its entry to `mod.json`

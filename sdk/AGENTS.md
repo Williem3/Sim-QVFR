@@ -113,14 +113,14 @@ contract. Any method you don't override answers "the core's default".
 | Feature | What the player gets | What your mod supplies |
 | --- | --- | --- |
 | **QVFR itself** | Four views drawn, two composed | `has_qvfr`, `qvfr_start`, then a frame each time: `qvfr_take_frame` / `qvfr_latest_frame` (where each view sits), `qvfr_note_views`, `qvfr_frame_end`. Report multi-view with `qvfr_multi_view`. |
-| **Live periphery and focus resolution** | Resolution changes while driving, from the headset menu or Auto-fit | Answer `qvfr_live_resolution` with 1, then apply `qvfr_set_live_layout` each time it's called. The game keeps the size it launched with; you draw into the part the new size needs. Only lowering works live; raising above the launch size waits for the next start. |
+| **Live periphery and focus resolution** | Resolution changes while driving, from the headset menu or Auto-fit | Turn on `liveResolution` (section 7). Answer `qvfr_live_resolution` with 1, then apply `qvfr_set_live_layout` each time it's called. The game keeps the size it launched with; you draw into the part the new size needs. Only lowering works live; raising above the launch size waits for the next start. |
 | **Focus area size and position** | The sharp box's size and offset, changed live | Apply `qvfr_set_live` (the focus box's share of the eye, width and height). |
 | **Eye tracking** | The focus box follows the player's eyes | Answer `wants_gaze` with 1 and aim the focus views from `qvfr_set_gaze`. The core reads the tracker, applies the dead-zone, and makes both eyes' boxes meet where the eyes converge. |
 | **Foveated DLAA / DLSS (and FSR, DLSS-NR)** | DLAA on the periphery, DLAA or upscaling on the focus views | Your views need what the upscaler needs: colour, depth and motion vectors per view, and sub-pixel jitter. Apply `qvfr_jitter_views` to the cameras you draw with, and `qvfr_set_dlss` / `qvfr_set_nr` for the settings. `qvfr_target_sizes` reports render and output sizes. |
-| **Focus mask and corner radius** | The focus views skip pixels outside the focus shape (a rounded box, or a free-form outline) | Apply `qvfr_set_focus_mask` (the focus area and a margin): keep the focus views from rendering outside the area, for example with a depth mask drawn before the scene so its draws skip those pixels (early depth). Stay a margin outside the shape, so nothing that is shown, or that DLSS, sharpening or ambient occlusion read next to it, is lost. The rounding and the feather come with `qvfr_set_look`. |
-| **View crop** | The game stops drawing the edges a helmet would hide | Nothing extra when the game renders the field of view OpenXR gives it: the core narrows it. A game with fixed cameras has to apply the layout's `cropWidth` / `cropHeight`. |
+| **Focus mask and corner radius** | The focus views skip pixels outside the focus shape (a rounded box, or a free-form outline) | Turn on `focusMask` (section 7). Apply `qvfr_set_focus_mask` (the focus area and a margin): keep the focus views from rendering outside the area, for example with a depth mask drawn before the scene so its draws skip those pixels (early depth). Stay a margin outside the shape, so nothing that is shown, or that DLSS, sharpening or ambient occlusion read next to it, is lost. The rounding and the feather come with `qvfr_set_look`. |
+| **View crop** | The game stops drawing the edges a helmet would hide | Turn on `fovCrop` (section 7). Nothing else when the game renders the field of view OpenXR gives it: the core narrows it. A game with fixed cameras has to apply the layout's `cropWidth` / `cropHeight`. |
 | **Helmet overlay** (racing-style games) | A visor round the view, lit by the scene | Nothing: the core draws it over the composed eyes. Turn on `helmet` in your game's `features` (section 7) so the launcher offers it. |
-| **CAS sharpening, feather, colour correction** | A crisper focus area, a soft blend at its edge, exposure, contrast and saturation | Nothing when the core composes (the default). If your game composes the views itself (`qvfr_composable` 0), these are yours to match. |
+| **CAS sharpening, feather, colour correction** | A crisper focus area, a soft blend at its edge, exposure, contrast and saturation | Turn on `sharpening` (section 7): it covers sharpening and colour correction. The feather is always on. Nothing else when the core composes (the default). If your game composes the views itself (`qvfr_composable` 0), these are yours to match. |
 | **Headset menu, performance overlay, launcher tab** | Every core setting, live, in the headset; frame times | Nothing for the core's settings. Your own settings go in `settings.json` (section 7). |
 | **Hang watch, logs, captures** | A dump when the game hangs; one log per game | `hang_watch_s` (seconds of no frames before it fires) and `host->log`. |
 
@@ -164,6 +164,24 @@ The less your mod does, the more of this works without extra code. The order to 
   }]
 }
 ```
+
+The `features` flags (all false unless you set them) decide what the launcher, the headset menu and the core offer
+for your game. Turn one on only once your mod supports it:
+
+| Flag | Offers |
+| --- | --- |
+| `liveResolution` | resolution changes while playing (else: at the next launch) |
+| `helmet` | the helmet overlay |
+| `fovCrop` | the view crop |
+| `sharpening` | CAS sharpening and colour correction |
+| `focusMask` | the focus mask (pixels outside the focus shape skipped) |
+| `eyeOff` | one eye off, for a player who sees with one eye |
+| `multiView` | NVIDIA multi-view rendering |
+| `layerMultiView` | multi-view through the D3D11 layer alone (each eye's pass draws its focus view) |
+
+Two more keys: `image` says how the core offers the game its views, so the launcher checks the right size
+(`doubleWide`, the default; `eyeColumns`; `oneViewSize`; `separateViews`). `antiCheat` lists up to 4 anti-cheat
+process names: while one runs, Sim-QVFR stays off in that launch and only logs (section 9).
 
 The launcher lists the game once the mod is added, and the core loads your DLL when that exe starts OpenXR (after the
 player approves it). Turn a feature on in `features` only once your mod supports it: the launcher and the headset menu

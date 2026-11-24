@@ -39,5 +39,6 @@ jobs:
           path: |
             ${{ runner.temp }}/dist/sqvfr-nightly-*.zip
             ${{ runner.temp }}/dist/sqvfr-mod-*.zip
+            ${{ runner.temp }}/dist/sqvfr-sdk-*.zip
           if-no-files-found: error
           retention-days: 14

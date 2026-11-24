@@ -347,6 +347,18 @@ try {
             Remove-Item -LiteralPath (Join-Path $modFolder 'SHA256.txt')
             Write-Output "Mod archive:     $modArchive"
         }
+        # The mod SDK (sdk/README.md): sdk\ as committed, with the core's ABI headers in its include\.
+        $sdkStage = Join-Path ([System.IO.Path]::GetTempPath()) "sqvfr-sdk-$Version"
+        if (Test-Path -LiteralPath $sdkStage) { Remove-Item -LiteralPath $sdkStage -Recurse -Force }
+        Copy-Item -LiteralPath (Join-Path $work 'sdk') -Destination $sdkStage -Recurse
+        New-Item -ItemType Directory -Force -Path (Join-Path $sdkStage 'include') | Out-Null
+        foreach ($header in 'mod_api.h', 'mod.hpp') {
+            Copy-Item -LiteralPath (Join-Path $work "src\mod_api\$header") -Destination (Join-Path $sdkStage 'include')
+        }
+        $sdkArchive = Join-Path (Split-Path -Parent $archive) "sqvfr-sdk-$Version.zip"
+        Compress-Archive -Path $sdkStage -DestinationPath $sdkArchive
+        Remove-Item -LiteralPath $sdkStage -Recurse -Force
+        Write-Output "SDK archive:     $sdkArchive"
     }
 } finally {
     Invoke-Native 'git worktree remove' { git -C $repo worktree remove --force $work } | Out-Null
