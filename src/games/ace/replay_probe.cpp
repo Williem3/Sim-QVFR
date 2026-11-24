@@ -2978,7 +2978,8 @@ void replay_probe_frame_end() {
                      "projection alone %.2f a frame",
                      eyeLive.lists.exchange(0) / 900.0, eyeLive.patches.exchange(0) / 900.0,
                      eyeLive.executed.exchange(0) / 900.0, eyeLive.fixDraws.exchange(0) / 900.0);
-            if (fixNext && log_debug() && eyeLive.dumpRead && ended % 1800 == 600 && eyeLive.dumpBursts.fetch_add(1) < 3) {
+            if ((fixNext || biasNext != 0) && log_debug() && eyeLive.dumpRead && ended % 1800 == 600 &&
+                eyeLive.dumpBursts.fetch_add(1) < 3) {
                 eyeLive.dumpFrame.store(UINT64_MAX);
                 eyeLive.dumpLeft.store(EyeLive::kDumps);
             }

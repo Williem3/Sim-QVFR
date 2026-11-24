@@ -617,7 +617,7 @@ struct EyeLive {
     std::atomic<float> match{0}, mipBias{0}, biasNow{0};
     // The right eye's previous projection corrected (kPatchShader's fixPrev): asked (replay_dlss_right_prev_fix), and
     // as a frame's end took it (with DLSS on and the copies ready). With it ACE's stereo scene draws read our copy.
-    std::atomic<bool> rightPrevFix{true}, fixNow{false};
+    std::atomic<bool> rightPrevFix{false}, fixNow{false};
     std::atomic<uint64_t> fixDraws{0};  // stereo scene draws that read our copy for it alone (eye_apply)
     // Detailed logs: ACE's pass constants as given and as our copy has them, for one list a frame over kDumps frames
     // (eye_record copies them to dumpRead; a frame's end logs each once its frame is kDumpAge old).
