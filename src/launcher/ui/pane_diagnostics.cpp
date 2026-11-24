@@ -10,6 +10,7 @@
 #include "../settings.h"
 #include "../session_history.h"
 #include "../../games/game.h"
+#include "../../profile/profiles.h"
 #include "window_state.h"
 #include "card.h"
 #include "controls.h"
@@ -70,7 +71,11 @@ const LogsUse& logs_use_now() {
 
 }  // namespace
 
+// The shown game's logs, games\<id>\logs (profile/profiles.h game_logs_folder): its launches' session logs, run
+// folders, captures and dumps. Without an ini, the launcher's own logs folder.
 std::wstring logs_folder() {
+    if (!app.ini.empty())
+        return game_logs_folder(app.ini, games::wide_id(games::launcher_game()));
     const std::wstring runtime = runtime_info_path();  // the launcher's folder\runtime.ini
     const size_t slash = runtime.find_last_of(L"\\/");
     return (slash == std::wstring::npos ? std::wstring(L".") : runtime.substr(0, slash)) + L"\\logs";

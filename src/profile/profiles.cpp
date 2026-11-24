@@ -136,8 +136,48 @@ std::wstring game_settings_folder(const std::wstring& settingsIni) {
     return (fs::path(settingsIni).parent_path() / L"games").wstring();
 }
 
+std::wstring game_data_folder(const std::wstring& settingsIni, const std::wstring& gameId) {
+    return (fs::path(game_settings_folder(settingsIni)) / gameId).wstring();
+}
+
 std::wstring game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId) {
+    return (fs::path(game_data_folder(settingsIni, gameId)) / (L"sim-qvfr-" + gameId + kExtension)).wstring();
+}
+
+std::wstring game_logs_folder(const std::wstring& settingsIni, const std::wstring& gameId) {
+    return (fs::path(game_data_folder(settingsIni, gameId)) / L"logs").wstring();
+}
+
+std::wstring legacy_game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId) {
     return (fs::path(game_settings_folder(settingsIni)) / (gameId + kExtension)).wstring();
+}
+
+int migrate_game_settings(const std::wstring& settingsIni) {
+    const fs::path folder = game_settings_folder(settingsIni);
+    std::error_code ec;
+    if (!fs::is_directory(folder, ec) || fs::is_symlink(folder, ec))
+        return 0;
+    std::vector<std::wstring> ids;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fe;
+        if (!it->is_regular_file(fe) || it->is_symlink(fe) || _wcsicmp(it->path().extension().c_str(), kExtension) != 0)
+            continue;
+        const std::wstring id = it->path().stem().wstring();
+        if (valid_profile_name(id))  // a name a folder can have, not a preset's
+            ids.push_back(id);
+    }
+    int copied = 0;
+    for (const std::wstring& id : ids) {
+        const std::wstring target = game_settings_file(settingsIni, id);
+        if (GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES)
+            continue;  // already moved: the new copy is the one in use
+        std::error_code me;
+        fs::create_directories(game_data_folder(settingsIni, id), me);
+        // bFailIfExists: never over a copy something else wrote meanwhile.
+        if (CopyFileW(legacy_game_settings_file(settingsIni, id).c_str(), target.c_str(), TRUE))
+            ++copied;
+    }
+    return copied;
 }
 
 std::wstring launcher_game_id(const wchar_t* ini) {
@@ -195,7 +235,10 @@ bool load_profile(const std::wstring& folder, const std::wstring& name, Profile&
         }
     if (!valid_profile_name(name))
         return false;
-    const std::wstring file = (fs::path(folder) / (name + kExtension)).wstring();
+    return load_profile_file((fs::path(folder) / (name + kExtension)).wstring(), name, profile);
+}
+
+bool load_profile_file(const std::wstring& file, const std::wstring& name, Profile& profile) {
     if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES)
         return false;
     Profile p;

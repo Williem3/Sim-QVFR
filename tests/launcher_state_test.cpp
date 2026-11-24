@@ -645,6 +645,55 @@ void per_game_settings_checks() {
     fs::remove_all(dir, ec);
 }
 
+// Per-game folders (profiles.h game_settings_file, game_logs_folder, migrate_game_settings): each game's copy is
+// games\<id>\sim-qvfr-<id>.ini and its logs games\<id>\logs; an older launcher's games\<id>.ini is copied there once,
+// and nothing is deleted or overwritten.
+void per_game_folder_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-per-game-folder-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / L"games");
+    const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
+    WritePrivateProfileStringW(L"launcher", L"game", L"ats", ini.c_str());
+
+    check(fs::path(game_settings_file(ini, L"ats")) == dir / L"games" / L"ats" / L"sim-qvfr-ats.ini",
+          "per-game folder: a game's copy is games\\<id>\\sim-qvfr-<id>.ini");
+    check(fs::path(game_logs_folder(ini, L"ats")) == dir / L"games" / L"ats" / L"logs",
+          "per-game folder: a game's logs are games\\<id>\\logs");
+    check(fs::path(legacy_game_settings_file(ini, L"ats")) == dir / L"games" / L"ats.ini",
+          "per-game folder: the older copy was games\\<id>.ini");
+
+    // Before the update: ATS and ACE have older copies; ACE already has a new one too (written by a newer launcher).
+    const std::wstring oldAts = legacy_game_settings_file(ini, L"ats"), oldAce = legacy_game_settings_file(ini, L"ace");
+    WritePrivateProfileStringW(L"experiment", L"focus_density", L"140", oldAts.c_str());
+    WritePrivateProfileStringW(L"experiment", L"focus_density", L"120", oldAce.c_str());
+    fs::create_directories(dir / L"games" / L"ace");
+    WritePrivateProfileStringW(L"experiment", L"focus_density", L"90", game_settings_file(ini, L"ace").c_str());
+    // Not a game's copy: a preset's name, and a folder.
+    WritePrivateProfileStringW(L"experiment", L"focus_density", L"1", (dir / L"games" / L"Balanced.ini").c_str());
+    const std::string atsBefore = read_text(oldAts);
+
+    check(migrate_game_settings(ini) == 1, "per-game folder: only the copy without a new one is moved over");
+    check(ini_int(game_settings_file(ini, L"ats"), L"experiment", L"focus_density") == 140,
+          "per-game folder: ATS's new copy holds its old settings");
+    check(read_text(oldAts) == atsBefore, "per-game folder: the old copy is kept as it was (a backup)");
+    check(ini_int(game_settings_file(ini, L"ace"), L"experiment", L"focus_density") == 90,
+          "per-game folder: a new copy already there is never overwritten");
+    check(!fs::exists(dir / L"games" / L"Balanced" / L"sim-qvfr-Balanced.ini"),
+          "per-game folder: a preset's name isn't taken for a game");
+    check(migrate_game_settings(ini) == 0, "per-game folder: migrating again copies nothing");
+
+    // Seeding migrates first: a game with an older copy keeps its own settings, not the ones in use.
+    fs::remove(game_settings_file(ini, L"ats"), ec);
+    Settings inUse;
+    inUse.inner = 100;
+    save_settings(ini, inUse);
+    seed_game_settings(ini);
+    check(ini_int(game_settings_file(ini, L"ats"), L"experiment", L"focus_density") == 140,
+          "per-game folder: seeding after an update keeps a game's older copy (copied over, not reseeded)");
+    fs::remove_all(dir, ec);
+}
+
 // An elevated launch's registrations (explicit_layers.h), on a scratch key holding someone else's values: only ours
 // are added and taken out, nothing else changes, the key stays, and only what the ledger lists comes out.
 // What older versions left in their log folders (launcher/leftovers.h): only the copies of a game's program, by name,
@@ -945,6 +994,7 @@ void signature_checks() {
 int SIM_QVFR_TEST_MAIN() {
     signature_checks();
     per_game_settings_checks();
+    per_game_folder_checks();
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();

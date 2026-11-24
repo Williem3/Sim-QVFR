@@ -438,18 +438,27 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     }
 
     const std::wstring stamp = stamp_now();
-    const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
+    // Each game's launches log into its own folder, games\<id>\logs (profile/profiles.h game_logs_folder); the
+    // launcher's own logs (the OpenXR registrations, the registry backups) stay in <launcher>\logs.
+    const fs::path sharedLogs = here / L"logs";
+    const fs::path logs = game_logs_folder(ini.wstring(), games::wide_id(info)),
+                   runFolder = logs / (std::wstring(L"run-") + stamp);
 #ifndef SIM_QVFR_LOCAL_ANALYSIS
     // Copies of the game's program an older Sim-QVFR left in its log folders, and nothing else (leftovers.h); a dry run
     // removes nothing.
     const Leftovers leftovers =
-        dryRun ? Leftovers{} : remove_leftovers({logs.wstring(), (here / L"layer" / L"logs").wstring()});
+        dryRun ? Leftovers{} : remove_leftovers({sharedLogs.wstring(), (here / L"layer" / L"logs").wstring()});
 #else
     const Leftovers leftovers;  // the developer's build keeps them (local analysis tools)
 #endif
-    // The logs folder keeps the newest of each kind (log_retention.h), before this launch adds its own; a dry run
-    // removes nothing.
-    const PruneResult pruned = dryRun ? PruneResult{} : prune_logs(logs.wstring());
+    // The logs folders keep the newest of each kind (log_retention.h), before this launch adds its own: the game's,
+    // and the shared one an older Sim-QVFR logged every game's launches to. A dry run removes nothing.
+    PruneResult pruned = dryRun ? PruneResult{} : prune_logs(logs.wstring());
+    if (!dryRun) {
+        const PruneResult older = prune_logs(sharedLogs.wstring());
+        pruned.removed += older.removed;
+        pruned.bytes += older.bytes;
+    }
     // The Diagnostics pane's Detailed logs ([launcher] debug_logs, launches left): the layer logs at debug level.
     const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, ini.c_str())), 0,
                                      kDebugLogLaunches);

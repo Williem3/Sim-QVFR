@@ -81,7 +81,7 @@ Each phase leaves the app working.
 
 1. **Seams, no behaviour change.** Status: done, see below.
 2. **Per-game ini and logs.** `games/<id>/` folders, `SIM_QVFR_INI` plus a global ini path, per-game log folders,
-   and a one-time migration that deletes nothing.
+   and a one-time migration that deletes nothing. Status: first step done, see below.
 3. **Trust and loading.** The pinned-thumbprint check in the core, approval by hash, refusal under anti-cheat, safe
    `LoadLibraryExW`, and a packaging guard.
 4. **Extract the games into their own DLLs.** The SCS games first (after `lmu/mvr_probe` becomes an engine service),
@@ -92,6 +92,18 @@ Each phase leaves the app working.
    CMake function, JSON schemas, an example identity-only mod, and a making-a-mod guide.
 7. **Per-mod updates.** Release tags `mod-<id>-v<version>`, the `mods/<id>/` folder swapped whole, the old folder
    kept for rollback.
+
+## Phase 2, first step: per-game folders
+
+- Each game's settings copy is now `games/<id>/sim-qvfr-<id>.ini` (was `games/<id>.ini`).
+- Each launch from the launcher logs into `games/<id>/logs/`: session log, run folder, CPU captures, hang dumps,
+  Cheeky's snapshot. The Diagnostics pane, Open logs folder and the report follow the game the launcher shows.
+- The launcher's own logs (OpenXR registrations, registry backups) stay in `logs/`. Old sessions there are still
+  pruned as before.
+- Migration: at start, each `games/<id>.ini` without a new copy is copied over. Copy only: the old file stays as a
+  backup, and nothing is overwritten.
+- Not yet: the global ini still holds the shown game's values (the swap model), and the layer started without the
+  launcher still logs to `<package>/logs/`.
 
 ## Phase 1: what is in the code
 

@@ -40,10 +40,22 @@ std::wstring preset_summary(const Profile& profile);
 std::wstring profiles_folder(const std::wstring& settingsIni);
 
 // Per-game settings: each game keeps its own copy of the keys a profile holds (the launcher's settings_profile), in
-// <the launcher's ini folder>\games\<game id>.ini, with its [profiles] current. The launcher's ini holds the selected
-// game's ([launcher] game); switching games stores it into that game's copy and loads the other's (launcher/settings.h).
+// <the launcher's ini folder>\games\<game id>\sim-qvfr-<game id>.ini, with its [profiles] current. The launcher's ini
+// holds the selected game's ([launcher] game); switching games stores it into that game's copy and loads the other's
+// (launcher/settings.h). Each game's folder also holds its launches' logs (game_logs_folder).
+// <the launcher's ini folder>\games: every game's folder is in it.
 std::wstring game_settings_folder(const std::wstring& settingsIni);
+// <the launcher's ini folder>\games\<game id>.
+std::wstring game_data_folder(const std::wstring& settingsIni, const std::wstring& gameId);
 std::wstring game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId);
+// <the launcher's ini folder>\games\<game id>\logs: the game's session logs, run folders, captures and dumps.
+std::wstring game_logs_folder(const std::wstring& settingsIni, const std::wstring& gameId);
+// Where an older Sim-QVFR kept a game's copy: <the launcher's ini folder>\games\<game id>.ini.
+std::wstring legacy_game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId);
+// Each older copy (games\<id>.ini) without a new one is copied to games\<id>\sim-qvfr-<id>.ini. Copy only: the old
+// file stays as it was (a backup, and what an older launcher still reads), nothing is deleted or overwritten.
+// Returns how many were copied.
+int migrate_game_settings(const std::wstring& settingsIni);
 // Where a game's per-game keys are written (the headset menu, a running game): the launcher's ini while that game is
 // the one it shows, else the game's own copy, so a change never lands in another game's settings.
 std::wstring game_settings_target(const std::wstring& settingsIni, const std::wstring& gameId);
@@ -53,6 +65,8 @@ std::wstring launcher_game_id(const wchar_t* ini);
 std::vector<std::wstring> profile_names(const std::wstring& folder);
 // A preset by name is the one for the mode (`eyeTracked`: [quad] gaze).
 bool load_profile(const std::wstring& folder, const std::wstring& name, Profile& profile, bool eyeTracked);
+// A profile from a file by its path (any name), named `name`. False if it is missing or holds no keys.
+bool load_profile_file(const std::wstring& file, const std::wstring& name, Profile& profile);
 // Writes <folder>\<name>.ini afresh (the folder made if needed). False for a preset's name or a bad one.
 bool save_profile(const std::wstring& folder, const Profile& profile);
 bool delete_profile(const std::wstring& folder, const std::wstring& name);

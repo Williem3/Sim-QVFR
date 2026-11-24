@@ -102,7 +102,7 @@ bool store_game_settings(const std::wstring& ini, const std::wstring& gameId) {
 
 bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) {
     Profile stored;
-    if (gameId.empty() || is_preset_name(gameId) || !load_profile(game_settings_folder(ini), gameId, stored, true))
+    if (gameId.empty() || is_preset_name(gameId) || !load_profile_file(game_settings_file(ini, gameId), gameId, stored))
         return false;
     // Only the keys whose value differs are written: each write rewrites the whole ini, and between two games
     // usually only a few differ.
@@ -127,6 +127,8 @@ bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) 
 int seed_game_settings(const std::wstring& ini) {
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
         return 0;
+    // An older launcher's copies (games\<id>.ini) first, so a game that had one keeps its own settings.
+    migrate_game_settings(ini);
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
     int made = 0;
