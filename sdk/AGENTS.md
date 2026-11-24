@@ -57,9 +57,22 @@ The core owns everything that isn't game-specific. A mod supplies only what only
 - write to the game's memory or exe without a hash check (`code_matches` before `code_write`);
 - inject into other processes, or load code from outside your mod's folder;
 - disable, bypass or hide from an anti-cheat;
-- put the game's code addresses, memory offsets or anti-cheat details in public files (the repository, logs, issues).
-  What a layer-level mod needs to find the game's passes (draw and shader fingerprints, render-target shapes) may be
-  in your repository: it isn't useful for cheating, and it keeps mods reviewable (section 8).
+- put the game's code or data addresses (RVAs), offsets into its memory, or anything about its anti-cheat in public
+  files (the repository, logs, issues), nor patch or hook its code.
+
+**What may be in your (public) repository:** how the game *draws*, not its code. That doesn't help anyone cheat, and
+it keeps mods reviewable (section 8):
+
+- the game exe's hash (to tell builds apart);
+- shader bytecode checksums (the DXBC hash RenderDoc shows);
+- draw and pass patterns: bound targets, formats, sizes, sample counts;
+- constant-buffer variable names, read through shader reflection;
+- the OpenXR sizes and fields of view the layer hands the game.
+
+**Recognise by bindings, with checksums only as a fast path.** A game update recompiles shaders; a mod that also
+knows a pass by what it binds keeps working. Take values (cameras, eye index, render scale) from what the layer sees
+(OpenXR, the constant buffers the game binds), never from the game's memory. Sim-QVFR's own Le Mans Ultimate support
+works this way on builds it doesn't know: the model to follow.
 
 **Stop and ask the human when:**
 
