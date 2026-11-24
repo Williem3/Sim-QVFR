@@ -35,7 +35,8 @@ enum class FramePart : int {
 struct FramePartSpan {
     std::atomic<uint64_t> ticks{0}, calls{0};
 };
-inline FramePartSpan framePartSpans[static_cast<int>(FramePart::count)];
+// The core's one copy (quad/shared_state.cpp): a game mod's DLL has none of its own.
+extern FramePartSpan framePartSpans[static_cast<int>(FramePart::count)];
 
 // Times its scope into `part`.
 struct FramePartTimer {

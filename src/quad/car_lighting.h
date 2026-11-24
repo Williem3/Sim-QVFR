@@ -107,15 +107,12 @@ inline CarLighting car_lighting_from_bits(uint64_t bits) {
     return clamped(c);
 }
 
-// The settings as the layer applied them last (live_apply), read from any thread (the game's render thread).
-inline std::atomic<uint64_t>& car_lighting_state() {
-    static std::atomic<uint64_t> bits{car_lighting_bits(CarLighting{})};
-    return bits;
-}
-inline CarLighting car_lighting() { return car_lighting_from_bits(car_lighting_state().load(std::memory_order_relaxed)); }
-inline void set_car_lighting(const CarLighting& c) {
-    car_lighting_state().store(car_lighting_bits(c), std::memory_order_relaxed);
-}
+// The settings as the layer applied them last (live_apply), read from any thread (the game's render thread). The one
+// copy is the core's (quad/shared_state.cpp), as car_lighting_bits.
+uint64_t car_lighting_current_bits();
+void set_car_lighting_bits(uint64_t bits);
+inline CarLighting car_lighting() { return car_lighting_from_bits(car_lighting_current_bits()); }
+inline void set_car_lighting(const CarLighting& c) { set_car_lighting_bits(car_lighting_bits(c)); }
 
 // For the log: "off", or "fill 80%, occlusion 70%, highlights 100%, gloss 70%, smoothing 15 cm, shadows on, detail on".
 // Quality presets: the effects' tier (car_light_quality); the switches stay as the player set them. The A/B of

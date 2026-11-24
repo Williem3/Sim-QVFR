@@ -2,6 +2,10 @@
 // another game; an entry beyond a table's size, a null one, or a query answered below 0 gets GameAdapter's default;
 // every struct survives the trip core -> C table -> C++ mod -> core (AdapterMod over a recording GameAdapter); the mod
 // is told which game it is in; and SCS Software's two games, still built in, reach the layer through one mod's tables.
+#include <windows.h>
+#include <d3d11.h>
+#include <wrl/client.h>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -12,8 +16,11 @@
 #include "games/scssoftware/ats/game.h"
 #include "games/scssoftware/ets2/game.h"
 #include "games/adapter.h"
+#include "quad/eye_off.h"
+#include "quad/showcase.h"
 #include "mod_api/adapter_mod.h"
 #include "mod_api/host_services.h"
+#include "mod_api/mod_loader.h"
 #include "mod_api/mod.hpp"
 #include "mod_api/plugin_adapter.h"
 
@@ -466,6 +473,114 @@ void scs_through_the_tables() {
     check(scs::mod_entry(&host) == nullptr, "the SCS mod refuses a core of another ABI");
 }
 
+// The module an address is in.
+HMODULE module_of(const void* address) {
+    HMODULE m = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       static_cast<LPCWSTR>(address), &m);
+    return m;
+}
+
+// The SCS games' mod DLL (SIM_QVFR_SCS_AS_MOD) through the core's real loader: mods\scs\sim-qvfr-scs.dll beside the
+// core (here the test program, in build\<config>), LoadLibraryExW by full path, sqvfr_mod_entry, the tables.
+void scs_dll_through_the_loader() {
+    const std::wstring folder = simqvfr::mod_api::mods_folder();
+    check(folder.size() > 5 && _wcsicmp(folder.c_str() + folder.size() - 5, L"\\mods") == 0, "the mods folder");
+    std::string why;
+    check(!simqvfr::mod_api::load_mod_dll(L"mods\\scs\\sim-qvfr-scs.dll", &::ats::kGame, why) &&
+              why.find("full path") != std::string::npos,
+          "a relative path is refused");
+    check(!simqvfr::mod_api::load_mod_dll(folder + L"\\none\\sim-qvfr-none.dll", &::ats::kGame, why) &&
+              why.find("no mod") != std::string::npos,
+          "a missing mod is refused");
+#ifdef SIM_QVFR_SCS_AS_MOD
+    const std::wstring path = simqvfr::mod_api::mod_dll_path(L"scs", L"sim-qvfr-scs.dll");
+    const GameInfo* games[2] = {&::ats::kGame, &::ets2::kGame};
+    for (const GameInfo* game : games) {
+        auto a = simqvfr::mod_api::load_mod_dll(path, game, why);
+        check(a != nullptr, "the SCS mod DLL loads");
+        if (!a) {
+            std::printf("  why: %s\n", why.c_str());
+            continue;
+        }
+        const SqvfrMod& t = a->table();
+        const HMODULE dll = GetModuleHandleW(L"sim-qvfr-scs.dll");
+        check(dll != nullptr && module_of(reinterpret_cast<const void*>(t.has_qvfr)) == dll &&
+                  module_of(t.self) == dll,
+              "the table and its mod are the DLL's");
+        check(t.abi == SQVFR_ABI_VERSION && t.size == sizeof(SqvfrMod) && std::strcmp(t.gameId, game->id) == 0,
+              "the DLL's table: ABI, size, its game");
+        check(a->info() == game && !a->has_qvfr() && !a->own_qvfr(nullptr) && !a->wants_gaze() && !a->shows_overlay() &&
+                  !a->observes_d3d11() && a->hang_watch_s() == 30 &&
+                  a->qvfr_multi_view() == simqvfr::games::QvfrMultiView::none,
+              "the DLL's SCS adapter answers as the built-in one before a launch");
+        XrFrameEndInfo fe = {XR_TYPE_FRAME_END_INFO};
+        check(a->adjust_frame_end(&fe, nullptr) == &fe, "the DLL passes a frame on when the corner is off");
+    }
+    // The layer's own path for the game goes through the DLL too.
+    GameAdapter& layer = simqvfr::games::adapter_for(&::ats::kGame);
+    auto* plugin = dynamic_cast<PluginAdapter*>(&layer);
+    check(plugin && module_of(plugin->table().self) == GetModuleHandleW(L"sim-qvfr-scs.dll"),
+          "adapter_for(ATS) is the DLL's");
+#else
+    std::printf("mod_api_test: SIM_QVFR_SCS_AS_MOD off, the SCS DLL isn't built (its load not tested)\n");
+#endif
+}
+
+// The host's D3D11 hooks with a mod's C observers (what a mod DLL's context_hooks calls reach), on a WARP device: draws
+// and render-target binds seen, a draw replaced, the bypass passing our own calls straight on.
+int hookDraws = 0, hookTargets = 0, hookReplaced = 0;
+void* hookContext = nullptr;
+
+void host_d3d11_hooks_on_warp() {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,
+                                 nullptr, &context))) {
+        check(false, "a WARP device");
+        return;
+    }
+    const SqvfrHost& h = simqvfr::mod_api::host_table();
+    hookContext = context.Get();
+    SqvfrD3D11Observers o = {};
+    o.draw = [](void* c, int32_t, uint32_t, uint32_t) {
+        if (c == hookContext)
+            ++hookDraws;
+    };
+    o.targets = [](void* c, uint32_t, void* const*, void*) {
+        if (c == hookContext)
+            ++hookTargets;
+    };
+    o.draw_replace = [](void*, int32_t entry, const SqvfrDrawCall* call) -> int32_t {
+        if (entry == SQVFR_D3D11_DRAW && call->count == 7) {
+            ++hookReplaced;
+            return 1;  // drawn in the game's place
+        }
+        return 0;
+    };
+    const uint32_t wanted = (1u << SQVFR_D3D11_DRAW) | (1u << SQVFR_D3D11_OM_SET_RENDER_TARGETS);
+    check(h.d3d11_hooks_install(context.Get(), wanted, &o) == 1 && h.d3d11_hooks_installed() == 1,
+          "the host's D3D11 hooks install with C observers");
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    context->Draw(3, 0);
+    context->Draw(7, 0);
+    check(hookDraws == 2 && hookTargets == 1, "draws and binds reach the C observers");
+    check(hookReplaced == 1, "a draw replaced through the C observer");
+    h.d3d11_hooks_bypass(1);
+    context->Draw(3, 0);
+    h.d3d11_hooks_bypass(0);
+    check(hookDraws == 2, "a bypassed call goes straight on");
+    h.d3d11_hooks_rescan();
+    h.d3d11_hooks_uninstall();
+    context->Draw(3, 0);
+    check(hookDraws == 2 && h.d3d11_hooks_installed() == 0, "nothing observed after uninstall");
+    SqvfrNvapiSupport nv = {-1, -1, -1, -1, -1};
+    h.nvapi_query(device.Get(), &nv);
+    check(nv.loaded == 0 || nv.loaded == 1, "nvapi_query answers (WARP: whatever the PC has)");
+    check(h.nvapi_status_name(0) != nullptr, "nvapi_status_name");
+}
+
 void host_table_filled() {
     const SqvfrHost& h = simqvfr::mod_api::host_table();
     check(h.size == sizeof(SqvfrHost) && h.abi == SQVFR_ABI_VERSION, "the host table's header");
@@ -473,6 +588,34 @@ void host_table_filled() {
               h.code_write && h.code_redirect && h.vtable_slot && h.vtable_slot_replace && h.readable &&
               h.request_game_exit,
           "every host entry is filled");
+    check(h.log_debug_on && h.log_dir && h.d3d11_hooks_install && h.d3d11_hooks_rescan && h.d3d11_hooks_uninstall &&
+              h.d3d11_hooks_installed && h.d3d11_hooks_bypass && h.multi_view_shaders_install &&
+              h.multi_view_shaders_device && h.multi_view_shaders_option && h.multi_view_shaders_frame_end &&
+              h.multi_view_shaders_backend && h.nvapi_query && h.nvapi_set_two_views && h.nvapi_status_name &&
+              h.aftermath_built && h.aftermath_enable_dumps && h.aftermath_attach && h.aftermath_mark &&
+              h.aftermath_marking && h.aftermath_set_marker_names && h.aftermath_after_removal && h.aftermath_detach &&
+              h.hang_watch_on_fire && h.stock_wanted && h.set_stock_active && h.note_scene_frame && h.eye_off &&
+              h.car_lighting_bits,
+          "every appended host entry is filled");
+    // The shared switches are the core's one copy.
+    simqvfr::set_stock_wanted(true);
+    check(h.stock_wanted() == 1, "stock_wanted through the host is the core's");
+    simqvfr::set_stock_wanted(false);
+    simqvfr::set_eye_off(1);
+    check(h.eye_off() == 1, "eye_off through the host is the core's");
+    simqvfr::set_eye_off(-1);
+    h.set_stock_active(1);
+    check(simqvfr::stock_active(), "set_stock_active through the host reaches the core");
+    h.set_stock_active(0);
+    const uint64_t frames = simqvfr::scene_frames();
+    h.note_scene_frame();
+    check(simqvfr::scene_frames() == frames + 1, "note_scene_frame through the host counts in the core");
+    // Nested bypasses balance (context_hooks.h's depth count).
+    h.d3d11_hooks_bypass(1);
+    h.d3d11_hooks_bypass(1);
+    h.d3d11_hooks_bypass(0);
+    h.d3d11_hooks_bypass(0);
+    check(h.d3d11_hooks_installed() == 0, "no D3D11 hooks without an install");
     check(h.ini_path() != nullptr && h.module_base() != 0, "host entries answer");
     int local = 0;
     check(h.readable(&local, sizeof(local)) == 1 && h.readable(nullptr, 4) == 0, "readable");
@@ -487,6 +630,8 @@ int SIM_QVFR_TEST_MAIN() {
     structs_round_trip();
     host_names_the_game();
     scs_through_the_tables();
+    scs_dll_through_the_loader();
+    host_d3d11_hooks_on_warp();
     host_table_filled();
     if (failures) {
         std::printf("mod_api_test: %d failure(s)\n", failures);

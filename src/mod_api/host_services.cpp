@@ -4,12 +4,23 @@
 
 #include <MinHook.h>
 
+#include <d3d11.h>
+
+#include <new>
 #include <string>
 
 #include "../dev_build.h"
 #include "../engine/code_patch.h"
+#include "../engine/context_hooks.h"
+#include "../engine/nvapi_stereo.h"
+#include "../games/lmu/mvr_probe.h"
 #include "../log.h"
+#include "../probe/aftermath.h"
+#include "../probe/hang_watch.h"
 #include "../probe/run_exit.h"
+#include "../quad/car_lighting.h"
+#include "../quad/eye_off.h"
+#include "../quad/showcase.h"
 
 namespace simqvfr::mod_api {
 
@@ -82,6 +93,132 @@ int32_t host_readable(const void* address, size_t size) { return b(address && re
 
 int32_t host_request_game_exit(const char* why) { return request_game_exit(why ? why : "a mod asked"); }
 
+int32_t host_log_debug_on() { return b(log_debug()); }
+
+const wchar_t* host_log_dir() {
+    static const std::wstring dir = log_directory();
+    return dir.c_str();
+}
+
+// ---- The D3D11 context hooks: the mod's C observers behind the core's (one install at a time, context_hooks.h) ----
+
+namespace ch = context_hooks;
+
+static_assert(int{SQVFR_D3D11_UNMAP} == int{ch::kUnmap} && int{SQVFR_D3D11_DRAW_INSTANCED} == int{ch::kDrawInstanced} &&
+                  int{SQVFR_D3D11_PS_SET_CONSTANT_BUFFERS1} == int{ch::kPSSetConstantBuffers1},
+              "mod_api.h's D3D11 entries follow context_hooks.h's");
+static_assert(sizeof(SqvfrDrawCall) == sizeof(ch::DrawCall), "SqvfrDrawCall mirrors context_hooks::DrawCall");
+
+SqvfrD3D11Observers modObservers = {};
+
+void t_targets(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    modObservers.targets(c, n, reinterpret_cast<void* const*>(rtvs), dsv);
+}
+void t_draw(ID3D11DeviceContext* c, ch::Entry e, UINT count, UINT instances) { modObservers.draw(c, e, count, instances); }
+void t_execute(ID3D11DeviceContext* c, ID3D11CommandList* list) { modObservers.execute(c, list); }
+bool t_draw_replace(ID3D11DeviceContext* c, ch::Entry e, const ch::DrawCall& call) {
+    const SqvfrDrawCall d = {call.count, call.instances, call.start, call.startInstance, call.baseVertex};
+    return modObservers.draw_replace(c, e, &d) != 0;
+}
+void t_draw_after(ID3D11DeviceContext* c, ch::Entry e, UINT count, UINT instances, UINT start) {
+    modObservers.draw_after(c, e, count, instances, start);
+}
+bool t_viewports(ID3D11DeviceContext* c, UINT n, const D3D11_VIEWPORT* in, D3D11_VIEWPORT* out) {
+    return modObservers.viewports(c, n, in, out) != 0;
+}
+bool t_scissors(ID3D11DeviceContext* c, UINT n, const D3D11_RECT* in, D3D11_RECT* out) {
+    return modObservers.scissors(c, n, in, out) != 0;
+}
+bool t_constant_buffers(ID3D11DeviceContext* c, bool pixel, UINT start, UINT n, ID3D11Buffer* const* in,
+                        ID3D11Buffer** out) {
+    return modObservers.constant_buffers(c, b(pixel), start, n, reinterpret_cast<void* const*>(in),
+                                         reinterpret_cast<void**>(out)) != 0;
+}
+void t_unmap(ID3D11DeviceContext* c, ID3D11Resource* r, UINT sub) { modObservers.unmap(c, r, sub); }
+
+int32_t host_d3d11_hooks_install(void* context, uint32_t wanted, const SqvfrD3D11Observers* observers) {
+    if (!context || !observers || ch::installed())
+        return 0;
+    modObservers = *observers;
+    ch::Observers o;
+    o.targets = modObservers.targets ? t_targets : nullptr;
+    o.draw = modObservers.draw ? t_draw : nullptr;
+    o.execute = modObservers.execute ? t_execute : nullptr;
+    o.draw_replace = modObservers.draw_replace ? t_draw_replace : nullptr;
+    o.draw_after = modObservers.draw_after ? t_draw_after : nullptr;
+    o.viewports = modObservers.viewports ? t_viewports : nullptr;
+    o.scissors = modObservers.scissors ? t_scissors : nullptr;
+    o.constant_buffers = modObservers.constant_buffers ? t_constant_buffers : nullptr;
+    o.unmap = modObservers.unmap ? t_unmap : nullptr;
+    return b(ch::install(static_cast<ID3D11DeviceContext*>(context), wanted, o));
+}
+void host_d3d11_hooks_rescan() { ch::rescan(); }
+void host_d3d11_hooks_uninstall() { ch::uninstall(); }
+int32_t host_d3d11_hooks_installed() { return b(ch::installed()); }
+void host_d3d11_hooks_bypass(int32_t enter) {
+    // A Bypass is a depth count on this thread (context_hooks.cpp): entering constructs one, leaving destroys one.
+    alignas(ch::Bypass) static thread_local unsigned char slot[sizeof(ch::Bypass)];
+    if (enter)
+        new (slot) ch::Bypass;
+    else
+        std::launder(reinterpret_cast<ch::Bypass*>(slot))->~Bypass();
+}
+
+// ---- The multi-view shader service, NVAPI, Aftermath, the hang watch, the shared switches ----
+
+int32_t host_mvs_install(const wchar_t* ini, int32_t attachTwins, int32_t nameShaders) {
+    return b(lmu::mvr_probe_install(ini, attachTwins != 0, nameShaders != 0));
+}
+void host_mvs_device(void* device) { lmu::mvr_probe_device(static_cast<ID3D11Device*>(device)); }
+void host_mvs_option(int32_t option, int32_t on) {
+    switch (option) {
+        case SQVFR_MVS_POSITION_TWINS: lmu::mvr_probe_position_twins(on != 0); break;
+        case SQVFR_MVS_OWN_PIXEL_LOADS: lmu::mvr_probe_own_pixel_loads(on != 0); break;
+        case SQVFR_MVS_TINT_ROWS: lmu::mvr_probe_tint_rows(on != 0); break;
+        case SQVFR_MVS_CB_ROWS: lmu::mvr_probe_cb_rows(on != 0); break;
+        default: break;
+    }
+}
+void host_mvs_frame_end() { lmu::mvr_probe_frame_end(); }
+int32_t host_mvs_backend() {
+    switch (lmu::mvr_probe_backend()) {
+        case lmu::MvrBackend::nvapi: return SQVFR_MVS_BACKEND_NVAPI;
+        case lmu::MvrBackend::instanced: return SQVFR_MVS_BACKEND_INSTANCED;
+        default: return SQVFR_MVS_BACKEND_NONE;
+    }
+}
+
+void host_nvapi_query(void* device, SqvfrNvapiSupport* out) {
+    if (!out)
+        return;
+    const nvapi::Support s = nvapi::query(static_cast<ID3D11Device*>(device));
+    *out = {b(s.loaded), b(s.singlePassStereo), b(s.xyzw), b(s.multiView), s.status};
+}
+int32_t host_nvapi_set_two_views(void* context, int32_t on, int32_t independentMasks, uint32_t targetOffset) {
+    return nvapi::set_two_views(static_cast<ID3D11DeviceContext*>(context), on != 0, independentMasks != 0, targetOffset);
+}
+const char* host_nvapi_status_name(int32_t status) { return nvapi::status_name(status); }
+
+int32_t host_aftermath_built() { return b(aftermath::built()); }
+int32_t host_aftermath_enable_dumps() { return b(aftermath::enable_dumps()); }
+int32_t host_aftermath_attach(void* device, void* context, int32_t shaderErrors) {
+    return b(aftermath::attach(static_cast<ID3D11Device*>(device), static_cast<ID3D11DeviceContext*>(context),
+                               shaderErrors != 0));
+}
+void host_aftermath_mark(uint64_t code) { aftermath::mark(code); }
+int32_t host_aftermath_marking() { return b(aftermath::marking()); }
+void host_aftermath_set_marker_names(void (*name)(uint64_t, char*, unsigned)) { aftermath::set_marker_names(name); }
+void host_aftermath_after_removal(unsigned waitMs) { aftermath::after_removal(waitMs); }
+void host_aftermath_detach() { aftermath::detach(); }
+
+void host_hang_watch_on_fire(void (*fn)(void)) { hang_watch_on_fire(fn); }
+
+int32_t host_stock_wanted() { return b(stock_wanted()); }
+void host_set_stock_active(int32_t on) { set_stock_active(on != 0); }
+void host_note_scene_frame() { note_scene_frame(); }
+int32_t host_eye_off() { return eye_off(); }
+uint64_t host_car_lighting_bits() { return car_lighting_current_bits(); }
+
 }  // namespace
 
 const SqvfrHost& host_table() {
@@ -104,6 +241,35 @@ const SqvfrHost& host_table() {
         h.vtable_slot_replace = host_vtable_slot_replace;
         h.readable = host_readable;
         h.request_game_exit = host_request_game_exit;
+        h.log_debug_on = host_log_debug_on;
+        h.log_dir = host_log_dir;
+        h.d3d11_hooks_install = host_d3d11_hooks_install;
+        h.d3d11_hooks_rescan = host_d3d11_hooks_rescan;
+        h.d3d11_hooks_uninstall = host_d3d11_hooks_uninstall;
+        h.d3d11_hooks_installed = host_d3d11_hooks_installed;
+        h.d3d11_hooks_bypass = host_d3d11_hooks_bypass;
+        h.multi_view_shaders_install = host_mvs_install;
+        h.multi_view_shaders_device = host_mvs_device;
+        h.multi_view_shaders_option = host_mvs_option;
+        h.multi_view_shaders_frame_end = host_mvs_frame_end;
+        h.multi_view_shaders_backend = host_mvs_backend;
+        h.nvapi_query = host_nvapi_query;
+        h.nvapi_set_two_views = host_nvapi_set_two_views;
+        h.nvapi_status_name = host_nvapi_status_name;
+        h.aftermath_built = host_aftermath_built;
+        h.aftermath_enable_dumps = host_aftermath_enable_dumps;
+        h.aftermath_attach = host_aftermath_attach;
+        h.aftermath_mark = host_aftermath_mark;
+        h.aftermath_marking = host_aftermath_marking;
+        h.aftermath_set_marker_names = host_aftermath_set_marker_names;
+        h.aftermath_after_removal = host_aftermath_after_removal;
+        h.aftermath_detach = host_aftermath_detach;
+        h.hang_watch_on_fire = host_hang_watch_on_fire;
+        h.stock_wanted = host_stock_wanted;
+        h.set_stock_active = host_set_stock_active;
+        h.note_scene_frame = host_note_scene_frame;
+        h.eye_off = host_eye_off;
+        h.car_lighting_bits = host_car_lighting_bits;
         return h;
     }();
     return host;

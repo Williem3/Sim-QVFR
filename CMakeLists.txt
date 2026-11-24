@@ -121,6 +121,17 @@ if(AFTERMATH_SDK_DIR AND SIM_QVFR_VERSION STREQUAL "dev" AND EXISTS "${AFTERMATH
    AND EXISTS "${AFTERMATH_SDK_DIR}/lib/x64/GFSDK_Aftermath_Lib.x64.dll")
   set(SIM_QVFR_AFTERMATH ON)
 endif()
+# SCS Software's games (ATS, ETS2): built into the core, or with SIM_QVFR_SCS_AS_MOD as their own game mod, the DLL
+# mods/scs/sim-qvfr-scs.dll the core loads (src/mod_api, docs/architecture/mod-manager-plan.md; the nightly line).
+option(SIM_QVFR_SCS_AS_MOD "Build SCS Software's games as their own mod DLL (mods/scs/sim-qvfr-scs.dll)" OFF)
+set(SIM_QVFR_SCS_SOURCES
+  src/games/scssoftware/adapter.cpp src/games/scssoftware/mod_entry.cpp src/games/scssoftware/pass_probe.cpp
+  src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp
+  src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp
+  src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp
+  src/games/scssoftware/corner_mirror_diag.cpp src/games/scssoftware/corner_anomaly.cpp
+  src/games/scssoftware/fixation.cpp)
+
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
 # A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
@@ -128,15 +139,20 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/aftermath.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/cpp_exceptions.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_placement.cpp src/probe/cpu_isolation.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/replay_probe.cpp src/games/ace/replay_focus.cpp src/games/ace/replay_lighting.cpp src/games/ace/replay_transparents.cpp src/games/ace/replay_post.cpp src/games/ace/replay_eye_live.cpp src/games/ace/replay_fixation.cpp src/games/ace/replay_samples.cpp src/games/ace/replay_cull.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/xplane/spirv_module.cpp src/games/xplane/spirv_patch_eyes.cpp src/games/xplane/spirv_patch_focus.cpp src/games/xplane/spirv_patch_rays.cpp src/games/xplane/spirv_patch_view_rects.cpp src/games/xplane/spirv_patch_diag.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/mod_entry.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/games/scssoftware/corner_mirror_diag.cpp src/games/scssoftware/corner_anomaly.cpp src/games/scssoftware/fixation.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/replay_probe.cpp src/games/ace/replay_focus.cpp src/games/ace/replay_lighting.cpp src/games/ace/replay_transparents.cpp src/games/ace/replay_post.cpp src/games/ace/replay_eye_live.cpp src/games/ace/replay_fixation.cpp src/games/ace/replay_samples.cpp src/games/ace/replay_cull.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/xplane/spirv_module.cpp src/games/xplane/spirv_patch_eyes.cpp src/games/xplane/spirv_patch_focus.cpp src/games/xplane/spirv_patch_rays.cpp src/games/xplane/spirv_patch_view_rects.cpp src/games/xplane/spirv_patch_diag.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/mod_api/mod_loader.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/d3d11_fixation.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
-  src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/showcase.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
+  src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/showcase.cpp src/quad/shared_state.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(sim_qvfr_core PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 target_precompile_headers(sim_qvfr_core PRIVATE ${SIM_QVFR_PCH})
+if(SIM_QVFR_SCS_AS_MOD)
+  target_compile_definitions(sim_qvfr_core PRIVATE SIM_QVFR_SCS_AS_MOD)
+else()
+  target_sources(sim_qvfr_core PRIVATE ${SIM_QVFR_SCS_SOURCES})
+endif()
 if(SIM_QVFR_AFTERMATH)
   set_property(SOURCE src/probe/aftermath.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${AFTERMATH_SDK_DIR}/include")
   set_property(SOURCE src/probe/aftermath.cpp APPEND PROPERTY COMPILE_DEFINITIONS SIM_QVFR_AFTERMATH
@@ -192,6 +208,30 @@ add_custom_command(TARGET sim_qvfr POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_CURRENT_SOURCE_DIR}/manifest/VkLayer_SIM_qvfr_early.json
           $<TARGET_FILE_DIR:sim_qvfr>/vulkan/VkLayer_SIM_qvfr_early.json)
+
+if(SIM_QVFR_SCS_AS_MOD)
+  # The SCS games as a game mod: their sources, the core's services through the host table (mod_api/core_shim.cpp)
+  # and the stateless helpers they draw with. No core library: everything with process-wide state stays the core's.
+  add_library(sim_qvfr_scs SHARED ${SIM_QVFR_SCS_SOURCES} src/games/scssoftware/mod_export.cpp
+    src/mod_api/core_shim.cpp src/quad/d3d11_fixation.cpp src/quad/d3d11_depth_probe.cpp src/probe/d3d11_capture.cpp)
+  target_include_directories(sim_qvfr_scs PRIVATE src ${THIRD_PARTY}/openxr/include)
+  target_compile_definitions(sim_qvfr_scs PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX SIM_QVFR_MOD_BUILD)
+  target_compile_options(sim_qvfr_scs PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(sim_qvfr_scs PRIVATE d3d11 dxgi d3dcompiler windowscodecs ole32 dxguid)
+  set_target_properties(sim_qvfr_scs PROPERTIES OUTPUT_NAME sim-qvfr-scs
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/mods/scs)
+  sim_qvfr_version_info(sim_qvfr_scs sim-qvfr-scs.dll VFT_DLL "Sim-QVFR game mod: ATS and ETS2")
+  add_custom_command(TARGET sim_qvfr_scs POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/src/games/scssoftware/mod.json
+            $<TARGET_FILE_DIR:sim_qvfr_scs>/mod.json)
+  add_dependencies(sim_qvfr sim_qvfr_scs)
+  # The same sources linked straight into the test program, for the tests of the SCS code itself.
+  add_library(sim_qvfr_scs_inproc STATIC ${SIM_QVFR_SCS_SOURCES})
+  target_include_directories(sim_qvfr_scs_inproc PRIVATE src ${THIRD_PARTY}/openxr/include)
+  target_compile_definitions(sim_qvfr_scs_inproc PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(sim_qvfr_scs_inproc PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(sim_qvfr_scs_inproc PUBLIC sim_qvfr_core d3d11)
+endif()
 
 # Offline check of the layer chain (tests/layer_chain_test.cpp): it negotiates the built sim-qvfr.dll.
 sim_qvfr_test(layer_chain_test tests/layer_chain_test.cpp)
@@ -424,7 +464,10 @@ sim_qvfr_test(mod_api_test tests/mod_api_test.cpp)
 target_include_directories(mod_api_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(mod_api_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(mod_api_test PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(mod_api_test PRIVATE sim_qvfr_core)
+target_link_libraries(mod_api_test PRIVATE sim_qvfr_core d3d11)
+if(SIM_QVFR_SCS_AS_MOD)
+  target_compile_definitions(mod_api_test PRIVATE SIM_QVFR_SCS_AS_MOD)
+endif()
 
 # Offline check of the frame records carried to the composition (tests/frame_records_test.cpp).
 sim_qvfr_test(frame_records_test tests/frame_records_test.cpp)
@@ -875,6 +918,9 @@ add_executable(sim_qvfr_tests ${CMAKE_CURRENT_BINARY_DIR}/generated/tests_main.c
 target_compile_options(sim_qvfr_tests PRIVATE /W4 /permissive- /utf-8)
 # The layer and launcher objects by name: an object library reaches only the target that links it directly.
 target_link_libraries(sim_qvfr_tests PRIVATE ${_tests} sim_qvfr_layer sim_qvfr_launcher_shared shell32)
+if(SIM_QVFR_SCS_AS_MOD)
+  target_link_libraries(sim_qvfr_tests PRIVATE sim_qvfr_scs_inproc)
+endif()
 # What the tests load or start from beside the program: the layer, the launcher (the dump helper), the fake runtime.
 add_dependencies(sim_qvfr_tests sim_qvfr sim_qvfr_launcher cheeky_fake_runtime)
 # A deterministic link (no time stamp in the exe): a build that changed nothing the tests use relinks to the same

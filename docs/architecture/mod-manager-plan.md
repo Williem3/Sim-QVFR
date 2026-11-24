@@ -14,6 +14,36 @@ Sim-QVFR splits into a signed **core** and one **mod DLL per game**:
 - First-party games use the same plugin path as community mods.
 - The launcher gives each installed mod its own tab, and a mod can be updated on its own.
 
+## Where this work lives: the nightly line
+
+This work is **never merged into `development` or `main`** (the user's rule, 2026-11-24). It lives as its own
+**nightly** line. From it come nightly builds for players who want to test, and for mod authors who want to build
+against the SDK. The stable releases (1.2.x and on) don't change.
+
+- **Branch.** Today the work is on `claude/mod-manager`, cut from development 58d60ae. It can be renamed to a
+  long-lived `nightly` branch when the first nightly build goes out (the user's call).
+- **Keeping it current.** Merge `development` into nightly regularly, never the other way and never by cherry-pick.
+  Stable fixes then reach nightly testers, and nightly never leaks into a release.
+- **Version.** `<next stable>-nightly.<yyyymmdd>`, for example `1.3.0-nightly.20261124 (<short sha>)`. A nightly
+  build is told apart from a release in the About pane, the log header and the report bundle.
+- **Not offered to stable players.** The shipped launchers' updater takes the highest GitHub release that has a
+  `sim-qvfr-*.zip` asset (`update_check.cpp` `package_zip`). Its version compare reads only the leading numbers, and
+  a tag with no numbers compares equal to every version, so it is kept if it comes first in the list. So:
+  - a nightly published in the Sim-QVFR repository must **not** have an asset named `sim-qvfr-*.zip`. Name it
+    `sqvfr-nightly-<version>.zip`, or publish nightlies in a separate repository;
+  - this matters for launchers already out there, so it can't be fixed in their code. It is a rule for how nightly
+    builds are published.
+- **The nightly launcher's own updater** follows the nightly channel only. It looks for `sqvfr-nightly-*.zip` or a
+  nightly repository, and offers going back to stable as an explicit choice.
+- **Settings and data.** A nightly install keeps its own folder. Its one-time migration (phase 2) works on a copy and
+  never on a stable install's `sim-qvfr.ini`, so a tester can go back to stable.
+- **Signing.** Nightly builds are signed like releases, by hand, or left unsigned. An unsigned nightly can't start
+  a Run with anti-cheat launch (the launcher refuses one, and EAC refuses the DLL). That keeps nightly testers out
+  of anti-cheat games unless a build is signed.
+- **SDK on nightly.** The ABI is `SQVFR_ABI_VERSION` 1 and may still change while it is nightly-only. Every
+  breaking change bumps the version, so an old mod is refused with a reason instead of crashing. The SDK zip on a
+  nightly says which ABI it builds. ABI 1 is frozen when the first stable release with mods ships.
+
 ## Decisions
 
 1. **Plugin ABI: a versioned C function table, wrapped in a header-only C++ class for mod authors.** We don't
@@ -91,6 +121,36 @@ The SCS games go through the table even though they are still built into the DLL
 names, exe, Steam folder and app id, builds and defaults. `features`, `qvfrImage`, `dll`, `version` and `update`
 are shared at the top level, and an entry can override them. The launcher makes one tab per entry. The layer finds
 the entry by exe and passes its `id` as `SqvfrHost::gameId`. Each game keeps its own `games/<id>/` ini and logs.
+
+## Phase 4, first step: the SCS games as their own DLL
+
+What it does:
+
+- **The option.** Build with `-DSIM_QVFR_SCS_AS_MOD=ON` (default OFF; OFF builds as before). The SCS sources then
+  leave the core and become `<build>\<config>\mods\scs\sim-qvfr-scs.dll`. Its one export is `sqvfr_mod_entry`, and
+  `mod.json` (with a `games` array for `ats` and `ets2`) is copied beside it.
+- **Loading.** The core loads the DLL from the package's `mods` folder by full path, with
+  `LoadLibraryExW(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)` (`mod_api/mod_loader.cpp`). There
+  is no trust check yet: the log says the mod was loaded UNVERIFIED. A mod that won't load leaves the game on log
+  only.
+- **The mod side.** The game's sources are unchanged. `mod_api/core_shim.cpp`, compiled into the mod only, defines
+  the core functions they call, each forwarding to `SqvfrHost`: log, D3D11 context hooks, the multi-view shader
+  service, NVAPI, Aftermath, the hang watch, and the layer's switches. Stateless helpers are compiled into the DLL:
+  `d3d11_state`, `dlss_math`, `corner_fit`, `D3D11Fixation`, `d3d11_capture`.
+- **Shared state moved into the core.** The process-wide state that sat in inline headers is in
+  `quad/shared_state.cpp` now: showcase, car lighting, eye off and the frame parts. The mod reads it through the host
+  table.
+- **Tests.**
+  - With the option on, the test program links an in-process copy of the SCS sources for the SCS code's own tests.
+  - `mod_api_test` loads the built DLL through the real loader and checks the tables.
+  - It also drives the host's D3D11 hooks with C observers on a WARP device.
+
+Left for later:
+
+- `lmu/mvr_probe` stays where it is. It is reached as a service through the host, but it still lives in LMU's folder
+  and includes LMU's YEBIS shaders.
+- Packaging the `mods` folder into a nightly ZIP.
+- The mod-side context-hook trampolines are exercised only in a game.
 
 ## What phase 4 has to solve first
 

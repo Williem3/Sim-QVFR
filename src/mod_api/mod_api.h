@@ -137,6 +137,61 @@ enum { SQVFR_LOG_INFO = 0, SQVFR_LOG_DEBUG = 1 };
 /* SqvfrHost::flags */
 #define SQVFR_HOST_DEV_BUILD 0x1u /* a development build of the core (diagnostic switches allowed) */
 
+/* engine/context_hooks.h Entry, as bits for SqvfrHost::d3d11_hooks_install's `wanted` (1 << entry). */
+enum {
+    SQVFR_D3D11_OM_SET_RENDER_TARGETS = 0,
+    SQVFR_D3D11_OM_SET_RENDER_TARGETS_AND_UAVS = 1,
+    SQVFR_D3D11_DRAW_INDEXED = 2,
+    SQVFR_D3D11_DRAW = 3,
+    SQVFR_D3D11_DRAW_INDEXED_INSTANCED = 4,
+    SQVFR_D3D11_DRAW_INSTANCED = 5,
+    SQVFR_D3D11_DRAW_INDEXED_INSTANCED_INDIRECT = 6,
+    SQVFR_D3D11_DRAW_INSTANCED_INDIRECT = 7,
+    SQVFR_D3D11_EXECUTE_COMMAND_LIST = 8,
+    SQVFR_D3D11_RS_SET_VIEWPORTS = 9,
+    SQVFR_D3D11_RS_SET_SCISSOR_RECTS = 10,
+    SQVFR_D3D11_VS_SET_CONSTANT_BUFFERS1 = 11,
+    SQVFR_D3D11_PS_SET_CONSTANT_BUFFERS1 = 12,
+    SQVFR_D3D11_UNMAP = 13
+};
+
+/* context_hooks.h DrawCall. */
+typedef struct SqvfrDrawCall {
+    uint32_t count, instances, start, startInstance;
+    int32_t baseVertex;
+} SqvfrDrawCall;
+
+/* context_hooks.h Observers, each null or a function of the mod's. D3D11 objects as opaque pointers (`context` an
+ * ID3D11DeviceContext*, `rtvs` ID3D11RenderTargetView* const*, `viewports` D3D11_VIEWPORT, `rects` D3D11_RECT,
+ * `buffers` ID3D11Buffer*), entries as SQVFR_D3D11_*. Booleans returned as int32_t. */
+typedef struct SqvfrD3D11Observers {
+    void (*targets)(void* context, uint32_t count, void* const* rtvs, void* dsv);
+    void (*draw)(void* context, int32_t entry, uint32_t count, uint32_t instances);
+    void (*execute)(void* context, void* list);
+    int32_t (*draw_replace)(void* context, int32_t entry, const SqvfrDrawCall* call);
+    void (*draw_after)(void* context, int32_t entry, uint32_t count, uint32_t instances, uint32_t start);
+    int32_t (*viewports)(void* context, uint32_t count, const void* in, void* out);
+    int32_t (*scissors)(void* context, uint32_t count, const void* in, void* out);
+    int32_t (*constant_buffers)(void* context, int32_t pixel, uint32_t start, uint32_t count, void* const* in,
+                                void** out);
+    void (*unmap)(void* context, void* resource, uint32_t subresource);
+} SqvfrD3D11Observers;
+
+/* engine/nvapi_stereo.h Support. */
+typedef struct SqvfrNvapiSupport {
+    int32_t loaded, singlePassStereo, xyzw, multiView;
+    int32_t status;
+} SqvfrNvapiSupport;
+
+/* SqvfrHost::multi_view_shaders_option */
+enum {
+    SQVFR_MVS_POSITION_TWINS = 0,  /* mvr_probe_position_twins */
+    SQVFR_MVS_OWN_PIXEL_LOADS = 1, /* mvr_probe_own_pixel_loads */
+    SQVFR_MVS_TINT_ROWS = 2,       /* mvr_probe_tint_rows */
+    SQVFR_MVS_CB_ROWS = 3          /* mvr_probe_cb_rows */
+};
+enum { SQVFR_MVS_BACKEND_NONE = 0, SQVFR_MVS_BACKEND_NVAPI = 1, SQVFR_MVS_BACKEND_INSTANCED = 2 };
+
 /* ---- core -> mod ---- */
 
 typedef struct SqvfrHost {
@@ -174,6 +229,55 @@ typedef struct SqvfrHost {
 
     /* Asks the game to close as its window's close button does (diagnostic runs); how many windows were asked. */
     int32_t (*request_game_exit)(const char* why);
+
+    /* ---- Appended after the first slice (still ABI 1: read each only where `size` covers it) ---- */
+
+    /* Debug lines are written this launch (a mod skips building costly ones otherwise). */
+    int32_t (*log_debug_on)(void);
+    /* The folder the game's session log is in (debug captures and dumps go beside it); never null. */
+    const wchar_t* (*log_dir)(void);
+
+    /* The game's D3D11 immediate context observed at the API level (engine/context_hooks.h): one set of hooks in the
+     * process, shared by the core and every mod. `wanted`: bits of SQVFR_D3D11_*; `observers` is copied. 1: hooked. */
+    int32_t (*d3d11_hooks_install)(void* context, uint32_t wanted, const struct SqvfrD3D11Observers* observers);
+    void (*d3d11_hooks_rescan)(void);
+    void (*d3d11_hooks_uninstall)(void);
+    int32_t (*d3d11_hooks_installed)(void);
+    /* Our own calls on the game's thread pass straight through while a bypass is held: 1 enters, 0 leaves (nested). */
+    void (*d3d11_hooks_bypass)(int32_t enter);
+
+    /* The core's multi-view shader service (every vertex shader given its twins at creation, the private-data GUIDs
+     * the twins carry: games/lmu/mvr_probe.h). One per process. */
+    int32_t (*multi_view_shaders_install)(const wchar_t* ini, int32_t attachTwins, int32_t nameShaders);
+    void (*multi_view_shaders_device)(void* device);
+    void (*multi_view_shaders_option)(int32_t option, int32_t on); /* SQVFR_MVS_* */
+    void (*multi_view_shaders_frame_end)(void);
+    int32_t (*multi_view_shaders_backend)(void); /* SQVFR_MVS_BACKEND_* */
+
+    /* NVIDIA's multi-view through NVAPI (engine/nvapi_stereo.h): what the device supports, two views on a context. */
+    void (*nvapi_query)(void* device, struct SqvfrNvapiSupport* support);
+    int32_t (*nvapi_set_two_views)(void* context, int32_t on, int32_t independentMasks, uint32_t targetOffset);
+    const char* (*nvapi_status_name)(int32_t status);
+
+    /* NVIDIA Nsight Aftermath GPU crash dumps (probe/aftermath.h; dev builds with the SDK, else they do nothing). */
+    int32_t (*aftermath_built)(void);
+    int32_t (*aftermath_enable_dumps)(void);
+    int32_t (*aftermath_attach)(void* device, void* context, int32_t shaderErrors);
+    void (*aftermath_mark)(uint64_t code);
+    int32_t (*aftermath_marking)(void);
+    void (*aftermath_set_marker_names)(void (*name)(uint64_t code, char* out, unsigned size));
+    void (*aftermath_after_removal)(unsigned waitMs);
+    void (*aftermath_detach)(void);
+
+    /* Called when the core's hang watch fires (probe/hang_watch.h), before it writes its dump. */
+    void (*hang_watch_on_fire)(void (*fn)(void));
+
+    /* The layer's switches the game shares (quad/showcase.h, eye_off.h, car_lighting.h). */
+    int32_t (*stock_wanted)(void);
+    void (*set_stock_active)(int32_t on);
+    void (*note_scene_frame)(void);
+    int32_t (*eye_off)(void);              /* -1 both eyes on, 0 the left off, 1 the right off */
+    uint64_t (*car_lighting_bits)(void);   /* quad/car_lighting.h's packed settings */
 } SqvfrHost;
 
 /* ---- mod -> core ---- */

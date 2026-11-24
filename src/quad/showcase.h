@@ -18,30 +18,21 @@
 
 namespace simqvfr {
 
+// The state below is the process's one copy, in the core (quad/shared_state.cpp), never in a header: a game mod's own
+// DLL reaches it through the host table (mod_api.h), so the layer and the game see the same switch.
+
 // The wish, as the layer applied it last (live_apply), read from any thread.
-inline std::atomic<bool>& stock_wanted_state() {
-    static std::atomic<bool> on{false};
-    return on;
-}
-inline bool stock_wanted() { return stock_wanted_state().load(std::memory_order_relaxed); }
-inline void set_stock_wanted(bool on) { stock_wanted_state().store(on, std::memory_order_relaxed); }
+bool stock_wanted();
+void set_stock_wanted(bool on);
 
 // What the game renders: set by the game at the frame boundary where it took the wish.
-inline std::atomic<bool>& stock_active_state() {
-    static std::atomic<bool> on{false};
-    return on;
-}
-inline bool stock_active() { return stock_active_state().load(std::memory_order_relaxed); }
-inline void set_stock_active(bool on) { stock_active_state().store(on, std::memory_order_relaxed); }
+bool stock_active();
+void set_stock_active(bool on);
 
 // Frames that drew the track (the game's scene, either side), counted by the game at its frame's end: the A/B table
 // leaves out the rest (menus, loading, pause), which would otherwise skew whichever side was showing.
-inline std::atomic<uint64_t>& scene_frames_state() {
-    static std::atomic<uint64_t> n{0};
-    return n;
-}
-inline void note_scene_frame() { scene_frames_state().fetch_add(1, std::memory_order_relaxed); }
-inline uint64_t scene_frames() { return scene_frames_state().load(std::memory_order_relaxed); }
+void note_scene_frame();
+uint64_t scene_frames();
 
 // ---- The A/B table ---------------------------------------------------------------------------------------------------
 

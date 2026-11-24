@@ -22,12 +22,9 @@ inline const char* eye_off_name(int eye) { return eye == 0 ? "the left eye off" 
 
 // The setting as the layer applied it last (live_apply), read from any thread: the game's passes (LMU's) and the
 // submission.
-inline std::atomic<int>& eye_off_state() {
-    static std::atomic<int> eye{kEyeOffNone};
-    return eye;
-}
-inline int eye_off() { return eye_off_state().load(std::memory_order_relaxed); }
-inline void set_eye_off(int eye) { eye_off_state().store(eye == 0 || eye == 1 ? eye : kEyeOffNone, std::memory_order_relaxed); }
+// The one copy is the core's (quad/shared_state.cpp).
+int eye_off();
+void set_eye_off(int eye);
 
 // A frame's layers with one eye off, and the structs they point into (kept until the runtime's xrEndFrame returns).
 struct EyeOffFrame {

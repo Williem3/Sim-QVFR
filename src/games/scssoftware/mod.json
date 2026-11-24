@@ -1,0 +1,30 @@
+{
+  "abi": 1,
+  "id": "scs",
+  "name": "SCS Software's truck simulators",
+  "author": "Sim-QVFR",
+  "version": "dev",
+  "dll": "sim-qvfr-scs.dll",
+  "features": { "layerMultiView": true, "showcase": true },
+  "qvfrImage": "DoubleWide",
+  "defaults": { "periphery": 40, "density": 150, "focusWidth": 25, "focusHeight": 25 },
+  "launchArgs": "-openxr -experimental_vr -rdevice dx11 -nointro",
+  "games": [
+    {
+      "id": "ats",
+      "name": "American Truck Simulator",
+      "shortName": "ATS",
+      "exe": "amtrucks.exe",
+      "steam": { "appId": "270880", "folder": "American Truck Simulator", "exeFolder": "bin\\win_x64" },
+      "builds": ["63ecae85a070934530d9fd971d4d56e5479f1214d7077b403f79b8981c613e08"]
+    },
+    {
+      "id": "ets2",
+      "name": "Euro Truck Simulator 2",
+      "shortName": "ETS2",
+      "exe": "eurotrucks2.exe",
+      "steam": { "appId": "227300", "folder": "Euro Truck Simulator 2", "exeFolder": "bin\\win_x64" },
+      "builds": ["055ec5343d53bd427de54b06eca74937f0d348dbb0c5d71862edddcf45e2db66"]
+    }
+  ]
+}
