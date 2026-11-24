@@ -12,6 +12,8 @@
 // - Cheeky Foveated DLSS's loader (dxgi.dll, version.dll) in the game folder: ACE fails to start with it.
 // - With Cheeky on: its runtime and OpenXR layer found; OpenXR Toolkit nearer ACE than Cheeky's layer
 //   (ACE crashes at start otherwise); with its frame generation, Toolkit's Turbo mode off (ACE crashes).
+// - Sim-QVFR's Turbo mode and OpenXR Toolkit's both on (two turbos stacked): Toolkit's off; Sim-QVFR's with Cheeky's
+//   frame generation: a note that it stays off.
 // - Eye tracked foveation without eye tracking at the last launch.
 // - A game that reaches OpenXR through OpenComposite (ACC): OpenComposite's openvr_api.dll in its folder.
 // - With Cheeky on: the game's DLSS (GameInfo::dlssDll) new enough for Cheeky's own DLSS passes (the 310 series;
@@ -64,6 +66,7 @@ struct PreflightInput {
     CheekyLayer cheekyLayer = CheekyLayer::Missing;
     LayerPlan layers;      // the launch's layers (plan_layers)
     int toolkitTurbo = -1; // OpenXR Toolkit's Turbo mode for ACE: 1 on, 0 off, -1 not set (or no Toolkit)
+    bool turbo = false;    // Sim-QVFR's own Turbo mode ([cpu] turbo, layer/turbo.h)
     bool eyeTracked = true;
     EyeTracker eyeTracker = EyeTracker::Unknown;
     int sessionFocus = -1;  // RuntimeInfo::sessionFocus

@@ -106,6 +106,7 @@ Settings load_settings(const std::wstring& ini) {
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
     s.hotkeyFooter = ini_flag(f, kHotkeyFooter);
     s.cpuIsolateMain = ini_flag(f, kCpuIsolateMain);
+    s.turbo = ini_flag(f, kTurbo);
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.dlss = read_dlss_settings(ini.c_str());
     s.nr = read_nr_settings(ini.c_str());
@@ -246,6 +247,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
     ok &= write(ini, kHotkeyFooter, s.hotkeyFooter ? L"1" : L"0");
     ok &= write(ini, kCpuIsolateMain, s.cpuIsolateMain ? L"1" : L"0");
+    ok &= write(ini, kTurbo, s.turbo ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
     ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)

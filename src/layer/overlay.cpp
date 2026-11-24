@@ -32,6 +32,7 @@
 #include "ini_put.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "layer/config.h"
 
 namespace simqvfr::layer {
 
@@ -86,6 +87,12 @@ void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_orde
 
 bool frame_generation_on() { return cheeky_running() && osd.cheeky.processing && osd.cheeky.fg; }
 
+// Turbo's guard (layer/turbo.h): Cheeky's frame generation set to run (the ini's, kept by config.cpp and live_ini.cpp),
+// or running.
+bool cheeky_fg_set(const CheekySettings& c) { return game_features().frameGeneration && c.load && c.processing && c.fg; }
+
+bool frame_generation_set() { return experiment.fgSet.load(std::memory_order_relaxed) || frame_generation_on(); }
+
 int64_t menu_hide_ms() { return osd.placement.enabled ? kMenuHideOverlayMs : kMenuHideMs; }
 
 void menu_frame_line() {
@@ -126,6 +133,14 @@ void osd_wait_returned(double waitMs) {
     osd.waitReturnCycles = cycles;
     osd.waitThread = GetCurrentThreadId();
     osd.waitMs = waitMs;
+}
+
+void osd_wait_held(double heldMs, int64_t heldTicks) {
+    if (!osd.placement.enabled && !optimize.optimizer.running())
+        return;
+    // The hold moved from xrWaitFrame to xrBeginFrame: it is the frame's wait, not its work.
+    osd.waitReturnQpc += heldTicks;
+    osd.waitMs = heldMs;
 }
 
 void osd_measure(XrTime displayTime) {

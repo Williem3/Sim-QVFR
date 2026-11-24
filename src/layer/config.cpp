@@ -80,6 +80,7 @@ LiveSettings read_live(const wchar_t* ini) {
         l.stock = ini_flag(ini, kStock);
     const int isolateExperiment = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
     l.cpuIsolate = isolateExperiment ? isolateExperiment : ini_flag(ini, kCpuIsolateMain) ? 1 : 0;
+    l.turbo = ini_flag(ini, kTurbo);
     l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;
     // Missing (or 0): focus_percent's, as views4_sizes takes 0.
     const int heightPercent = ini_raw(ini, kFocusHeightPercent, 0);
@@ -440,6 +441,12 @@ void load_experiment() {
              settings.cpuIsolate);
     else if (!experiment.cpuSettings)
         log_line("cpu: the game's CPU scheduling left as it is (a baseline or log-only run)");
+    experiment.turbo = settings.turbo;  // armed per frame (layer/session.cpp): logged there when it arms
+    experiment.fgSet = cheeky_fg_set(read_cheeky_settings(ini.c_str()));
+    logf("experiment: turbo %s ([cpu] turbo)",
+         !settings.turbo              ? "off"
+         : experiment.cpuSettings     ? "asked for"
+                                      : "asked for, stays off (a baseline or log-only run)");
     if (settings.eyeOff != kEyeOffNone)
         logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;

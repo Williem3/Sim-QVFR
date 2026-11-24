@@ -430,6 +430,13 @@ target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/incl
 target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(two_loops_test PRIVATE sim_qvfr_layer)
 
+# Offline check of turbo mode's frame loop (layer/turbo.h) against fake runtimes, alone and through the layer's
+# xrWaitFrame and xrBeginFrame (tests/turbo_test.cpp).
+sim_qvfr_test(turbo_test tests/turbo_test.cpp)
+target_include_directories(turbo_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(turbo_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(turbo_test PRIVATE sim_qvfr_layer)
+
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
 sim_qvfr_test(quad_flow_test tests/quad_flow_test.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)

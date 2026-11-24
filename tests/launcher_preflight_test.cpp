@@ -317,6 +317,22 @@ int SIM_QVFR_TEST_MAIN() {
         check(turbo && turbo->tone == CheckTone::Bad && turbo->fix == CheckFix::TurboOff, "preflight: Turbo mode with Cheeky's frame generation");
         in.cheekyFg = false;
         check(!find(preflight_checks(in), "toolkit_turbo"), "preflight: Turbo mode without frame generation");
+        // Sim-QVFR's own Turbo mode ([cpu] turbo): Toolkit's as well is two turbos stacked.
+        check(!find(preflight_checks(in), "turbo_twice"), "preflight: Toolkit's Turbo alone is no stack");
+        in.turbo = true;
+        checks = preflight_checks(in);
+        const Check* twice = find(checks, "turbo_twice");
+        check(twice && twice->tone == CheckTone::Warn && twice->fix == CheckFix::TurboOff && !find(checks, "turbo_fg"),
+              "preflight: Sim-QVFR's and Toolkit's Turbo modes both on");
+        in.toolkitTurbo = 0;
+        check(!find(preflight_checks(in), "turbo_twice"), "preflight: Toolkit's Turbo off: one turbo");
+        in.toolkitTurbo = 1;
+        in.layers.below = {moved(kCheekyLayer)};
+        check(!find(preflight_checks(in), "turbo_twice"), "preflight: Toolkit not loaded: one turbo");
+        in.cheekyFg = true;
+        const Check* withFg = find(preflight_checks(in), "turbo_fg");
+        check(withFg && withFg->tone == CheckTone::Warn, "preflight: Sim-QVFR's Turbo with frame generation: it stays off");
+        in.turbo = in.cheekyFg = false;
         in.cheekyLoad = false;
 
         in.eyeTracker = EyeTracker::Missing;

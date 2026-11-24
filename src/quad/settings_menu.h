@@ -68,8 +68,9 @@ enum class MenuItem {
     NrLimit,  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
     // The Picture page's Vision section, for a game with it (MenuLaunch::eyeOff): one eye off ([quad] eye_off).
     EyeOff,
-    // The CPU page: the main thread's core ([cpu] isolate_main_thread, probe/cpu_isolation.h).
-    CpuIsolateMain,
+    // The CPU page: the main thread's core ([cpu] isolate_main_thread, probe/cpu_isolation.h), Turbo mode ([cpu] turbo,
+    // layer/turbo.h).
+    CpuIsolateMain, Turbo,
     // The clock's size ([clock] width, degrees), as the launcher's Clock card.
     ClockWidth,
     // The Colour page (quad/color_grade.h; a game with it, MenuLaunch::sharpening): the switch, then its four values.
@@ -135,6 +136,7 @@ struct MenuValues {
     MenuPlacement placement;  // [menu]
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys listed under the panel
     bool cpuIsolateMain = kCpuIsolateMain.def != 0;  // [cpu] isolate_main_thread: the main thread's core to itself
+    bool turbo = kTurbo.def != 0;  // [cpu] turbo: the game's xrWaitFrame returns at once (layer/turbo.h)
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)

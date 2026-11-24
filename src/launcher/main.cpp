@@ -813,7 +813,11 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.cheekyLayer = cheeky_layer_state();
     in.layers = launcher_layer_plan();
     in.toolkitTurbo = exe.empty() ? -1 : toolkit_turbo(exe);
-    in.eyeTracked = load_settings(ini).eyeTracking;
+    {
+        const Settings settings = load_settings(ini);
+        in.eyeTracked = settings.eyeTracking;
+        in.turbo = settings.turbo;
+    }
     const RuntimeInfo runtime = load_runtime_info(runtime_info_path());
     in.eyeTracker = runtime.eyeTracker;
     in.sessionFocus = runtime.sessionFocus;

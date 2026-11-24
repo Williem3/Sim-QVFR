@@ -1275,7 +1275,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         SettingsMenu f;
         f.launch = {true, 50, 39, 39};
         check(menu_pages(f).back() == MenuPage::Game && go(f, MenuPage::Game) && menu_page_name(f) == L"Game" &&
-                  menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadCpu, MenuItem::CpuIsolateMain} &&
+                  menu_page_items(f) == std::vector<MenuItem>{MenuItem::Page, MenuItem::HeadCpu, MenuItem::CpuIsolateMain,
+                                                         MenuItem::Turbo} &&
                   line_of(f, MenuItem::HeadCpu).label == L"CPU",
               "Game: the last page, its CPU card");
         pick(f, MenuItem::CpuIsolateMain);
@@ -1293,6 +1294,18 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         SettingsMenu headset;
         go(headset, MenuPage::Headset);
         check(!has(headset, MenuItem::CpuIsolateMain), "not on the Headset page");
+        // Turbo mode ([cpu] turbo, layer/turbo.h): beside it, off by default, live.
+        pick(f, MenuItem::Turbo);
+        check(!f.values.turbo && line_of(f, MenuItem::Turbo).label == L"Turbo mode" &&
+                  line_of(f, MenuItem::Turbo).value == L"Off",
+              "turbo: the launcher's name, off by default");
+        check(menu_key(f, MenuKey::Right) && f.values.turbo && line_of(f, MenuItem::Turbo).value == L"On",
+              "a step turns turbo on");
+        DeleteFileW(ini.c_str());
+        check(!read_menu_values(ini.c_str()).turbo && write_menu_values(ini.c_str(), f.values, false) &&
+                  read_menu_values(ini.c_str()).turbo,
+              "turbo: unset is off; written and read back");
+        DeleteFileW(ini.c_str());
     }
 
     // Only what changed is written (ini_put.h): WritePrivateProfileString rewrites the whole ini for every key, even
