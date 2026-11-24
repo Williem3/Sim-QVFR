@@ -130,7 +130,7 @@ void gaze_init(XrInstance instance, bool extensionEnabled) {
         gaze.space = XR_NULL_HANDLE;
         gaze.extensionEnabled = extensionEnabled;
     }
-    if ((!experiment.quad && !experiment.composing() && !game->wants_gaze()) || !next.CreateActionSet)
+    if ((!experiment.composing() && !game->wants_gaze()) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy_s(setInfo.actionSetName, "simqvfr_gaze");

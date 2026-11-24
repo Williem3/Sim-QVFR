@@ -39,7 +39,6 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         rt->CreateLayer(&layer);
         rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), clip.Get()), layer.Get());
         const auto R = [&](float rx, float ry, float rw, float rh) { return Rect{x + rx * k, y + ry * k, rw * k, rh * k}; };
-        const bool tfi = app.s.mode == RenderMode::TwoLoop;
         const bool eye = app.s.eyeTracking && !eye_warning();
         const float fw = W * app.s.width / 100, fh = H * app.s.height / 100;
         // Centred on the lens in both modes (eye tracked: looking straight ahead), moved by the offset, roughly:
@@ -57,16 +56,13 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         const float fx = std::clamp(gx * W - fw / 2, cl, std::max(cl, W - cr - fw)),
                     fy = std::clamp(gy * H - fh / 2, ct, std::max(ct, H - cb - fh));
         // Grid cell size shows pixel density: 8 in the periphery, 8 / ratio in the focus region.
-        const double ratio = tfi ? ro.focusDensity * 100 / app.s.outer : ro.focusDensity * 100 / app.s.outer;
+        const double ratio = ro.focusDensity * 100 / app.s.outer;
         const float pc = 8, fc = std::clamp(static_cast<float>(pc / std::max(0.01, ratio)), 2.0f, 8.0f);
         app.canvas.fill(R(0, 0, W, H), col(app.c->preview_periphery));
         for (float gxl = 0; gxl <= W; gxl += pc)
             app.canvas.line(x + gxl * k, y, x + gxl * k, y + frameH, col(app.c->preview_canvas), 0.6f * k);
         for (float gyl = 0; gyl <= H; gyl += pc)
             app.canvas.line(x, y + gyl * k, x + w, y + gyl * k, col(app.c->preview_canvas), 0.6f * k);
-        if (tfi)
-            for (float iy = 0; iy < H; iy += 4)
-                app.canvas.fill(R(0, iy, W, 2), col(app.c->preview_canvas, 0.55f));
         // Feather: the focus region fades in over feather % of its size, as the compositor blends it;
         // its corners rounded by corner % of half the shorter side, or with a custom shape, the outline through its
         // points (focus_shape.h; its feather drawn as the outline shrunk toward the box's middle).
@@ -162,7 +158,7 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
             }
         }
         // The cropped edges, as the headset shows them; with the helmet, its rim reaches into the view.
-        const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on && game_has(&games::GameFeatures::helmet);
+        const bool helmet = app.s.helmet.on && game_has(&games::GameFeatures::helmet);
         const float rim = helmet ? H * app.s.helmet.rim / 100.0f : 0;
         const Color cropped = col(app.c->preview_canvas, helmet ? 1.0f : 0.9f);
         app.canvas.fill(R(0, 0, W, ct + rim), cropped);

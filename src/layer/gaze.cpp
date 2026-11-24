@@ -222,8 +222,8 @@ void gaze_thread_stop() {
     gazeThread.lookupMs = gazeThread.lookupMaxMs = 0;
 }
 
-// The gaze for ACE's xrLocateViews in views4 (Two-loop looks it up per frame itself): from the gaze thread while it can run (it is started on the first
-// call), else looked up here. False while not tracked (the last tracked gaze is kept kGazeHoldNs).
+// The gaze for ACE's xrLocateViews in views4: from the gaze thread while it can run (it is started on the first call),
+// else looked up here. False while not tracked (the last tracked gaze is kept kGazeHoldNs).
 bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& direction) {
     bool threaded = experiment.gazeThread;
     bool syncsOwn = false;

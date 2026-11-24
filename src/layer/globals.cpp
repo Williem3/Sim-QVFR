@@ -38,7 +38,6 @@ HelmetSettings helmetSettings;
 
 Live live;
 
-TwoLoops loops;
 
 Gaze gaze;
 

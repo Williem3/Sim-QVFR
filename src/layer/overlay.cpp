@@ -147,11 +147,9 @@ void osd_measure(XrTime displayTime) {
     if (!osd.placement.enabled && !optimize.optimizer.running())
         return;
     // The refreshes since the previous frame, from the display times the runtime gave (the period: the steady one,
-    // pacing_waited). Not with two loops: their two frames share a display time, at half the period.
+    // pacing_waited).
     const XrTime lastDisplay = std::exchange(osd.lastDisplay, displayTime);
-    const int refreshes = experiment.twoLoops ? 0
-                                              : osd_refreshes_between(lastDisplay, displayTime,
-                                                                      osd.periodNs.load(std::memory_order_relaxed));
+    const int refreshes = osd_refreshes_between(lastDisplay, displayTime, osd.periodNs.load(std::memory_order_relaxed));
     const int64_t now = qpc_now();
     const DWORD thread = GetCurrentThreadId();
     ULONG64 cycles = 0;

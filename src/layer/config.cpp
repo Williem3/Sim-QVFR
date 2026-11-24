@@ -201,10 +201,10 @@ void load_experiment() {
         logf("experiment: baseline=1: running as mode=off (ini mode=%ls), measuring", mode);
         wcscpy_s(mode, L"off");
     }
-    // Two-Loop (mode=quad, the two_loops experiment) is deprecated: none of its code runs. An ini still set to it runs
-    // QVFR (the launcher writes views4 at its next save).
-    if (parse_render_mode(mode) == IniRenderMode::TwoLoop) {
-        logf("experiment: mode=%ls is Two-Loop, which is deprecated: running as QVFR (views4)", mode);
+    // Two-Loop (mode=quad, the two_loops experiment) is gone. An ini still set to it runs QVFR (the launcher writes
+    // views4 at its next save).
+    if (parse_render_mode(mode) == IniRenderMode::Deprecated) {
+        logf("experiment: mode=%ls is Two-Loop, which is removed: running as QVFR (views4)", mode);
         wcscpy_s(mode, L"views4");
     }
     // A game known by its identity alone (no QVFR yet, games/adapter.h): log only, whatever the ini says.
@@ -392,9 +392,6 @@ void load_experiment() {
     experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;
     if (experiment.d3d11CaptureHotkey && experiment.d3d11CaptureFrame == 0)
         experiment.d3d11CaptureFrame = 0xFFFFFFFFu;
-    experiment.quad = _wcsicmp(mode, L"quad") == 0;
-    experiment.twoLoops = parse_render_mode(mode) == IniRenderMode::TwoLoop;  // quad too (its frame B the focus box)
-    experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
     const LiveSettings settings = read_live(ini.c_str());
     experiment.focusFraction = settings.focusFraction;
     experiment.focusFractionY = settings.focusFractionY;
@@ -489,12 +486,11 @@ void load_experiment() {
     }
     experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
-    // In quad mode this is the outer view's resolution; at most 100 (the shared table's range). Only the modes that render
-    // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
-    // resolution the user set before launch (the launcher writes eye_scale for Two-loop and QVFR's fallback,
-    // so a baseline run got 30% of it, 2026-11-03).
+    // At most 100 (the shared table's range). Only the modes that render through it scale what ACE is offered: with
+    // mode=off (baseline=1 too) ACE gets the runtime's own size, the resolution the user set before launch (the launcher
+    // writes eye_scale for QVFR's fallback, so a baseline run got 30% of it, 2026-11-03).
     const int eyePercent = ini_int(ini.c_str(), kEyeScale);
-    const bool scaledMode = experiment.views4 || experiment.twoLoops || experiment.focusOnly || experiment.doubleRender ||
+    const bool scaledMode = experiment.views4 || experiment.focusOnly || experiment.doubleRender ||
                             experiment.views3;
     experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
     // baseline_eye_scale=N (measurement only, baseline=1): the game's own two views at N% of the runtime's eye size,
@@ -575,9 +571,9 @@ void load_experiment() {
         runtime_info(L"launch_crop",
                      percent(c.top) + L"," + percent(c.bottom) + L"," + percent(c.outer) + L"," + percent(c.inner));
     }
-    logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%d feather_percent=%.0f corner_radius_percent=%.0f "
+    logf("experiment: mode=%ls focus_percent=%.0f eye_scale=%d feather_percent=%.0f corner_radius_percent=%.0f "
          "debug_border=%d gaze=%d fixed_offset_y=%d gaze_offset_y=%d fixed_offset_x=%d gaze_offset_x=%d (from %ls)",
-         mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
+         mode, experiment.focusFraction * 100, eyePercent, experiment.feather * 100,
          experiment.cornerRadius * 100,
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze,
          settings.offset.fixedX, settings.offset.gazeX, ini.c_str());

@@ -133,9 +133,7 @@ Picture
   Closed, Half or Open (its hotkey, Ctrl+Alt+V). The headset menu's Helmet page has them all. The log
   suggests the crop that matches their opening.
 - Rendering: how the focus views are drawn in this game (in LMU and the truck sims, multi-view
-  rendering: NVIDIA's or Sim-QVFR's own). A profile still on the legacy Two-loop method shows
-  Rendering method here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered
-  again.
+  rendering: NVIDIA's or Sim-QVFR's own).
   Runtime composition (LMU, automatic, no switch): on a Pimax or Varjo OpenXR runtime with Quad-Views
   Foveated Rendering enabled in Pimax Play or Varjo Base, Sim-QVFR hands the runtime the four views,
   and the focus area reaches the display at its full resolution. Its focus area is drawn inside the

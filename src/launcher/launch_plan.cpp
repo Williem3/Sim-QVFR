@@ -228,10 +228,6 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
             p.on = false;
         else if (listed(options.onLayers, c.name))
             p.on = true;
-        if (options.frameGenerationOff && c.name == kFrameGenerationLayer) {
-            p.on = false;
-            p.lock = "frame generation breaks Two-loop";
-        }
         for (const ForcedLayer& f : options.forced)
             if (f.name == c.name) {
                 p.on = f.on;

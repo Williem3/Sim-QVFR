@@ -163,15 +163,14 @@ int SIM_QVFR_TEST_MAIN() {
               "no period: unchanged");
     }
     {  // The guards, in order.
-        check(turbo_block(false, true, false, false, false, false) == TurboBlock::Off, "off when not asked for");
-        check(turbo_block(true, false, true, true, false, false) == TurboBlock::BaselineRun, "off in a baseline run");
-        check(turbo_block(true, true, true, true, false, false) == TurboBlock::FrameGeneration,
+        check(turbo_block(false, true, false, false, false) == TurboBlock::Off, "off when not asked for");
+        check(turbo_block(true, false, true, true, false) == TurboBlock::BaselineRun, "off in a baseline run");
+        check(turbo_block(true, true, true, true, false) == TurboBlock::FrameGeneration,
               "off with frame generation");
-        check(turbo_block(true, true, false, true, false, false) == TurboBlock::VectorXr,
+        check(turbo_block(true, true, false, true, false) == TurboBlock::VectorXr,
               "off with VectorXR's frame generation");
-        check(turbo_block(true, true, false, false, true, false) == TurboBlock::TwoLoops, "off while two_loops is armed");
-        check(turbo_block(true, true, false, false, false, true) == TurboBlock::Chained, "off with chained structures");
-        check(turbo_block(true, true, false, false, false, false) == TurboBlock::None, "armed otherwise");
+        check(turbo_block(true, true, false, false, true) == TurboBlock::Chained, "off with chained structures");
+        check(turbo_block(true, true, false, false, false) == TurboBlock::None, "armed otherwise");
         check(!turbo_frames_generated(100, 100) && !turbo_frames_generated(100, 102) && turbo_frames_generated(100, 103) &&
                   turbo_frames_generated(100, 200),
               "a frame generator above: more xrEndFrame than xrBeginFrame calls, beyond two");
@@ -308,7 +307,6 @@ int SIM_QVFR_TEST_MAIN() {
         next.BeginFrame = layerFakeBegin;
         next.EndFrame = layerFakeEnd;
         next.EndSession = layerFakeEndSession;
-        experiment.twoLoops = false;
         experiment.cpuSettings = true;
         experiment.turbo = true;
         int errors = 0;

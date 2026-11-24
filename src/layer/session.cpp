@@ -240,8 +240,6 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 cpu_placement_start();
             }
             cheeky_session(d3d12->device, d3d12->queue);
-        } else if (experiment.quad) {
-            log_line("quad: session is not D3D12 (a layer above converted it?); quad pipeline off");
         }
     }
     return r;
@@ -338,7 +336,6 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.outImages.clear();
         quad.outPending = {};
         quad.outDensity = {};
-        quad.outerCaptured = quad.aViewsValid = quad.releaseHeld = false;
         quad.device = nullptr;
         quad.queue = nullptr;
         sessionGraphics = {};
@@ -381,17 +378,12 @@ std::atomic<uint64_t> gameBegins{0}, gameEnds{0};
 
 // Whether turbo is armed for this xrWaitFrame, its changes logged.
 bool turbo_armed(const XrFrameWaitInfo* info, const XrFrameState* state) {
-    bool twoLoopsActive = false;
-    if (experiment.twoLoops) {
-        std::lock_guard guard(loops.mutex);
-        twoLoopsActive = loops.active;
-    }
     const bool wanted = experiment.turbo.load(std::memory_order_relaxed);
     const bool vectorXr = experiment.vectorXrLoaded ||
                           turbo_frames_generated(gameBegins.load(std::memory_order_relaxed),
                                                  gameEnds.load(std::memory_order_relaxed));
     const TurboBlock b = turbo_block(wanted, experiment.cpuSettings, wanted && frame_generation_set(), vectorXr,
-                                     twoLoopsActive, (info && info->next) || state->next);
+                                     (info && info->next) || state->next);
     if (b != turboShown) {
         // Off from the start is the default: said once at load (config.cpp), not here.
         log_line(turbo_log_line(b));
@@ -422,7 +414,7 @@ XrResult XRAPI_CALL layerEndSession(XrSession session) {
 }
 
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
-    // Turbo first (layer/turbo.h): it takes the frame loop over before the deprecated two_loops can arm.
+    // Turbo (layer/turbo.h) takes the frame loop over when armed.
     const bool armed = state && turbo_armed(info, state);
     if (state && (armed || turboWait.active())) {
         if (!armed && ((info && info->next) || state->next)) {
@@ -446,56 +438,13 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
             return r;
         }
     }
-    if (!experiment.twoLoops) {
-        const int64_t t0 = qpc_now();
-        const XrResult r = next.WaitFrame(session, info, state);
-        if (XR_SUCCEEDED(r)) {
-            const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
-            frame_waited(state->predictedDisplayPeriod, waitMs);
-            osd_wait_returned(waitMs);
-        }
-        return r;
-    }
-    std::unique_lock lock(loops.mutex);
-    if (!loops.active && !loops.broken && loops.waits >= kArmAfterFrames && loops.waits == loops.begins &&
-        loops.begins == loops.ends && (!experiment.quad || quad_ready())) {
-        loops.active = true;
-        loops.pairedWaits = loops.pairedBegins = loops.pairedEnds = 0;
-        QueryPerformanceFrequency(&loops.frequency);
-        QueryPerformanceCounter(&loops.lastReport);
-        logf("two_loops: ARMED after %llu frames; ACE now runs two frames (A, B) per display frame",
-             static_cast<unsigned long long>(loops.waits));
-    }
-    if (!loops.active) {
-        lock.unlock();
-        const XrResult r = next.WaitFrame(session, info, state);
-        lock.lock();
-        if (++loops.waits == 20 * kArmAfterFrames && !loops.broken)
-            log_line(experiment.quad && !quad_ready()
-                         ? "two_loops: not armed: ACE's eye swapchain was not adopted (see the quad: lines above); "
-                           "ACE runs unchanged"
-                         : "two_loops: not armed yet: no idle point between frames (is ACE's option to overlap the "
-                           "OpenXR frame wait with the previous frame on?)");
-        return r;
-    }
-    const uint64_t index = loops.pairedWaits++;
-    if (index % 2 == 1) {  // B: same display time and pose as A, no real wait
-        loops.inB = true;
-        state->predictedDisplayTime = loops.pendingState.predictedDisplayTime;
-        state->predictedDisplayPeriod = loops.pendingState.predictedDisplayPeriod;
-        state->shouldRender = loops.pendingState.shouldRender;
-        QueryPerformanceCounter(&loops.bWaitReturned);
-        return XR_SUCCESS;
-    }
-    lock.unlock();  // never hold the lock across the runtime's blocking wait
+    const int64_t t0 = qpc_now();
     const XrResult r = next.WaitFrame(session, info, state);
-    lock.lock();
-    loops.pendingState.predictedDisplayTime = state->predictedDisplayTime;
-    loops.pendingState.predictedDisplayPeriod = state->predictedDisplayPeriod;
-    loops.pendingState.shouldRender = state->shouldRender;
-    QueryPerformanceCounter(&loops.aWaitReturned);
-    if (XR_SUCCEEDED(r))
-        osd_waited(state->predictedDisplayPeriod / 2);  // two ACE frames per display frame
+    if (XR_SUCCEEDED(r)) {
+        const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
+        frame_waited(state->predictedDisplayPeriod, waitMs);
+        osd_wait_returned(waitMs);
+    }
     return r;
 }
 
@@ -518,21 +467,10 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
             gpu_frame_timer_mark(GpuMark::kBegin);
         return r;
     }
-    if (!experiment.twoLoops) {
-        const XrResult r = next.BeginFrame(session, info);
-        if (XR_SUCCEEDED(r))
-            gpu_frame_timer_mark(GpuMark::kBegin);
-        return r;
-    }
-    std::unique_lock lock(loops.mutex);
-    if (!loops.active) {
-        ++loops.begins;
-        lock.unlock();
-        return next.BeginFrame(session, info);
-    }
-    const uint64_t index = loops.pairedBegins++;
-    lock.unlock();
-    return index % 2 == 0 ? next.BeginFrame(session, info) : XR_SUCCESS;  // B's frame is already begun
+    const XrResult r = next.BeginFrame(session, info);
+    if (XR_SUCCEEDED(r))
+        gpu_frame_timer_mark(GpuMark::kBegin);
+    return r;
 }
 
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
@@ -574,14 +512,8 @@ void quad_adopt_chain(XrSession session, const XrSwapchainCreateInfo* info, XrSw
     }
     XrSwapchainCreateInfo out = *info;
     out.next = nullptr;
-    // views4: at the focus density's size (quad/output_density.h; made once, not grown live); the two loops at native.
-    if (experiment.views4Compose || experiment.replayCompose) {
-        views4_output_chain(quad.outDensity);
-    } else {
-        quad.outDensity = {};
-        quad.outDensity.eyeW = quad.nativeW;
-        quad.outDensity.eyeH = quad.nativeH;
-    }
+    // At the focus density's size (quad/output_density.h; made once, not grown live).
+    views4_output_chain(quad.outDensity);
     out.width = 2 * quad.outDensity.eyeW;
     out.height = quad.outDensity.eyeH;
     out.mipCount = 1;
@@ -634,7 +566,7 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
         std::lock_guard guard(v4d3d11.mutex);
         v4d3d11.chains[*swapchain].format = info->format;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose) &&
+    if (XR_SUCCEEDED(r) && (experiment.views4Compose || experiment.replayCompose) &&
         (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
         quad_adopt_chain(session, info, *swapchain);
     return r;
@@ -704,7 +636,7 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose)) {
+    if (XR_SUCCEEDED(r) && (experiment.views4Compose || experiment.replayCompose)) {
         std::lock_guard guard(quad.mutex);
         if (swapchain == quad.appChain)
             quad.appAcquired = *index;
@@ -747,7 +679,7 @@ XrResult XRAPI_CALL layerDestroySwapchain(XrSwapchain swapchain) {
             quad.outPending = {};
             quad.outDensity = {};
             quad.appAcquired = 0;
-            quad.outerCaptured = quad.releaseHeld = quad.v4Composed = false;
+            quad.v4Composed = false;
             // The compositor was made for that chain's format; the helmet's pieces load again into the next one.
             quad.compositor.shutdown();
             for (int p = 0; p < 3; ++p) {

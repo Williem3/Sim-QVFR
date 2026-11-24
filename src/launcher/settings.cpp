@@ -40,13 +40,12 @@ const wchar_t* color_name(OutlineColor color) {
 Settings load_settings(const std::wstring& ini) {
     Settings s;
     const wchar_t* const f = ini.c_str();
-    // Two-Loop is deprecated (the layer runs an ini still set to it as QVFR): read as QVFR, written as views4.
-    s.mode = RenderMode::Qvfr;
+    // Any mode reads as QVFR, written as views4 (the layer runs an ini still set to the removed Two-Loop as QVFR).
     s.width = ini_int(f, kFocusPercent);
     s.height = ini_int(f, kFocusHeightPercent, s.width);
     const int eyeScale = ini_raw(f, kEyeScale, kEyeScale.def);
     const int periphery = ini_raw(f, kPeripheryScale, 0);
-    s.outer = kPeripheryScale.clamp(s.mode == RenderMode::Qvfr && periphery ? periphery : eyeScale);
+    s.outer = kPeripheryScale.clamp(periphery ? periphery : eyeScale);
     // Unset, the layer derives the density from eye_scale (equal quarters); show that value.
     const int density = ini_raw(f, kFocusDensity, 0);
     s.inner = kFocusDensity.clamp(density ? density : static_cast<int>(std::lround(100.0 * kEyeScale.clamp(eyeScale) / s.width)));
@@ -123,15 +122,15 @@ Settings load_settings(const std::wstring& ini) {
 }
 
 double Settings::crop_width() const {
-    return mode == RenderMode::Qvfr && crop ? 1 - (clamp_to(cropOuter, kCropRange) + clamp_to(cropInner, kCropRange)) / 100.0 : 1;
+    return crop ? 1 - (clamp_to(cropOuter, kCropRange) + clamp_to(cropInner, kCropRange)) / 100.0 : 1;
 }
 
 double Settings::crop_height() const {
-    return mode == RenderMode::Qvfr && crop ? 1 - (clamp_to(cropTop, kCropRange) + clamp_to(cropBottom, kCropRange)) / 100.0 : 1;
+    return crop ? 1 - (clamp_to(cropTop, kCropRange) + clamp_to(cropBottom, kCropRange)) / 100.0 : 1;
 }
 
 std::wstring crop_key(const Settings& s) {
-    if (s.mode != RenderMode::Qvfr || !s.crop)
+    if (!s.crop)
         return L"0,0,0,0";
     const auto n = [](int v) { return std::to_wstring(clamp_to(v, kCropRange)); };
     return n(s.cropTop) + L"," + n(s.cropBottom) + L"," + n(s.cropOuter) + L"," + n(s.cropInner);
@@ -161,17 +160,13 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     s.corner = clamp_to(s.corner, kCornerRange);
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
-    if (s.mode == RenderMode::Qvfr) {
-        ok &= write(ini, L"experiment", L"mode", L"views4");
-        ok &= write(ini, L"experiment", L"views4_callers", kQvfrCallers);
-        ok &= write(ini, L"experiment", L"views4_compose", L"1");
-        ok &= write(ini, L"experiment", L"views4_show_copies", L"0");
-        ok &= write(ini, kPeripheryScale, n(s.outer));
-        ok &= write(ini, kFocusDensity, n(s.inner));
-    } else {
-        ok &= write(ini, L"experiment", L"mode", L"quad");
-    }
-    ok &= write(ini, kEyeScale, n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write(ini, L"experiment", L"mode", L"views4");
+    ok &= write(ini, L"experiment", L"views4_callers", kQvfrCallers);
+    ok &= write(ini, L"experiment", L"views4_compose", L"1");
+    ok &= write(ini, L"experiment", L"views4_show_copies", L"0");
+    ok &= write(ini, kPeripheryScale, n(s.outer));
+    ok &= write(ini, kFocusDensity, n(s.inner));
+    ok &= write(ini, kEyeScale, n(s.outer));  // QVFR's fallback
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"launcher", L"native_quad_reset", L"1");  // the card's old off reset once (load_settings)
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
@@ -208,29 +203,27 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     s.corner = clamp_to(s.corner, kCornerRange);
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
-    if (s.mode == RenderMode::Qvfr) {  // QVFR resizes its views live, up to their launch size
-        ok &= write(ini, kPeripheryScale, n(clamp_to(s.outer, kOuterRange)));
-        ok &= write(ini, kFocusDensity, n(clamp_to(s.inner, kInnerRange)));
-        ok &= write(ini, kCropEnabled, s.crop ? L"1" : L"0");  // and the FOV crop
-        ok &= write(ini, kCropTop, n(clamp_to(s.cropTop, kCropRange)));
-        ok &= write(ini, kCropBottom, n(clamp_to(s.cropBottom, kCropRange)));
-        ok &= write(ini, kCropOuter, n(clamp_to(s.cropOuter, kCropRange)));
-        ok &= write(ini, kCropInner, n(clamp_to(s.cropInner, kCropRange)));
-        ok &= write_helmet_settings(ini.c_str(), s.helmet);
-        ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
-        ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
-        ok &= write(ini, kPeripheryTextureMatch, n(clamp_to(s.textureMatch, kTextureMatchRange)));
-        ok &= write_color_grade(ini.c_str(), s.grade);
-        ok &= write_car_lighting(ini.c_str(), s.carLight);
-        ok &= write(ini, kFocusCorridor, s.corridor ? L"1" : L"0");  // road focus (a game without it ignores them)
-        ok &= write_road_focus_saved(ini.c_str(), s.roadSaved);
-        ok &= write(ini, kFocusCorridorWidth, n(kFocusCorridorWidth.clamp(s.corridorWidth)));
-        ok &= write(ini, kFocusCorridorHeight, n(kFocusCorridorHeight.clamp(s.corridorHeight)));
-        ok &= write(ini, kFocusCorridorPreset, n(kFocusCorridorPreset.clamp(s.corridorPreset)));
-        ok &= write(ini, kFocusCorridorSpread, n(kFocusCorridorSpread.clamp(s.corridorSpread)));
-        ok &= write(ini, kFocusCorridorBlend, n(kFocusCorridorBlend.clamp(s.corridorBlend)));
-        ok &= write(ini, kFocusCorridorShow, s.corridorShow ? L"1" : L"0");
-    }
+    ok &= write(ini, kPeripheryScale, n(clamp_to(s.outer, kOuterRange)));  // QVFR resizes its views live, up to their
+    ok &= write(ini, kFocusDensity, n(clamp_to(s.inner, kInnerRange)));    // launch size
+    ok &= write(ini, kCropEnabled, s.crop ? L"1" : L"0");  // and the FOV crop
+    ok &= write(ini, kCropTop, n(clamp_to(s.cropTop, kCropRange)));
+    ok &= write(ini, kCropBottom, n(clamp_to(s.cropBottom, kCropRange)));
+    ok &= write(ini, kCropOuter, n(clamp_to(s.cropOuter, kCropRange)));
+    ok &= write(ini, kCropInner, n(clamp_to(s.cropInner, kCropRange)));
+    ok &= write_helmet_settings(ini.c_str(), s.helmet);
+    ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
+    ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
+    ok &= write(ini, kPeripheryTextureMatch, n(clamp_to(s.textureMatch, kTextureMatchRange)));
+    ok &= write_color_grade(ini.c_str(), s.grade);
+    ok &= write_car_lighting(ini.c_str(), s.carLight);
+    ok &= write(ini, kFocusCorridor, s.corridor ? L"1" : L"0");  // road focus (a game without it ignores them)
+    ok &= write_road_focus_saved(ini.c_str(), s.roadSaved);
+    ok &= write(ini, kFocusCorridorWidth, n(kFocusCorridorWidth.clamp(s.corridorWidth)));
+    ok &= write(ini, kFocusCorridorHeight, n(kFocusCorridorHeight.clamp(s.corridorHeight)));
+    ok &= write(ini, kFocusCorridorPreset, n(kFocusCorridorPreset.clamp(s.corridorPreset)));
+    ok &= write(ini, kFocusCorridorSpread, n(kFocusCorridorSpread.clamp(s.corridorSpread)));
+    ok &= write(ini, kFocusCorridorBlend, n(kFocusCorridorBlend.clamp(s.corridorBlend)));
+    ok &= write(ini, kFocusCorridorShow, s.corridorShow ? L"1" : L"0");
     ok &= write(ini, kFocusPercent, n(s.width));
     ok &= write(ini, kFocusHeightPercent, n(s.height));
     ok &= write(ini, kFeatherPercent, n(s.feather));
@@ -305,7 +298,7 @@ bool shared_profile(const std::string& text, Profile& profile) {
         return false;
     Profile p = settings_profile(Settings{}, in.name);
     for (const ProfileKey& k : in.keys) {
-        if (k.section == L"experiment" && k.key == L"mode" && k.value != L"views4")  // Two-loop (quad) is legacy: not shared
+        if (k.section == L"experiment" && k.key == L"mode" && k.value != L"views4")  // only QVFR is shared
             continue;
         for (ProfileKey& mine : p.keys)
             if (_wcsicmp(mine.section.c_str(), k.section.c_str()) == 0 && _wcsicmp(mine.key.c_str(), k.key.c_str()) == 0)

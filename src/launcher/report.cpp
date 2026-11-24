@@ -856,7 +856,7 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
         add(I18N(L"The view is larger than the headset runtime allows"), {},
             I18N(L"Lower the outer resolution or the focus density in Resolution."));
     // The runtime composing (Pimax, Varjo): Sim-QVFR's focus area shows only inside the runtime's own focus views.
-    if (s.mode == RenderMode::Qvfr && rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0 &&
+    if (rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0 &&
         (s.width > rt.quadFocusWidth + 1 || s.height > rt.quadFocusHeight + 1))
         add(I18N(L"The focus area ({width}% × {height}%) is larger than the runtime's own focus region "
                  L"({runtime_width}% × {runtime_height}%)"),
@@ -919,7 +919,6 @@ std::wstring issue_title(const IssueReport& r) {
 std::wstring issue_details(const IssueReport& r) {
     const Settings& s = r.settings;
     const RuntimeInfo& rt = r.runtime;
-    const bool qvfr = s.mode == RenderMode::Qvfr;
     const std::wstring unknown = L"not known";
     std::wstring b;
     b += L"- **Version:** Sim-QVFR " + (r.version.empty() ? unknown : r.version) + L" (launcher and layer)\n";
@@ -943,32 +942,28 @@ std::wstring issue_details(const IssueReport& r) {
                       : rt.eyeTracker == EyeTracker::Missing ? L"no samples"
                                                              : L"not known") +
          (rt.sessionFocus == 0 ? L" (the session never got input focus from the runtime)" : L"") + L"\n";
-    b += L"- **Method:** " + std::wstring(qvfr ? L"Quad View Foveated Rendering (QVFR)" : L"Two-loop Foveated Interlaced") +
-         L", " + (s.eyeTracking ? L"eye tracked" : L"fixed") + L"\n";
-    std::wstring res = qvfr ? L"outer " + number(s.outer) + L"%, focus density " + number(s.inner) + L"%"
-                            : L"eye scale " + number(s.outer) + L"%";
+    b += L"- **Method:** Quad View Foveated Rendering (QVFR), " + std::wstring(s.eyeTracking ? L"eye tracked" : L"fixed") +
+         L"\n";
+    std::wstring res = L"outer " + number(s.outer) + L"%, focus density " + number(s.inner) + L"%";
     res += L", focus area " + number(s.width) + L"×" + number(s.height) + L"%";
     if (rt.known()) {
         const Readouts ro = readouts(s, rt);
-        res += L" (outer " + number(ro.outer.width) + L"×" + number(ro.outer.height);
-        if (qvfr)
-            res += L", focus " + number(ro.focus.width) + L"×" + number(ro.focus.height);
-        res += L" px)";
+        res += L" (outer " + number(ro.outer.width) + L"×" + number(ro.outer.height) + L", focus " +
+               number(ro.focus.width) + L"×" + number(ro.focus.height) + L" px)";
     }
     b += L"- **Resolution:** " + res + L"\n";
     b += L"- **Focus area:** feather " + number(s.feather) + L"%, " +
          (s.shape.custom ? focus_shape_text(s.shape) : L"corner radius " + number(s.corner) + L"%") +
          formatted(L", gaze dead-zone %.1f°", s.gazeDeadzone / 10.0) + L", offset " +
          number(s.offset.for_mode(s.eyeTracking)) + L"° up, " + number(s.offset.for_mode_x(s.eyeTracking)) + L"° right\n";
-    if (qvfr)
-        b += L"- **FOV crop:** " + (s.crop ? crop_key(s) + L" % (top, bottom, outer, inner)" : std::wstring(L"off")) + L"\n";
+    b += L"- **FOV crop:** " + (s.crop ? crop_key(s) + L" % (top, bottom, outer, inner)" : std::wstring(L"off")) + L"\n";
     std::wstring dlss = s.cheeky.load ? L"on" : L"off";
     if (!rt.cheekyStatus.empty())
         dlss += L" (last launch: " + rt.cheekyStatus + (rt.cheekyVersion.empty() ? L"" : L" " + rt.cheekyVersion) + L")";
     if (s.cheeky.load)
         dlss += s.cheeky.fg ? L", frame generation " + number(s.cheeky.fgMultiplier) + L"x" : L", frame generation off";
     b += L"- **Foveated DLSS:** " + dlss + L"\n";
-    if (qvfr && !rt.quadViews.empty())  // the runtime composing the views (Pimax, Varjo): what the last launch did
+    if (!rt.quadViews.empty())  // the runtime composing the views (Pimax, Varjo): what the last launch did
         b += L"- **Runtime composition:** " + std::wstring(s.nativeQuad ? L"auto" : L"off") + L" (last launch: " +
              (rt.quadViewsUsed               ? L"the runtime composed the views"
               : rt.quadViews == L"offered"   ? L"offered by the runtime, not used"

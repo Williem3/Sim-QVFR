@@ -217,7 +217,7 @@ void live_apply(const LiveSettings& l) {
         live_resolution(l);
     else if (experiment.views4)
         logf("live: %ls resizes its views at the next launch (no live resolution yet)", game->info()->shortName);
-    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
+    if (l.gaze && !gazeAvailable && experiment.composing())
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
     if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
         log_line("live: debug_border without views4_compose starts at the next launch");
@@ -399,19 +399,13 @@ void ini_worker_sync() {
         log_line("live: the ini worker hadn't finished its writes after 2 s: going on (they finish later)");
 }
 
-// Applies the ini's live keys when the worker read a change. Only between display frames: with
-// two_loops, never between frame A and frame B. No file access here.
+// Applies the ini's live keys when the worker read a change, between display frames. No file access here.
 void live_reload() {
     if (live.ini.empty())
         return;
     {
         std::lock_guard guard(iniWorker.mutex);
         ini_worker_watch(live.ini, live.written);
-    }
-    {
-        std::lock_guard guard(loops.mutex);
-        if (loops.active && loops.pairedEnds % 2 != 0)
-            return;  // A ended, B not yet: apply after B
     }
     std::optional<IniSnapshot> s;
     {

@@ -156,7 +156,6 @@ int SIM_QVFR_TEST_MAIN() {
     // ---- The headset menu's Color page -------------------------------------------------------------------------
     {
         SettingsMenu m;
-        m.launch.qvfr = true;
         m.launch.sharpening = false;
         bool shown = false;
         for (const MenuPage p : menu_pages(m))
@@ -186,10 +185,10 @@ int SIM_QVFR_TEST_MAIN() {
               "menu: saturation stops at -100%");
         const std::wstring ini = temp_path(L"sim-qvfr-color-grade-menu-test.ini");
         DeleteFileW(ini.c_str());
-        write_menu_values(ini.c_str(), m.values, true);
+        write_menu_values(ini.c_str(), m.values);
         check(GetPrivateProfileIntW(L"quad", L"color_correction", -1, ini.c_str()) == -1,
               "menu: not written for a game without it");
-        write_menu_values(ini.c_str(), m.values, true, false, false, true);
+        write_menu_values(ini.c_str(), m.values, false, false, true);
         check(read_menu_values(ini.c_str()).color == m.values.color, "menu: written for a game with it, and read back");
         DeleteFileW(ini.c_str());
     }

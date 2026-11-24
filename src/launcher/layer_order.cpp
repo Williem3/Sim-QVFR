@@ -136,7 +136,7 @@ bool write_launcher_layers(const std::wstring& ini, const LauncherLayers& l) {
     return ok;
 }
 
-Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLoad, bool cheekyFg,
+Options launch_options(const LauncherLayers& layers, bool cheekyLoad, bool cheekyFg,
                        std::vector<std::wstring> setVariables, bool antiCheat) {
     if (antiCheat)
         cheekyLoad = cheekyFg = false;
@@ -145,9 +145,7 @@ Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLo
     o.offLayers = layers.off;
     o.onLayers = layers.on;
     o.setVariables = std::move(setVariables);
-    if (twoLoop)
-        o.forced.push_back({kFrameGenerationLayer, false, "Two-loop renders two game frames per headset frame: frame generation breaks it"});
-    else if (cheekyLoad && cheekyFg)
+    if (cheekyLoad && cheekyFg)
         o.forced.push_back({kFrameGenerationLayer, false, "Cheeky's frame generation is on: one frame generation at a time"});
     if (cheekyLoad)
         o.forced.push_back({kCheekyLayer, true, "Cheeky Foveated DLSS is on: its runtime needs its layer"});
