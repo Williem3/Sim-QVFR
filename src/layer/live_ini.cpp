@@ -426,8 +426,9 @@ void live_reload() {
     }
     if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
     {
+        // The eyes stay pinned to F on the API path, live as at launch (config.cpp: K smears ACE's right eye).
         if (FocusImages* images = focus_images())
-            images->set_dlss_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
+            images->set_dlss_presets(experiment.apiPath ? 6 : s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
         static int scaleSent = 0;  // the Focus views mode, live
         if (scaleSent != s->menu.dlss.focusScale) {
             scaleSent = s->menu.dlss.focusScale;
