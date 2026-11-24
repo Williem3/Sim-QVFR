@@ -40,13 +40,15 @@ std::unique_ptr<PluginAdapter> PluginAdapter::create(const games::GameInfo* game
 }
 
 std::unique_ptr<PluginAdapter> PluginAdapter::load(const games::GameInfo* game, SqvfrModEntry entry,
-                                                   std::string& why) {
+                                                   std::string& why, const std::string& modId) {
     if (!entry) {
         why = "the mod has no entry point";
         return nullptr;
     }
     auto host = std::make_unique<SqvfrHost>(host_table());
     host->gameId = game ? game->id : "";
+    // Its own copy of the id, for the process (the table is, a refused mod's too).
+    host->modId = modId.empty() ? "" : (new std::string(modId))->c_str();
     auto adapter = create(game, entry(host.get()), why);
     if (!adapter) {
         (void)host.release();  // a refused mod may still hold it: kept for the process

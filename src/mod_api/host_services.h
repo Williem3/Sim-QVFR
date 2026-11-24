@@ -9,4 +9,7 @@ namespace simqvfr::mod_api {
 // Lives for the process.
 const SqvfrHost& host_table();
 
+// The ini mods' approvals and settings are in: SIM_QVFR_INI (the launcher sets it), else sim-qvfr.ini beside the core.
+std::wstring mods_ini();
+
 }  // namespace simqvfr::mod_api

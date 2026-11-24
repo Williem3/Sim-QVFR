@@ -22,7 +22,8 @@ public:
     static std::unique_ptr<PluginAdapter> create(const games::GameInfo* game, const SqvfrMod* mod, std::string& why);
     // Calls `entry` with the core's host table (host_services.h) naming `game`, then create. The adapter keeps that
     // table for the mod (a refused mod's is kept too: it may hold on to it).
-    static std::unique_ptr<PluginAdapter> load(const games::GameInfo* game, SqvfrModEntry entry, std::string& why);
+    static std::unique_ptr<PluginAdapter> load(const games::GameInfo* game, SqvfrModEntry entry, std::string& why,
+                                               const std::string& modId = {});
 
     const games::GameInfo* info() const override { return game_; }
     bool has_qvfr() const override;

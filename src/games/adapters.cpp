@@ -6,6 +6,7 @@
 #include <string>
 
 #include "../log.h"
+#include "../mod_api/host_services.h"
 #include "../mod_api/mod_loader.h"
 #include "../module_path.h"
 #include "../mod_api/plugin_adapter.h"
@@ -54,13 +55,7 @@ GameAdapter& through_mod(const GameInfo* game, SqvfrModEntry entry) {
 #ifdef SIM_QVFR_SCS_AS_MOD
 // The launch's ini, where the user's mod approvals are ([mods]): the launcher's run copy (SIM_QVFR_INI), else the
 // sim-qvfr.ini beside the core.
-std::wstring approvals_ini() {
-    wchar_t env[MAX_PATH] = {};
-    const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
-    if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
-        return env;
-    return (std::filesystem::path(module_folder(reinterpret_cast<const void*>(&approvals_ini))) / L"sim-qvfr.ini").wstring();
-}
+std::wstring approvals_ini() { return mod_api::mods_ini(); }
 
 // `game`'s adapter from the mod DLL <mods>\<folder>\<dll> (mod_api/mod_loader.h), kept for the process, once the trust
 // check (mod_api/mod_trust.h) lets it load; `firstParty`: a mod the package ships. `online`: the game's anti-cheat

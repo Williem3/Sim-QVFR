@@ -21,7 +21,9 @@ std::wstring mod_dll_path(const wchar_t* folder, const wchar_t* dll);
 // file isn't there, won't load, has no entry, or its table is refused (PluginAdapter::create). The DLL stays loaded for
 // the process either way.
 // No trust check: load_checked_mod's last step (and the tests').
-std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const games::GameInfo* game, std::string& why);
+// `modId`: its mods\\<id> folder, which names its settings (SqvfrHost::modId); empty: none.
+std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const games::GameInfo* game, std::string& why,
+                                           const std::string& modId = {});
 
 // Mod `id` at `path`, checked first (mod_trust.h decide_mod_trust): its file held open against changes from the check
 // until it is loaded, its approval read from `ini`. `verdict` says what it was taken for, or why it was refused (then

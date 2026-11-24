@@ -278,6 +278,15 @@ typedef struct SqvfrHost {
     void (*note_scene_frame)(void);
     int32_t (*eye_off)(void);              /* -1 both eyes on, 0 the left off, 1 the right off */
     uint64_t (*car_lighting_bits)(void);   /* quad/car_lighting.h's packed settings */
+
+    /* The mod's own settings (its settings.json, set on the launcher's Game tab). `modId`: the id of the mod this
+     * table was given to (its mods\<id> folder); empty when the core loaded it some other way. */
+    const char* modId;
+    /* The value of setting `key` of this mod ([mod_<modId>] of sim-qvfr.ini; ASCII, as settings.json names its values:
+     * "1"/"0" for a toggle, an option's value for a choice) into `out`, terminated. Its length, or -1 when it isn't
+     * set (the mod then uses its own default), the key isn't a setting name, or `size` is too small. `host` is this
+     * table. sqvfr::setting (mod.hpp) wraps it. */
+    int32_t (*mod_setting)(const struct SqvfrHost* host, const char* key, char* out, uint32_t size);
 } SqvfrHost;
 
 /* ---- mod -> core ---- */

@@ -6,6 +6,8 @@
 
 #include <d3d11.h>
 
+#include <cstring>
+#include <filesystem>
 #include <new>
 #include <string>
 
@@ -15,6 +17,7 @@
 #include "../engine/nvapi_stereo.h"
 #include "../games/lmu/mvr_probe.h"
 #include "../log.h"
+#include "../module_path.h"
 #include "../probe/aftermath.h"
 #include "../probe/hang_watch.h"
 #include "../probe/run_exit.h"
@@ -219,7 +222,45 @@ void host_note_scene_frame() { note_scene_frame(); }
 int32_t host_eye_off() { return eye_off(); }
 uint64_t host_car_lighting_bits() { return car_lighting_current_bits(); }
 
+// A mod or setting name: a-z, 0-9, _ (and - in a mod id), up to 32 (launcher/mod_catalog.h valid_mod_name).
+bool setting_name(const char* s, bool dash) {
+    if (!s || !*s)
+        return false;
+    size_t n = 0;
+    for (; s[n]; ++n)
+        if (n >= 32 || !((s[n] >= 'a' && s[n] <= 'z') || (s[n] >= '0' && s[n] <= '9') || s[n] == '_' || (dash && s[n] == '-')))
+            return false;
+    return true;
+}
+
+int32_t host_mod_setting(const SqvfrHost* host, const char* key, char* out, uint32_t size) {
+    if (!host || !out || size == 0)
+        return -1;
+    out[0] = '\0';
+    if (!setting_name(host->modId, true) || !setting_name(key, false))
+        return -1;
+    const std::wstring section = L"mod_" + std::wstring(host->modId, host->modId + strlen(host->modId));
+    const std::wstring name(key, key + strlen(key));
+    wchar_t value[128] = {};
+    const DWORD n = GetPrivateProfileStringW(section.c_str(), name.c_str(), L"", value, 128, mods_ini().c_str());
+    if (n == 0 || n + 1 > size)
+        return -1;
+    for (DWORD i = 0; i < n; ++i)
+        out[i] = value[i] < 0x80 ? static_cast<char>(value[i]) : '?';
+    out[n] = '\0';
+    return static_cast<int32_t>(n);
+}
+
+
 }  // namespace
+
+std::wstring mods_ini() {
+    wchar_t env[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
+    if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
+        return env;
+    return (std::filesystem::path(module_folder(reinterpret_cast<const void*>(&mods_ini))) / L"sim-qvfr.ini").wstring();
+}
 
 const SqvfrHost& host_table() {
     static const SqvfrHost host = [] {
@@ -270,6 +311,8 @@ const SqvfrHost& host_table() {
         h.note_scene_frame = host_note_scene_frame;
         h.eye_off = host_eye_off;
         h.car_lighting_bits = host_car_lighting_bits;
+        h.modId = "";  // PluginAdapter::load names the mod in its own copy
+        h.mod_setting = host_mod_setting;
         return h;
     }();
     return host;

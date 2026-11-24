@@ -12,11 +12,36 @@
 //   }
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <string>
 
 #include "mod_api.h"
 
 namespace sqvfr {
+
+// The mod's own setting `key` (settings.json, set on the launcher's Game tab), as text: false when it isn't set (use
+// your default) or the core is older than this service.
+inline bool setting(const SqvfrHost* host, const char* key, std::string& value) {
+    if (!host || host->size < offsetof(SqvfrHost, mod_setting) + sizeof(host->mod_setting) || !host->mod_setting)
+        return false;
+    char buffer[128] = {};
+    if (host->mod_setting(host, key, buffer, sizeof(buffer)) < 0)
+        return false;
+    value = buffer;
+    return true;
+}
+// A "toggle" setting: on or off, `def` when it isn't set.
+inline bool setting_on(const SqvfrHost* host, const char* key, bool def) {
+    std::string v;
+    return setting(host, key, v) && (v == "1" || v == "0") ? v == "1" : def;
+}
+// A "choice" setting: the chosen option's value, `def` when it isn't set.
+inline std::string setting_choice(const SqvfrHost* host, const char* key, const char* def) {
+    std::string v;
+    return setting(host, key, v) ? v : std::string(def);
+}
 
 class Mod {
 public:

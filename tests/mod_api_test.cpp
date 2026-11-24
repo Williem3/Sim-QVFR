@@ -731,7 +731,7 @@ void host_table_filled() {
               h.aftermath_built && h.aftermath_enable_dumps && h.aftermath_attach && h.aftermath_mark &&
               h.aftermath_marking && h.aftermath_set_marker_names && h.aftermath_after_removal && h.aftermath_detach &&
               h.hang_watch_on_fire && h.stock_wanted && h.set_stock_active && h.note_scene_frame && h.eye_off &&
-              h.car_lighting_bits,
+              h.car_lighting_bits && h.mod_setting,
           "every appended host entry is filled");
     // The shared switches are the core's one copy.
     simqvfr::set_stock_wanted(true);
@@ -758,6 +758,43 @@ void host_table_filled() {
     h.log(SQVFR_LOG_INFO, "mod_api_test: a line through the host table");
 }
 
+// A mod reads its own settings ([mod_<id>] of the ini SIM_QVFR_INI names) through its copy of the host table, and
+// only its own: the section comes from the table's modId, never from the mod.
+void mod_reads_its_settings() {
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring ini = std::wstring(temp) + L"sqvfr-mod-settings-test.ini";
+    DeleteFileW(ini.c_str());
+    WritePrivateProfileStringW(L"mod_cool", L"sharp", L"1", ini.c_str());
+    WritePrivateProfileStringW(L"mod_cool", L"look", L"warm", ini.c_str());
+    WritePrivateProfileStringW(L"mods", L"cool_sha256", L"abc", ini.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_INI", ini.c_str());
+
+    SqvfrHost host = simqvfr::mod_api::host_table();
+    check(host.mod_setting && host.modId && *host.modId == '\0', "the shared host table names no mod");
+    host.modId = "cool";
+    char out[32] = {};
+    check(host.mod_setting(&host, "sharp", out, sizeof(out)) == 1 && std::strcmp(out, "1") == 0, "a mod reads its toggle");
+    check(sqvfr::setting_on(&host, "sharp", false) && sqvfr::setting_choice(&host, "look", "cool") == "warm",
+          "mod.hpp's helpers read the toggle and the choice");
+    check(!sqvfr::setting_on(&host, "missing", false) && sqvfr::setting_choice(&host, "missing", "def") == "def",
+          "a setting not set gives the mod's default");
+    check(host.mod_setting(&host, "cool_sha256", out, sizeof(out)) == -1, "a mod can't read the approvals");
+    check(host.mod_setting(&host, "../x", out, sizeof(out)) == -1, "a key that isn't a setting name is refused");
+    check(host.mod_setting(&host, "look", out, 3) == -1, "a buffer too small is refused");
+    host.modId = "other";
+    check(host.mod_setting(&host, "sharp", out, sizeof(out)) == -1, "another mod doesn't see them");
+    host.modId = "";
+    check(host.mod_setting(&host, "sharp", out, sizeof(out)) == -1, "a mod loaded without an id has no settings");
+    SqvfrHost old = host;
+    old.size = static_cast<uint32_t>(offsetof(SqvfrHost, modId));
+    old.modId = "cool";
+    check(!sqvfr::setting_on(&old, "sharp", false), "an older core without the service: the default");
+
+    SetEnvironmentVariableW(L"SIM_QVFR_INI", nullptr);
+    DeleteFileW(ini.c_str());
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
@@ -770,6 +807,7 @@ int SIM_QVFR_TEST_MAIN() {
     scs_dll_through_the_loader();
     host_d3d11_hooks_on_warp();
     host_table_filled();
+    mod_reads_its_settings();
     if (failures) {
         std::printf("mod_api_test: %d failure(s)\n", failures);
         return 1;

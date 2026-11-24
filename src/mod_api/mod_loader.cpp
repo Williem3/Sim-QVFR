@@ -31,7 +31,8 @@ std::string narrow(const std::wstring& w) {
 
 }  // namespace
 
-std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const games::GameInfo* game, std::string& why) {
+std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const games::GameInfo* game, std::string& why,
+                                           const std::string& modId) {
     if (!std::filesystem::path(path).is_absolute()) {
         why = "not a full path: " + narrow(path);
         return nullptr;
@@ -50,7 +51,7 @@ std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const game
         why = std::string("the mod has no ") + SQVFR_MOD_ENTRY_NAME + " export: " + narrow(path);
         return nullptr;
     }
-    return PluginAdapter::load(game, entry, why);
+    return PluginAdapter::load(game, entry, why, modId);
 }
 
 std::unique_ptr<PluginAdapter> load_checked_mod(const std::wstring& path, const std::wstring& id, const std::wstring& ini,
@@ -85,7 +86,7 @@ std::unique_ptr<PluginAdapter> load_checked_mod(const std::wstring& path, const 
     if (verdict.trust == ModTrust::Refused)
         why = verdict.why;
     else
-        mod = load_mod_dll(path, game, why);
+        mod = load_mod_dll(path, game, why, narrow(id));
     CloseHandle(hold);
     return mod;
 }

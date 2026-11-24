@@ -119,7 +119,8 @@ between Ko-fi and About.
   - `package.ps1 -Nightly` stamps the package version into each first-party `mod.json` and writes
     `sqvfr-mod-<id>-<version>.zip` (signed files plus SHA256.txt). CI uploads it with the nightly zip.
   - Third-party mods are never offered updates: their authors ship them.
-- **Not yet:** sliders, and a mod reading its `[mod_<id>]` values through the host table.
+- **A mod reads its settings** through its copy of the host table: `SqvfrHost::mod_setting` (the section comes from the table's `modId`, its `mods\<id>` folder, so a mod sees only its own; never `[mods]`). In C++: `sqvfr::setting_on(host, "key", def)` and `sqvfr::setting_choice(host, "key", "def")` (mod.hpp). Read at launch: a change applies on the next launch.
+- **Not yet:** sliders.
 
 ## Phase 3, first step: the trust check (option A)
 
