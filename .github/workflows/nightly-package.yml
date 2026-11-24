@@ -1,0 +1,39 @@
+# Nightly line only (docs/architecture/mod-manager-plan.md "Nightly channel"): every push to feature/mod-manager or
+# nightly builds the package on a Windows runner, runs every offline test (package.ps1 does), and keeps the
+# sqvfr-nightly-*.zip as a downloadable artifact for 14 days. Nothing is published as a release.
+#
+# The artifact is NOT signed (the certificate's key stays on the maintainer's PC: sign before publishing) and has
+# no DLSS (NVIDIA's SDK is never in this repository: -NoDlss). The Defender scan is skipped (-NoScan): runners
+# don't keep Defender's signatures current. It never runs for development or main.
+name: Nightly package
+
+on:
+  push:
+    branches: [feature/mod-manager, nightly]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package (nightly, unsigned, no DLSS)
+        shell: powershell
+        run: ./package.ps1 -Nightly -NoDlss -NoScan -OutputDirectory "$env:RUNNER_TEMP\dist"
+
+      - name: Upload the nightly zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqvfr-nightly-${{ github.sha }}
+          path: ${{ runner.temp }}/dist/sqvfr-nightly-*.zip
+          if-no-files-found: error
+          retention-days: 14
