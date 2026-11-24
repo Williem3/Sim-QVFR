@@ -91,6 +91,11 @@ public:
             // smeared the right eye, 2026-11-24); otherwise it applies when ACE next makes its DLSS.
             const bool remake = read_uint(ini, L"replay_dlss_eye_remake", 0) != 0;
             simqvfr::focus_ngx::set_options(static_cast<float>(jitterX), dlaa, remake);
+            // ACE's stereo lists give the right eye no previous jitter: corrected in our copy of its constants.
+            const bool rightFix = read_uint(ini, L"replay_dlss_right_prev_fix", 1) != 0;
+            simqvfr::replay_probe_set_right_prev_fix(rightFix);
+            simqvfr::logf("experiment: API path DLSS: the right eye's previous projection %s",
+                          rightFix ? "corrected" : "left as ACE's (replay_dlss_right_prev_fix=0)");
             simqvfr::logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every "
                           "in-game mode %s; a live eye preset %s", jitterX * 100, dlaa ? "on" : "off",
                           remake ? "remakes ACE's feature" : "waits for ACE's next feature");

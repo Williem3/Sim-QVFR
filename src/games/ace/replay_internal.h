@@ -157,6 +157,7 @@ struct Stream {
     uint64_t eyeState = 0;                     // the live size this list records with (0: off), taken at its Reset
     uint64_t eyeOut = 0;                       // and the region after the game's DLSS upscale (eye_out), taken with it
     float eyeBias = 0;                         // the periphery texture bias this list records with (0: off), taken with it
+    bool eyeFix = false;                       // the right eye's previous projection corrected (fixNow), taken with it
     struct EyePatch {
         D3D12_GPU_VIRTUAL_ADDRESS from, to;
         int mode;    // 0 pass constants, 1 tile culling, 2 normal reconstruction, 3 deferred shadows, 4 velocity packing
@@ -223,6 +224,7 @@ struct Stream {
         cbv1Root = cbv5Root = sceneRoot = nullptr;
         eyeState = eyeOut = 0;
         eyeBias = 0;
+        eyeFix = false;
         eyePatches.clear();
     }
     template <class T> void put(const T& v) {
@@ -613,6 +615,9 @@ struct EyeLive {
     // surfaces (fences, lattices) average to a light solid shade at the periphery's low resolution and are see-through
     // in the sharper focus views; a sharper periphery makes the two agree. `biasNow`: taken at a frame's end.
     std::atomic<float> match{0}, mipBias{0}, biasNow{0};
+    // The right eye's previous projection corrected (kPatchShader's fixPrev): asked (replay_dlss_right_prev_fix), and
+    // as a frame's end took it (with DLSS on and the copies ready). With it ACE's stereo scene draws read our copy.
+    std::atomic<bool> rightPrevFix{true}, fixNow{false};
     ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
     ComPtr<ID3D12PipelineState> pso;   // kEyeShader
     std::atomic<uint32_t> nextSlot{0};

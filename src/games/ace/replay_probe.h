@@ -165,6 +165,8 @@ void replay_probe_set_eye_scale(double scale);
 // The showcase's Stock (quad/showcase.h): no focus replays from the next frame's end, ACE's eyes at their launch size and
 // uncomposed. The layer asks only when that size is the native eye (periphery 100%, no crop at launch).
 void replay_probe_set_stock(bool on);
+// ACE's stereo lists: the right eye's previous projection corrected for DLSS's motion vectors (on by default).
+void replay_probe_set_right_prev_fix(bool on);
 void replay_probe_eye_allow(bool composed);
 // Periphery texture match ([quad] periphery_texture_match), live: ACE's own eye passes sample their material textures
 // sharper by `share` (0..1; 0 off) of the mip levels the focus views are sharper by, so see-through surfaces (fences,

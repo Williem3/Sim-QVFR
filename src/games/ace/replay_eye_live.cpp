@@ -130,6 +130,7 @@ void eye_record(List* gameList, const Stream& s) {
             std::memcpy(params, floats, sizeof(floats));
             params[34] = 1;  // eyeMode
             std::memcpy(params + 35, &s.eyeBias, 4);  // mipBias
+            params[22] = eyeLive.rightPrevFix.load(std::memory_order_relaxed) ? 1 : 0;  // fixPrev
             l->SetPipelineState(focus.patchPso.Get());
         } else {
             params[0] = static_cast<uint32_t>(p.mode);

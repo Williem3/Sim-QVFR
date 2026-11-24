@@ -923,9 +923,10 @@ void eye_apply(List* l, Stream* s) {
             scissorsOriginal(l, s->scN, s->scAll);
         s->eyeScaled = false;
     }
-    // The periphery texture bias without the live periphery: an eye scene draw at its own size reads our copy too.
+    // The periphery texture bias without the live periphery: an eye scene draw at its own size reads our copy too. So
+    // does a stereo one for the right eye's previous projection (eyeFix: DLSS on).
     bool biased = false;
-    if (!now.on && s->eyeBias != 0 && scene && s->vpN >= 1 && s->vpN <= 2) {
+    if (!now.on && (s->eyeBias != 0 || (s->eyeFix && s->vpN == 2)) && scene && s->vpN >= 1 && s->vpN <= 2) {
         const float ew = focus.sceneEyeW.load(std::memory_order_relaxed), eh = focus.sceneEyeH.load(std::memory_order_relaxed);
         biased = ew >= 64;
         for (UINT i = 0; biased && i < s->vpN; ++i) {
@@ -1249,6 +1250,7 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
         s->eyeState = eyeLive.state.load(std::memory_order_relaxed);
         s->eyeOut = eyeLive.out.load(std::memory_order_relaxed);
         s->eyeBias = eyeLive.biasNow.load(std::memory_order_relaxed);
+        s->eyeFix = eyeLive.fixNow.load(std::memory_order_relaxed);
     }
     if (probeMode == 3 && !focusActive.load(std::memory_order_relaxed)) {
         s->active = false;  // cost A/B off: the hooks pass straight through (no recording)
@@ -2688,6 +2690,7 @@ void replay_probe_set_size(double k, double kY, double renderScale) {
 }
 
 void replay_probe_set_stock(bool on) { stockWanted.store(on, std::memory_order_relaxed); }
+void replay_probe_set_right_prev_fix(bool on) { eyeLive.rightPrevFix.store(on, std::memory_order_relaxed); }
 
 void replay_probe_set_eye_scale(double scale) {
     eyeLive.wanted.store(static_cast<float>(std::clamp(scale, 0.25, 1.0)), std::memory_order_relaxed);
@@ -2965,6 +2968,11 @@ void replay_probe_frame_end() {
                 logf("replay eye: periphery texture match: %.2f mip levels on ACE's own eye passes (%.0f%% of the %.2f "
                      "levels the focus views are sharper by%s)",
                      biasNext, share * 100, gap, fixed != 0 ? "; replay_periphery_mip_bias set" : "");
+            const bool fixNext = eyeLive.rightPrevFix.load(std::memory_order_relaxed) && focus.settings.dlss && ew >= 256 &&
+                                 eh >= 256 && eye_ready();
+            if (fixNext != eyeLive.fixNow.exchange(fixNext, std::memory_order_relaxed))
+                logf("replay eye: the right eye's previous projection for DLSS's motion vectors %s",
+                     fixNext ? "corrected" : "as ACE's");
             if (next != reported || why != eyeLive.whyNot) {
                 reported = next;
                 eyeLive.whyNot = why;

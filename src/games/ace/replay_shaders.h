@@ -17,9 +17,17 @@ namespace simqvfr::replay_detail {
 // (the eye's NDC jitter x eye size / focus size), not the box's magnification of it: DLSS takes sub-pixel jitter.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; uint eyeMode; float mipBias; float4 gaze; float4 gazePrev; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint fixPrev; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; uint eyeMode; float mipBias; float4 gaze; float4 gazePrev; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
+// ACE's single-pass stereo lists (eyeHalfWidthPixels, 112.z, set) carry the right eye's current unjittered projection
+// in prevProjectionUnjitteredRight (107-110: the same as 103-106), so the right eye's velocities lack the frame-to-frame
+// jitter change and DLSS smears its periphery (2026-11-24, preset K). fixPrev: the left eye's previous-to-current change
+// (25-28 minus 17-20) added to the right eye's current one. Per-eye lists are left as they are.
+float4 row(uint r) {
+    if (fixPrev != 0 && r >= 107 && r <= 110 && src[112].z != 0) return src[r - 4] + (src[r - 82] - src[r - 90]);
+    return src[r];
+}
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 132) return;
     if (i >= 128) {
@@ -29,7 +37,7 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
         dst.Store4(i * 16, asuint(kept));
         return;
     }
-    float4 v = src[i];
+    float4 v = row(i);
     const bool left = i < 64;
     // The box's centre off the eye's forward axis (the gaze; NDC, per eye: gaze.xy left, .zw right; a right-eye list
     // holds its eye in the left rows). The previous frame's projections take the previous frame's centre, so velocities
@@ -48,10 +56,10 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     const float sx = src[84].z > 0 ? src[84].z / focusSize.x : ax, sy = src[84].w > 0 ? src[84].w / focusSize.y : ay;
     if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107)) {  // viewProjection and the projections
         const float own = i == 21 ? 0 : jitter.x;                 // this row's own jitter: all but prevProjection carry it
-        v = ax * v + (ax * ox - own * (ax - sx)) * src[i + 3];    // x' = a x + b w, b = -a * centre = a * ox
+        v = ax * v + (ax * ox - own * (ax - sx)) * row(i + 3);    // x' = a x + b w, b = -a * centre = a * ox
     } else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108)) {
         const float own = i == 22 ? 0 : jitter.y;
-        v = ay * v + (ay * oy - own * (ay - sy)) * src[i + 2];    // y' = c y + d w
+        v = ay * v + (ay * oy - own * (ay - sy)) * row(i + 2);    // y' = c y + d w
     }
     if (i == 85) v.xy = jitter * float2(sx, sy);
     if (i == 90) v.x += mipBias;  // globalMaterialMipBias (the periphery texture bias: ACE's own eyes; 0 otherwise)
@@ -92,7 +100,7 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
 )";
 
 // kPatchShader's Params as 32-bit values, at HLSL's packing (a vector never straddles a 16-byte register): 0-3 the
-// floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, (22-23 padding), 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
+// floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, 22 fixPrev, (23 padding), 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
 // fogSrv1, 34 eyeMode, 35 mipBias, 36-39 gaze, 40-43 gazePrev.
 constexpr UINT kPatchParams = 44;
 // ACE's tyre shaders have no single-pass-stereo variant (the vertex shader takes no instance id and writes no viewport
