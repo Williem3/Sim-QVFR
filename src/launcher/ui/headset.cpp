@@ -161,10 +161,17 @@ void hotkey_row(const Rect& r, HotkeyAction action) {
                                   : k.pad.set() ? control_text(k.pad.control)
                                                 : std::wstring(tr(L"No button"));
     const float x = r.x + c.labelW;
-    button(kHotkeyKey, {x, r.y, c.buttonW, r.h}, keyLabel, keyCapture ? Btn::Primary : Btn::Secondary, nullptr, a);
+    // Waiting for a press: the primary's fill; else edged as popup_button's (the fill alone is too close to the card).
+    const auto edge = [&cv](const Rect& b, bool capturing) {
+        if (!capturing)
+            cv.stroke(b.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
+    };
+    const Rect keyR{x, r.y, c.buttonW, r.h}, padR{x + c.buttonW + kHotkeyGap, r.y, c.buttonW, r.h};
+    button(kHotkeyKey, keyR, keyLabel, keyCapture ? Btn::Primary : Btn::Secondary, nullptr, a);
+    edge(keyR, keyCapture);
     app.hits.back().tip = tr(L"Click, then press the keys: Esc cancels, Delete clears it.");
-    button(kHotkeyPad, {x + c.buttonW + kHotkeyGap, r.y, c.buttonW, r.h}, padLabel, padCapture ? Btn::Primary : Btn::Secondary,
-           nullptr, a);
+    button(kHotkeyPad, padR, padLabel, padCapture ? Btn::Primary : Btn::Secondary, nullptr, a);
+    edge(padR, padCapture);
     app.hits.back().tip = k.pad.set() ? trf(L"On {device}. Click, then press another.",
                                             {{L"device", k.pad.name.empty() ? k.pad.device : k.pad.name}})
                                       : std::wstring(tr(L"Click, then press a wheel or controller button."));

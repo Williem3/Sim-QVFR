@@ -351,11 +351,14 @@ Card diagnostics_card() {
                 m.row(tr(L"Logs folder"), kept, size_text(use.bytes));
         };
         b.divider();
+        const std::wstring toolsMore = tr(L"tools for comparing and bug reports");
         if (app.s.cpuProfile || app.s.frameCapture || app.s.baselineNext || app.s.debugLogs > 0) {
+            // Its More is kept open, so turning the last one off leaves the switches where they are (under Hide).
+            app.moreOpen.insert(app.drawingSection + L"/" + toolsMore);
             b.group(tr(L"Tools for comparing and bug reports"));
             tools(b);
         } else {
-            b.more(tr(L"tools for comparing and bug reports"),
+            b.more(toolsMore,
                    {tr(L"CPU capture"), tr(L"Frame capture"), tr(L"Next launch without QVFR"), tr(L"Detailed logs"),
                     tr(L"Logs folder")},
                    tools);

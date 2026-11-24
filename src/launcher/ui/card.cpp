@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -289,6 +290,8 @@ void Body::actions(const std::vector<ButtonSpec>& list) {
     if (draw_)
         for (size_t i = 0; i < list.size(); ++i) {
             button(list[i].id, rects[i], list[i].label, list[i].style, list[i].icon, list[i].option);
+            if (list[i].style == Btn::Secondary)  // its edge as popup_button's: the fill alone is too close to the card
+                app.canvas.stroke(rects[i].inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
             record(list[i].label, rects[i]);  // Find a setting finds a button (Report an issue…)
         }
     h_ += y + t::kControlHeight;
@@ -391,22 +394,31 @@ void Body::more(const std::wstring& label, const std::vector<std::wstring>& hidd
     gap();
     const std::wstring key = app.drawingSection + L"/" + label;
     const bool open = app.moreOpen.count(key) > 0;
-    const float y = y_ + h_, h = 24;
+    // A Secondary button (controls.cpp's), edged like a pop-up button so it reads as a control on the card: the label, the
+    // chevron after it (down: shows more, up: hides them).
+    const float y = y_ + h_, h = t::kControlHeight;
     if (draw_) {
         const std::wstring text =
             open ? trf(L"Hide {name}", {{L"name", label}}) : trf(L"Show {name}", {{L"name", label}});
-        const float tw = std::ceil(app.canvas.measure(text, t::kBodyMedium));
-        const Rect r{x_ - 4, y, tw + 8 + 18, h};
+        constexpr float kChevronW = 10, kChevronGap = 8;
+        const float room = std::max(0.0f, w_ - t::kSpace4 - kChevronGap - kChevronW - t::kSpace3);
+        const std::wstring shown = fit(text, kButtonLabel, room);
+        const float tw = std::min(room, std::ceil(app.canvas.measure(shown, kButtonLabel)));
+        const Rect r{x_, y, t::kSpace4 + tw + kChevronGap + kChevronW + t::kSpace3, h};
         const int index = static_cast<int>(app.moreKeys.size());
         app.moreKeys.push_back(key);
-        if (pointer_in(r))
-            app.canvas.fill(r, col(app.c->control_hover), t::kRadiusControl);
-        app.canvas.text(text, t::kBodyMedium, {x_, y, tw + 2, h}, col(app.c->accent));
-        app.canvas.path(open ? "M1.5 7.5L5 4l3.5 3.5" : "M1.5 4.5L5 8l3.5-3.5", {x_ + tw + 6, y + (h - 12) / 2, 10, 12}, 10,
-                        col(app.c->accent), 1.5f);
+        const bool down = app.pressed == kMore && r.contains(app.mouseX, app.mouseY);
+        app.canvas.fill(r, col(down || pointer_in(r) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
+        if (down)  // a shade under the hover, as Btn::Secondary's
+            app.canvas.fill(r, col(0x000000, 0.08f), t::kRadiusControl);
+        app.canvas.stroke(r, col(app.c->control_border), 1, t::kRadiusControl);
+        app.canvas.text(shown, kButtonLabel, {r.x + t::kSpace4, y, tw + 2, h}, col(app.c->label));
+        app.canvas.path(open ? "M1.5 7.5L5 4l3.5 3.5" : "M1.5 4.5L5 8l3.5-3.5",
+                        {r.x + t::kSpace4 + tw + kChevronGap, y + (h - 12) / 2, kChevronW, 12}, 10,
+                        col(app.c->label_secondary), 1.5f);
         if (focused(kMore) && app.focusOption == index)
             focus_ring(r, t::kRadiusControl);
-        app.hits.push_back({kMore, r, index, L"", text, open ? 1 : 0});
+        app.hits.push_back({kMore, r, index, shown != text ? text : std::wstring(), text, open ? 1 : 0});
         if (!open)
             for (const std::wstring& l : hiddenLabels)
                 app.drawnLabels.push_back({l, app.drawingSection, {x_, y, w_, h}, L"", key});
@@ -494,11 +506,33 @@ float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool 
     const float gap = 16;
     const int cols = std::clamp(static_cast<int>((w + gap) / (kCardMinW + gap)), 1, 4);
     const float cw = std::floor((w - gap * (cols - 1)) / cols);
+    // Sticky columns: a card keeps the column it was first given while this page, game and column count stay (another
+    // page, game or column count: laid out afresh, balanced). A card not seen before goes where it follows or to the
+    // shortest column, and is remembered there. Find a setting's indexing draws every page: it reads the current page's
+    // columns but changes nothing, so the page shown doesn't lose them.
+    const bool indexing = app.searchOpen && !app.searchIndexed;
+    const std::wstring key = std::to_wstring(static_cast<int>(app.pane)) + L"/" +
+                             games::wide_id(games::launcher_game()) + L"/" + std::to_wstring(cols);
+    std::map<std::wstring, int> scratch;
+    if (!indexing && app.cardGridKey != key) {
+        app.cardGridKey = key;
+        app.cardColumns.clear();
+    }
+    std::map<std::wstring, int>& remembered = app.cardGridKey == key ? app.cardColumns : scratch;
     std::vector<float> colY(static_cast<size_t>(cols), 0.0f);
     size_t last = 0;
     bool any = false;
     for (const Card& card : cards) {
-        const size_t c = card.follows && any ? last : static_cast<size_t>(std::min_element(colY.begin(), colY.end()) - colY.begin());
+        size_t c = 0;
+        const auto it = remembered.find(card.title);
+        if (it != remembered.end() && it->second >= 0 && it->second < cols) {
+            c = static_cast<size_t>(it->second);
+        } else {
+            c = card.follows && any ? last
+                                    : static_cast<size_t>(std::min_element(colY.begin(), colY.end()) - colY.begin());
+            if (!indexing)
+                remembered[card.title] = static_cast<int>(c);
+        }
         last = c;
         any = true;
         const float h = card_height(card, cw);
@@ -528,6 +562,7 @@ void reset_card(int index) {
         if (button != 1)
             return;
         reset(app.s);
+        app.cardColumns.clear();  // the page laid out afresh, balanced: the player just confirmed, not tracking a card
         changed();  // saved, and sent to a running game, as any change
     };
     open_sheet(std::move(s));

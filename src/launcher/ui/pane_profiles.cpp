@@ -1,4 +1,5 @@
 // The Profiles pane (profile/profiles.h): using, saving, sharing and deleting profiles.
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <utility>
@@ -21,12 +22,13 @@ float profiles_pane(float x, float y, float w, bool draw) {
     const std::vector<Profile> presets = builtin_profiles(app.s.eyeTracking);
     // A row's buttons, right-aligned in its control rect: (id, label), each the profile's index as its option;
     // kNone: a green badge with the label instead ("In use").
-    const auto buttons_row = [](size_t i, std::vector<std::pair<Ctl, std::wstring>> list) {
+    // Use, Revert and the In use badge share one width, so a row's buttons stay in their columns as it changes.
+    const float useW = std::max({button_width(tr(L"Use")), button_width(tr(L"Revert")), badge_width(tr(L"In use"))});
+    const auto buttons_row = [useW](size_t i, std::vector<std::pair<Ctl, std::wstring>> list) {
         float width = 0;
         std::vector<float> widths;
         for (const auto& [id, label] : list) {
-            widths.push_back(id == kNone ? badge_width(label)
-                                         : button_width(label));
+            widths.push_back(id == kNone || id == kProfileUse || id == kProfileRevert ? useW : button_width(label));
             width += widths.back();
         }
         width += t::kSpace2 * (list.size() - 1);
@@ -36,16 +38,19 @@ float profiles_pane(float x, float y, float w, bool draw) {
         r.control = [i, list, widths](const Rect& rect) {
             float bx = rect.x;
             for (size_t b = 0; b < list.size(); ++b) {
-                if (list[b].first == kNone) {
-                    badge(bx, rect.y + (rect.h - 20) / 2, 0, list[b].second);
+                if (list[b].first == kNone) {  // centred in the Use button's place
+                    const float bw = badge_width(list[b].second);
+                    badge(bx + (widths[b] - bw) / 2, rect.y + (rect.h - 20) / 2, 0, list[b].second);
                 } else {
                     const Ctl id = list[b].first;
-                    button(id, {bx, rect.y, widths[b], rect.h}, list[b].second,
+                    const Rect br{bx, rect.y, widths[b], rect.h};
+                    button(id, br, list[b].second,
                            id == kProfileDelete ? Btn::Danger
-                           : id == kProfileShare ? Btn::Ghost
                            : id == kProfileUpdate ? Btn::Tint
                                                   : Btn::Secondary);
                     app.hits.back().option = static_cast<int>(i);
+                    if (id == kProfileDelete)  // a Danger button has no fill at rest: its edge shows it is one
+                        app.canvas.stroke(br.inset(0.5f, 0.5f), col(app.c->danger, 0.5f), 1, t::kRadiusControl);
                 }
                 bx += widths[b] + t::kSpace2;
             }
@@ -99,7 +104,7 @@ float profiles_pane(float x, float y, float w, bool draw) {
         const float saveW = button_width(save) + 24;
         const float pasteW = button_width(paste) + 24;
         button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, save, Btn::Tint, kIconPlus);
-        button(kProfilePaste, {r.x + saveW + t::kSpace2, r.y, pasteW, t::kControlHeight}, paste, Btn::Ghost,
+        button(kProfilePaste, {r.x + saveW + t::kSpace2, r.y, pasteW, t::kControlHeight}, paste, Btn::Secondary,
                kIconPaste);
     };
     savedRows.push_back(actions);
@@ -119,6 +124,7 @@ void use_profile(const std::wstring& name) {
     }
     set_current_profile(app.ini.c_str(), p.name);
     app.s = load_settings(app.ini);
+    app.cardColumns.clear();  // every card may change: the pages laid out afresh, balanced (card.cpp card_grid)
     changed();  // saved as the launcher saves, and to a running game
     app.profileMessage = trf(L"Using {name}.", {{L"name", p.name}});
     refresh_profiles();

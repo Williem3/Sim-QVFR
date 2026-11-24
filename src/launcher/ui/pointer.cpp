@@ -295,6 +295,8 @@ void open_popup(Ctl owner) {
     }
     app.popup.kinds.clear();
     app.popup.actions.clear();
+    app.popup.swatches.clear();
+    app.popup.opener = kNone;
     for (const Hit& h : app.hits)
         if (h.id == owner) {
             app.popup.anchor = h.r;
@@ -341,14 +343,20 @@ int profile_index(const std::wstring& name) {
 
 // The top bar's profile menu: what the settings are now, the presets and saved profiles (the one in use checked), the
 // one in use's Update and Revert once the settings differ from it, saving and pasting, the Profiles page, and Restore
-// Defaults (its Undo stays in the status and Ctrl+Z).
-void open_profile_menu() {
+// Defaults (its Undo stays in the status and Ctrl+Z). Under the control it was opened from: the top bar's button, or
+// the Overview's Custom segment (the segments' last).
+void open_profile_menu(Ctl from) {
     Popup& p = app.popup;
     p = {};
     p.owner = kProfileMenu;
+    p.opener = from;
     for (const Hit& h : app.hits)
-        if (h.id == kProfileMenu)
+        if (h.id == from)
             p.anchor = h.r;
+    if (p.anchor.w <= 0 && from != kProfileMenu) {  // not drawn this frame: under the top bar's button
+        open_profile_menu(kProfileMenu);
+        return;
+    }
     const auto add = [&p](PopupRow kind, const std::wstring& text, int action) {
         p.items.push_back(text);
         p.kinds.push_back(kind);
@@ -425,6 +433,10 @@ void choose(Ctl owner, int option) {
     if (owner == kCardMenu) {
         if (option >= 0 && option < static_cast<int>(app.popup.actions.size()))
             reset_card(app.popup.actions[static_cast<size_t>(option)]);
+        return;
+    }
+    if (owner == kColorGame) {  // a game's colour, as its swatches and Custom… did
+        choose_color_menu(option);
         return;
     }
     if (owner == kDiagKind) {  // not a setting
