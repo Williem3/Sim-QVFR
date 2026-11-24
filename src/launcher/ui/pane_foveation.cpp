@@ -132,7 +132,11 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
             const int side = right ? 1 : 0;
             const Rect box = R(fx, fy, fw, fh);
             app.shapeBox[side] = box;
-            app.canvas.stroke(box, col(app.c->preview_label, 0.35f), 1);
+            // The area's outline a little stronger under the pointer (a click there adds a point) or while dragged in.
+            const bool boxHover = pointer_in(box) && app.hover == kShapeCanvas &&
+                                  app.hoverOption == side * kShapeCanvasEye + kShapeCanvasBox;
+            const bool dragged = app.dragging == kShapeCanvas;
+            app.canvas.stroke(box, col(app.c->preview_label, boxHover || dragged ? 0.6f : 0.35f), 1);
             app.hits.push_back({kShapeCanvas, box, side * kShapeCanvasEye + kShapeCanvasBox, {},
                                 tr(L"Focus shape: click to add a point")});
             const bool whole = app.shapePoint == kFocusWholeShape;  // every handle filled, none numbered
@@ -142,6 +146,12 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
                 const D2D1_POINT_2F p = point_at(i, 1, 1);
                 const bool held = whole || i == picked;
                 const float r = held ? 6.0f : 4.5f;
+                // A soft accent halo: under the pointer, stronger while the point (or the whole shape) is dragged.
+                const bool grabbed = dragged && held;
+                const bool over = pointer_in(Rect{p.x - 8, p.y - 8, 16, 16}) && app.hover == kShapeCanvas &&
+                                  app.hoverOption == side * kShapeCanvasEye + i;
+                if (grabbed || over)
+                    app.canvas.circle(p.x, p.y, r + 4, col(app.c->accent, grabbed ? 0.22f : 0.14f), true, 0);
                 app.canvas.circle(p.x, p.y, r, col(held ? app.c->accent : app.c->preview_label), true, 0);
                 app.canvas.circle(p.x, p.y, r, col(app.c->preview_canvas), false, 1.2f);
                 if (held && !whole)
@@ -193,10 +203,10 @@ float preview(float x, float y, float w, bool draw) {
     if (draw) {
         preview_eye(x, y, half, true, false);
         preview_eye(x + half + gap, y, half, true, true);
-        app.canvas.text(tr(L"Left eye"), t::kSubheadline, {x, y + h + 4, half, 16}, col(app.c->label_secondary),
-                        Align::Center);
-        app.canvas.text(tr(L"Right eye"), t::kSubheadline, {x + half + gap, y + h + 4, half, 16},
+        app.canvas.text(fit(tr(L"Left eye"), t::kSubheadline, half), t::kSubheadline, {x, y + h + 4, half, 16},
                         col(app.c->label_secondary), Align::Center);
+        app.canvas.text(fit(tr(L"Right eye"), t::kSubheadline, half), t::kSubheadline,
+                        {x + half + gap, y + h + 4, half, 16}, col(app.c->label_secondary), Align::Center);
     }
     return h + 4 + 16;
 }
@@ -214,7 +224,8 @@ float preview_legend(float x, float y, float w, bool draw) {
         const float cx = x + 16 + fw + t::kSpace4;
         app.canvas.fill({cx, y + 3, 10, 10}, col(app.c->preview_canvas), 2);
         app.canvas.stroke({cx, y + 3, 10, 10}, col(app.c->label_muted), 1, 2);
-        app.canvas.text(tr(L"Not rendered"), t::kSubheadline, {cx + 16, y, std::max(0.0f, x + w - cx - 16), 16},
+        const float restW = std::max(0.0f, x + w - cx - 16);
+        app.canvas.text(fit(tr(L"Not rendered"), t::kSubheadline, restW), t::kSubheadline, {cx + 16, y, restW, 16},
                         col(app.c->label_secondary));
     }
     return 16;
@@ -225,7 +236,7 @@ float readout(float x, float y, float w, const std::wstring& name, const std::ws
               const std::wstring& of) {
     if (draw) {
         reader_text({x, y, w, 20}, name + L": " + value + (of.empty() ? L"" : L" " + of));
-        app.canvas.text(name, t::kBody, {x, y, w / 2, 20}, col(app.c->label_secondary));
+        app.canvas.text(fit(name, t::kBody, w / 2 - 4), t::kBody, {x, y, w / 2, 20}, col(app.c->label_secondary));
         const float ow = of.empty() ? 0 : std::ceil(app.canvas.measure(of, t::kBody)) + 2;
         app.canvas.text(value, t::kBody, {x + w / 2, y, w / 2 - ow - (of.empty() ? 0 : 4), 20}, col(app.c->label), Align::Trailing);
         if (!of.empty())

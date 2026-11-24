@@ -283,9 +283,12 @@ Card night_cars_card() {
 void outline_color_row(Body& b) {
     b.custom(32, [](const Rect& r) {
         const std::wstring label = tr(L"Outline color");
-        app.canvas.text(label, t::kBody, {r.x, r.y + 6, r.w / 2, 20}, col(app.c->label));
-        help_icon(label, r.x + std::ceil(app.canvas.measure(label, t::kBody)) + 6, r.y + 6);
         const float sw = segmented_width();
+        // Cut with an ellipsis before the help icon and the segments (help, hits and labels keep the full text).
+        const float labelW = std::max(0.0f, std::min(r.w / 2, r.w - sw - 30));
+        const std::wstring shown = fit(label, t::kBody, labelW);
+        app.canvas.text(shown, t::kBody, {r.x, r.y + 6, r.w / 2, 20}, col(app.c->label));
+        help_icon(label, r.x + std::ceil(app.canvas.measure(shown, t::kBody)) + 6, r.y + 6);
         segmented(kColor, {r.right() - sw, r.y, sw, 32}, static_cast<int>(app.s.color), false);
         app.drawnLabels.push_back({label, app.drawingSection, r});
     });

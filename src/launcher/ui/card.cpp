@@ -33,8 +33,10 @@ void draw_slider(const SliderSpec& s, float x, float y, float w) {
     const float vw = std::ceil(cv.measure(value, t::kValue)) + 2;
     const float dw = s.detail.empty() ? 0 : std::ceil(cv.measure(s.detail, t::kCallout)) + 8;
     const float lw = std::max(0.0f, w - vw - dw - 8);
-    cv.text(s.label, t::kBody, {x, y, lw, kLineH}, col(app.c->label));
-    help_icon(s.label, x + std::min(lw - 14, std::ceil(cv.measure(s.label, t::kBody)) + 6), y);
+    // A label longer than its room (a longer language beside the value) is cut, its ⓘ kept after it.
+    const std::wstring shown = fit(s.label, t::kBody, help_for(s.label) ? std::max(0.0f, lw - 20) : lw);
+    cv.text(shown, t::kBody, {x, y, lw, kLineH}, col(app.c->label));
+    help_icon(s.label, x + std::min(lw - 14, std::ceil(cv.measure(shown, t::kBody)) + 6), y);
     if (dw > 0)
         cv.text(s.detail, t::kCallout, {x + w - vw - dw, y, dw - 6, kLineH}, col(app.c->label_muted), Align::Trailing);
     cv.text(value, t::kValue, {x + w - vw, y, vw, kLineH}, col(app.c->label), Align::Trailing);
@@ -216,8 +218,9 @@ void Body::trailing(const std::wstring& label, const std::wstring& desc, float t
     if (draw_) {
         // Read before its control: what the row says (its value), or its line under the label.
         reader_text({x_, y, w_, h}, !spoken.empty() ? spoken : desc.empty() ? L"" : label + L". " + desc);
-        app.canvas.text(label, t::kBody, {x_, y, textW, kLineH}, col(app.c->label));
-        help_icon(label, x_ + std::min(textW - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), y);
+        const std::wstring shown = fit(label, t::kBody, help_for(label) ? std::max(0.0f, textW - 20) : textW);
+        app.canvas.text(shown, t::kBody, {x_, y, textW, kLineH}, col(app.c->label));
+        help_icon(label, x_ + std::min(textW - 14, std::ceil(app.canvas.measure(shown, t::kBody)) + 6), y);
         if (dh > 0)
             app.canvas.text(desc, t::kCallout, {x_, y + kLineH + 2, textW, dh + 2}, col(app.c->label_secondary), Align::Leading,
                             false, true);
@@ -470,7 +473,9 @@ void draw_card(const Card& card, const Rect& r, int index) {
     }
     const float tx = r.x + kPad + 18;
     const float titleW = std::ceil(cv.measure(card.title, t::kTitle2));
-    cv.text(card.title, t::kTitle2, {tx, hy, std::max(0.0f, right - tx), 22}, col(app.c->label));
+    // Cut before its tag and ⋯ menu in a narrow card (the heading read above keeps it whole).
+    cv.text(fit(card.title, t::kTitle2, std::max(0.0f, right - tx)), t::kTitle2, {tx, hy, std::max(0.0f, right - tx), 22},
+            col(app.c->label));
     app.drawnLabels.push_back({card.title, card.title, {r.x, r.y, r.w, kHeaderH}});
     if (!card.chip.empty() && tx + titleW + 12 < right)
         badge(tx + titleW + 12, hy + 1, card.chipTone, card.chip, right - (tx + titleW + 12));

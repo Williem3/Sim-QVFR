@@ -116,8 +116,12 @@ float popup_width(const std::wstring* items, int count, float minWidth) {
 
 void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disabled) {
     const bool open = app.popup.open && app.popup.owner == id;
-    app.canvas.fill(r, col(!disabled && (open || pointer_in(r)) ? app.c->control_hover : app.c->control_bg, disabled ? 0.5f : 1),
-                    t::kRadiusControl);
+    // Pressed a shade under the hover (Btn::Secondary's); disabled: no hover or pressed state.
+    const bool down = !disabled && app.pressed == id && r.contains(app.mouseX, app.mouseY);
+    const uint32_t bg = down                                    ? mix(app.c->control_hover, 0, 0.08f)
+                        : !disabled && (open || pointer_in(r)) ? app.c->control_hover
+                                                                : app.c->control_bg;
+    app.canvas.fill(r, col(bg, disabled ? 0.5f : 1), t::kRadiusControl);
     // Its edge at 3:1 in both themes (field-border): the fill alone is too close to the card.
     app.canvas.stroke(r, col(app.c->control_border, disabled ? 0.4f : 1), 1, t::kRadiusControl);
     app.canvas.text(fit(value, t::kBody, r.w - t::kSpace3 - 30), t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
@@ -147,6 +151,11 @@ void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabl
     const float f = range.max > range.min ? static_cast<float>(value - range.min) / (range.max - range.min) : 0;
     const float kx = track.x + travel * f;
     const Color fill = col(disabled ? app.c->label_tertiary : app.c->accent_fill);
+    // The thumb's state (Btn::Primary's mixes): lighter under the pointer, darker while dragged; none when disabled.
+    const bool dragged = !disabled && app.dragging == id, over = !disabled && !dragged && pointer_in(track);
+    const Color thumb = dragged ? col(mix(app.c->accent_fill, 0, 0.12f))
+                        : over  ? col(mix(app.c->accent_fill, 0xffffff, 0.1f))
+                                : fill;
     app.canvas.fill({track.x, cy - 2, track.w, 4}, col(app.c->segment_track));
     // Filled from the range's start, or from 0 when it spans both signs (degrees left and right).
     const float zx = range.min < 0 && range.max > 0 ? track.x + travel * (0.0f - range.min) / (range.max - range.min) : track.x;
@@ -154,7 +163,10 @@ void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabl
     app.canvas.fill({std::min(zx, kc), cy - 2, std::abs(kc - zx), 4}, fill);
     // The thumb: a rounded square in blue, a white centre mark (no shadow).
     const Rect k{kx, cy - knob / 2, knob, knob};
-    app.canvas.fill(k, fill, t::kRadiusThumb);
+    if (dragged || over)  // a soft accent halo behind it, stronger while dragged
+        app.canvas.fill({k.x - 3, k.y - 3, k.w + 6, k.h + 6}, col(app.c->accent_fill, dragged ? 0.22f : 0.12f),
+                        t::kRadiusThumb + 3);
+    app.canvas.fill(k, thumb, t::kRadiusThumb);
     app.canvas.fill({k.x + knob / 2 - 1, k.y + 5, 2, knob - 10}, col(app.c->knob, disabled ? 0.6f : 1));
     if (focused(id))
         focus_ring(k, t::kRadiusThumb);
@@ -188,12 +200,27 @@ float checkbox_height(const std::wstring& desc, float width) {
 }
 
 // The switch itself (44 x 24, a rounded rectangle): blue when on, with its square knob at the trailing end.
-void switch_track(const Rect& s, bool on, bool disabled) {
+namespace {
+
+// The switch, with its feedback when enabled: `state` 0 at rest, 1 hovered, 2 pressed. On: Btn::Primary's mixes; off:
+// toward the label's ink (darker on light, lighter on dark).
+void switch_track_in(const Rect& s, bool on, bool disabled, int state) {
     const float alpha = disabled ? 0.4f : 1;
-    app.canvas.fill(s, col(on ? app.c->accent_fill : app.c->switch_off, alpha), t::kRadiusSwitch);
+    uint32_t track = on ? app.c->accent_fill : app.c->switch_off;
+    if (!disabled && state > 0) {
+        if (on)
+            track = state == 2 ? mix(track, 0, 0.12f) : mix(track, 0xffffff, 0.1f);
+        else
+            track = mix(track, app.dark ? 0xffffff : 0, state == 2 ? 0.14f : 0.07f);
+    }
+    app.canvas.fill(s, col(track, alpha), t::kRadiusSwitch);
     const float knob = s.h - 6, kx = on ? s.right() - 3 - knob : s.x + 3;
     app.canvas.fill({kx, s.y + 3, knob, knob}, col(app.c->knob, disabled ? 0.6f : 1), t::kRadiusKnob);
 }
+
+}  // namespace
+
+void switch_track(const Rect& s, bool on, bool disabled, int state) { switch_track_in(s, on, disabled, state); }
 
 // A setting that is on or off: its label (and description) leading, a switch trailing; the whole row toggles it.
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,
@@ -207,7 +234,12 @@ void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, co
         app.canvas.text(desc, t::kCallout, {r.x, ty + t::kBody.lineHeight + 2, tw, descH + 2},
                         col(disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
     const Rect s{r.right() - kSwitchW, r.y + (r.h - kSwitchH) / 2, kSwitchW, kSwitchH};
-    switch_track(s, checked, disabled);
+    // The whole row is its hit, so the switch answers the pointer anywhere in it.
+    const int state = disabled                                                   ? 0
+                      : app.pressed == id && r.contains(app.mouseX, app.mouseY) ? 2
+                      : pointer_in(r)                                            ? 1
+                                                                                 : 0;
+    switch_track_in(s, checked, disabled, state);
     if (disabled) {
         app.drawnLabels.push_back({label, app.drawingSection, r});
         return;  // no hit: it does nothing
@@ -247,6 +279,8 @@ void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& it
         const bool on = static_cast<int>(i) == selected;
         if (on)
             app.canvas.fill(item, col(app.c->segment_selected, disabled ? 0.35f : 1), t::kRadiusControl - 2);
+        else if (!disabled && app.pressed == id && item.contains(app.mouseX, app.mouseY))
+            app.canvas.fill(item, col(mix(app.c->control_hover, 0, 0.08f)), t::kRadiusControl - 2);
         else if (!disabled && pointer_in(item))
             app.canvas.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
         app.canvas.text(items[i], on ? t::kBodyStrong : t::kBodyMedium, item,
@@ -278,6 +312,8 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
         const bool on = i == selected;
         if (on)  // the selected segment: ink on light, near-white on dark, its text inverted
             app.canvas.fill(item, col(app.c->segment_selected, disabled ? 0.35f : 1), t::kRadiusControl - 2);
+        else if (!disabled && app.pressed == id && item.contains(app.mouseX, app.mouseY))
+            app.canvas.fill(item, col(mix(app.c->control_hover, 0, 0.08f)), t::kRadiusControl - 2);
         else if (!disabled && pointer_in(item))
             app.canvas.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
         app.canvas.circle(item.x + t::kSpace3 + 5, item.y + item.h / 2, 5, col(overlay(i), disabled ? 0.4f : 1), true);
@@ -321,7 +357,9 @@ float badge(float x, float y, int tone, const std::wstring& text, float maxWidth
     const uint32_t fg[] = {app.c->success, app.c->warning, app.c->danger, app.c->label};
     app.canvas.fill({x, y - 1, w, 22}, col(bg[tone]), t::kRadiusControl);
     glyph(tone, x + 8, y + 4, col(fg[tone]));
-    app.canvas.text(text, kBadgeStyle, {x + 25, y - 1, w - 25 - 9, 22}, col(fg[tone]));
+    // Cut to its width with an ellipsis when maxWidth narrows it.
+    const float textW = w - 25 - 9;
+    app.canvas.text(fit(text, kBadgeStyle, textW), kBadgeStyle, {x + 25, y - 1, textW, 22}, col(fg[tone]));
     return w;
 }
 

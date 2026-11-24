@@ -110,14 +110,22 @@ void apply_layers() {
 namespace {
 
 void mini_check(int option, const Rect& box, bool on, bool disabled, const std::wstring& name, const std::wstring& tip) {
-    switch_track(box, on, disabled);
+    const Rect hit{box.x - 4, box.y - 4, box.w + 8, box.h + 8};
+    const int state = disabled                                                         ? 0
+                      : app.pressed == kLayerOn && hit.contains(app.mouseX, app.mouseY) ? 2
+                      : pointer_in(hit)                                                  ? 1
+                                                                                         : 0;
+    switch_track(box, on, disabled, state);
     if (!disabled)
-        app.hits.push_back({kLayerOn, {box.x - 4, box.y - 4, box.w + 8, box.h + 8}, option, tip, name, on ? 1 : 0});
+        app.hits.push_back({kLayerOn, hit, option, tip, name, on ? 1 : 0});
 }
 
 void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
     app.canvas.fill(r, col(!disabled && pointer_in(r) ? app.c->control_hover : app.c->control_bg, disabled ? 0.5f : 1),
                     t::kRadiusControl);
+    // Pressed: the hover 8% darker (popup_button's mix, as black over it).
+    if (!disabled && app.pressed == id && r.contains(app.mouseX, app.mouseY))
+        app.canvas.fill(r, col(0, 0.08f), t::kRadiusControl);
     app.canvas.path(id == kLayerUp ? "M3 7.5L6 4.5l3 3" : "M3 4.5L6 7.5l3-3", {r.x + (r.w - 12) / 2, r.y + (r.h - 12) / 2, 12, 12},
                     12, col(disabled ? app.c->label_tertiary : app.c->label), 1.5f);
     if (!disabled)

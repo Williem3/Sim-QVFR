@@ -124,7 +124,8 @@ void sheet_card() {
     cv.fill(card, col(app.c->group_bg), radius);  // the panes' cards: their buttons read on it
     cv.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, radius);
     float y = card.y + pad;
-    cv.text(s.title, t::kTitle3, {card.x + pad, y, inner, t::kTitle3.lineHeight}, col(app.c->label));
+    // One line (the card's height counts one): a long title, "Reset {card}?" in a longer language, is cut.
+    cv.text(fit(s.title, t::kTitle3, inner), t::kTitle3, {card.x + pad, y, inner, t::kTitle3.lineHeight}, col(app.c->label));
     reader_text({card.x + pad, y, inner, t::kTitle3.lineHeight}, s.title, 1);
     reader_text({card.x + pad, y + t::kTitle3.lineHeight, inner, textH}, s.text);
     y += t::kTitle3.lineHeight;

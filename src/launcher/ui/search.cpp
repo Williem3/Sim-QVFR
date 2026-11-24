@@ -190,8 +190,10 @@ void search_card() {
             cv.fill(r, col(app.c->accent_fill, app.dark ? 0.28f : 0.12f), t::kRadiusControl);
         else if (pointer_in(r))
             cv.fill(r, col(app.c->control_hover), t::kRadiusControl);
-        cv.text(e.label, t::kBodyMedium, {r.x + 12, r.y + 5, r.w - 24, 20}, col(app.c->label));
-        cv.text(where(e), t::kCallout, {r.x + 12, r.y + 25, r.w - 24, 17}, col(app.c->label_secondary));
+        // A long name or path (a longer language, a hidden row's "shows with") is cut to the card.
+        cv.text(fit(e.label, t::kBodyMedium, r.w - 24), t::kBodyMedium, {r.x + 12, r.y + 5, r.w - 24, 20}, col(app.c->label));
+        cv.text(fit(where(e), t::kCallout, r.w - 24), t::kCallout, {r.x + 12, r.y + 25, r.w - 24, 17},
+                col(app.c->label_secondary));
         app.hits.push_back({kSearchResult, r, static_cast<int>(i)});
         y += kResultH;
     }
