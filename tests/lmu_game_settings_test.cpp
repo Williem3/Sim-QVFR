@@ -3,6 +3,9 @@
 // CRLF and comments too), unknown values left alone, and a file replaced with a backup kept and put back.
 #include "launcher_test_kit.h"
 
+#include <set>
+
+#include "dev_build.h"
 #include "launcher/lmu_game_settings.h"
 
 namespace {
@@ -140,6 +143,26 @@ int SIM_QVFR_TEST_MAIN() {
         }
         check(grouped && advanced == 3 && std::wstring(ls::kGroups[ls::kVrGroup]) == L"Virtual reality",
               "table: every setting on a card, three on Advanced performance, the FOV check on Virtual reality");
+        // Not vetted for players: development builds only. A release shows none of them (no control, nothing written)
+        // and so no Advanced performance card; a dev build shows every setting.
+        const std::set<std::string> devOnly = {"Auto Detail Framerate", "Load Opponent Cockpits", "UI Refresh Rate",
+                                               "Sun Occlusion",         "Wind and Crowd Motion",  "Headlights On Cars"};
+        std::set<std::string> marked;
+        bool releaseHides = true, devShows = true, buildAgrees = true;
+        for (const ls::Def& d : ls::defs()) {
+            if (d.devOnly)
+                marked.insert(d.key);
+            releaseHides = releaseHides && ls::shown_in(d, false) == !devOnly.count(d.key);
+            devShows = devShows && ls::shown_in(d, true);
+            buildAgrees = buildAgrees && ls::shown(d) == ls::shown_in(d, simqvfr::kDevBuild);
+        }
+        check(marked == devOnly && releaseHides && devShows && buildAgrees,
+              "table: the six unvetted settings in development builds only");
+        bool releaseCard = false;
+        for (const ls::Def& d : ls::defs())
+            releaseCard = releaseCard || (d.group == ls::kGroupCount - 1 && ls::shown_in(d, false));
+        check(!releaseCard && ls::group_shown(ls::kGroupCount - 1) == simqvfr::kDevBuild,
+              "table: no Advanced performance card in a release");
         bool known = false;
         check(ls::toggle_on("true", known) && known && !ls::toggle_on("0", known) && known &&
                   (ls::toggle_on("maybe", known), !known),
