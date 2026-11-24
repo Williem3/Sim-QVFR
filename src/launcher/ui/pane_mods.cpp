@@ -469,7 +469,11 @@ bool mods_press(Ctl id, int option) {
     }
     if (id >= kModSource0 && id <= kModSourceLast) {
         const size_t i = static_cast<size_t>(id - kModSource0);
-        if (i < app.mods.size() && valid_source_link(std::string(app.mods[i].source.begin(), app.mods[i].source.end())))
+        std::string link;
+        if (i < app.mods.size())
+            for (wchar_t c : app.mods[i].source)
+                link += c < 0x80 ? static_cast<char>(c) : ' ';
+        if (!link.empty() && valid_source_link(link))
             ShellExecuteW(app.hwnd, L"open", app.mods[i].source.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return true;
     }
