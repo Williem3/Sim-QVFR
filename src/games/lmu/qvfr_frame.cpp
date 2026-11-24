@@ -99,12 +99,12 @@ std::uintptr_t base() { return simqvfr::module_base(); }
 
 // ---- The game's facts on any build ----
 // QVFR reads five facts of the game: the size it was offered, its render scale (its main targets' size), whether its FSR
-// is on, each eye's projection and the eye a pass rendered. On a build abi.h's addresses are from (knownBuild) they are
-// read there, as since the start; on any other build (a game update, the studio's beta or alpha branches) they come from
-// what the layer sees instead (buildFree): the size it offered at xrEnumerateViewConfigurationViews, the scene target a
-// pass binds, FSR's compute writes into the eye's image, the FOV the game was handed at xrLocateViews, and the passes'
-// order. [experiment] lmu_build_free=1 takes them that way on a known build too (the check of this path). On a known
-// build both are taken and compared (check_facts), so a run says whether the layer's agree with the game's.
+// is on, each eye's projection and the eye a pass rendered. On every build (buildFree, the default since 2026-11-24)
+// they come from what the layer sees: the size it offered at xrEnumerateViewConfigurationViews, the scene target a pass
+// binds, FSR's compute writes into the eye's image, the FOV the game was handed at xrLocateViews and the passes' order.
+// On the build abi.h's addresses are from (knownBuild) they are also read there and compared (check_facts), so a run
+// says whether the layer's agree with the game's; [experiment] lmu_build_free=0 takes the game's there instead (the
+// old path, a temporary fallback for the headset A/B).
 bool knownBuild = false;
 bool buildFree = false;
 std::atomic<std::uint32_t> offeredW{0}, offeredH{0};  // the stereo views' size the layer offered the game
@@ -1509,12 +1509,14 @@ bool qvfr_frame_start(const QvfrFrameRun& run) {
                       "nothing read in the game",
                       tag(), buildSha.c_str());
     else if (buildFree)
-        simqvfr::logf("%s: lmu_build_free=1: the game's facts from what OpenXR and Direct3D show, as on a build Sim-QVFR "
-                      "wasn't made for (compared with the game's in the log)",
+        simqvfr::logf("%s: a build Sim-QVFR was made for, build-free (the default): the game's facts from what OpenXR "
+                      "and Direct3D show, DLSS's camera from the draws' constant buffers (compared with the game's in "
+                      "the log's build-free lines)",
                       tag());
     else
-        simqvfr::logf("%s: a build Sim-QVFR was made for: the game's facts read in it, compared with what OpenXR and "
-                      "Direct3D show (the log's build-free lines)",
+        simqvfr::logf("%s: a build Sim-QVFR was made for, lmu_build_free=0 (the old path, a temporary fallback): the "
+                      "game's facts read in it, compared with what OpenXR and Direct3D show (the log's build-free "
+                      "lines)",
                       tag());
     // The game's own two eye passes, found at the d3d11 level, and the lens mask and the VR UI from their d3d11 draws:
     // no game code hooked.

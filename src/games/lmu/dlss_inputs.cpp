@@ -218,7 +218,7 @@ bool pass_matrices(int eye, float (&view)[16], float (&projection)[16]) {
         float rv[16], rp[16];
         bool fromSlot = false;
         if (rigid && shaped && qvfr_frame_known_build() && renderer_matrices(eye, rv, rp, fromSlot))
-            compare(eye, view, projection, rv, rp);  // lmu_build_free=1 on a known build: against the game's
+            compare(eye, view, projection, rv, rp);  // build-free on a known build: against the game's
         return rigid && shaped;
     }
     bool fromSlot = false;

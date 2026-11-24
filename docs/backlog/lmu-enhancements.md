@@ -5,6 +5,12 @@ local recon notes (`docs/recon-lmu.md`, not in the repository).
 
 ## Survive game updates: learn the game's values from the API instead of its memory
 
+**Status (2026-11-24).** Done as "build-free": since 2026-11-18 unknown builds take every fact from OpenXR and Direct3D
+11 (DLSS's camera from the draws' constant buffers, view_pair.h), and since 2026-11-24 the known build does too by
+default (`[experiment] lmu_build_free`, default 1). On the known build the memory reads are left only to compare with
+(the log's `build-free` lines) and behind `lmu_build_free=0`, a temporary fallback for the headset A/B. Next: remove
+those reads and `src/games/lmu/abi.h`, leaving the exe's SHA-256 as the only per-build fact.
+
 **Idea.** Take every value Sim-QVFR still reads from LMU's memory from what the game hands OpenXR and Direct3D 11
 instead, so a game update that moves LMU's data doesn't turn QVFR off.
 
