@@ -581,6 +581,9 @@ sim_qvfr_test(quad_flow_test tests/quad_flow_test.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(quad_flow_test PRIVATE sim_qvfr_layer)
+if(SIM_QVFR_ACE_AS_MOD)
+  target_link_libraries(quad_flow_test PRIVATE sim_qvfr_ace_inproc)
+endif()
 
 # The output density (quad/output_density.h): the composed output at the focus views' density (tests/output_density_test.cpp).
 sim_qvfr_test(output_density_test tests/output_density_test.cpp)

@@ -6,13 +6,16 @@
 #include "layer/layer.h"
 #include "quad/output_density.h"
 #include "quad/focus_turn.h"
+#include "../src/games/ace/adapter.h"
 #include "../src/games/ace/game.h"
+#include "../src/mod_api/plugin_adapter.h"
 #include "../src/games/ace/views4.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 #include <dxgi1_6.h>
@@ -539,7 +542,18 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
     using namespace simqvfr::layer;
-    game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's
+    // views4 below is ACE's: its adapter through its mod table in this process (the nightly builds ACE as a DLL the
+    // core would load from mods\ace\, which a test has none of).
+    {
+        std::string why;
+        static std::unique_ptr<mod_api::PluginAdapter> aceMod =
+            mod_api::PluginAdapter::load(&ace::kGame, &ace::mod_entry, why, "ace");
+        if (!aceMod) {
+            std::printf("FAIL ACE's mod table refused: %s\n", why.c_str());
+            return 1;
+        }
+        game = aceMod.get();
+    }
     testThread = GetCurrentThreadId();
     // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
     wchar_t logDir[MAX_PATH] = {};
