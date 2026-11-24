@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cwctype>
 #include <algorithm>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -104,7 +105,23 @@ SRWLOCK lock = SRWLOCK_INIT;
 CreateInfo made;
 EyeEval eyes[2];
 std::atomic<uint64_t> evaluations{0};
-int logged = 0;  // whole evaluations logged
+// Detailed logs: each game feature's evaluations traced (its first three, then every 900th), by handle.
+std::vector<std::pair<const NVSDK_NGX_Handle*, uint64_t>> traced;
+bool trace_due(const NVSDK_NGX_Handle* h) {
+    if (!log_debug())
+        return false;
+    AcquireSRWLockExclusive(&lock);
+    auto at = std::find_if(traced.begin(), traced.end(), [&](const auto& t) { return t.first == h; });
+    if (at == traced.end()) {
+        if (traced.size() >= 16)
+            traced.erase(traced.begin());
+        traced.push_back({h, 0});
+        at = traced.end() - 1;
+    }
+    const uint64_t n = at->second++;
+    ReleaseSRWLockExclusive(&lock);
+    return n < 3 || n % 900 == 0;
+}
 std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
 std::atomic<bool> eyeRemake{false};             // set_options: a live eye preset remakes the game's feature
 std::atomic<float> jitterX{1.0f};        // set_options
@@ -554,27 +571,23 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
             // The right eye: the colour subrect starts past x 0 (one double-wide target); with separate targets per eye
             // (both at 0) the order in the frame decides.
             const int eye = e.colorBase[0] > 0 ? 1 : (e.colorBase[0] == 0 && e.outputBase[0] > 0 ? 1 : 0);
-            bool logIt = false;
             AcquireSRWLockExclusive(&lock);
             eyes[eye] = e;
-            if (logged < 4) {
-                ++logged;
-                logIt = true;
-            }
             ReleaseSRWLockExclusive(&lock);
-            if (logIt) {
-                logd("focus dlss: game evaluation %llu (eye %d): colour %s base %u,%u; depth %s base %u,%u; motion %s base "
-                     "%u,%u scale %.4g,%.4g; output %s base %u,%u; render %ux%u",
-                     static_cast<unsigned long long>(n), eye, describe(e.color).c_str(), e.colorBase[0], e.colorBase[1],
-                     describe(e.depth).c_str(), e.depthBase[0], e.depthBase[1], describe(e.motion).c_str(),
-                     e.motionBase[0], e.motionBase[1], e.motionScale[0], e.motionScale[1], describe(e.output).c_str(),
-                     e.outputBase[0], e.outputBase[1], e.renderW, e.renderH);
-                logd("focus dlss:   jitter %.4f,%.4f; exposure texture %s; pre-exposure %s%.4g; exposure scale %s%.4g; "
-                     "sharpness %.3g; frame time %s%.3g ms; reset %d; transparency mask %s; bias mask %s",
-                     e.jitter[0], e.jitter[1], describe(e.exposure).c_str(), e.hasPreExposure ? "" : "(unset) ",
-                     e.preExposure, e.hasExposureScale ? "" : "(unset) ", e.exposureScale, e.sharpness,
-                     e.hasFrameTime ? "" : "(unset) ", e.frameTime, e.reset, describe(e.transparency).c_str(),
-                     describe(e.bias).c_str());
+            const bool traceIt = trace_due(h);
+            if (traceIt) {
+                logd("focus dlss: game evaluation %llu (handle %p, eye %d): colour %s base %u,%u; depth %s base %u,%u; motion "
+                     "%s base %u,%u scale %.4g,%.4g; output %s base %u,%u; render %ux%u",
+                     static_cast<unsigned long long>(n), static_cast<const void*>(h), eye, describe(e.color).c_str(),
+                     e.colorBase[0], e.colorBase[1], describe(e.depth).c_str(), e.depthBase[0], e.depthBase[1],
+                     describe(e.motion).c_str(), e.motionBase[0], e.motionBase[1], e.motionScale[0], e.motionScale[1],
+                     describe(e.output).c_str(), e.outputBase[0], e.outputBase[1], e.renderW, e.renderH);
+                logd("focus dlss:   jitter %.4f,%.4f (NGX told x %.4f); exposure texture %s; pre-exposure %s%.4g; exposure "
+                     "scale %s%.4g; sharpness %.3g; frame time %s%.3g ms; reset %d; transparency mask %s; bias mask %s",
+                     e.jitter[0], e.jitter[1], e.jitter[0] * jitterX.load(), describe(e.exposure).c_str(),
+                     e.hasPreExposure ? "" : "(unset) ", e.preExposure, e.hasExposureScale ? "" : "(unset) ",
+                     e.exposureScale, e.sharpness, e.hasFrameTime ? "" : "(unset) ", e.frameTime, e.reset,
+                     describe(e.transparency).c_str(), describe(e.bias).c_str());
             }
             // The horizontal jitter NGX is told, as really drawn (set_options): the kept evaluation holds the game's.
             if (const float sx = jitterX.load(); sx != 1.0f)
@@ -609,12 +622,18 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
                     b->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, Y(e.renderH));
                     if (fresh)
                         b->Set(NVSDK_NGX_Parameter_Reset, 1);
+                    if (traceIt)
+                        logd("focus dlss:   evaluated by our live-periphery feature %p (%.0f%% x %.0f%%)%s",
+                             static_cast<const void*>(mine), fx * 100, fy * 100, fresh ? ", reset" : "");
                     return evaluateOriginal(l, mine, bag, callback);
                 }
             }
             const NVSDK_NGX_Handle* const use = eye_feature(l, h, fresh);
             if (fresh)  // another feature than last frame's: no history of its own
                 const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Reset, 1);
+            if (traceIt)
+                logd("focus dlss:   evaluated by %s %p%s", use == h ? "the game's own feature" : "our remade feature",
+                     static_cast<const void*>(use), fresh ? ", reset" : "");
             return evaluateOriginal(l, use, bag, callback);
         }
     }
