@@ -4,7 +4,9 @@
 #
 # The artifact is NOT signed (the certificate's key stays on the maintainer's PC: sign before publishing) and has
 # no DLSS (NVIDIA's SDK is never in this repository: -NoDlss). The Defender scan is skipped (-NoScan): runners
-# don't keep Defender's signatures current. It never runs for development or main.
+# don't keep Defender's signatures current. load_test is left out (-SkipTest): its live GPU check needs a real GPU's
+# engine counters, and a runner has only Microsoft's Basic Render Driver; VERSION.txt in the zip says it was skipped,
+# and it still runs on every local build. It never runs for development or main.
 name: Nightly package
 
 on:
@@ -28,7 +30,7 @@ jobs:
 
       - name: Package (nightly, unsigned, no DLSS)
         shell: powershell
-        run: ./package.ps1 -Nightly -NoDlss -NoScan -OutputDirectory "$env:RUNNER_TEMP\dist"
+        run: ./package.ps1 -Nightly -NoDlss -NoScan -SkipTest load_test -OutputDirectory "$env:RUNNER_TEMP\dist"
 
       - name: Upload the nightly zip
         uses: actions/upload-artifact@v4
