@@ -90,7 +90,8 @@ The fit, best first: the game draws four views when asked (OpenXR only); the gam
 
 Climb one rung at a time. Each rung ends with a launch, and the log or the human's eyes saying it works.
 
-1. **Identity.** `mod.json` with the game's entry (section 7), the DLL from `examples/hello`. Add the zip, approve it.
+1. **Identity.** `mod.json` with your game's entry (section 7, in place of the example's ATS and ETS2), the DLL
+   from `examples/hello`. Add the zip, approve it.
    The launcher lists the game and starts it.
 2. **The core loads you in the game.** The game's log says your mod loaded, and your `instance_created` logs a line.
    `has_qvfr` still answers 0.

@@ -38,9 +38,12 @@ You need Windows, Visual Studio 2022 (the "Desktop development with C++" workloa
 3. **Add it.** Drop the zip on the Sim-QVFR launcher window, or use **Settings > Mods > Add a mod…**. Confirm.
 4. **Approve it.** In **Settings > Mods**, press **Approve** on your mod. Approval covers this exact file, so each
    rebuild needs approving again.
-5. **Run the game** from the launcher, then open the game's log (**Game › Get help › Open the logs folder**). The
-   example writes `hello mod: running in ats, feeling calm`.
-6. **Change a setting** on the Game tab's **Mod settings** card, launch again, and watch the log line change.
+5. **See its settings.** The example names ATS and ETS2 in `games`, so its two settings show on those games' Game tab
+   (**Mod settings**). It doesn't run in them: Sim-QVFR's own mod serves those games.
+6. **Point it at your game.** Replace `games` with your game's entry (AGENTS.md section 7: its `exe`, Steam folder
+   and app id). Build and add it again, and approve it. The launcher lists your game; launch it from there, then
+   open the game's log (**Game › Get help › Open the logs folder**). The example writes
+   `hello mod: running in <your game>, feeling calm`.
 
 From there, climb AGENTS.md's ladder (section 4) one rung at a time. For a new game, add its entry to `mod.json`
 (AGENTS.md section 7): the launcher then lists it.
