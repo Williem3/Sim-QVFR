@@ -228,7 +228,7 @@ inline constexpr GamePalette kGamePalettes[] = {
 };
 
 // Type: the bundled families (src/launcher/launcher.rc), and the styles.
-enum class Family : uint8_t { Inter, Jost };
+enum class Family : uint8_t { Inter, Jost, Mono };
 struct FamilyInfo {
     const wchar_t* name;      // the family name in the font files
     const wchar_t* fallback;  // installed families to use when the bundled one can't be loaded
@@ -236,6 +236,7 @@ struct FamilyInfo {
 inline constexpr FamilyInfo kFamilies[] = {
     {L"Inter", L"Segoe UI Variable Text, Segoe UI"},  // Inter
     {L"Jost*", L"Segoe UI Variable Display, Segoe UI"},  // Jost
+    {L"Cascadia Mono", L"Cascadia Mono, Consolas"},       // Mono: hashes and paths (not bundled: Windows' own)
 };
 // Size and line height in DIPs; weight; tabular figures; family; uppercase; letter spacing in em.
 struct TypeStyle {
@@ -264,6 +265,7 @@ inline constexpr TypeStyle kSubheadline = {12.0f, 16.0f, 400, false, Family::Int
 inline constexpr TypeStyle kValue = {13.0f, 18.0f, 600, true, Family::Inter, false, 0.0f};
 inline constexpr TypeStyle kBadge = {12.0f, 16.0f, 600, false, Family::Inter, false, 0.0f};
 inline constexpr TypeStyle kButton = {14.0f, 20.0f, 500, false, Family::Inter, false, 0.0f};
+inline constexpr TypeStyle kMono = {12.5f, 18.0f, 400, false, Family::Mono, false, 0.0f};
 inline constexpr TypeStyle kRailName = {11.0f, 13.0f, 500, false, Family::Inter, false, 0.0f};
 
 // Spacing (DIPs).

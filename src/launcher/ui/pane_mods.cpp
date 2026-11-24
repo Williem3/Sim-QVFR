@@ -293,7 +293,6 @@ namespace {
 constexpr const char* kIconCube = "M8 1.75l5.5 3.1v6.3L8 14.25l-5.5-3.1v-6.3zM2.5 4.85L8 8l5.5-3.15M8 8v6.25";
 constexpr const char* kIconChevronRight = "M6 3.5L10.5 8 6 12.5";
 constexpr const char* kIconChevronDown = "M3.5 6L8 10.5 12.5 6";
-constexpr const char* kIconRescan = "M13.25 8A5.25 5.25 0 1 1 11.7 4.3M12.5 1.75v3h-3";
 constexpr const char* kIconFolder = "M1.75 4.25v8h12.5v-6.5H7.5L6 4.25z";
 constexpr const char* kIconUpload = "M8 11V2.75M4.75 6L8 2.75 11.25 6M2.75 10.5v2.75h10.5V10.5";
 constexpr const char* kIconCheck = "M3.5 8.25l3 3 6-6.5";
@@ -322,15 +321,18 @@ std::wstring games_line(const ModEntry& m) {
 // (the green "Approved"). Returns its width; draws only with `draw`.
 float pill(float x, float y, int tone, const std::wstring& text, const char* icon, bool bare, bool draw) {
     const float iconW = icon ? 16.0f : 0.0f;
-    const float w = std::ceil(app.canvas.measure(text, t::kBadge)) + 16 + iconW;
+    const float padX = bare ? 4.0f : 10.0f;
+    const float w = std::ceil(app.canvas.measure(text, t::kBadge)) + 2 * padX + iconW + 2;
     if (draw) {
         const uint32_t bg[] = {app.c->success_bg, app.c->warning_bg, app.c->danger_bg, app.c->segment_track};
         const uint32_t fg[] = {app.c->success, app.c->warning, app.c->danger, app.c->label_secondary};
-        if (!bare)
-            app.canvas.fill({x, y, w, 22}, col(bg[tone]), t::kRadiusFull);
+        if (!bare) {
+            app.canvas.fill({x, y, w, 22}, col(bg[tone]), 6);
+            app.canvas.stroke(Rect{x, y, w, 22}.inset(0.5f, 0.5f), col(fg[tone], 0.25f), 1, 6);
+        }
         if (icon)
-            app.canvas.path(icon, {x + 8, y + 5, 12, 12}, 16, col(fg[tone]), 1.6f);
-        app.canvas.text(text, t::kBadge, {x + 8 + iconW, y, w - 16 - iconW, 22}, col(fg[tone]));
+            app.canvas.path(icon, {x + padX, y + 5, 12, 12}, 16, col(fg[tone]), 1.6f);
+        app.canvas.text(text, t::kBadge, {x + padX + iconW, y, w - 2 * padX - iconW, 22}, col(fg[tone]), Align::Center);
     }
     return w;
 }
@@ -373,8 +375,13 @@ std::wstring source_shown(const std::wstring& link) {
         return rest;
     std::wstring shown = parts[0] + L"/" + parts[1];
     size_t from = 2;
-    if (parts.size() > 3 && (parts[2] == L"tree" || parts[2] == L"blob"))
-        from = 4;  // and the branch
+    if (parts.size() > 3 && (parts[2] == L"tree" || parts[2] == L"blob")) {
+        from = 4;  // and the branch; one named feature/…, bugfix/…, deprecate/… or release/… takes two parts
+        static const wchar_t* kPrefixes[] = {L"feature", L"bugfix", L"deprecate", L"release", L"hotfix"};
+        for (const wchar_t* p : kPrefixes)
+            if (parts[3] == p && parts.size() > 4)
+                from = 5;
+    }
     std::wstring path;
     for (size_t k = from; k < parts.size(); ++k)
         path += (path.empty() ? L"" : L"/") + parts[k];
@@ -638,7 +645,7 @@ float details_content(size_t i, float x, float y, float w, bool draw) {
                                     : changed ? trf(L"Approved {old}… · now {now}…", {{L"old", short_hash(st.approval.sha256)},
                                                                                      {L"now", short_hash(st.facts.sha256)}})
                                               : tr(L"It won’t run until you approve it.");
-                                const t::TypeStyle& subStyle = changed ? t::kValue : t::kCallout;
+                                const t::TypeStyle& subStyle = changed ? t::kMono : t::kCallout;
                                 const float sh = app.canvas.measure_height(sub, subStyle, vw);
                                 if (d) {
                                     const int tone = approved ? 0 : 1;
@@ -651,6 +658,7 @@ float details_content(size_t i, float x, float y, float w, bool draw) {
                                 return 24 + sh;
                             }});
             const int n = static_cast<int>(i);
+            if (!(st.offline.trust == ModTrust::Community && !st.facts.signatureTrusted))  // else the banner says it
             rows.push_back({tr(L"Online"), [&st, n](float vx, float vy, float vw, bool d) {
                                 const bool approved = st.offline.trust == ModTrust::Community;
                                 if (!st.facts.signatureTrusted || !approved) {
@@ -750,14 +758,14 @@ float details_content(size_t i, float x, float y, float w, bool draw) {
         if (!built.empty())
             rows.push_back({tr(L"Built with"), [built](float vx, float vy, float vw, bool d) {
                                 if (d)
-                                    app.canvas.text(fit(built, t::kValue, vw), t::kValue, {vx, vy, vw, 20}, col(app.c->label));
+                                    app.canvas.text(fit(built, t::kMono, vw), t::kMono, {vx, vy, vw, 20}, col(app.c->label));
                                 return 20.0f;
                             }});
         if (!st.facts.sha256.empty())
             rows.push_back({tr(L"File hash"), [&st](float vx, float vy, float vw, bool d) {
                                 if (d) {
                                     const float bw = small_button(kModDetailCopy, vx + vw, vy, tr(L"Copy"), true);
-                                    app.canvas.text(fit(short_hash(st.facts.sha256) + L"…", t::kValue, vw - bw - 8), t::kValue,
+                                    app.canvas.text(fit(short_hash(st.facts.sha256) + L"…", t::kMono, vw - bw - 8), t::kMono,
                                                     {vx, vy, vw - bw - 8, 20}, col(app.c->label));
                                 }
                                 return 20.0f;
@@ -779,7 +787,7 @@ float details_content(size_t i, float x, float y, float w, bool draw) {
         rows.push_back({tr(L"Folder"), [&m](float vx, float vy, float vw, bool d) {
                             if (d) {
                                 const float bw = small_button(kModDetailFolder, vx + vw, vy, tr(L"Show in Explorer"), true);
-                                app.canvas.text(fit_left(m.folder, t::kValue, vw - bw - 8), t::kValue, {vx, vy, vw - bw - 8, 20},
+                                app.canvas.text(fit_left(m.folder, t::kMono, vw - bw - 8), t::kMono, {vx, vy, vw - bw - 8, 20},
                                                 col(app.c->label));
                             }
                             return 20.0f;
@@ -1125,25 +1133,23 @@ float settings_pane(float x, float y, float w, bool draw) {
     // Header: "Mods" and what approval means; Rescan, Open Folder, Check for Updates, Add Mod… trailing.
     const std::wstring title = tr(L"Mods");
     const std::wstring intro = tr(L"Mods from anyone other than Sim-QVFR stay off until you approve them.");
-    const std::vector<Body::ButtonSpec> tools = {{kModsReload, tr(L"Rescan"), Btn::Ghost, kIconRescan},
+    const std::vector<Body::ButtonSpec> tools = {{kModsReload, tr(L"Rescan"), Btn::Ghost, kIconReset},
                                                  {kModsOpenFolder, tr(L"Open Folder"), Btn::Ghost, kIconFolder},
                                                  {kModsCheck, tr(L"Check for Updates"), Btn::Secondary},
                                                  {kModsAdd, tr(L"Add Mod…"), Btn::Primary, kIconPlus}};
     float toolsW = 0;
     for (const Body::ButtonSpec& s : tools)
         toolsW += button_width(s.label) + (s.icon ? 24.0f : 0.0f) + (toolsW > 0 ? 6.0f : 0.0f);
-    const bool oneLine = w - toolsW > 220;
-    const float textW = oneLine ? w - toolsW - 16 : w;
-    const float introH = app.canvas.measure_height(intro, t::kCallout, textW);
-    const float headH = std::max(oneLine ? t::kControlHeight : 0.0f, t::kHeadline.lineHeight + 2 + introH);
-    b.custom(headH + (oneLine ? 0 : 8 + t::kControlHeight), [&](const Rect& r) {
-        app.canvas.text(title, t::kHeadline, {r.x, r.y, textW, t::kHeadline.lineHeight}, col(app.c->label));
-        reader_text({r.x, r.y, textW, t::kHeadline.lineHeight}, title, 2);
-        app.canvas.text(intro, t::kCallout, {r.x, r.y + t::kHeadline.lineHeight + 2, textW, introH + 2}, col(app.c->label_secondary),
-                        Align::Leading, false, true);
-        reader_text({r.x, r.y + t::kHeadline.lineHeight + 2, textW, introH}, intro);
+    const float titleW = std::ceil(app.canvas.measure(title, t::kHeadline));
+    const bool oneLine = w - toolsW >= titleW + 16;  // the buttons on the title's line, else on their own under it
+    const float introH = app.canvas.measure_height(intro, t::kCallout, w);
+    const float lineH = t::kControlHeight;
+    const float headH = lineH + (oneLine ? 0 : 8 + t::kControlHeight) + 2 + introH;
+    b.custom(headH, [&](const Rect& r) {
+        app.canvas.text(title, t::kHeadline, {r.x, r.y, w, lineH}, col(app.c->label));
+        reader_text({r.x, r.y, titleW, lineH}, title, 2);
         float bx = oneLine ? r.right() - toolsW : r.x;
-        const float by = oneLine ? r.y + (headH - t::kControlHeight) / 2 : r.y + headH + 8;
+        const float by = oneLine ? r.y : r.y + lineH + 8;
         for (const Body::ButtonSpec& s : tools) {
             const float bw = button_width(s.label) + (s.icon ? 24.0f : 0.0f);
             const Rect br{bx, by, bw, t::kControlHeight};
@@ -1152,11 +1158,23 @@ float settings_pane(float x, float y, float w, bool draw) {
                 app.canvas.stroke(br.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
             bx += bw + 6;
         }
+        const float iy = by + t::kControlHeight + 2;
+        app.canvas.text(intro, t::kCallout, {r.x, iy, w, introH + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+        reader_text({r.x, iy, w, introH}, intro);
     });
     if (app.modsBusy)
         b.note(tr(L"Working…"));
-    else if (!app.modsMessage.empty())
-        b.chip(app.modsTone, app.modsMessage);
+    else if (!app.modsMessage.empty()) {
+        // Wrapped, in its tone's colour: a refusal says why in full.
+        const uint32_t tones[] = {app.c->success, app.c->warning, app.c->danger, app.c->label_secondary};
+        const uint32_t tone = tones[std::clamp(app.modsTone, 0, 3)];
+        const std::wstring message = app.modsMessage;
+        const float mh = app.canvas.measure_height(message, t::kCallout, w);
+        b.custom(mh, [message, mh, tone](const Rect& r) {
+            app.canvas.text(message, t::kCallout, {r.x, r.y, r.w, mh + 2}, col(tone), Align::Leading, false, true);
+            reader_text(r, message);
+        });
+    }
     // Built in (Sim-QVFR's own), then third-party.
     std::vector<size_t> own, others;
     for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i)
