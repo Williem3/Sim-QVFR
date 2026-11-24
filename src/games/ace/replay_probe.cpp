@@ -67,6 +67,7 @@ extern "C" size_t simqvfr_slot_SetComputeRootConstantBufferView(void);
 extern "C" size_t simqvfr_slot_SetComputeRootDescriptorTable(void);
 extern "C" size_t simqvfr_slot_Dispatch(void);
 extern "C" size_t simqvfr_slot_CopyBufferRegion(void);
+extern "C" size_t simqvfr_slot_ResourceBarrier(void);
 extern "C" size_t simqvfr_slot_CreateShaderResourceView(void);
 extern "C" size_t simqvfr_slot_CopyDescriptorsSimple(void);
 extern "C" size_t simqvfr_slot_CreateUnorderedAccessView(void);
@@ -134,6 +135,8 @@ TableFn computeTableOriginal;
 DispatchFn dispatchOriginal;
 using CopyRegionFn = void(STDMETHODCALLTYPE*)(List*, ID3D12Resource*, UINT64, ID3D12Resource*, UINT64, UINT64);
 CopyRegionFn copyRegionOriginal;
+using BarrierFn = void(STDMETHODCALLTYPE*)(List*, UINT, const D3D12_RESOURCE_BARRIER*);
+BarrierFn barrierOriginal;
 }  // namespace
 namespace replay_detail {  // declared in replay_internal.h
 SrvFn srvViewOriginal;
@@ -1946,6 +1949,14 @@ void STDMETHODCALLTYPE computeConstNHook(List* l, UINT i, UINT n, const void* da
         std::memcpy(s->visConsts + o, data, size_t{n} * 4);
     computeConstNOriginal(l, i, n, data, o);
 }
+// The game's transitions, for focus_ngx's copies of the right eye's DLSS inputs (their states as the game left them).
+void STDMETHODCALLTYPE barrierHook(List* l, UINT n, const D3D12_RESOURCE_BARRIER* b) {
+    if (b && focus_ngx::watching())
+        for (UINT i = 0; i < n; ++i)
+            if (b[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION && (b[i].Flags & D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY) == 0)
+                focus_ngx::note_transition(b[i].Transition.pResource, b[i].Transition.StateAfter);
+    barrierOriginal(l, n, b);
+}
 void STDMETHODCALLTYPE copyRegionHook(List* l, ID3D12Resource* dst, UINT64 dstOffset, ID3D12Resource* src, UINT64 srcOffset,
                                       UINT64 bytes) {
     if (Stream* s = stream_of(l); s && s->bufferCopies.size() < 64)
@@ -2570,6 +2581,7 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
              vtable_hook(deviceTable, simqvfr_slot_CreateRenderTargetView(), &rtvHook, &rtvOriginal) &&
              vtable_hook(*reinterpret_cast<void***>(queue), simqvfr_slot_ExecuteCommandLists(), &executeHook,
                          &executeOriginal) &&
+             (!settings.dlss || vtable_hook(vtable, simqvfr_slot_ResourceBarrier(), &barrierHook, &barrierOriginal)) &&
              focus_compile();
         if (ok && settings.cull) {  // focus culling: the buffer copies of ACE's visibility list
             cull.mode = settings.cull;

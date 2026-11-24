@@ -55,6 +55,12 @@ int focus_preset();
 // in-game DLSS mode (its optimal-settings query answered with render = output, its feature made as DLAA).
 void set_options(float jitterX, bool peripheryDlaa);
 float jitter_x();
+// The right eye evaluated from copies of its inputs at x 0, its output copied back: NGX's preset K smears the right eye
+// read at a subrect base past 0 of the game's double-wide targets.
+void set_right_own_inputs(bool on);
+// The game's resource transitions (its lists' ResourceBarrier): the right eye's inputs' states, for those copies.
+bool watching();
+void note_transition(ID3D12Resource* r, D3D12_RESOURCE_STATES after);
 // What runs, for the headset menu. Not seen until the game has made its DLSS feature.
 struct State {
     bool seen = false, forcedDlaa = false;

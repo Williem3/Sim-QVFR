@@ -141,6 +141,7 @@ struct Experiment {
     int replayDlssFocusPreset = 0;         // replay_dlss_focus_preset: our focus features' (empty: ACE's)
     double replayDlssJitterX = 0.5;        // replay_dlss_jitter_x_percent=50: the share of ACE's x jitter NGX is told
     bool replayDlssPeripheryDlaa = true;   // replay_dlss_periphery_dlaa=1: the eyes at DLAA in every in-game DLSS mode
+    bool replayDlssRightOwnInputs = true;  // replay_dlss_right_own_inputs=1: the right eye's DLSS from copies at x 0
     int replayDlssFocusScale = 100;        // [dlss] focus_scale: the focus views' DLSS mode on the API path (launch)
     double replayEyeShareX = 0, replayEyeShareY = 0;  // the API path: ACE's eye size as a share of the native eye (launch)
     int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)

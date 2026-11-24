@@ -26,6 +26,7 @@ size_t simqvfr_slot_DrawInstanced(void) { return SLOT(ID3D12GraphicsCommandListV
 size_t simqvfr_slot_DrawIndexedInstanced(void) { return SLOT(ID3D12GraphicsCommandListVtbl, DrawIndexedInstanced); }
 size_t simqvfr_slot_Dispatch(void) { return SLOT(ID3D12GraphicsCommandListVtbl, Dispatch); }
 size_t simqvfr_slot_CopyBufferRegion(void) { return SLOT(ID3D12GraphicsCommandListVtbl, CopyBufferRegion); }
+size_t simqvfr_slot_ResourceBarrier(void) { return SLOT(ID3D12GraphicsCommandListVtbl, ResourceBarrier); }
 size_t simqvfr_slot_ExecuteIndirect(void) { return SLOT(ID3D12GraphicsCommandListVtbl, ExecuteIndirect); }
 size_t simqvfr_slot_Close(void) { return SLOT(ID3D12GraphicsCommandListVtbl, Close); }
 size_t simqvfr_slot_Reset(void) { return SLOT(ID3D12GraphicsCommandListVtbl, Reset); }

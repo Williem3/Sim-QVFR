@@ -309,6 +309,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     if (experiment.replayProbe == 3 && experiment.replayDlss)
         focus_ngx::set_options(static_cast<float>(experiment.replayDlssJitterX), experiment.replayDlssPeripheryDlaa);
     if (experiment.replayProbe == 3 && experiment.replayDlss)
+        focus_ngx::set_right_own_inputs(experiment.replayDlssRightOwnInputs);
+    if (experiment.replayProbe == 3 && experiment.replayDlss)
         focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
