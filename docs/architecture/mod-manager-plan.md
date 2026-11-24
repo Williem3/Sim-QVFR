@@ -83,7 +83,7 @@ Each phase leaves the app working.
 2. **Per-game ini and logs.** `games/<id>/` folders, `SIM_QVFR_INI` plus a global ini path, per-game log folders,
    and a one-time migration that deletes nothing. Status: first step done, see below.
 3. **Trust and loading.** The pinned-thumbprint check in the core, approval by hash, refusal under anti-cheat, safe
-   `LoadLibraryExW`, and a packaging guard.
+   `LoadLibraryExW`, and a packaging guard. Status: first step done, see below.
 4. **Extract the games into their own DLLs.** The SCS games first (after `lmu/mvr_probe` becomes an engine service),
    then X-Plane, ACC once it is remade, ACE, and LMU last.
 5. **Dynamic tabs.** The launcher scans `mods/*/mod.json` and builds each tab from `settings.json`. It never loads a
@@ -92,6 +92,22 @@ Each phase leaves the app working.
    CMake function, JSON schemas, an example identity-only mod, and a making-a-mod guide.
 7. **Per-mod updates.** Release tags `mod-<id>-v<version>`, the `mods/<id>/` folder swapped whole, the old folder
    kept for rollback.
+
+## Phase 3, first step: the trust check (option A)
+
+Willie chose option A (2026-11-24): community mods may run online, but only signed by their own author.
+
+- The code is in `src/mod_api/mod_trust.h/.cpp`, and `load_checked_mod` in `mod_loader.cpp`.
+- **Official:** Windows trusts the signature, and the certificate is the pinned one (`kOfficialThumbprints`).
+- **First-party, unsigned build:** a dev or nightly core that isn't signed loads the package's own mods, offline
+  only. Nothing is signed, so no signature is lent.
+- **Third-party:** needs the user's approval of that exact file (`[mods] <id>_sha256`).
+  - Online (an anti-cheat running), it also needs the author's own trusted signature and `[mods] <id>_online=1`.
+  - Unsigned never loads online.
+- The file is held open (no write, rename or delete) from the check until it is loaded.
+- The session log names each mod's label and its signer, for example "third-party, not made by Sim-QVFR".
+- Not yet: the launcher screen to approve a mod and to switch on Allow online. It comes with the mods tab (phase 5).
+  Until then the keys are written by hand.
 
 ## Phase 2, first step: per-game folders
 

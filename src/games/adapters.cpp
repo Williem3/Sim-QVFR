@@ -2,10 +2,12 @@
 
 #include <windows.h>
 
+#include <filesystem>
 #include <string>
 
 #include "../log.h"
 #include "../mod_api/mod_loader.h"
+#include "../module_path.h"
 #include "../mod_api/plugin_adapter.h"
 #include "../probe/local_analysis.h"
 #include "identity_adapter.h"
@@ -50,15 +52,28 @@ GameAdapter& through_mod(const GameInfo* game, SqvfrModEntry entry) {
 #endif
 
 #ifdef SIM_QVFR_SCS_AS_MOD
-// `game`'s adapter from the mod DLL <mods>\<folder>\<dll> (mod_api/mod_loader.h), kept for the process. Not verified
-// yet: no signature or approval check before it loads (phase 3 of docs/architecture/mod-manager-plan.md).
-GameAdapter& through_mod_dll(const GameInfo* game, const wchar_t* folder, const wchar_t* dll) {
+// The launch's ini, where the user's mod approvals are ([mods]): the launcher's run copy (SIM_QVFR_INI), else the
+// sim-qvfr.ini beside the core.
+std::wstring approvals_ini() {
+    wchar_t env[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
+    if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
+        return env;
+    return (std::filesystem::path(module_folder(reinterpret_cast<const void*>(&approvals_ini))) / L"sim-qvfr.ini").wstring();
+}
+
+// `game`'s adapter from the mod DLL <mods>\<folder>\<dll> (mod_api/mod_loader.h), kept for the process, once the trust
+// check (mod_api/mod_trust.h) lets it load; `firstParty`: a mod the package ships. `online`: the game's anti-cheat
+// protects this launch.
+GameAdapter& through_mod_dll(const GameInfo* game, const wchar_t* folder, const wchar_t* dll, bool firstParty,
+                             bool online) {
     const std::wstring path = mod_api::mod_dll_path(folder, dll);
     std::string why;
-    if (std::unique_ptr<mod_api::PluginAdapter> mod = mod_api::load_mod_dll(path, game, why)) {
-        logf("game: %ls's mod loaded from %ls, UNVERIFIED (no signature or approval check yet), ABI %u, its table %u "
-             "bytes",
-             game->name, path.c_str(), mod->table().abi, mod->table().size);
+    mod_api::TrustVerdict verdict;
+    if (std::unique_ptr<mod_api::PluginAdapter> mod =
+            mod_api::load_checked_mod(path, folder, approvals_ini(), game, firstParty, online, verdict, why)) {
+        logf("game: %ls's mod loaded from %ls: %s (%s), ABI %u, its table %u bytes", game->name, path.c_str(),
+             mod_api::trust_label(verdict.trust), verdict.why.c_str(), mod->table().abi, mod->table().size);
         return *mod.release();
     }
     logf("game: %ls's mod not loaded (%s): Sim-QVFR only logs in this launch.", game->name, why.c_str());
@@ -112,11 +127,11 @@ GameAdapter& adapter_for(const GameInfo* game) {
     // (scssoftware/mod_entry.cpp): built in, or with SIM_QVFR_SCS_AS_MOD its own DLL, mods\scs\sim-qvfr-scs.dll.
 #ifdef SIM_QVFR_SCS_AS_MOD
     if (game == &::ats::kGame) {
-        static GameAdapter& ats = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll");
+        static GameAdapter& ats = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", true, protectedLaunch);
         return ats;
     }
     if (game == &::ets2::kGame) {
-        static GameAdapter& ets2 = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll");
+        static GameAdapter& ets2 = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", true, protectedLaunch);
         return ets2;
     }
 #else

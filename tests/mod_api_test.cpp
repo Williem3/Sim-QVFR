@@ -21,6 +21,8 @@
 #include "mod_api/adapter_mod.h"
 #include "mod_api/host_services.h"
 #include "mod_api/mod_loader.h"
+#include "mod_api/mod_trust.h"
+#include "sha256_file.h"
 #include "mod_api/mod.hpp"
 #include "mod_api/plugin_adapter.h"
 
@@ -473,6 +475,112 @@ void scs_through_the_tables() {
     check(scs::mod_entry(&host) == nullptr, "the SCS mod refuses a core of another ABI");
 }
 
+// The trust rules (mod_api/mod_trust.h, option A): official only by the pinned certificate; a third-party mod only
+// with the user's approval of that exact file; online (an anti-cheat running) only with its author's own trusted
+// signature and the user's Allow online; nothing in an unsigned build lends a signature.
+void trust_rules() {
+    using simqvfr::mod_api::decide_mod_trust;
+    using simqvfr::mod_api::ModTrust;
+    using simqvfr::mod_api::TrustInput;
+    const std::string hash(64, 'a'), other(64, 'b');
+    const std::wstring official = L"4683DA63C881A76D5A1E803751B481F621ADF9C1";
+    const std::wstring author = L"0123456789ABCDEF0123456789ABCDEF01234567";
+
+    check(simqvfr::mod_api::official_thumbprint(official) &&
+              simqvfr::mod_api::official_thumbprint(L"4683da63c881a76d5a1e803751b481f621adf9c1") &&
+              !simqvfr::mod_api::official_thumbprint(author) && !simqvfr::mod_api::official_thumbprint(L""),
+          "trust: only the pinned certificate is official");
+
+    TrustInput in;
+    in.mod.sha256 = hash;
+    in.mod.signatureTrusted = true;
+    in.mod.thumbprint = official;
+    in.coreOfficial = true;
+    check(decide_mod_trust(in).trust == ModTrust::Official, "trust: the maintainer's signature is official");
+    in.onlineLaunch = true;
+    check(decide_mod_trust(in).trust == ModTrust::Official, "trust: and official online too, without an approval");
+
+    // Someone else's DLL, even in the official mod's folder of a signed release: never official.
+    TrustInput c;
+    c.mod.sha256 = hash;
+    c.coreOfficial = true;
+    c.firstPartyPath = true;
+    check(decide_mod_trust(c).trust == ModTrust::Refused, "trust: an unsigned DLL in a signed release isn't first-party");
+    c.mod.signatureTrusted = true;
+    c.mod.thumbprint = author;
+    c.mod.signer = L"Some Author";
+    check(decide_mod_trust(c).trust == ModTrust::Refused, "trust: another signer, not approved: refused");
+    // A trust check that Windows failed can't pass for official because of a copied thumbprint.
+    TrustInput forged = c;
+    forged.mod.signatureTrusted = false;
+    forged.mod.thumbprint = official;
+    check(decide_mod_trust(forged).trust == ModTrust::Refused, "trust: the pinned thumbprint without a trusted signature isn't official");
+
+    c.approval.sha256 = other;
+    check(decide_mod_trust(c).trust == ModTrust::Refused &&
+              decide_mod_trust(c).why.find("changed") != std::string::npos,
+          "trust: a file changed since it was approved is refused");
+    c.approval.sha256 = hash;
+    const auto community = decide_mod_trust(c);
+    check(community.trust == ModTrust::Community && community.why.find("not made by Sim-QVFR") != std::string::npos &&
+              community.why.find("Some Author") != std::string::npos,
+          "trust: approved, it loads as third-party, named by its author");
+
+    c.onlineLaunch = true;
+    check(decide_mod_trust(c).trust == ModTrust::Refused, "trust: online needs the user's Allow online");
+    c.approval.online = true;
+    check(decide_mod_trust(c).trust == ModTrust::Community, "trust: author-signed + Allow online: it loads online");
+    c.mod.signatureTrusted = false;
+    c.mod.signer.clear();
+    c.mod.thumbprint.clear();
+    check(decide_mod_trust(c).trust == ModTrust::Refused, "trust: unsigned never loads online, whatever the user allowed");
+    c.onlineLaunch = false;
+    check(decide_mod_trust(c).trust == ModTrust::Community, "trust: unsigned but approved loads offline");
+
+    // An unsigned build (development, nightly): the package's own mods, offline only.
+    TrustInput dev;
+    dev.mod.sha256 = hash;
+    dev.firstPartyPath = true;
+    check(decide_mod_trust(dev).trust == ModTrust::FirstPartyUnsignedBuild, "trust: an unsigned build loads its own mods");
+    dev.onlineLaunch = true;
+    check(decide_mod_trust(dev).trust == ModTrust::Refused, "trust: but not while an anti-cheat runs");
+    dev.onlineLaunch = false;
+    dev.firstPartyPath = false;
+    check(decide_mod_trust(dev).trust == ModTrust::Refused, "trust: and only its own (another path needs approval)");
+    dev.mod.sha256.clear();
+    dev.firstPartyPath = true;
+    check(decide_mod_trust(dev).trust == ModTrust::Refused, "trust: a file that can't be read is refused");
+
+    // Approvals in [mods].
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring ini = std::wstring(temp) + L"sim-qvfr-mod-trust-test.ini";
+    DeleteFileW(ini.c_str());
+    simqvfr::mod_api::ModApproval a;
+    a.sha256 = hash;
+    a.online = true;
+    check(simqvfr::mod_api::write_mod_approval(ini, L"demo", a), "trust: an approval is written");
+    const auto back = simqvfr::mod_api::read_mod_approval(ini, L"demo");
+    check(back.sha256 == hash && back.online, "trust: and read back");
+    check(simqvfr::mod_api::read_mod_approval(ini, L"other").sha256.empty(), "trust: another mod isn't approved");
+    WritePrivateProfileStringW(L"mods", L"bad_sha256", L"not-a-hash", ini.c_str());
+    check(simqvfr::mod_api::read_mod_approval(ini, L"bad").sha256.empty(), "trust: a malformed hash approves nothing");
+    a.sha256.clear();
+    simqvfr::mod_api::write_mod_approval(ini, L"demo", a);
+    const auto gone = simqvfr::mod_api::read_mod_approval(ini, L"demo");
+    check(gone.sha256.empty() && !gone.online, "trust: an approval taken away takes Allow online with it");
+    DeleteFileW(ini.c_str());
+
+    // This test program: unsigned, readable.
+    wchar_t self[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, self, MAX_PATH);
+    const auto facts = simqvfr::mod_api::read_mod_facts(self);
+    check(facts.sha256.size() == 64 && !facts.signatureTrusted && facts.thumbprint.empty(),
+          "trust: an unsigned file's facts: its hash, no signature");
+    check(!simqvfr::mod_api::module_officially_signed(reinterpret_cast<const void*>(&trust_rules)),
+          "trust: a test build isn't officially signed");
+}
+
 // The module an address is in.
 HMODULE module_of(const void* address) {
     HMODULE m = nullptr;
@@ -516,6 +624,34 @@ void scs_dll_through_the_loader() {
               "the DLL's SCS adapter answers as the built-in one before a launch");
         XrFrameEndInfo fe = {XR_TYPE_FRAME_END_INFO};
         check(a->adjust_frame_end(&fe, nullptr) == &fe, "the DLL passes a frame on when the corner is off");
+    }
+    // Through the trust check: the package's own path in this unsigned build loads; the same file taken for a
+    // third-party mod needs the user's approval of exactly it, and never loads online unsigned.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"sim-qvfr-mod-loader-test.ini";
+        DeleteFileW(ini.c_str());
+        simqvfr::mod_api::TrustVerdict verdict;
+        using simqvfr::mod_api::ModTrust;
+        check(simqvfr::mod_api::load_checked_mod(path, L"scs", ini, &::ats::kGame, true, false, verdict, why) &&
+                  verdict.trust == ModTrust::FirstPartyUnsignedBuild,
+              "checked: the package's own mod loads in an unsigned build");
+        check(!simqvfr::mod_api::load_checked_mod(path, L"scs", ini, &::ats::kGame, false, false, verdict, why) &&
+                  verdict.trust == ModTrust::Refused,
+              "checked: as a third-party mod, not approved: refused");
+        simqvfr::mod_api::ModApproval a;
+        a.sha256 = simqvfr::sha256_file(path.c_str());
+        simqvfr::mod_api::write_mod_approval(ini, L"scs", a);
+        check(simqvfr::mod_api::load_checked_mod(path, L"scs", ini, &::ats::kGame, false, false, verdict, why) &&
+                  verdict.trust == ModTrust::Community,
+              "checked: approved, it loads as third-party");
+        a.online = true;
+        simqvfr::mod_api::write_mod_approval(ini, L"scs", a);
+        check(!simqvfr::mod_api::load_checked_mod(path, L"scs", ini, &::ats::kGame, false, true, verdict, why) &&
+                  verdict.trust == ModTrust::Refused,
+              "checked: unsigned, it never loads online");
+        DeleteFileW(ini.c_str());
     }
     // The layer's own path for the game goes through the DLL too.
     GameAdapter& layer = simqvfr::games::adapter_for(&::ats::kGame);
@@ -630,6 +766,7 @@ int SIM_QVFR_TEST_MAIN() {
     structs_round_trip();
     host_names_the_game();
     scs_through_the_tables();
+    trust_rules();
     scs_dll_through_the_loader();
     host_d3d11_hooks_on_warp();
     host_table_filled();

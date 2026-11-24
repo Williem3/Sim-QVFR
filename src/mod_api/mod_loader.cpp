@@ -53,4 +53,41 @@ std::unique_ptr<PluginAdapter> load_mod_dll(const std::wstring& path, const game
     return PluginAdapter::load(game, entry, why);
 }
 
+std::unique_ptr<PluginAdapter> load_checked_mod(const std::wstring& path, const std::wstring& id, const std::wstring& ini,
+                                                const games::GameInfo* game, bool firstPartyPath, bool onlineLaunch,
+                                                TrustVerdict& verdict, std::string& why) {
+    verdict = {};
+    if (!std::filesystem::path(path).is_absolute()) {
+        why = "not a full path: " + narrow(path);
+        verdict.why = why;
+        return nullptr;
+    }
+    // Held open, others only reading, from the check until LoadLibraryExW has mapped it: the file checked is the file
+    // loaded (no write, rename or delete in between).
+    HANDLE hold = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (hold == INVALID_HANDLE_VALUE) {
+        why = (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND ? "no mod at "
+                                                                                                 : "the mod can't be opened: ") +
+              narrow(path);
+        verdict.why = why;
+        return nullptr;
+    }
+    static const bool coreOfficial = module_officially_signed(reinterpret_cast<const void*>(&mods_folder));
+    TrustInput in;
+    in.mod = read_mod_facts(path);
+    in.approval = read_mod_approval(ini, id);
+    in.coreOfficial = coreOfficial;
+    in.firstPartyPath = firstPartyPath;
+    in.onlineLaunch = onlineLaunch;
+    verdict = decide_mod_trust(in);
+    std::unique_ptr<PluginAdapter> mod;
+    if (verdict.trust == ModTrust::Refused)
+        why = verdict.why;
+    else
+        mod = load_mod_dll(path, game, why);
+    CloseHandle(hold);
+    return mod;
+}
+
 }  // namespace simqvfr::mod_api
