@@ -791,7 +791,7 @@ void mod_adds_a_game() {
     const std::wstring folder = mods + L"\\newgame";
     CreateDirectoryW(mods.c_str(), nullptr);
     CreateDirectoryW(folder.c_str(), nullptr);
-    const std::string manifest = R"({"id":"newgame","dll":"sim-qvfr-newgame.dll","games":[
+    const std::string manifest = R"({"id":"newgame","dll":"sim-qvfr-newgame.dll","source":"https://github.com/someone/demo","license":"MIT","games":[
         {"id":"spacesim","name":"Space Sim","short":"SPC","exe":"SpaceSim.exe","steamFolder":"Space Sim","steamAppId":"123456",
          "launchArgs":"-openxr","features":{"liveResolution":true,"helmet":true,"carLighting":true},"image":"separateViews",
          "antiCheat":["EasyAntiCheat.exe"]},

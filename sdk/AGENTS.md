@@ -57,8 +57,9 @@ The core owns everything that isn't game-specific. A mod supplies only what only
 - write to the game's memory or exe without a hash check (`code_matches` before `code_write`);
 - inject into other processes, or load code from outside your mod's folder;
 - disable, bypass or hide from an anti-cheat;
-- put game-specific reverse-engineering details in public files (addresses, offsets, shader hashes, anti-cheat
-  internals). Keep them out of the repository, out of logs and out of issues.
+- put the game's code addresses, memory offsets or anti-cheat details in public files (the repository, logs, issues).
+  What a layer-level mod needs to find the game's passes (draw and shader fingerprints, render-target shapes) may be
+  in your repository: it isn't useful for cheating, and it keeps mods reviewable (section 8).
 
 **Stop and ask the human when:**
 
@@ -201,13 +202,30 @@ a change applies at the next launch.
 
 A player adds a mod by dropping its zip on the launcher, or with **Settings > Mods > Add a mod…**. The zip must hold:
 
-- `mod.json` (schema: `schemas/mod.schema.json`), with an `id` of a-z, 0-9, `_` and `-` (up to 32 characters);
+- `mod.json` (schema: `schemas/mod.schema.json`), with an `id` of a-z, 0-9, `_` and `-` (up to 32 characters), and
+  its `source` and `license` (below);
 - the DLL that `mod.json`'s `dll` names;
 - optionally `settings.json`, your assets, and a `SHA256.txt` (lines of `<sha256>  <file>`; when present, every file
   must match it).
 
 Put the files at the zip's root, or in one folder. Use one mod per zip, under 64 MB. `sqvfr_add_mod`'s
 `sqvfr_mod_zip_<name>` target makes this zip for you.
+
+**Mods are open source.** A mod's `mod.json` must link its source code and name its licence, or the launcher refuses
+it:
+
+```json
+"source": "https://github.com/you/spacesim-qvfr",
+"license": "MIT"
+```
+
+- `source`: an https link to the mod's repository (a host and a path). Players see it in Settings > Mods, with a
+  **View source** button, and on the card that asks them to add the mod.
+- `license`: the source code's licence, as an SPDX id (`MIT`, `Apache-2.0`, `GPL-3.0-only`).
+- The repository holds everything needed to build the DLL you ship. The link is a promise the launcher can't check, so
+  keep it true: players and reviewers rely on it.
+- Later, the launcher will check mods' own releases for updates. Publish yours as releases in that repository, each
+  with the zip.
 
 ## 9. Trust: what players see
 
@@ -218,6 +236,23 @@ Put the files at the zip's root, or in one folder. Use one mod per zip, under 64
 - Sim-QVFR's own signature never covers your mod. Logs and reports label it "third-party".
 
 ## 10. Building, testing and debugging
+
+**Tools.** Use them offline only (below):
+
+| Tool | For |
+| --- | --- |
+| **RenderDoc** | Frame captures on D3D11 and D3D12. The first tool: find the eye passes, their targets, viewports and cameras. |
+| **PIX on Windows** | D3D12 GPU captures and timing (its GPU captures are D3D12 only); CPU timing for any game. |
+| **NVIDIA Nsight Graphics** | Captures and GPU traces: where the frame's GPU time goes, pass by pass. |
+| **NVIDIA Nsight Aftermath** | GPU crash and hang dumps (the core can write them in developer builds). |
+| **The D3D11 / D3D12 debug layer** | API misuse while you develop (Windows' optional feature "Graphics Tools"). |
+| **OpenXR layer tools** | The runtime's own tools and an OpenXR layer list, to check which layers load and in what order. |
+| **Sim-QVFR itself** | Detailed logs, the performance overlay's frame times, and Diagnostics' "Next launch without QVFR" to compare. |
+
+- **Never run a capture tool in an online or anti-cheat-protected launch.** Capture tools inject into the game, which
+  is what anti-cheat looks for.
+- **Captures can hang a game** (one hung at its menu under PIX). Capture offline, and keep a way back.
+
 
 - Build the example first (`examples/hello`, see `README.md`), add its zip through the launcher, approve it, and check
   the game's log for its line. That proves your tool chain, packaging and trust steps before any rendering work.

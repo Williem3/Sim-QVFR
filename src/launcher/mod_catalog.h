@@ -38,6 +38,8 @@ struct ModEntry {
     std::wstring folder;   // <mods>\<id>
     std::wstring name, author, version;
     std::wstring dll;      // its file name
+    std::wstring source;   // its source code (an https link; required of a mod not made by Sim-QVFR)
+    std::wstring license;  // its source's licence (an SPDX id: "MIT", "GPL-3.0-only"; required with source)
     std::wstring dllPath;  // <folder>\<dll>
     std::vector<std::wstring> games;  // the games it covers (their ids)
     std::vector<ModSetting> settings;
@@ -48,7 +50,9 @@ struct ModEntry {
 // A name a mod or a setting key may have: 1..32 of a-z, 0-9, '_' and (`dash`) '-'.
 bool valid_mod_name(const std::string& name, bool dash);
 
-// mod.json's text into `mod` (id, name, author, version, dll, games). False, with `error`, when it can't be used.
+// mod.json's text into `mod` (id, name, author, version, dll, source, license, games). False, with `error`, when it
+// can't be used: a mod not made by Sim-QVFR must link its source code and name its licence.
+bool valid_source_link(const std::string& url);
 bool parse_mod_manifest(const std::string& text, ModEntry& mod, std::wstring& error);
 // settings.json's text. False, with `error`, when it can't be used (then no settings show).
 bool parse_mod_settings(const std::string& text, std::vector<ModSetting>& settings, std::wstring& error);

@@ -708,12 +708,22 @@ void mod_catalog_checks() {
     ModEntry m;
     std::wstring error;
     check(parse_mod_manifest(R"({"id":"demo","name":"Demo mod","author":"Someone","version":"0.1","dll":"demo.dll",
+                                "source":"https://github.com/someone/demo","license":"MIT",
                                 "games":[{"id":"ats"},{"id":"bad id"}]})",
                              m, error) &&
               m.id == L"demo" && m.name == L"Demo mod" && m.dll == L"demo.dll" && m.games.size() == 1,
           "mods: a good mod.json is read (a game with a bad id left out)");
-    for (const char* bad : {R"({"id":"demo","dll":"..\\x.dll"})", R"({"id":"demo","dll":"C:/x.dll"})",
-                            R"({"id":"demo","dll":"demo.exe"})", R"({"id":"Demo!","dll":"d.dll"})", "not json"}) {
+    check(m.source == L"https://github.com/someone/demo" && m.license == L"MIT", "mods: its source link and licence");
+    for (const char* closed : {R"({"id":"demo","dll":"demo.dll"})", R"({"id":"demo","dll":"demo.dll","source":"https://github.com/a/b"})",
+                               R"({"id":"demo","dll":"demo.dll","source":"http://github.com/a/b","license":"MIT"})",
+                               R"({"id":"demo","dll":"demo.dll","source":"https://github.com","license":"MIT"})"}) {
+        ModEntry c;
+        check(!parse_mod_manifest(closed, c, error), "mods: a mod without a source link (https, to a project) and licence is refused");
+    }
+    ModEntry own;
+    check(parse_mod_manifest(R"({"id":"scs","dll":"sim-qvfr-scs.dll"})", own, error), "mods: Sim-QVFR's own needs neither");
+    for (const char* bad : {R"({"source":"https://github.com/someone/demo","license":"MIT","id":"demo","dll":"..\\x.dll"})", R"({"source":"https://github.com/someone/demo","license":"MIT","id":"demo","dll":"C:/x.dll"})",
+                            R"({"source":"https://github.com/someone/demo","license":"MIT","id":"demo","dll":"demo.exe"})", R"({"source":"https://github.com/someone/demo","license":"MIT","id":"Demo!","dll":"d.dll"})", "not json"}) {
         ModEntry b;
         check(!parse_mod_manifest(bad, b, error), "mods: a mod.json with a bad id or dll is refused");
     }
@@ -739,7 +749,7 @@ void mod_catalog_checks() {
     auto put = [](const fs::path& p, const std::string& text) {
         std::ofstream(p, std::ios::binary) << text;
     };
-    put(dir / L"mods" / L"demo" / L"mod.json", R"({"id":"demo","name":"Demo","author":"Someone","dll":"demo.dll"})");
+    put(dir / L"mods" / L"demo" / L"mod.json", R"({"id":"demo","name":"Demo","author":"Someone","dll":"demo.dll","source":"https://github.com/someone/demo","license":"MIT"})");
     put(dir / L"mods" / L"demo" / L"demo.dll", "not really a dll");
     put(dir / L"mods" / L"demo" / L"settings.json",
         R"({"settings":[{"key":"glare","type":"toggle","label":"Glare","default":true}]})");

@@ -64,6 +64,16 @@ bool valid_mod_name(const std::string& name, bool dash) {
     return true;
 }
 
+bool valid_source_link(const std::string& url) {
+    if (url.size() < 12 || url.size() > 200 || url.compare(0, 8, "https://") != 0)
+        return false;
+    for (char c : url)
+        if (static_cast<unsigned char>(c) <= 0x20 || c == '"' || c == '<' || c == '>' || c == '\\' || c < 0)
+            return false;
+    const size_t host = url.find('/', 8);
+    return host != std::string::npos && host > 8 && host + 1 < url.size();  // a host and a path: a project, not a site
+}
+
 bool parse_mod_manifest(const std::string& text, ModEntry& mod, std::wstring& error) {
     json::Value root;
     if (!json::parse(text, root) || root.type != json::Value::Type::Object) {
@@ -94,6 +104,15 @@ bool parse_mod_manifest(const std::string& text, ModEntry& mod, std::wstring& er
         mod.name = mod.id;
     mod.author = shown(root.string_at("author"), 60);
     mod.version = shown(root.string_at("version"), 24);
+    // Every community mod is open source: its code public, linked here (and, later, its updates checked there).
+    const std::string source = root.string_at("source");
+    mod.source = valid_source_link(source) ? ascii_wide(source) : std::wstring();
+    mod.license = shown(root.string_at("license"), 40);
+    if (!mod_api::first_party_mod(mod.id) && (mod.source.empty() || mod.license.empty())) {
+        error = mod.source.empty() ? L"mod.json has no \"source\" link (https) to the mod's source code: Sim-QVFR mods must be open source"
+                                   : L"mod.json has no \"license\" for its source code";
+        return false;
+    }
     mod.games.clear();
     if (const json::Value* games = root.find("games"); games && games->type == json::Value::Type::Array)
         for (const json::Value& g : games->items)

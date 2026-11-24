@@ -4,7 +4,9 @@
   "type": "object",
   "required": [
     "id",
-    "dll"
+    "dll",
+    "source",
+    "license"
   ],
   "properties": {
     "id": {
@@ -131,6 +133,17 @@
           }
         }
       }
+    },
+    "source": {
+      "description": "Required: an https link to the mod's source code (its repository). Sim-QVFR mods are open source; the link shows in Settings > Mods, and later lets the launcher check for updates.",
+      "type": "string",
+      "pattern": "^https://[^/\\s\"<>\\\\]+/[^\\s\"<>\\\\]+$",
+      "maxLength": 200
+    },
+    "license": {
+      "description": "Required: the source code's licence, as an SPDX id (\"MIT\", \"Apache-2.0\", \"GPL-3.0-only\").",
+      "type": "string",
+      "maxLength": 40
     }
   }
 }

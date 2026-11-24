@@ -44,7 +44,7 @@ std::wstring check_staged_mod(const std::wstring& staged, const std::wstring& id
 // Nothing is approved by it: a third-party mod still runs only once the user approves it.
 struct StagedMod {
     std::wstring folder;  // where it is unpacked
-    std::wstring id, name, author, version;
+    std::wstring id, name, author, version, source, license;
     bool replaces = false;     // mods\<id> is there already (it is kept as mods\.backup\<id>-<its version>)
     std::wstring error;        // why it can't be added; empty: it can
 };

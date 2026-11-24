@@ -109,6 +109,8 @@ void confirm_add(const StagedMod& staged) {
     s.title = trf(L"Add {mod}?", {{L"mod", staged.name}});
     std::wstring text = trf(L"By {author}{version}.", {{L"author", staged.author.empty() ? std::wstring(tr(L"an unknown author")) : staged.author},
                                                        {L"version", staged.version.empty() ? std::wstring() : L", version " + staged.version}});
+    if (!staged.source.empty())
+        text += L" " + trf(L"Source code: {link} ({license}).", {{L"link", staged.source}, {L"license", staged.license}});
     if (staged.replaces)
         text += L" " + std::wstring(tr(L"It replaces the one installed, which is kept so you can go back."));
     if (!mod_api::first_party_mod(staged.id))
@@ -230,6 +232,8 @@ void trust_rows(Body& b, size_t i) {
             games += (games.empty() ? L"" : L", ") + g;
         b.info(tr(L"Games"), games);
     }
+    if (!m.source.empty())
+        b.info(tr(L"Source code"), m.source + (m.license.empty() ? L"" : L" (" + m.license + L")"));
     if (!m.settings.empty())
         b.note(tr(L"Its settings are on the Game tab, with each game it covers."));
 }
@@ -463,6 +467,12 @@ bool mods_press(Ctl id, int option) {
             start_mod_install(i, true);
         return true;
     }
+    if (id >= kModSource0 && id <= kModSourceLast) {
+        const size_t i = static_cast<size_t>(id - kModSource0);
+        if (i < app.mods.size() && valid_source_link(std::string(app.mods[i].source.begin(), app.mods[i].source.end())))
+            ShellExecuteW(app.hwnd, L"open", app.mods[i].source.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
     if (id >= kModRemove0 && id <= kModRemoveLast) {
         const size_t i = static_cast<size_t>(id - kModRemove0);
         if (i < app.mods.size())
@@ -528,7 +538,11 @@ float settings_pane(float x, float y, float w, bool draw) {
         b.chip(tone, text);
         trust_rows(b, i);
         update_rows(b, i);
-        b.actions({{static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
+        if (!app.mods[i].source.empty())
+            b.actions({{static_cast<Ctl>(kModSource0 + static_cast<int>(i)), tr(L"View source")},
+                       {static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
+        else
+            b.actions({{static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
     }
     return b.height();
 }

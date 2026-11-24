@@ -374,14 +374,14 @@ int SIM_QVFR_TEST_MAIN() {
 
         // Adding a mod from a zip (Settings > Mods: Add a mod…, or a zip dropped on the window).
         const fs::path source = folder / "zips" / "cool-mod";
-        put(source / "mod.json", R"({"id":"cool","name":"Cool mod","author":"Someone","version":"0.3","dll":"cool.dll"})");
+        put(source / "mod.json", R"({"id":"cool","name":"Cool mod","author":"Someone","version":"0.3","dll":"cool.dll","source":"https://github.com/someone/demo","license":"MIT"})");
         put(source / "cool.dll", "a dll");
         const fs::path zip = folder / "zips" / "cool-mod.zip";
         const std::wstring pack = L"tar.exe -a -c -f \"" + zip.wstring() + L"\" -C \"" + (folder / "zips").wstring() + L"\" cool-mod";
         check(_wsystem(pack.c_str()) == 0 && fs::is_regular_file(zip, ec), "mod add: the test zip is made");
         StagedMod add = stage_mod_zip(mods.wstring(), zip.wstring());
         check(add.error.empty() && add.id == L"cool" && add.name == L"Cool mod" && add.author == L"Someone" &&
-                  add.version == L"0.3" && !add.replaces,
+                  add.version == L"0.3" && !add.replaces && add.license == L"MIT",
               "mod add: a zip with its mod in one folder is unpacked and read");
         const InstallResult added = add_staged_mod(mods.wstring(), add, L"");
         check(added.ok && fs::is_regular_file(mods / "cool" / "cool.dll", ec) && !fs::exists(mods / ".update" / "add", ec),

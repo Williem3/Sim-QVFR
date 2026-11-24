@@ -4,6 +4,8 @@
   "name": "SCS Software's truck simulators",
   "author": "Sim-QVFR",
   "version": "dev",
+  "source": "https://github.com/Williem3/Sim-QVFR",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "dll": "sim-qvfr-scs.dll",
   "features": { "layerMultiView": true, "showcase": true },
   "qvfrImage": "DoubleWide",

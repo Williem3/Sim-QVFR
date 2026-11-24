@@ -178,7 +178,7 @@ enum Ctl {
     // (kModRemove0 + its index).
     kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7,
     // Sim-QVFR's own mods' updates (mod_update.h): check them all, a mod's Install and Go back (+ its index).
-    kModsCheck, kModsAdd, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
+    kModsCheck, kModsAdd, kModSource0, kModSourceLast = kModSource0 + 7, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.

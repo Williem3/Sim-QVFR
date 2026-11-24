@@ -164,6 +164,10 @@ int add_games_of(const std::filesystem::path& modFolder) {
     if (dll.size() <= 4 || dll.find_first_of(L"\\/:") != std::wstring::npos || dll.find(L"..") != std::wstring::npos ||
         _wcsicmp(dll.c_str() + dll.size() - 4, L".dll") != 0)
         return 0;
+    // Only an open-source mod adds a game (launcher/mod_catalog.cpp parse_mod_manifest's rule).
+    const std::string source = root.string_at("source");
+    if (source.size() < 12 || source.compare(0, 8, "https://") != 0 || root.string_at("license").empty())
+        return 0;
     const json::Value* list = root.find("games");
     if (!list || list->type != json::Value::Type::Array)
         return 0;

@@ -300,6 +300,8 @@ StagedMod stage_mod_zip(const std::wstring& modsFolder, const std::wstring& zipT
     s.name = m.name;
     s.author = m.author;
     s.version = m.version;
+    s.source = m.source;
+    s.license = m.license;
     s.replaces = fs::exists(mods / m.id, ec);
     return s;
 }
