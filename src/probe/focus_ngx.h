@@ -58,6 +58,8 @@ void set_options(float jitterX, bool peripheryDlaa, bool remakeEyes = false);
 float jitter_x();
 // The right eye's vertical jitter told to NGX negated (ACE's stereo draws: drawn the other way round from the left's).
 void set_right_jitter_flip(bool on);
+// The right eye evaluated from copies of its inputs at x 0, its output copied back (does K mishandle subrect bases?).
+void set_right_own_inputs(bool on);
 // What runs, for the headset menu. Not seen until the game has made its DLSS feature.
 struct State {
     bool seen = false, forcedDlaa = false;

@@ -99,6 +99,12 @@ public:
             const bool tellY = read_uint(ini, L"replay_dlss_right_jitter_y_tell", 0) != 0;
             simqvfr::replay_probe_set_right_jitter_flip(flipY);
             simqvfr::focus_ngx::set_right_jitter_flip(tellY);
+            // The right eye's DLSS from inputs of its own at x 0 (K and the double-wide target's subrect bases).
+            const bool ownInputs = read_uint(ini, L"replay_dlss_right_own_inputs", 1) != 0;
+            simqvfr::focus_ngx::set_right_own_inputs(ownInputs);
+            simqvfr::logf("experiment: API path DLSS: the right eye's DLSS %s",
+                          ownInputs ? "from inputs of its own at x 0 (replay_dlss_right_own_inputs=1)"
+                                    : "from ACE's double-wide inputs at their x offset");
             // (2026-11-24 test: the right eye's previous projection rebuilt from the left's; a no-op, as the dumps showed)
             const bool rightFix = read_uint(ini, L"replay_dlss_right_prev_fix", 0) != 0;
             simqvfr::replay_probe_set_right_prev_fix(rightFix);
