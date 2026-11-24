@@ -19,7 +19,6 @@
 #include "game.h"
 #include "mvr_pass.h"
 #include "mvr_probe.h"
-#include "view_probe.h"
 
 namespace lmu {
 namespace {
@@ -171,17 +170,12 @@ public:
         // keys: lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a comparison); lmu_dlss_view_inverse,
         // lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's gate (lmu_dlss_gate=1) or the picture
         // say they are the other way round.
-        // Any game build (qvfr_frame.h qvfr_frame_known_build): the game's facts from OpenXR and Direct3D on every
-        // build, the known one included (default since 2026-11-24). lmu_build_free=0 reads them in the known build's
-        // memory instead: the old path, a temporary fallback for the headset A/B, to go with abi.h.
-        run.buildFree = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_build_free", 1, s.ini) != 0;
         // lmu_viewport_reads=0/1/2 (an A/B; mvr_pass.h mvr_viewport_reads): who is given the game's own viewports.
         run.viewportReads = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_viewport_reads", 1, s.ini))
                                   : 1;
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
-        // Each pass's camera for DLSS (dlss_inputs.cpp): what the pass's draws upload (view_pair.h), on every build by
-        // default; the game's renderer's only on a known build with lmu_build_free=0.
+        // Each pass's camera for DLSS (dlss_inputs.cpp): what the pass's draws upload (view_pair.h), on every build.
         dlssPossible_ = run.trackerDrives;
         if (s.ini) {
             const auto key = [&](const wchar_t* name, int fallback) {
@@ -391,7 +385,6 @@ public:
         IdentityAdapter::instance_created(ini, mode);
         if (!analysis())
             return;
-        viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
         // Multi-view rendering (with lmu_qvfr): the probe keeps the converted shaders, attached to the game's
         // (mvr_pass.h), its shaders named for the traces. The layer decides the same at xrCreateInstance (config.cpp).
         // lmu_mvr_probe=1 without it: every vertex shader converted and created through NVAPI, log only.
@@ -409,8 +402,6 @@ public:
     void frame_end() override {
         if (mvrProbe_)
             mvr_probe_frame_end();
-        if (viewProbe_)
-            view_probe_frame_end();
     }
 
 private:
@@ -420,7 +411,6 @@ private:
         // Per axis (side by side for MVR): each view's share of the target's width and height.
         qvfr_frame_set_live_axes(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]);
     }
-    bool viewProbe_ = false;
     bool mvrProbe_ = false;
     bool qvfr_ = false;
     bool fixation_ = true;       // [experiment] lmu_fixation

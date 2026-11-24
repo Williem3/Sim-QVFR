@@ -6,9 +6,7 @@
 // - a halo in the eye's glare lands in the focus view's glare at the same direction and the same angular size (in
 //   focus texels: the eye's size times the focus magnification, per axis), the texels beyond the focus region untouched,
 //   the focus region's edge carrying the eye's glare at the box edge (no seam), and the game's bound target and viewport
-//   as they were (the resample runs between two of YEBIS's draws);
-// - the pointer walk from CRenderGlare to the D3D11 texture, on fake objects laid out as abi.h says, refusing nulls,
-//   unreadable memory and a texture of another size.
+//   as they were (the resample runs between two of YEBIS's draws).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -318,52 +316,6 @@ void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
     check(beyondKept, "texels beyond the focus pass's region are untouched");
 }
 
-void read_checks(ID3D11Device* device) {
-    std::vector<std::uint32_t> texels(kW * kH, 0);
-    auto tex = glare_texture(device, texels, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-    // Fake YEBIS objects at abi.h's offsets: CRenderGlare -> CRenderTexture -> IGPUTexture -> the D3D11 resource.
-    alignas(16) std::uint8_t gpu[0x100] = {}, surface[0x100] = {}, glare[0x400] = {};
-    ID3D11Resource* resource = tex.Get();
-    std::memcpy(gpu + lmu::kGpuTextureResource, &resource, sizeof(resource));
-    const unsigned size[2] = {kW, kH};
-    float scale[4];
-    uv_scale(0.5f, kW, kH, scale);
-    std::memcpy(surface + lmu::kRenderTextureSize, size, sizeof(size));
-    std::memcpy(surface + lmu::kRenderTextureScale, scale, sizeof(scale));
-    const void* gpuPtr = gpu;
-    std::memcpy(surface + lmu::kRenderTextureGpu, &gpuPtr, sizeof(gpuPtr));
-    const void* surfacePtr = surface;
-    std::memcpy(glare + lmu::kGlareResult, &surfacePtr, sizeof(surfacePtr));
-
-    lmu::YebisGlare g;
-    int rc = lmu::read_yebis_glare(glare, g);
-    check(rc == 0 && g.texture == tex.Get() && g.width == kW && g.height == kH && g.textureWidth == kW &&
-              g.textureHeight == kH && g.scaleOffset[0] == scale[0],
-          "read: the glare result's texture and its size, the render texture's size and UV scale");
-    if (g.texture)
-        g.texture->Release();
-
-    const unsigned smaller[2] = {kW / 2, kH};
-    std::memcpy(surface + lmu::kRenderTextureSize, smaller, sizeof(smaller));
-    rc = lmu::read_yebis_glare(glare, g);
-    check(rc == 0 && g.width == kW / 2 && g.textureWidth == kW, "read: a render texture smaller than its texture is read");
-    if (g.texture)
-        g.texture->Release();
-    const unsigned bigger[2] = {kW * 2, kH};
-    std::memcpy(surface + lmu::kRenderTextureSize, bigger, sizeof(bigger));
-    rc = lmu::read_yebis_glare(glare, g);
-    check(rc == 3 && !g.texture, "read: a render texture bigger than the texture is refused");
-    std::memcpy(surface + lmu::kRenderTextureSize, size, sizeof(size));
-
-    const void* null = nullptr;
-    std::memcpy(glare + lmu::kGlareResult, &null, sizeof(null));
-    check(lmu::read_yebis_glare(glare, g) == 1, "read: no result surface (glare off) is refused");
-
-    const void* bad = reinterpret_cast<const void*>(0x10);
-    std::memcpy(glare + lmu::kGlareResult, &bad, sizeof(bad));
-    check(lmu::read_yebis_glare(glare, g) == 2 && !g.texture, "read: unreadable memory on the way is caught, not a crash");
-}
-
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
@@ -376,7 +328,6 @@ int SIM_QVFR_TEST_MAIN() {
         return 1;
     }
     share_checks(device.Get(), context.Get());
-    read_checks(device.Get());
     dds_checks(device.Get());
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;

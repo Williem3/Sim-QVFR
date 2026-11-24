@@ -20,8 +20,7 @@ Easy Anti-Cheat with Sim-QVFR running, so you can race online. The launcher asks
 turns on.
 
 **This is entirely at your own risk.** Sim-QVFR works inside LMU while it runs: it leaves LMU's code unchanged, but
-it sits between LMU and its graphics calls and reads LMU's memory. The anti-cheat may kick you or **ban your
-account** for that. By turning the option on, you knowingly take responsibility for it.
+it sits between LMU and its graphics calls. The anti-cheat may kick you or **ban your account** for that. By turning the option on, you knowingly take responsibility for it.
 
 Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky Foveated DLSS always stays off with this option
 on.

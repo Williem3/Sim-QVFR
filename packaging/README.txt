@@ -393,8 +393,8 @@ A yellow Eyes only there means the focus views aren't being made: both eyes rend
 a correct, sharp picture that costs more. Sim-QVFR tries again by itself, at once after you change a
 graphics setting in LMU and otherwise every 20 seconds at most (a failed try shows as a brief soft
 blink); on a card that can't do multi-view rendering it stays that way. The log says why.
-Sim-QVFR doesn't change, hook or call LMU's own code: it works through OpenXR and Direct3D 11, reads a
-few values in LMU's memory (the cameras, the eye being drawn, the render scale) and writes nothing.
+Sim-QVFR doesn't change, hook or call LMU's own code, and reads and writes nothing in LMU's memory: it
+works through OpenXR and Direct3D 11 alone (the cameras, the eye being drawn and the render scale too).
 Each view's resolution, and its live changes, are set in the Direct3D 11 calls: LMU renders at its own
 size and Sim-QVFR draws the eye into the part of its image the periphery's resolution needs.
 LMU's own render scale and FSR (its VR graphics settings) work with QVFR: they lower every view's
@@ -434,8 +434,8 @@ DLSS are trademarks of NVIDIA Corporation; Sim-QVFR is not sponsored or endorsed
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Run with
 anti-cheat (Game > Online racing) starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
 launch; it asks you to accept the risk first. AT YOUR OWN RISK: Sim-QVFR works inside LMU while it
-runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics calls and reads LMU's
-memory. The anti-cheat may kick you or ban your account for that. Turning it on, you knowingly take
+runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics calls. The anti-cheat
+may kick you or ban your account for that. Turning it on, you knowingly take
 responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off
 with it on.
 Before each Run with anti-cheat launch the launcher checks that Windows trusts Sim-QVFR's signature

@@ -41,7 +41,6 @@
 #include "qvfr_frame.h"
 #include "tag_viewport.h"
 #include "view_pair.h"
-#include "abi.h"
 #include "yebis_shaders.h"
 
 // This image's own base (mvr_pass_binds.h from_this_image: our RSGetViewports calls told from the game's).

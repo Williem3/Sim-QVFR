@@ -28,7 +28,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <rect width="1120" height="934" fill="var(--window-bg)"/>
 <text class="h1" x="20" y="40">LMU with NVIDIA’s multi-view rendering</text>
 <text class="sub" x="20" y="66">NVIDIA RTX 20 series and newer. LMU runs its own two eye passes as shipped; each scene draw in them also draws that eye’s</text>
-<text class="sub" x="20" y="84">focus view beside the eye. LMU’s code isn’t changed, hooked or called; Sim-QVFR reads a few values in its memory and writes none.</text>
+<text class="sub" x="20" y="84">focus view beside the eye. LMU’s code isn’t changed, hooked or called; nothing is read or written in its memory.</text>
 <circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
 <text class="s" x="36" y="116">LMU, unchanged</text>
 <circle cx="155.39999999999998" cy="112" r="5" fill="var(--overlay-teal)"/>
