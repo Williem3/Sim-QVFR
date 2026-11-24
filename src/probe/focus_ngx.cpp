@@ -164,6 +164,7 @@ int watched_state(int slot, ID3D12Resource* r) {
     return w.state.load();
 }
 
+std::string name_of(ID3D12Resource* r);
 // Ours replaced: released this many evaluations later (the GPU may still be copying into or out of them).
 struct OldCopy {
     ID3D12Resource* ours;
@@ -196,11 +197,11 @@ ID3D12Resource* own_copy(int slot, ID3D12Resource* from, unsigned w, unsigned h,
     if (c.ours)
         oldCopies.push_back({c.ours, now + 64});  // released 64 evaluations later, not while the GPU may use it
     c = {};
-    const int made = copiesMade.fetch_add(1) + 1;
-    if (made <= 16 || made % 100 == 0)
-        logf("focus dlss: the right eye's own inputs: texture %d made (%d so far) for %s %ux%u", slot, made,
+    const int count = copiesMade.fetch_add(1) + 1;
+    if (count <= 16 || count % 100 == 0)
+        logf("focus dlss: the right eye's own inputs: texture %d made (%d so far) for %s %ux%u", slot, count,
              name_of(from).c_str(), w, h);
-    if (made > 40) {  // made again and again: something keeps changing; stop rather than churn
+    if (count > 40) {  // made again and again: something keeps changing; stop rather than churn
         rightOwnInputs.store(false);
         log_line("focus dlss: the right eye's own inputs: textures made too often; off for this session");
         return nullptr;
