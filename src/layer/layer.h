@@ -263,6 +263,12 @@ void road_focus_region_known(int regionWidth, int regionHeight);
 // eye_off.cpp (quad/eye_off.h): one eye off at the runtime's xrEndFrame. Installed into `next` before native quad
 // views' wrappers, so it is the last of the layer's before the runtime.
 void eye_off_install();
+// submit_trace.cpp (quad/submit_trace.h): the frame as it is handed down, logged per new shape, and the motion
+// compensators in the process. Installed into `next` before eye off's wrapper: the very last of the layer's.
+void submit_trace_install();
+// A reference space the game created (the others the trace sees are the layer's own).
+void submit_trace_game_space(XrSpace space);
+void submit_trace_session_ended();
 // At xrDestroySession: its black image released, the counts logged.
 void eye_off_session_ended();
 

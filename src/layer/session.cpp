@@ -243,6 +243,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     osd_shutdown();
     clock_shutdown();
     eye_off_session_ended();
+    submit_trace_session_ended();
     probe_stop();
     game->session_destroyed();
     dred_stop();
