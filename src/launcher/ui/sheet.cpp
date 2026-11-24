@@ -114,11 +114,16 @@ void sheet_card() {
     app.hits.clear();
     app.drawingSheet = true;
     const float w = std::min(s.width, W - 32), pad = t::kSpace6, inner = w - 2 * pad;
-    const float textH = s.text.empty() ? 0 : cv.measure_height(s.text, t::kBody, inner);
+    const float fullTextH = s.text.empty() ? 0 : cv.measure_height(s.text, t::kBody, inner);
     constexpr float kFieldH = 32;
     const float labelH = s.fieldLabel.empty() ? 0 : t::kCallout.lineHeight + t::kSpace2;
-    const float h = pad + t::kTitle3.lineHeight + (textH > 0 ? t::kSpace2 + textH : 0) + (s.field ? t::kSpace4 + labelH + kFieldH : 0) +
-                    t::kSpace6 + t::kControlHeight + pad;
+    const float rest = pad + t::kTitle3.lineHeight + (fullTextH > 0 ? t::kSpace2 : 0) + (s.field ? t::kSpace4 + labelH + kFieldH : 0) +
+                       t::kSpace6 + t::kControlHeight + pad;
+    // Taller than the window: the text scrolls (the wheel), the title and buttons stay in view.
+    const float textH = std::max(0.0f, std::min(fullTextH, H - 32 - rest));
+    s.scrollMax = std::max(0.0f, fullTextH - textH);
+    s.scroll = std::clamp(s.scroll, 0.0f, s.scrollMax);
+    const float h = rest + textH;
     const float radius = t::kRadiusGroup;
     const Rect card{std::round((W - w) / 2), std::round(std::max(16.0f, (H - h) / 2 - 24)), w, h};
     cv.fill(card, col(app.c->group_bg), radius);  // the panes' cards: their buttons read on it
@@ -130,8 +135,11 @@ void sheet_card() {
     reader_text({card.x + pad, y + t::kTitle3.lineHeight, inner, textH}, s.text);
     y += t::kTitle3.lineHeight;
     if (textH > 0) {
-        cv.text(s.text, t::kBody, {card.x + pad, y + t::kSpace2, inner, textH + 2}, col(app.c->label_secondary), Align::Leading,
+        const Rect area{card.x + pad, y + t::kSpace2, inner, textH};
+        cv.push_clip(area);
+        cv.text(s.text, t::kBody, {area.x, area.y - s.scroll, inner, fullTextH + 2}, col(app.c->label_secondary), Align::Leading,
                 false, true);
+        cv.pop_clip();
         y += t::kSpace2 + textH;
     }
     if (s.field) {

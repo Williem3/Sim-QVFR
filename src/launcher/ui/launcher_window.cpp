@@ -421,8 +421,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_MOUSEWHEEL:
-        if (app.sheet.open)
+        if (app.sheet.open) {
+            if (app.sheet.scrollMax > 0) {
+                app.sheet.scroll = std::clamp(app.sheet.scroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f,
+                                              app.sheet.scrollMax);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
+        }
         app.tip = -1;  // its ⓘ moves away
         if (app.panel != PanelKind::None) {  // an open panel's content scrolls, not the page under it
             if (app.panelScrollMax > 0) {

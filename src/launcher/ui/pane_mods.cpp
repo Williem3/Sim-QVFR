@@ -202,7 +202,7 @@ void mod_item(Body& b, size_t i) {
     const bool approved = st.offline.trust == ModTrust::Community;
     if (update_available(i))
         buttons.push_back({static_cast<Ctl>(kModInstall0 + n), tr(L"Update"), Btn::Primary});
-    if (st.approvable && approved && st.facts.signatureTrusted)
+    if (st.approvable && approved)
         buttons.push_back({static_cast<Ctl>(kModOnline0 + n), st.approval.online ? tr(L"Online: on") : tr(L"Allow online…")});
     if (st.approvable)
         buttons.push_back({static_cast<Ctl>(kModApprove0 + n), approved ? tr(L"Take back") : tr(L"Approve…"),
@@ -211,55 +211,69 @@ void mod_item(Body& b, size_t i) {
     b.item(m.name, tone, text, byline(m), buttons);
 }
 
-// A mod's Details window, over the Settings panel: who made it, what loads and why, its approval, online, games, source,
-// settings, folder; and Remove, Go back, View source.
+// What the core will do with the mod, in a sentence for players (its status badge says it in short).
+std::wstring status_sentence(const ModEntry& m, const ModStatus& st) {
+    switch (st.offline.trust) {
+    case ModTrust::Official: return tr(L"Made and signed by Sim-QVFR. It runs in every launch.");
+    case ModTrust::FirstPartyUnsignedBuild:
+        return tr(L"Comes with this test build of Sim-QVFR. This build isn’t signed, so the mod stays off while a game’s "
+                  L"anti-cheat runs.");
+    case ModTrust::Community:
+        return st.online.trust == ModTrust::Community ? tr(L"You approved it. It runs offline and online.")
+                                                      : tr(L"You approved it. It runs offline.");
+    case ModTrust::Refused: break;
+    }
+    if (st.approvable)
+        return st.approval.sha256.empty() ? tr(L"Not approved yet: it won’t run until you approve it.")
+                                          : tr(L"Its file changed since you approved it: approve it again to use it.");
+    (void)m;
+    return trf(L"It won’t load: {why}.", {{L"why", widen_reason(st.offline.why)}});
+}
+
+// A mod's Details window, over the Settings panel: what it is, what loads and why, its approval, online, games, source,
+// updates, settings; and Remove (not Sim-QVFR's own), Go back, Open folder, View source.
 void show_details(size_t i) {
     const ModEntry& m = app.mods[i];
     const ModStatus& st = app.modStatus[i];
+    const bool own = mod_api::first_party_mod(m.id);
     Sheet s;
     s.title = m.name.empty() ? m.id : m.name;
     std::wstring t;
     auto line = [&t](const std::wstring& label, const std::wstring& value) {
-        if (value.empty())
-            return;
-        t += (t.empty() ? L"" : L"\n\n") + label + L": " + value;
+        if (!value.empty())
+            t += (t.empty() ? L"" : L"\n") + label + L":  " + value;
     };
     std::wstring folder, backupVersion;
-    const bool backup = m.error.empty() && mod_api::first_party_mod(m.id) &&
-                        find_mod_backup(mods_folder_path(), m.id, folder, backupVersion);
+    const bool backup = m.error.empty() && own && find_mod_backup(mods_folder_path(), m.id, folder, backupVersion);
     if (!m.error.empty()) {
         line(tr(L"Won’t load"), m.error);
     } else {
-        line(tr(L"Made by"), byline(m));
+        std::wstring made = m.author.empty() ? std::wstring(tr(L"Unknown author")) : m.author;
+        if (!m.version.empty())
+            made += L", " + trf(L"version {version}", {{L"version", m.version}});
+        line(tr(L"Made by"), made);
         std::wstring built;
         if (!m.sdk.empty())
             built = trf(L"SDK {version}", {{L"version", m.sdk}});
         if (m.abi > 0)
             built += (built.empty() ? L"" : L", ") + trf(L"mod ABI {abi}", {{L"abi", std::to_wstring(m.abi)}});
         line(tr(L"Built with"), built);
-        line(tr(L"Status"), chip_of(st).second + L". " + widen_reason(st.offline.why) + L".");
-        line(tr(L"Signature"), signed_line(st) + (st.offline.trust == ModTrust::Community || st.approvable
-                                                      ? L" " + std::wstring(tr(L"Not made by Sim-QVFR."))
-                                                      : std::wstring()));
-        if (st.approvable) {
-            const bool approved = st.offline.trust == ModTrust::Community;
-            if (approved)
-                line(tr(L"Approval"), trf(L"This exact file ({hash}…). If it changes, it stops loading until you approve it again.",
-                                          {{L"hash", short_hash(st.facts.sha256)}}));
-            else if (!st.approval.sha256.empty())
-                line(tr(L"Approval"), tr(L"Its file changed since you approved it: approve it again to use it."));
-            else
-                line(tr(L"Approval"), tr(L"Not approved. It runs inside the game: approve it only if you trust who made it."));
+        line(tr(L"Status"), status_sentence(m, st));
+        if (st.offline.trust == ModTrust::Community)
+            line(tr(L"Approval"), trf(L"This exact file ({hash}…). If it changes, it stops loading until you approve it again.",
+                                      {{L"hash", short_hash(st.facts.sha256)}}));
+        if (st.approvable)
             line(tr(L"Online"),
                  !st.facts.signatureTrusted ? tr(L"Not signed by its author, so it never runs while a game’s anti-cheat runs.")
-                 : st.approval.online ? tr(L"On: it also runs while the game’s anti-cheat runs. The anti-cheat may kick or ban you for it.")
-                                      : tr(L"Off: it stays off while the game’s anti-cheat runs."));
-        }
+                 : st.approval.online
+                     ? trf(L"On. Signed by {signer}. It also runs while a game’s anti-cheat runs, which may kick or ban you for it.",
+                           {{L"signer", st.facts.signer}})
+                     : trf(L"Off. Signed by {signer}, so you can allow it.", {{L"signer", st.facts.signer}}));
         std::wstring games;
         for (const std::wstring& g : m.games)
             games += (games.empty() ? L"" : L", ") + g;
         line(tr(L"Games"), games);
-        if (mod_api::first_party_mod(m.id)) {
+        if (own) {
             const auto it = app.modReleases.find(m.id);
             line(tr(L"Updates"), update_available(i) ? trf(L"Version {version} is available.", {{L"version", it->second.version}})
                                  : !app.modsChecked ? std::wstring()
@@ -273,33 +287,38 @@ void show_details(size_t i) {
         if (!m.settings.empty())
             line(tr(L"Settings"), tr(L"On the Game tab, with each game it covers."));
     }
-    line(tr(L"Folder"), m.folder);
     s.text = t;
     s.width = 640;
     // Buttons, left to right; the last (Close) is the main one and Escape's.
-    std::vector<int> kinds;  // 0 Remove, 1 Go back, 2 View source, 3 Close
-    s.buttons.push_back(tr(L"Remove…"));
-    kinds.push_back(0);
+    std::vector<int> kinds;  // 0 Remove, 1 Go back, 2 Open folder, 3 View source, 4 Close
+    if (!own) {  // Sim-QVFR's own: removing it takes the game's support away until the package is reinstalled
+        s.buttons.push_back(tr(L"Remove…"));
+        kinds.push_back(0);
+    }
     if (backup) {
         s.buttons.push_back(tr(L"Go back"));
         kinds.push_back(1);
     }
+    s.buttons.push_back(tr(L"Open folder"));
+    kinds.push_back(2);
     if (!m.source.empty()) {
         s.buttons.push_back(tr(L"View source"));
-        kinds.push_back(2);
+        kinds.push_back(3);
     }
     s.buttons.push_back(tr(L"Close"));
-    kinds.push_back(3);
+    kinds.push_back(4);
     s.cancel = static_cast<int>(s.buttons.size()) - 1;
     s.focus = s.cancel;
     const int n = static_cast<int>(i);
-    s.done = [kinds, n](int button, const std::wstring&) {
+    const std::wstring modFolder = m.folder;
+    s.done = [kinds, n, modFolder](int button, const std::wstring&) {
         if (button < 0 || button >= static_cast<int>(kinds.size()))
             return;
         switch (kinds[static_cast<size_t>(button)]) {
         case 0: mods_press(static_cast<Ctl>(kModRemove0 + n), -1); break;
         case 1: mods_press(static_cast<Ctl>(kModRestore0 + n), -1); break;
-        case 2: mods_press(static_cast<Ctl>(kModSource0 + n), -1); break;
+        case 2: ShellExecuteW(app.hwnd, L"explore", modFolder.c_str(), nullptr, nullptr, SW_SHOWNORMAL); break;
+        case 3: mods_press(static_cast<Ctl>(kModSource0 + n), -1); break;
         default: break;
         }
     };
@@ -393,8 +412,14 @@ void approve(size_t i) {
 void allow_online(size_t i) {
     const ModEntry& m = app.mods[i];
     const ModStatus& st = app.modStatus[i];
-    if (st.offline.trust != ModTrust::Community || !st.facts.signatureTrusted)
+    if (st.offline.trust != ModTrust::Community)
         return;
+    if (!st.facts.signatureTrusted) {
+        notify(tr(L"Offline only"), trf(L"{mod} isn’t signed by its author, so it can’t run while a game’s anti-cheat runs. "
+                                        L"Its author can sign it to make that possible.",
+                                        {{L"mod", m.name}}));
+        return;
+    }
     mod_api::ModApproval a = st.approval;
     if (a.online) {  // off: at once
         a.online = false;

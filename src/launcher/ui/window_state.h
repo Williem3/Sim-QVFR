@@ -328,6 +328,7 @@ struct Sheet {
     int cancel = 0;   // the button Escape presses
     bool danger = false;
     float width = 460;   // a longer read (a mod's Details) is wider
+    float scroll = 0, scrollMax = 0;  // its text scrolls (the wheel) when the sheet would be taller than the window
     bool field = false;  // a name field above the buttons (Return in it presses the main button)
     std::wstring fieldLabel, fieldText;
     std::function<void(int button, const std::wstring& text)> done;  // the button pressed, and the field's text
