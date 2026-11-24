@@ -9,7 +9,6 @@
 #include <cstdint>
 
 #include "../../quad/d3d11_view_resample.h"
-#include "abi.h"
 #include "focus_math.h"
 
 namespace lmu {
@@ -84,50 +83,6 @@ inline simqvfr::ViewMapping glare_mapping(const FocusBox& box) {
     for (int i = 0; i < 9; ++i)
         m.rotation[i] = identity[i];
     return m;
-}
-
-// CRenderGlare's result after its composite (abi.h [Glare share]): the texture (AddRef'd) and its size, the render
-// texture's own size and UV scale and offset.
-struct YebisGlare {
-    ID3D11Texture2D* texture = nullptr;
-    unsigned textureWidth = 0, textureHeight = 0;
-    unsigned width = 0, height = 0;
-    float scaleOffset[4] = {};
-};
-
-// Reads it under SEH (no C++ objects with destructors here: __try needs a plain frame). 0: read; 1: a pointer on the way
-// is null; 2: unreadable (an access violation); 3: the resource isn't a 2D texture at least the size the render texture
-// says.
-inline int read_yebis_glare(const void* renderGlare, YebisGlare& out) {
-    out = YebisGlare{};
-    __try {
-        const auto* glare = static_cast<const std::uint8_t*>(renderGlare);
-        const auto* surface = glare ? *reinterpret_cast<const std::uint8_t* const*>(glare + kGlareResult) : nullptr;
-        const auto* gpu = surface ? *reinterpret_cast<const std::uint8_t* const*>(surface + kRenderTextureGpu) : nullptr;
-        auto* resource = gpu ? *reinterpret_cast<ID3D11Resource* const*>(gpu + kGpuTextureResource) : nullptr;
-        if (!resource)
-            return 1;
-        out.width = *reinterpret_cast<const unsigned*>(surface + kRenderTextureSize);
-        out.height = *reinterpret_cast<const unsigned*>(surface + kRenderTextureSize + 4);
-        for (int i = 0; i < 4; ++i)
-            out.scaleOffset[i] = reinterpret_cast<const float*>(surface + kRenderTextureScale)[i];
-        ID3D11Texture2D* texture = nullptr;
-        if (FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) || !texture)
-            return 3;
-        D3D11_TEXTURE2D_DESC d;
-        texture->GetDesc(&d);
-        if (d.Width < out.width || d.Height < out.height || out.width == 0 || out.height == 0 || d.SampleDesc.Count != 1) {
-            texture->Release();
-            return 3;
-        }
-        out.texture = texture;
-        out.textureWidth = d.Width;
-        out.textureHeight = d.Height;
-        return 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        out.texture = nullptr;
-        return 2;
-    }
 }
 
 }  // namespace lmu

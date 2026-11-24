@@ -111,20 +111,11 @@ struct QvfrFrameRun {
     int corridorDropPct = 15;
     float corridorHalfM = 0, corridorTallM = 0, corridorStartM = 3, corridorFarM = 0, corridorEyeHeightM = 1.3f;
     float corridorSlopeDeg = 35, corridorCentreM = 6;  // lmu_corridor_road_slope_deg, lmu_corridor_centre_cm
-    // [experiment] lmu_build_free=1: the game's facts (offered size, render scale, FSR, eye projections, eye of a pass)
-    // from OpenXR and Direct3D on a build abi.h knows too, as on any other build (qvfr_frame.cpp "any build").
-    bool buildFree = false;
     // [experiment] lmu_viewport_reads (mvr_pass.h mvr_viewport_reads): 1 (default) every caller but Sim-QVFR given the
     // game's own viewports while ours are bound, 2 only the game's exe, 0 not hooked. An A/B.
     int viewportReads = 1;
 };
 
-// The game's exe is a build abi.h's addresses are from (game.h kBuilds; hashed once). Any other build runs QVFR from
-// what OpenXR and Direct3D show, with nothing read in the game (DLSS's camera: dlss_inputs.cpp, view_pair.h).
-bool qvfr_frame_known_build();
-// This run takes the game's facts from OpenXR and Direct3D (an unknown build, or lmu_build_free=1); set by
-// qvfr_frame_start.
-bool qvfr_frame_build_free();
 // Eye `eye`'s projection from the FOV the game was last handed (focus_math.h projection_from_tangents: its x and y
 // terms only). False before the first.
 bool qvfr_frame_eye_projection(int eye, float (&out)[16]);
