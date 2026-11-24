@@ -289,6 +289,8 @@ struct Popup {
     std::vector<std::wstring> items;
     std::vector<PopupRow> kinds;  // per item; empty: all are items
     std::vector<int> actions;     // per item, what it does (the profile menu's: pointer.cpp profile_menu_action)
+    std::vector<uint32_t> swatches;  // per item, a colour dot before its name (kNoSwatch: none); empty: none
+    Ctl opener = kNone;              // the control drawn open while it shows (kNone: the owner)
     int selected = 0, hover = -1;
 };
 
@@ -507,6 +509,10 @@ struct App {
     // The cards' Mores: those open (by key: card title / its label), and this frame's keys (kMore's options).
     std::set<std::wstring> moreOpen;
     std::vector<std::wstring> moreKeys;
+    // The card grid's columns (card.cpp card_grid): each card's (by title) while the page, the game and the column count
+    // (cardGridKey) stay the same, so a card growing or appearing moves only the cards under it in its column.
+    std::wstring cardGridKey;
+    std::map<std::wstring, int> cardColumns;
     // Disclosures: when each parent (by Ctl) turned on, while its rows slide open, and its state as last drawn.
     std::map<int, unsigned long long> revealStart;
     std::map<int, bool> revealLast;
@@ -547,6 +553,8 @@ struct Help {
 
 // A pop-up menu item's height (chrome.cpp's popup_menu_rect).
 inline constexpr float kMenuItemH = 32;
+// A pop-up row without a colour dot (Popup::swatches).
+inline constexpr uint32_t kNoSwatch = 0xffffffffu;
 
 // window_state.cpp
 std::wstring game_name();
@@ -690,6 +698,9 @@ int color_game_index();
 // Whether the selected game can be raced online with Sim-QVFR (the Online racing card's, the Overview's); `tone`: badge's.
 std::wstring online_status(int& tone);
 void use_color_preset(int preset);
+// A game's colour button on the Games card: its drop-down (own colour, the presets, Custom…), and an item chosen there.
+void open_color_menu(int game);
+void choose_color_menu(int option);
 // The colour panel's content (Custom… on the Games card), and the Game tab's cards.
 float color_panel(float x, float y, float w, bool draw);
 float game_page(float x, float y, float w, bool draw);
@@ -804,7 +815,8 @@ void shape_remove(int option);
 // A slider of the whole shape (kShapePointY, kShapePointX with Whole shape picked) was set: its points follow.
 void shape_slider_set(Ctl id);
 void open_popup(Ctl owner);
-void open_profile_menu();
+// The profile menu, under `from`: the top bar's button, or the Overview's Custom segment (kOverviewProfile).
+void open_profile_menu(Ctl from = kProfileMenu);
 void open_card_menu(int card);
 // A choice's items and the one chosen (a pop-up's, a segmented control's), and choosing one.
 int choice_items(Ctl owner, std::vector<std::wstring>& items);

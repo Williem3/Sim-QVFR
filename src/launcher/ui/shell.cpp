@@ -265,8 +265,9 @@ void rail(float H) {
     cv.fill({0, 0, W, H}, col(app.c->rail));
     brand_mark(W / 2, (top - 20) / 2, 20);
     // The bottom first: the blocks take what is left above it.
-    const float versionH = 16, heartR = compact ? 14.0f : 16.0f;
-    const float bottomH = t::kSpace4 + 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight) + t::kSpace3 + versionH +
+    // The About button: the kit's small control height; compact, two lines (the icon over the version number).
+    const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;
+    const float bottomH = t::kSpace4 + 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight) + t::kSpace3 + aboutH +
                           t::kSpace4;
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
@@ -328,21 +329,57 @@ void rail(float H) {
         cv.stroke(kofi.inset(6, -3), col(app.c->rail_text), 2, t::kRadiusControl);
     app.hits.push_back({kSupport, kofi, -1, tr(L"Support Sim-QVFR on Ko-fi")});
     by += kofi.h + t::kSpace3;
-    // The version (About), with a dot when an update is available.
-    // A release's version without its commit ("1.0.5-beta (a78fc1f)"); a development build the release it is headed for.
+    // The About button: an info icon and the version ("About · v1.2.3-beta" where it fits), a dot when an update is
+    // available. A release's version without its commit ("1.0.5-beta (a78fc1f)"); a development build the release it is
+    // headed for.
     const std::wstring built = widen(SIM_QVFR_VERSION);
-    std::wstring version = known_version(built) ? L"v" + built.substr(0, built.find(L' ')) : L"v" + widen(SIM_QVFR_RELEASE) + L" dev";
-    if (compact)  // the number alone ("v1.0.5")
-        version = version.substr(0, std::min(version.find(L'-'), version.find(L' ')));
-    const Rect vr{0, by, W, versionH};
-    const std::wstring versionShown = fit(version, t::kRailName, W - 8);  // a long development version cut too
-    cv.text(versionShown, t::kRailName, vr, col(pointer_in(vr) ? app.c->rail_text : app.c->rail_text_muted), Align::Center);
-    if (app.update == Update::Available)
-        cv.circle(cx + std::min(W / 2 - 6, cv.measure(versionShown, t::kRailName) / 2 + 6), by + versionH / 2, 3,
-                  col(app.c->yellow), true);
+    const std::wstring version =
+        known_version(built) ? L"v" + built.substr(0, built.find(L' ')) : L"v" + widen(SIM_QVFR_RELEASE) + L" dev";
+    const std::wstring number = version.substr(0, std::min(version.find(L'-'), version.find(L' ')));  // "v1.0.5"
+    const Rect br{6, by, W - 12, aboutH};
+    const Rect aboutHit{0, by, W, aboutH};  // the rail's width, 26 (compact 35) high: no smaller than the version's was
+    const bool aboutHover = pointer_in(aboutHit);
+    cv.fill(br, col(0xffffff, aboutHover ? 0.12f : 0.05f), t::kRadiusControl);
+    cv.stroke(br.inset(0.5f, 0.5f), col(0xffffff, aboutHover ? 0.36f : 0.18f), 1, t::kRadiusControl);
+    if (app.pressed == kVersion && aboutHit.contains(app.mouseX, app.mouseY))  // held: a shade darker, as a button's
+        cv.fill(br, col(0, 0.16f), t::kRadiusControl);
+    // The longest label that fits beside the icon; compact: the icon over the number (cut to the button).
+    const float iconS = compact ? 12.0f : 14.0f, gap = 4.0f, pad = compact ? 4.0f : 7.0f;
+    const float textW = compact ? br.w - 2 * pad : br.w - 2 * pad - iconS - gap;
+    const std::wstring dot = L" · ";
+    const std::wstring about = tr(L"About");
+    std::wstring label;
+    if (compact) {
+        label = fit(number, t::kRailName, textW);
+    } else {
+        for (const std::wstring& l : {about + dot + version, about + dot + number, version, number})
+            if (cv.measure(l, t::kRailName) <= textW) {
+                label = l;
+                break;
+            }
+        if (label.empty())
+            label = fit(number, t::kRailName, textW);
+    }
+    const float labelW = label.empty() ? 0.0f : cv.measure(label, t::kRailName);
+    const float lh = t::kRailName.lineHeight;
+    // The icon's top-left: compact, centred over the number (4 from the top, 2 above it); else before the label.
+    const float gx = compact ? br.x + (br.w - iconS) / 2 : br.x + (br.w - iconS - (label.empty() ? 0.0f : gap + labelW)) / 2;
+    const float my = compact ? br.y + 4 + iconS / 2 : br.y + br.h / 2;
+    const Color ink = col(app.c->rail_text);
+    cv.circle(gx + iconS / 2, my, iconS / 2 - 0.75f, ink, false, 1.4f);  // the info icon: a ring, a stem and a dot
+    cv.path("M8 7.25V11.75", {gx, my - iconS / 2, iconS, iconS}, 16, ink, 1.6f);
+    cv.circle(gx + iconS / 2, my - iconS * 0.19f, iconS * 0.07f + 0.3f, ink, true);
+    if (compact && !label.empty())
+        cv.text(label, t::kRailName, {br.x, my + iconS / 2 + 2, br.w, lh}, ink, Align::Center);
+    else if (!label.empty())
+        cv.text(label, t::kRailName, {gx + iconS + gap, my - lh / 2, labelW + 2, lh}, ink, Align::Leading);
+    if (app.update == Update::Available) {  // on the button's corner, ringed in the rail's colour
+        cv.circle(br.right() - 2, br.y + 2, 5, col(app.c->rail), true);
+        cv.circle(br.right() - 2, br.y + 2, 3.5f, col(app.c->yellow), true);
+    }
     if (focused(kVersion))
-        cv.stroke(vr.inset(6, -2), col(app.c->rail_text), 2, t::kRadiusControl);
-    app.hits.push_back({kVersion, vr.inset(0, -4), -1,  // 24 high: the smallest target (WCAG 2.5.8)
+        cv.stroke(br.inset(-3, -3), col(app.c->rail_text), 2, t::kRadiusControl + 2);
+    app.hits.push_back({kVersion, aboutHit, -1,  // 26 high: above the smallest target (WCAG 2.5.8)
                         app.update == Update::Available
                             ? trf(L"Sim-QVFR {version} is available: About and updates",
                                   {{L"version", app.release.tag}})
@@ -430,7 +467,8 @@ void topbar(float W) {
     x -= 16 + profileW;
     {
         const Rect pr{x, (H - 34) / 2, profileW, 34};
-        const bool open = app.popup.open && app.popup.owner == kProfileMenu;
+        // Open: the menu shows under this button (not under the Overview's Custom segment).
+        const bool open = app.popup.open && app.popup.owner == kProfileMenu && app.popup.opener == kProfileMenu;
         cv.fill(pr, col(open || pointer_in(pr) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
         float tx = pr.x + 12;
         if (withPrefix) {

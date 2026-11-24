@@ -64,18 +64,28 @@ float popup_row_height(size_t i) {
     return kind == PopupRow::Separator ? 9.0f : kind == PopupRow::Note ? 28.0f : kMenuItemH;
 }
 
+namespace {
+
+// The room a row's colour dot takes before its name (Popup::swatches): none without one.
+float popup_swatch_w(size_t i) {
+    const Popup& p = app.popup;
+    return i < p.swatches.size() && p.swatches[i] != kNoSwatch ? 22.0f : 0.0f;
+}
+
+}  // namespace
+
 // The open pop-up menu: under its button, as wide as the button or its longest row (check mark column included),
-// right-aligned with the button when it would leave the window.
+// right-aligned with the button when it would leave the window (and never past the window's left edge).
 Rect popup_menu_rect() {
     const Popup& p = app.popup;
     float w = p.anchor.w, h = 12;
     for (size_t i = 0; i < p.items.size(); ++i) {
-        w = std::max(w, std::ceil(app.canvas.measure(p.items[i], t::kBody)) + 28 + 6 + 12 + 8);
+        w = std::max(w, std::ceil(app.canvas.measure(p.items[i], t::kBody)) + 28 + 6 + 12 + 8 + popup_swatch_w(i));
         h += popup_row_height(i);
     }
     Rect menu{p.anchor.x, p.anchor.y + p.anchor.h + 4, w, h};
     if (menu.right() > app.canvas.width() - 8)
-        menu.x = p.anchor.right() - w;
+        menu.x = std::max(8.0f, p.anchor.right() - w);
     if (menu.bottom() > app.canvas.height())
         menu.y = p.anchor.y - menu.h - 4;
     return menu;
@@ -124,7 +134,13 @@ void popup_menu() {
             if (static_cast<int>(i) == p.selected)
                 cv.path("M3.5 8.2l2.6 2.6L12.5 4.5", {item.x + 8, item.y + (h - 14) / 2, 14, 14}, 16,
                         col(hot ? app.c->on_accent : app.c->accent), 1.8f);
-            cv.text(p.items[i], t::kBody, {item.x + 28, item.y, item.w - 34, h}, col(hot ? app.c->on_accent : app.c->label));
+            const float sw = popup_swatch_w(i);
+            if (sw > 0) {  // its colour, ringed so a dark or light one reads on the accent and the surface
+                cv.circle(item.x + 28 + 7, item.y + h / 2, 7, col(p.swatches[i]), true);
+                cv.circle(item.x + 28 + 7, item.y + h / 2, 7.5f, col(hot ? app.c->on_accent : app.c->control_border), false, 1);
+            }
+            cv.text(p.items[i], t::kBody, {item.x + 28 + sw, item.y, item.w - 34 - sw, h},
+                    col(hot ? app.c->on_accent : app.c->label));
         }
         y += h;
     }

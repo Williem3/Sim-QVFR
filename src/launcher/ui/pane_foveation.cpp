@@ -221,7 +221,10 @@ float preview_legend(float x, float y, float w, bool draw) {
             app.s.eyeTracking && !eye_warning() ? tr(L"Focus, follows your eyes") : tr(L"Focus, fixed");
         const float fw = std::ceil(app.canvas.measure(focusText, t::kSubheadline));
         app.canvas.text(focusText, t::kSubheadline, {x + 16, y, fw + 2, 16}, col(app.c->label_secondary));
-        const float cx = x + 16 + fw + t::kSpace4;
+        // Not rendered after the longer of the two focus texts, so it stays put when Foveated mode or the tracker changes.
+        const float longest = std::max(std::ceil(app.canvas.measure(tr(L"Focus, follows your eyes"), t::kSubheadline)),
+                                       std::ceil(app.canvas.measure(tr(L"Focus, fixed"), t::kSubheadline)));
+        const float cx = x + 16 + longest + t::kSpace4;
         app.canvas.fill({cx, y + 3, 10, 10}, col(app.c->preview_canvas), 2);
         app.canvas.stroke({cx, y + 3, 10, 10}, col(app.c->label_muted), 1, 2);
         const float restW = std::max(0.0f, x + w - cx - 16);

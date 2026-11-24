@@ -126,6 +126,8 @@ void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
     // Pressed: the hover 8% darker (popup_button's mix, as black over it).
     if (!disabled && app.pressed == id && r.contains(app.mouseX, app.mouseY))
         app.canvas.fill(r, col(0, 0.08f), t::kRadiusControl);
+    // Its edge as popup_button's (the fill alone is too close to the card to read as a button).
+    app.canvas.stroke(r, col(app.c->control_border, disabled ? 0.4f : 1), 1, t::kRadiusControl);
     app.canvas.path(id == kLayerUp ? "M3 7.5L6 4.5l3 3" : "M3 4.5L6 7.5l3-3", {r.x + (r.w - 12) / 2, r.y + (r.h - 12) / 2, 12, 12},
                     12, col(disabled ? app.c->label_tertiary : app.c->label), 1.5f);
     if (!disabled)
