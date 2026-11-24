@@ -16,6 +16,7 @@
 #include "../launch_plan.h"
 #include "../launch_watch.h"
 #include "../lmu_game_settings.h"
+#include "../mod_catalog.h"
 #include "../layer_order.h"
 #include "../preflight.h"
 #include "../session_history.h"
@@ -166,7 +167,12 @@ enum Ctl {
     kLmuSetting, kLmuSettingEnd = kLmuSetting + 64,
     // The Developer tab (developer.cpp): the showcase's Stock/QVFR in the running game and its A/B table, then one
     // switch per dev_switches.h entry (kDevSwitch0 + its index).
-    kDevStock, kDevAbTable, kDevSwitch0, kDevSwitchLast = kDevSwitch0 + 31
+    kDevStock, kDevAbTable, kDevSwitch0, kDevSwitchLast = kDevSwitch0 + 31,
+    // The Mods card (pane_mods.cpp): a mod's Approve / Take back approval and its Allow online (kModApprove0 /
+    // kModOnline0 + the mod's index in app.mods), and a mod's setting (kModSetting0 + the mod's index * 16 + the
+    // setting's; option: a choice's item), then the list read again.
+    kModApprove0, kModApproveLast = kModApprove0 + 7, kModOnline0, kModOnlineLast = kModOnline0 + 7,
+    kModSetting0, kModSettingLast = kModSetting0 + 8 * 16 - 1, kModsReload
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -534,6 +540,12 @@ struct App {
     // The In-game settings page: LMU's files as last read (lmu_game_refresh), and what the last change said (an error:
     // tone 2).
     lmu_settings::Snapshot lmuGame;
+    // The Mods card: the installed mods (mod_catalog.h) and what the core will decide for each, as last read
+    // (mods_refresh); whether the layer DLL is officially signed.
+    std::vector<ModEntry> mods;
+    std::vector<ModStatus> modStatus;
+    bool modsRead = false;
+    bool coreOfficial = false;
     bool lmuGameRead = false;
     std::wstring lmuGameMessage;
     int lmuGameTone = 3;
@@ -704,6 +716,10 @@ void choose_color_menu(int option);
 // The colour panel's content (Custom… on the Games card), and the Game tab's cards.
 float color_panel(float x, float y, float w, bool draw);
 float game_page(float x, float y, float w, bool draw);
+
+// pane_mods.cpp: the Mods card on the Game tab; the mods read again; a control of its own used (true: handled).
+void mods_refresh();
+bool mods_press(Ctl id, int option);
 
 // pane_lmu_game.cpp: Le Mans Ultimate's own graphics settings (lmu_game_settings.h). The page; its files read again (the
 // page opened, the window back in front); whether a control is one of its own, a choice's items and the one chosen, a

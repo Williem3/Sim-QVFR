@@ -127,6 +127,7 @@ Card help_card();
 Card games_card();
 Card online_card();  // racing online: offline only, or LMU's anti-cheat switch and its risk
 Card layers_card();
+Card mods_card();  // the installed game mods: who made them, approval, Allow online, their settings
 
 // The card menu's Reset this card: asks first, then the card's settings go back to their defaults (a change like any
 // other: saved and sent to a running game).

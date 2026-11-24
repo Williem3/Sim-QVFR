@@ -63,6 +63,8 @@ bool official_thumbprint(const std::wstring& thumbprint) {
     return false;
 }
 
+bool first_party_mod(const std::wstring& id) { return _wcsicmp(id.c_str(), L"scs") == 0; }
+
 TrustVerdict decide_mod_trust(const TrustInput& in) {
     TrustVerdict v;
     if (in.mod.sha256.empty()) {

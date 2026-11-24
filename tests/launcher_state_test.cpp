@@ -2,6 +2,7 @@
 // retention, the session history, the game tabs, per-game settings, older versions' leftovers, and an elevated
 // launch's explicit registrations (explicit_layers.h) on a scratch registry key.
 #include "launcher_test_kit.h"
+#include "launcher/mod_catalog.h"
 
 namespace {
 
@@ -694,6 +695,87 @@ void per_game_folder_checks() {
     fs::remove_all(dir, ec);
 }
 
+// The Mods card's catalog (mod_catalog.h): mod.json and settings.json read strictly, the mods folder scanned, settings
+// in [mod_<id>], and what the core will decide shown before any launch (a third-party mod needs an approval).
+void mod_catalog_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-mod-catalog-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / L"mods" / L"demo");
+    fs::create_directories(dir / L"mods" / L"broken");
+    fs::create_directories(dir / L"mods" / L"empty");  // no mod.json: not a mod
+
+    ModEntry m;
+    std::wstring error;
+    check(parse_mod_manifest(R"({"id":"demo","name":"Demo mod","author":"Someone","version":"0.1","dll":"demo.dll",
+                                "games":[{"id":"ats"},{"id":"bad id"}]})",
+                             m, error) &&
+              m.id == L"demo" && m.name == L"Demo mod" && m.dll == L"demo.dll" && m.games.size() == 1,
+          "mods: a good mod.json is read (a game with a bad id left out)");
+    for (const char* bad : {R"({"id":"demo","dll":"..\\x.dll"})", R"({"id":"demo","dll":"C:/x.dll"})",
+                            R"({"id":"demo","dll":"demo.exe"})", R"({"id":"Demo!","dll":"d.dll"})", "not json"}) {
+        ModEntry b;
+        check(!parse_mod_manifest(bad, b, error), "mods: a mod.json with a bad id or dll is refused");
+    }
+    ModEntry wrongFolder;
+    wrongFolder.id = L"other";
+    check(!parse_mod_manifest(R"({"id":"demo","dll":"d.dll"})", wrongFolder, error),
+          "mods: an id that isn't its folder's name is refused");
+
+    std::vector<ModSetting> settings;
+    check(parse_mod_settings(R"({"settings":[{"key":"glare","type":"toggle","label":"Glare","default":true},
+        {"key":"mode","type":"choice","label":"Mode","default":"fine",
+         "options":[{"value":"fast","label":"Fast"},{"value":"fine","label":"Fine"}]}]})",
+                             settings, error) &&
+              settings.size() == 2 && settings[0].def == "1" && settings[1].def == "fine" && settings[1].options.size() == 2,
+          "mods: settings.json's toggle and choice are read");
+    check(!parse_mod_settings(R"({"settings":[{"key":"a","type":"slider"}]})", settings, error) && settings.empty(),
+          "mods: an unknown setting type refuses the file");
+    check(!parse_mod_settings(R"({"settings":[{"key":"a","type":"toggle"},{"key":"a","type":"toggle"}]})", settings, error),
+          "mods: two settings with one key refuse the file");
+    check(!parse_mod_settings(R"({"settings":[{"key":"m","type":"choice","options":[{"value":"x"}]}]})", settings, error),
+          "mods: a choice with one option refuses the file");
+
+    auto put = [](const fs::path& p, const std::string& text) {
+        std::ofstream(p, std::ios::binary) << text;
+    };
+    put(dir / L"mods" / L"demo" / L"mod.json", R"({"id":"demo","name":"Demo","author":"Someone","dll":"demo.dll"})");
+    put(dir / L"mods" / L"demo" / L"demo.dll", "not really a dll");
+    put(dir / L"mods" / L"demo" / L"settings.json",
+        R"({"settings":[{"key":"glare","type":"toggle","label":"Glare","default":true}]})");
+    put(dir / L"mods" / L"broken" / L"mod.json", R"({"id":"broken"})");
+    const std::vector<ModEntry> mods = scan_mods((dir / L"mods").wstring());
+    check(mods.size() == 2 && mods[0].id == L"broken" && !mods[0].error.empty() && mods[1].id == L"demo" &&
+              mods[1].error.empty() && mods[1].settings.size() == 1,
+          "mods: the folder's mods are found by id, a broken one says why");
+
+    const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
+    WritePrivateProfileStringW(L"launcher", L"game", L"ats", ini.c_str());
+    const ModEntry& demo = mods[1];
+    const ModSetting& glare = demo.settings[0];
+    check(mod_setting_value(ini, L"demo", glare) == "1", "mods: an unset setting is its default");
+    check(write_mod_setting(ini, L"demo", glare, "0") && mod_setting_value(ini, L"demo", glare) == "0",
+          "mods: a setting is written to [mod_<id>]");
+    check(!write_mod_setting(ini, L"demo", glare, "maybe"), "mods: a value the setting doesn't have isn't written");
+    check(!per_game_key(L"mod_demo", L"glare") && !per_game_key(L"mods", L"demo_sha256"),
+          "mods: mods' settings and approvals are shared, not per game");
+
+    ModStatus st = mod_status(demo, ini, false);
+    check(st.approvable && st.offline.trust == mod_api::ModTrust::Refused && !st.facts.signatureTrusted,
+          "mods: an unsigned third-party mod needs an approval");
+    mod_api::ModApproval a;
+    a.sha256 = st.facts.sha256;
+    a.online = true;
+    mod_api::write_mod_approval(ini, L"demo", a);
+    st = mod_status(demo, ini, false);
+    check(st.offline.trust == mod_api::ModTrust::Community && st.online.trust == mod_api::ModTrust::Refused,
+          "mods: approved, it loads offline; unsigned, never online");
+    put(dir / L"mods" / L"demo" / L"demo.dll", "an update");
+    st = mod_status(demo, ini, false);
+    check(st.offline.trust == mod_api::ModTrust::Refused && st.approvable, "mods: a changed DLL needs approving again");
+    fs::remove_all(dir, ec);
+}
+
 // An elevated launch's registrations (explicit_layers.h), on a scratch key holding someone else's values: only ours
 // are added and taken out, nothing else changes, the key stays, and only what the ledger lists comes out.
 // What older versions left in their log folders (launcher/leftovers.h): only the copies of a game's program, by name,
@@ -995,6 +1077,7 @@ int SIM_QVFR_TEST_MAIN() {
     signature_checks();
     per_game_settings_checks();
     per_game_folder_checks();
+    mod_catalog_checks();
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();

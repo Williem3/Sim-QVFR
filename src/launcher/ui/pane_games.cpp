@@ -391,7 +391,7 @@ Card cpu_card() {
 // then the last sessions and the games, the OpenXR layers (for troubleshooting) last.
 float game_page(float x, float y, float w, bool draw) {
     const std::vector<Card> cards = {checks_card(), online_card(), help_card(), cpu_card(),
-                                     diagnostics_card(), games_card(), layers_card()};
+                                     diagnostics_card(), games_card(), mods_card(), layers_card()};
     return card_grid(cards, x, y, w, draw);
 }
 

@@ -279,6 +279,8 @@ bool per_game_key(const std::wstring& section, const std::wstring& key) {
     for (const DevSwitch& d : kDevSwitches)  // the Developer tab's: every game's, in no profile
         if (section == d.section && key == d.key)
             return false;
+    if (section == L"mods" || section.rfind(L"mod_", 0) == 0)  // mod approvals and mods' own settings: shared
+        return false;
     return !(section == L"menu" || section == L"osd" || section == L"clock" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
              (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||

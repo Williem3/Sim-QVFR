@@ -87,11 +87,27 @@ Each phase leaves the app working.
 4. **Extract the games into their own DLLs.** The SCS games first (after `lmu/mvr_probe` becomes an engine service),
    then X-Plane, ACC once it is remade, ACE, and LMU last.
 5. **Dynamic tabs.** The launcher scans `mods/*/mod.json` and builds each tab from `settings.json`. It never loads a
-   mod DLL itself.
+   mod DLL itself. Status: first step done (the Mods card), see below.
 6. **The SDK and its docs.** An `sdk/` folder with `mod_api.h`, `mod.hpp`, helpers that hold no global state, a
    CMake function, JSON schemas, an example identity-only mod, and a making-a-mod guide.
 7. **Per-mod updates.** Release tags `mod-<id>-v<version>`, the `mods/<id>/` folder swapped whole, the old folder
    kept for rollback.
+
+## Phase 5, first step: the Mods card
+
+- The Game tab now has a Mods card (`src/launcher/ui/pane_mods.cpp`). It reads `mods/*/mod.json`,
+  `settings.json` and the DLL's hash and signature, using `src/launcher/mod_catalog.h`. The launcher never loads a
+  mod's DLL.
+- Each mod shows its author, version and signer, plus a label: Official, Built in (unsigned build), Third-party
+  approved, or not approved. The label comes from the same `decide_mod_trust` the core runs.
+- A third-party mod gets **Approve…** (a warning first) and **Take back**. Once approved, it gets **Allow online**
+  (a ban-risk warning). Allow online is greyed out when the mod isn't signed by its author.
+- `settings.json` v1 supports two setting types:
+  - `toggle`
+  - `choice` (2 to 4 options)
+- Values go to `[mod_<id>]` in sim-qvfr.ini, which every launch passes on. They are shared by every game, not per
+  game.
+- Not yet: number or slider settings, and a mod reading its `[mod_<id>]` values through the host table.
 
 ## Phase 3, first step: the trust check (option A)
 

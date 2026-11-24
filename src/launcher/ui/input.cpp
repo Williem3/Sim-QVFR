@@ -26,6 +26,8 @@ void activate(Ctl id, int option) {
     }
     if (developer_press(id))  // the Developer tab's switches (developer.cpp)
         return;
+    if (mods_press(id, option))  // the Mods card (pane_mods.cpp)
+        return;
     switch (id) {
     case kPage:
         app.pane = static_cast<Pane>(option);
@@ -526,6 +528,8 @@ bool space_control(Ctl id) {
         return true;
     if (id == kDevStock || id == kDevAbTable || (id >= kDevSwitch0 && id <= kDevSwitchLast))
         return true;  // the Developer tab's switches
+    if ((id >= kModOnline0 && id <= kModOnlineLast) || (id >= kModSetting0 && id <= kModSettingLast))
+        return true;  // the Mods card's switches
     switch (id) {
     case kMethod:
     case kMode:

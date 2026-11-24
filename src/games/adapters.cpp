@@ -127,11 +127,11 @@ GameAdapter& adapter_for(const GameInfo* game) {
     // (scssoftware/mod_entry.cpp): built in, or with SIM_QVFR_SCS_AS_MOD its own DLL, mods\scs\sim-qvfr-scs.dll.
 #ifdef SIM_QVFR_SCS_AS_MOD
     if (game == &::ats::kGame) {
-        static GameAdapter& ats = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", true, protectedLaunch);
+        static GameAdapter& ats = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", mod_api::first_party_mod(L"scs"), protectedLaunch);
         return ats;
     }
     if (game == &::ets2::kGame) {
-        static GameAdapter& ets2 = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", true, protectedLaunch);
+        static GameAdapter& ets2 = through_mod_dll(game, L"scs", L"sim-qvfr-scs.dll", mod_api::first_party_mod(L"scs"), protectedLaunch);
         return ets2;
     }
 #else

@@ -23,6 +23,9 @@ namespace simqvfr::mod_api {
 // certificate is added here, an old one kept while builds signed with it are in use.
 bool official_thumbprint(const std::wstring& thumbprint);
 
+// A mod the package itself ships (its folder under mods\): "scs".
+bool first_party_mod(const std::wstring& id);
+
 // What the core found out about a mod's file.
 struct ModFacts {
     bool signatureTrusted = false;  // Windows trusts its Authenticode signature
