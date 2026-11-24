@@ -25,7 +25,7 @@ void start_update_check() {
         auto* result = new UpdateResult;
         std::string body;
         if (fetch_releases(body, result->error)) {
-            result->ok = newest_release(body, result->release);
+            result->ok = newest_release(body, result->release, channel_named(SIM_QVFR_CHANNEL));
             if (!result->ok)
                 result->error = tr(L"GitHub lists no release");  // About shows it
         }

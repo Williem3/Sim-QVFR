@@ -16,6 +16,15 @@ inline constexpr wchar_t kReleasePagePrefix[] = L"https://github.com/Williem3/Si
 // a path of plain URL characters (no control characters, spaces, "..", or anything a shell would read as more).
 bool trusted_release_page(const std::wstring& url);
 
+// The release channel a launcher was built for (SIM_QVFR_CHANNEL, launcher_version.h). Each looks only at its own
+// packages: a stable launcher at "sim-qvfr-<version>.zip", a nightly one at "sqvfr-nightly-<version>.zip". Launchers
+// shipped before the nightly line know only the stable name, so they never offer a nightly.
+enum class Channel { Stable, Nightly };
+// "nightly" (any case) is Nightly; anything else Stable.
+Channel channel_named(const char* name);
+// The package asset's name prefix for `channel` ("sim-qvfr-", "sqvfr-nightly-").
+const char* package_prefix(Channel channel);
+
 struct Release {
     std::wstring tag, url;  // "v2026.11.3.3-alpha", its page
     // Its zip ("sim-qvfr-<version>.zip", install.h): the download, its size and SHA-256 as GitHub gives them
@@ -24,11 +33,13 @@ struct Release {
     unsigned long long zipSize = 0;
 };
 
-// The newest release that is not a draft in GitHub's releases JSON (newest first). False if there is none.
-bool newest_release(const std::string& json, Release& release);
+// The newest release that is not a draft in GitHub's releases JSON (newest first) with a package of `channel`. False if
+// there is none.
+bool newest_release(const std::string& json, Release& release, Channel channel = Channel::Stable);
 
 // The version's numbers in order ("v2026.11.3.3-alpha (1a2b3c4)" -> 2026, 11, 3, 3), compared: <0, 0, >0. A
-// version without numbers ("dev") compares as unknown: 0 from known_version.
+// version without numbers ("dev") compares as unknown: 0 from known_version. A nightly's date counts as one more
+// number ("1.3.0-nightly.20261124" -> 1, 3, 0, 20261124), so a later nightly of the same release is newer.
 int compare_versions(const std::wstring& a, const std::wstring& b);
 bool known_version(const std::wstring& version);
 

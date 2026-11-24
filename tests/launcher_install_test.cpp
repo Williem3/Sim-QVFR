@@ -42,6 +42,34 @@ int SIM_QVFR_TEST_MAIN() {
         check(!newest_release("[]", release) && !newest_release("{\"message\": \"rate limited\"}", release) &&
                   !newest_release("not json", release) && !newest_release(R"([{"tag_name": "v1", "draft": true}])", release),
               "update: no release in an empty list, an error answer, garbage or drafts only");
+
+        // The nightly channel (update_check.h Channel): each launcher looks only at its own channel's packages, and a
+        // nightly's date makes a later nightly of the same release newer.
+        check(compare_versions(L"v1.3.0-nightly.20261125", L"1.3.0-nightly.20261124 (abc1234)") > 0 &&
+                  compare_versions(L"v1.3.0-nightly.20261124", L"1.3.0-nightly.20261124 (abc1234)") == 0 &&
+                  compare_versions(L"v1.4.0-nightly.20261101", L"1.3.0-nightly.20261124") > 0 &&
+                  compare_versions(L"v1.3.0-beta", L"1.3.0") == 0 && compare_versions(L"1.3.0 (abc)-nightly.5", L"1.3.0") == 0,
+              "update: a nightly's date counts after the release's numbers; only right after them");
+        check(channel_named("nightly") == Channel::Nightly && channel_named("Nightly") == Channel::Nightly &&
+                  channel_named("stable") == Channel::Stable && channel_named("") == Channel::Stable &&
+                  channel_named(nullptr) == Channel::Stable,
+              "update: the build's channel from SIM_QVFR_CHANNEL; anything but nightly is stable");
+        const std::string mixed = std::string("[") +
+            R"({"tag_name": "v1.3.0-nightly.20261125", "html_url": "n2", "draft": false, "prerelease": true, )" +
+            zip("sqvfr-nightly-1.3.0.20261125.zip") + "}," +
+            R"({"tag_name": "v1.3.0-nightly.20261124", "html_url": "n1", "draft": false, "prerelease": true, )" +
+            zip("sqvfr-nightly-1.3.0.20261124.zip") + "}," +
+            R"({"tag_name": "v1.2.3-beta", "html_url": "s1", "draft": false, "prerelease": true, )" +
+            zip("sim-qvfr-1.2.3-beta.zip") + "}]";
+        Release stable, nightly;
+        check(newest_release(mixed, stable) && stable.tag == L"v1.2.3-beta" &&
+                  newest_release(mixed, stable, Channel::Stable) && stable.tag == L"v1.2.3-beta",
+              "update: a stable launcher never picks a nightly, however new");
+        check(newest_release(mixed, nightly, Channel::Nightly) && nightly.tag == L"v1.3.0-nightly.20261125" &&
+                  nightly.url == L"n2",
+              "update: a nightly launcher picks the newest nightly and never a stable package");
+        check(!newest_release(releases, nightly, Channel::Nightly),
+              "update: a nightly launcher finds nothing in a list of stable packages only");
     }
 
     // Install (install.h): the hash lists, what to replace and keep, the downloads trusted, a staged release

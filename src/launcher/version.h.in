@@ -3,3 +3,6 @@
 #define SIM_QVFR_VERSION "@SIM_QVFR_VERSION@"
 // The release this code is headed for (CMakeLists.txt): what a development build ("dev") will become.
 #define SIM_QVFR_RELEASE "@SIM_QVFR_RELEASE@"
+// The release channel (CMakeLists.txt SIM_QVFR_CHANNEL): "stable", or "nightly" (package.ps1 -Nightly). The update
+// check looks only at its own channel's packages (update_check.h Channel).
+#define SIM_QVFR_CHANNEL "@SIM_QVFR_CHANNEL@"

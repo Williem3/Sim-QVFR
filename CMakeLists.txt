@@ -21,6 +21,13 @@ set(SIM_QVFR_PCH <algorithm> <atomic> <cmath> <cstdint> <cstdio> <cstring> <file
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
 set(SIM_QVFR_RELEASE "1.2.3-beta")
 set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
+# The release channel (docs/architecture/mod-manager-plan.md "Nightly channel"): stable, or nightly (package.ps1 -Nightly).
+# A nightly launcher's update check looks only at sqvfr-nightly-*.zip packages, a stable one only at sim-qvfr-*.zip.
+set(SIM_QVFR_CHANNEL "stable" CACHE STRING "Release channel: stable or nightly (package.ps1 -Nightly sets nightly)")
+set_property(CACHE SIM_QVFR_CHANNEL PROPERTY STRINGS stable nightly)
+if(NOT SIM_QVFR_CHANNEL MATCHES "^(stable|nightly)$")
+  message(FATAL_ERROR "SIM_QVFR_CHANNEL must be stable or nightly, not '${SIM_QVFR_CHANNEL}'")
+endif()
 # A development build (version "dev") or a release: diagnostic hotkeys and switches exist in development builds only
 # (src/dev_build.h).
 if(SIM_QVFR_VERSION STREQUAL "dev")
@@ -45,7 +52,7 @@ while(_count LESS 4)
 endwhile()
 list(SUBLIST _numbers 0 4 _numbers)
 list(JOIN _numbers "," SIM_QVFR_VERSION_COMMAS)
-if(SIM_QVFR_VERSION_TEXT MATCHES "alpha|beta|rc|dev")
+if(SIM_QVFR_VERSION_TEXT MATCHES "alpha|beta|rc|dev|nightly")
   set(SIM_QVFR_VERSION_FLAGS "VS_FF_PRERELEASE")
 else()
   set(SIM_QVFR_VERSION_FLAGS "0")

@@ -16,6 +16,10 @@
 # SDK 2.x: Kits\FidelityFX\..., never in this repository) and ships AMD's signed amd_fidelityfx_loader_dx12.dll and
 # amd_fidelityfx_upscaler_dx12.dll from its bin\ beside the layer (AMD's signatures kept), AMD's licence
 # (Kits\FidelityFX\docs\license.md) in licenses\. Optional: without it the layer has no FSR.
+# -Nightly packages the nightly line (docs/architecture/mod-manager-plan.md "Nightly channel"): the version becomes
+# <release>-nightly.<yyyyMMdd> (the release from -Version, else SIM_QVFR_RELEASE's numbers; the date in UTC), the
+# launcher's update channel nightly (it looks only at sqvfr-nightly-*.zip, and stable launchers never at those), the
+# SCS games their own mod (mods\scs\), and the zip dist\sqvfr-nightly-<release>.<yyyyMMdd>.zip.
 param([string]$Version = '',
       [string]$Commit = 'HEAD',
       [string]$OutputDirectory = '',
@@ -24,6 +28,7 @@ param([string]$Version = '',
       [string]$FfxSdk = '',
       [string[]]$SkipTest = @(),  # test builds only: ctest names left out of the run (VERSION.txt says so)
       [switch]$Sign,
+      [switch]$Nightly,
       [switch]$NoScan,  # local builds only: skips the Windows Defender scan before zipping
       [string]$CertificateThumbprint = '4683DA63C881A76D5A1E803751B481F621ADF9C1',  # Certum, until 2027-11-04
       [string]$TimestampUrl = 'http://time.certum.pl')
@@ -141,9 +146,20 @@ if (-not $Version) {
     $Version = $Matches[1]
 }
 if ($Version -notmatch '^[0-9A-Za-z.\-]+$') { throw "Version '$Version' may only hold letters, digits, dots and dashes" }
-Write-Host "Packaging Sim-QVFR $Version"
+if ($Nightly) {
+    # The release's numbers ("1.3.0-beta" -> "1.3.0"), then the day: "1.3.0-nightly.20261124".
+    if ($Version -notmatch '^([0-9]+(\.[0-9]+)*)') { throw "Version '$Version' has no release numbers for a nightly" }
+    $release = $Matches[1]
+    $day = [DateTime]::UtcNow.ToString('yyyyMMdd')
+    $Version = "$release-nightly.$day"
+    $name = "sqvfr-nightly-$release.$day"  # never sim-qvfr-*: launchers out there take those as stable updates
+    $channel = 'nightly'
+} else {
+    $name = "sim-qvfr-$Version"
+    $channel = 'stable'
+}
+Write-Host "Packaging Sim-QVFR $Version ($channel)"
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$name = "sim-qvfr-$Version"
 $stage = Join-Path $OutputDirectory $name
 $archive = "$stage.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $archive)) { throw "$stage(.zip) already exists" }
@@ -163,7 +179,8 @@ try {
         # Never the local analysis tools, whatever the environment says (SIM_QVFR_LOCAL_DIR).
         $env:SIM_QVFR_LOCAL_DIR = $null
         $configure = @('-S', $work, '-B', (Join-Path $work 'build'), '-G', 'Ninja Multi-Config', "-DSIM_QVFR_VERSION=$Version ($short)",
-                       '-DSIM_QVFR_LOCAL_DIR=')
+                       '-DSIM_QVFR_LOCAL_DIR=', "-DSIM_QVFR_CHANNEL=$channel",
+                       "-DSIM_QVFR_SCS_AS_MOD=$(if ($Nightly) { 'ON' } else { 'OFF' })")
         if ($NgxSdk) { $configure += "-DNGX_SDK_DIR=$NgxSdk" }
         $configure += "-DFFX_SDK_DIR=$FfxSdk"  # empty: no FSR (a local FFX_SDK_DIR never leaks in)
         Invoke-Native 'cmake configure' { cmake @configure } | Out-Null
@@ -214,6 +231,23 @@ try {
     foreach ($source in $files.Keys) {
         Copy-Item -LiteralPath (Join-Path $work $source) -Destination (Join-Path $stage $files[$source])
     }
+    # The nightly's game mods: first-party only, each from this build (mods\<id>\, src/mod_api). A stable package has none.
+    $firstPartyMods = @('mods\scs\sim-qvfr-scs.dll', 'mods\scs\mod.json')
+    if ($Nightly) {
+        foreach ($file in $firstPartyMods) {
+            $target = Join-Path $stage $file
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $work "build\Release\$file") -Destination $target
+        }
+    }
+    # Nothing under mods\ but this build's own mods: a file from anywhere else would be zipped, and its DLL signed, as ours.
+    $modsStaged = Join-Path $stage 'mods'
+    if (Test-Path -LiteralPath $modsStaged) {
+        $foreign = Get-ChildItem -LiteralPath $modsStaged -Recurse -File | Where-Object {
+            $_.FullName.Substring($stage.Length).TrimStart('\') -notin $firstPartyMods
+        }
+        if ($foreign) { throw "mods\ holds files this build didn't make, which must never ship or be signed: $($foreign.FullName -join ', ')" }
+    }
     # The launcher's languages (src/lang.h): each lang\<code>.ini and the template translators start from.
     New-Item -ItemType Directory -Path (Join-Path $stage 'lang') | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $work 'lang') -Filter '*.ini' | ForEach-Object {
@@ -261,7 +295,10 @@ try {
     if ($Sign) {
         # Signed before SHA256.txt is written, so its hashes are of the signed files. Ours only: nvngx_dlss.dll keeps
         # NVIDIA's signature.
-        $binaries = @('sim-qvfr-launcher.exe', 'layer\sim-qvfr.dll') | ForEach-Object { Join-Path $stage $_ }
+        # The nightly's first-party mod DLLs too: the guard above made sure mods\ holds nothing else.
+        $ours = @('sim-qvfr-launcher.exe', 'layer\sim-qvfr.dll')
+        if ($Nightly) { $ours += $firstPartyMods | Where-Object { $_ -like '*.dll' } }
+        $binaries = $ours | ForEach-Object { Join-Path $stage $_ }
         foreach ($binary in $binaries) {
             Invoke-Native "signing $binary" {
                 & $signtool sign /sha1 $CertificateThumbprint /fd sha256 /tr $TimestampUrl /td sha256 /d 'Sim-QVFR' $binary
@@ -272,6 +309,7 @@ try {
     }
     $dlssLine = if ($NgxSdk) { "DLSS: built with NVIDIA's DLSS SDK $dlssSdk, its nvngx_dlss.dll $dlssVersion included" } else { 'DLSS: not built in' }
     $versionText = "Sim-QVFR $Version`r`ncommit $hash`r`n$dlssLine"
+    if ($Nightly) { $versionText += "`r`nchannel: nightly (game mods: $(($firstPartyMods | Where-Object { $_ -like '*.dll' }) -join ', '))" }
     if ($FfxSdk) { $versionText += "`r`nFSR (experiment): AMD's $($fsrVersions -join ', ') included" }
     if ($SkipTest) { $versionText += "`r`ntests skipped: $($SkipTest -join ', ')" }
     Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value $versionText -Encoding ASCII

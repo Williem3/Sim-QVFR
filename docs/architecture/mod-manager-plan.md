@@ -34,7 +34,16 @@ against the SDK. The stable releases (1.2.x and on) don't change.
   - this matters for launchers already out there, so it can't be fixed in their code. It is a rule for how nightly
     builds are published.
 - **The nightly launcher's own updater** follows the nightly channel only. It looks for `sqvfr-nightly-*.zip`, and
-  offers going back to stable as an explicit choice.
+  offers going back to stable as an explicit choice (not built yet).
+- **Built (2026-11-24, cloud; not yet compiled on Windows):**
+  - CMake `SIM_QVFR_CHANNEL` (`stable` default, or `nightly`), in `launcher_version.h` as `SIM_QVFR_CHANNEL`.
+  - `update_check.h` `Channel`: `newest_release` takes the channel and matches only that channel's asset prefix
+    (`sim-qvfr-` or `sqvfr-nightly-`). `compare_versions` counts a nightly's date as one more number, so
+    `1.3.0-nightly.20261125` is newer than `1.3.0-nightly.20261124`. Tests in `launcher_install_test`.
+  - `package.ps1 -Nightly`: version `<release numbers>-nightly.<yyyyMMdd>` (UTC), `SIM_QVFR_CHANNEL=nightly`,
+    `SIM_QVFR_SCS_AS_MOD=ON`, `mods\scs\` staged, zip `dist\sqvfr-nightly-<release>.<yyyyMMdd>.zip`, VERSION.txt
+    says `channel: nightly`. With `-Sign` the mod DLL is signed too. A guard refuses any file under `mods\` that is
+    not on the first-party list, in every package. A stable package is built with the switch off and has no `mods\`.
 - **Settings and data.** A nightly install keeps its own folder. Its one-time migration (phase 2) works on a copy and
   never on a stable install's `sim-qvfr.ini`, so a tester can go back to stable.
 - **Signing.** Nightly builds are signed like releases, by hand, or left unsigned. An unsigned nightly can't start
@@ -149,7 +158,7 @@ Left for later:
 
 - `lmu/mvr_probe` stays where it is. It is reached as a service through the host, but it still lives in LMU's folder
   and includes LMU's YEBIS shaders.
-- Packaging the `mods` folder into a nightly ZIP.
+- Going back from nightly to stable from inside the launcher (today: install a stable zip by hand).
 - The mod-side context-hook trampolines are exercised only in a game. First headset run: ATS with
   `SIM_QVFR_SCS_AS_MOD=ON`, 2026-11-24, ran fine for the user. The log shows the DLL loaded, the context hooks
   installed through the host (44 d3d11 functions), the multi-view shaders through the host (93 converted, none

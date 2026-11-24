@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <cwctype>
 #include <vector>
@@ -33,10 +34,29 @@ std::vector<int> numbers(const std::wstring& version) {
         else
             break;
     }
+    // A nightly ("1.3.0-nightly.20261124"): its date as one more number. Only right after the numbers, so "-beta" and
+    // the commit in brackets still end them.
+    static constexpr wchar_t kNightly[] = L"-nightly.";
+    constexpr size_t kNightlyLength = std::size(kNightly) - 1;
+    if (!out.empty() && version.compare(i, kNightlyLength, kNightly) == 0) {
+        size_t j = i + kNightlyLength;
+        int n = 0;
+        const size_t start = j;
+        while (j < version.size() && std::iswdigit(version[j]) && j - start < 9)
+            n = n * 10 + (version[j++] - L'0');
+        if (j > start)
+            out.push_back(n);
+    }
     return out;
 }
 
 }  // namespace
+
+Channel channel_named(const char* name) {
+    return name && _stricmp(name, "nightly") == 0 ? Channel::Nightly : Channel::Stable;
+}
+
+const char* package_prefix(Channel channel) { return channel == Channel::Nightly ? "sqvfr-nightly-" : "sim-qvfr-"; }
 
 bool known_version(const std::wstring& version) { return !numbers(version).empty(); }
 
@@ -58,15 +78,17 @@ int compare_versions(const std::wstring& a, const std::wstring& b) {
 
 namespace {
 
-// The release's package: its "sim-qvfr-<version>.zip" asset with the SHA-256 GitHub gives it; null for none.
-const json::Value* package_zip(const json::Value& release) {
+// The release's package for `channel`: its "sim-qvfr-<version>.zip" (stable) or "sqvfr-nightly-<version>.zip" (nightly)
+// asset with the SHA-256 GitHub gives it; null for none.
+const json::Value* package_zip(const json::Value& release, Channel channel) {
+    const std::string prefix = package_prefix(channel);
     const json::Value* assets = release.find("assets");
     if (!assets || assets->type != json::Value::Type::Array)
         return nullptr;
     for (const json::Value& a : assets->items) {
         const std::string name = a.string_at("name"), digest = a.string_at("digest");
         const json::Value* size = a.find("size");
-        if (name.rfind("sim-qvfr-", 0) == 0 && name.size() >= 4 && name.compare(name.size() - 4, 4, ".zip") == 0 &&
+        if (name.rfind(prefix, 0) == 0 && name.size() >= 4 && name.compare(name.size() - 4, 4, ".zip") == 0 &&
             digest.rfind("sha256:", 0) == 0 && size && size->type == json::Value::Type::Number)
             return &a;
     }
@@ -87,7 +109,7 @@ bool trusted_release_page(const std::wstring& url) {
     });
 }
 
-bool newest_release(const std::string& text, Release& release) {
+bool newest_release(const std::string& text, Release& release, Channel channel) {
     json::Value root;
     if (!json::parse(text, root) || root.type != json::Value::Type::Array)
         return false;
@@ -99,7 +121,7 @@ bool newest_release(const std::string& text, Release& release) {
         const json::Value* draft = r.find("draft");
         if (r.type != json::Value::Type::Object || (draft && draft->boolean) || r.string_at("tag_name").empty())
             continue;
-        const json::Value* zip = package_zip(r);
+        const json::Value* zip = package_zip(r, channel);
         if (zip && (!best || compare_versions(widen(r.string_at("tag_name")), widen(best->string_at("tag_name"))) > 0)) {
             best = &r;
             bestZip = zip;
