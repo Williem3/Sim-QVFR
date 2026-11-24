@@ -2,6 +2,7 @@
 // newest release, the hash lists, a staged release installed into a folder and put back on a failure.
 #include "launcher_test_kit.h"
 #include "launcher/mod_update.h"
+#include <cstdlib>
 
 int SIM_QVFR_TEST_MAIN() {
     folder = temp_path(L"simqvfr-launcher-install-test");
@@ -370,6 +371,29 @@ int SIM_QVFR_TEST_MAIN() {
         check(back.ok && read_file((mods / "scs" / "mod.json").wstring(), text) && text.find("1.1.0") != std::string::npos &&
                   find_mod_backup(mods.wstring(), L"scs", backupFolder, backupVersion) && backupVersion == L"1.2.0",
               "mod update: Go back puts 1.1.0 in place and keeps 1.2.0 as the backup");
+
+        // Adding a mod from a zip (Settings > Mods: Add a mod…, or a zip dropped on the window).
+        const fs::path source = folder / "zips" / "cool-mod";
+        put(source / "mod.json", R"({"id":"cool","name":"Cool mod","author":"Someone","version":"0.3","dll":"cool.dll"})");
+        put(source / "cool.dll", "a dll");
+        const fs::path zip = folder / "zips" / "cool-mod.zip";
+        const std::wstring pack = L"tar.exe -a -c -f \"" + zip.wstring() + L"\" -C \"" + (folder / "zips").wstring() + L"\" cool-mod";
+        check(_wsystem(pack.c_str()) == 0 && fs::is_regular_file(zip, ec), "mod add: the test zip is made");
+        StagedMod add = stage_mod_zip(mods.wstring(), zip.wstring());
+        check(add.error.empty() && add.id == L"cool" && add.name == L"Cool mod" && add.author == L"Someone" &&
+                  add.version == L"0.3" && !add.replaces,
+              "mod add: a zip with its mod in one folder is unpacked and read");
+        const InstallResult added = add_staged_mod(mods.wstring(), add, L"");
+        check(added.ok && fs::is_regular_file(mods / "cool" / "cool.dll", ec) && !fs::exists(mods / ".update" / "add", ec),
+              "mod add: it goes to mods\\<id>, nothing left behind");
+        add = stage_mod_zip(mods.wstring(), zip.wstring());
+        check(add.error.empty() && add.replaces, "mod add: the same mod again says it replaces the one in place");
+        check(!stage_mod_zip(mods.wstring(), (source / "mod.json").wstring()).error.empty(), "mod add: not a .zip is refused");
+        fs::remove(source / "cool.dll", ec);
+        const fs::path noDll = folder / "zips" / "no-dll.zip";
+        const std::wstring packNoDll = L"tar.exe -a -c -f \"" + noDll.wstring() + L"\" -C \"" + (folder / "zips").wstring() + L"\" cool-mod";
+        check(_wsystem(packNoDll.c_str()) == 0 && !stage_mod_zip(mods.wstring(), noDll.wstring()).error.empty(),
+              "mod add: a zip without the DLL its mod.json names is refused");
     }
 
     fs::remove_all(folder, ec);

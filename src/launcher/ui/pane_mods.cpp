@@ -10,6 +10,7 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <commdlg.h>
 
 #include "../launcher.h"
 #include "../mod_catalog.h"
@@ -29,10 +30,11 @@ using mod_api::ModTrust;
 
 // A worker's outcome (kModWorkMessage): the update check's releases, or an install's or Go back's result.
 struct ModWork {
-    enum class Kind { Check, Install, Restore } kind = Kind::Check;
+    enum class Kind { Check, Install, Restore, Stage } kind = Kind::Check;
     std::wstring id, error;
     std::string body;  // Check: the releases JSON
     InstallResult result;
+    StagedMod staged;  // Stage: the mod unpacked from a zip
 };
 
 namespace {
@@ -94,6 +96,44 @@ void start_mod_install(size_t i, bool back) {
         if (!PostMessageW(hwnd, kModWorkMessage, 0, reinterpret_cast<LPARAM>(w)))
             delete w;
     }).detach();
+}
+
+// A mod unpacked from a zip (start_mod_add): what it is, and whether to add it. Nothing is approved by adding it.
+void confirm_add(const StagedMod& staged) {
+    if (!staged.error.empty()) {
+        app.modsMessage = trf(L"Not added: {why}", {{L"why", staged.error}});
+        app.modsTone = 2;
+        return;
+    }
+    Sheet s;
+    s.title = trf(L"Add {mod}?", {{L"mod", staged.name}});
+    std::wstring text = trf(L"By {author}{version}.", {{L"author", staged.author.empty() ? std::wstring(tr(L"an unknown author")) : staged.author},
+                                                       {L"version", staged.version.empty() ? std::wstring() : L", version " + staged.version}});
+    if (staged.replaces)
+        text += L" " + std::wstring(tr(L"It replaces the one installed, which is kept so you can go back."));
+    if (!mod_api::first_party_mod(staged.id))
+        text += L"\n\n" + std::wstring(tr(L"It wasn’t made by Sim-QVFR: it won’t run until you approve it in Settings > Mods."));
+    s.text = text;
+    s.buttons = {tr(L"Cancel"), tr(L"Add")};
+    s.focus = 1;
+    s.done = [staged](int button, const std::wstring&) {
+        if (button != 1)
+            return;
+        if (game_running()) {
+            app.modsMessage = tr(L"Close the game first: a mod can’t change while it runs.");
+            app.modsTone = 1;
+            return;
+        }
+        std::wstring oldVersion;
+        for (const ModEntry& m : app.mods)
+            if (_wcsicmp(m.id.c_str(), staged.id.c_str()) == 0)
+                oldVersion = m.version;
+        const InstallResult r = add_staged_mod(mods_folder_path(), staged, oldVersion);
+        app.modsMessage = r.ok ? trf(L"{mod} added.", {{L"mod", staged.name}}) : r.error;
+        app.modsTone = r.ok ? 0 : 2;
+        mods_refresh();
+    };
+    open_sheet(std::move(s));
 }
 
 // The update rows of one of Sim-QVFR's own mods: the newest release as last checked, Install, Go back.
@@ -310,6 +350,10 @@ void allow_online(size_t i) {
 void mods_work_done(ModWork* raw) {
     const std::unique_ptr<ModWork> w(raw);
     app.modsBusy = false;
+    if (w->kind == ModWork::Kind::Stage) {
+        confirm_add(w->staged);
+        return;
+    }
     if (w->kind == ModWork::Kind::Check) {
         if (!w->error.empty()) {
             app.modsMessage = w->error;
@@ -345,6 +389,25 @@ void mods_work_done(ModWork* raw) {
     mods_refresh();
 }
 
+void start_mod_add(const std::wstring& zip) {
+    if (app.panel != PanelKind::Settings)
+        open_panel(PanelKind::Settings);
+    if (app.modsBusy)
+        return;
+    app.modsBusy = true;
+    app.modsMessage.clear();
+    std::thread([hwnd = app.hwnd, folder = mods_folder_path(), zip] {
+        auto* w = new ModWork;
+        w->kind = ModWork::Kind::Stage;
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        w->staged = stage_mod_zip(folder, zip);
+        if (!PostMessageW(hwnd, kModWorkMessage, 0, reinterpret_cast<LPARAM>(w)))
+            delete w;
+    }).detach();
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 void mods_refresh() {
     app.modsRead = true;
     const mod_api::ModFacts core = mod_api::read_mod_facts((fs::path(layer_folder()) / L"sim-qvfr.dll").wstring());
@@ -366,6 +429,19 @@ bool mods_press(Ctl id, int option) {
         std::error_code ec;
         fs::create_directories(folder, ec);
         ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
+    if (id == kModsAdd) {
+        wchar_t path[MAX_PATH] = {};
+        OPENFILENAMEW ofn{sizeof(ofn)};
+        ofn.hwndOwner = app.hwnd;
+        ofn.lpstrFilter = L"Sim-QVFR mod (*.zip)\0*.zip\0";
+        ofn.lpstrFile = path;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.lpstrTitle = tr(L"Choose a mod’s zip");
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameW(&ofn))
+            start_mod_add(path);
         return true;
     }
     if (id == kModsCheck) {
@@ -439,7 +515,8 @@ float settings_pane(float x, float y, float w, bool draw) {
         b.note(tr(L"Working…"));
     else if (!app.modsMessage.empty())
         b.chip(app.modsTone, app.modsMessage);
-    b.actions({{kModsCheck, tr(L"Check for updates")}, {kModsOpenFolder, tr(L"Open the mods folder")},
+    b.note(tr(L"To add a mod, choose its zip with Add a mod…, or drop the zip on this window."));
+    b.actions({{kModsAdd, tr(L"Add a mod…"), Btn::Primary}, {kModsCheck, tr(L"Check for updates")}, {kModsOpenFolder, tr(L"Open the mods folder")},
                {kModsReload, tr(L"Look again")}});
     for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i) {
         b.divider();

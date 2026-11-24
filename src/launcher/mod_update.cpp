@@ -247,6 +247,82 @@ InstallResult install_mod_release(const std::wstring& modsFolder, const std::wst
     return r;
 }
 
+StagedMod stage_mod_zip(const std::wstring& modsFolder, const std::wstring& zipText) {
+    StagedMod s;
+    const fs::path mods = modsFolder, zip = zipText, work = mods / L".update" / L"add";
+    std::error_code ec;
+    if (_wcsicmp(zip.extension().c_str(), L".zip") != 0 || !fs::is_regular_file(zip, ec)) {
+        s.error = tr(L"that isn’t a .zip file");
+        return s;
+    }
+    if (fs::file_size(zip, ec) > kMaxModDownload) {
+        s.error = tr(L"the zip is larger than a mod can be (64 MB)");
+        return s;
+    }
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+    if (!unpack_zip(zip.wstring(), work.wstring(), s.error))
+        return s;
+    // The mod's folder: the zip's root when it has mod.json, else its only folder that does.
+    fs::path root = work;
+    if (!fs::is_regular_file(work / L"mod.json", ec)) {
+        std::vector<fs::path> folders;
+        for (fs::directory_iterator it(work, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code e;
+            if (it->is_directory(e) && fs::is_regular_file(it->path() / L"mod.json", e))
+                folders.push_back(it->path());
+        }
+        if (folders.size() != 1) {
+            s.error = folders.empty() ? tr(L"the zip has no mod.json: it isn’t a Sim-QVFR mod")
+                                      : tr(L"the zip holds more than one mod: add them one at a time");
+            return s;
+        }
+        root = folders.front();
+    }
+    std::string text;
+    ModEntry m;
+    std::wstring error;
+    if (!read_text(root / L"mod.json", text) || !parse_mod_manifest(text, m, error)) {
+        s.error = trf(L"its mod.json: {why}", {{L"why", error}});
+        return s;
+    }
+    if (!fs::is_regular_file(root / m.dll, ec)) {
+        s.error = trf(L"the zip has no {dll}, which its mod.json names", {{L"dll", m.dll}});
+        return s;
+    }
+    if (fs::is_regular_file(root / L"SHA256.txt", ec)) {
+        s.error = check_staged_mod(root.wstring(), m.id);
+        if (!s.error.empty())
+            return s;
+    }
+    s.folder = root.wstring();
+    s.id = m.id;
+    s.name = m.name;
+    s.author = m.author;
+    s.version = m.version;
+    s.replaces = fs::exists(mods / m.id, ec);
+    return s;
+}
+
+InstallResult add_staged_mod(const std::wstring& modsFolder, const StagedMod& staged, const std::wstring& oldVersion) {
+    InstallResult r;
+    if (!staged.error.empty() || staged.folder.empty() || staged.id.empty()) {
+        r.error = staged.error.empty() ? tr(L"there is no mod to add") : staged.error;
+        return r;
+    }
+    // Out of .update\add first (its own folder, so the swap moves one folder).
+    const fs::path mods = modsFolder, incoming = mods / L".update" / (staged.id + L"-add");
+    std::error_code ec;
+    fs::remove_all(incoming, ec);
+    if (!move(staged.folder, incoming)) {
+        r.error = tr(L"the unpacked mod couldn’t be moved into the mods folder");
+        return r;
+    }
+    r = swap_in(mods, staged.id, incoming, oldVersion);
+    fs::remove_all(mods / L".update" / L"add", ec);
+    return r;
+}
+
 InstallResult restore_mod_backup(const std::wstring& modsFolder, const std::wstring& id, const std::wstring& currentVersion) {
     InstallResult r;
     std::wstring folder, version;

@@ -13,6 +13,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 
 #include "../launcher.h"
 #include "../settings.h"
@@ -79,6 +80,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         create_report_edit();
         create_sheet_edit();
         create_search_edit();
+        DragAcceptFiles(hwnd, TRUE);  // a mod's zip dropped on the window adds it (Settings > Mods)
         refresh_installed();
         if (!game_shown(games::launcher_game())) {  // e.g. ACE, the first default, where only another game is installed
             std::size_t count = 0;
@@ -116,6 +118,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         install_done(reinterpret_cast<InstallResult*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_DROPFILES: {
+        const HDROP drop = reinterpret_cast<HDROP>(wParam);
+        wchar_t path[MAX_PATH] = {};
+        const bool one = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0) >= 1 && DragQueryFileW(drop, 0, path, MAX_PATH) > 0;
+        DragFinish(drop);
+        if (one)
+            start_mod_add(path);
+        return 0;
+    }
     case kModWorkMessage:
         mods_work_done(reinterpret_cast<ModWork*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);

@@ -178,7 +178,7 @@ enum Ctl {
     // (kModRemove0 + its index).
     kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7,
     // Sim-QVFR's own mods' updates (mod_update.h): check them all, a mod's Install and Go back (+ its index).
-    kModsCheck, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
+    kModsCheck, kModsAdd, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -247,6 +247,9 @@ inline constexpr UINT kRestoreDoneMessage = WM_APP + 9;
 inline constexpr UINT kModWorkMessage = WM_APP + 10;
 struct ModWork;
 void mods_work_done(ModWork* work);
+// A mod's zip to add (Settings > Mods: Add a mod…, or dropped on the window): unpacked and checked on a worker, then
+// the user asked.
+void start_mod_add(const std::wstring& zip);
 
 // The Hotkeys pane catching a wheel or controller button: polled this often.
 inline constexpr UINT_PTR kCaptureTimer = 2;

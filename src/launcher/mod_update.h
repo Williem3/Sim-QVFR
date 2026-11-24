@@ -38,6 +38,20 @@ bool find_mod_backup(const std::wstring& modsFolder, const std::wstring& id, std
 // its mod.json the mod `id`. Empty when it is good, else why not.
 std::wstring check_staged_mod(const std::wstring& staged, const std::wstring& id);
 
+// Adding a mod from a zip the user chose or dropped on the window (Settings > Mods: Add a mod…). Step 1, on a worker:
+// unpacked by Windows' tar.exe into mods\.update\add, the mod's folder found (the zip's root, or its one folder),
+// its mod.json read (an id a folder can have, a DLL that is there) and, when it has a SHA256.txt, every file checked.
+// Nothing is approved by it: a third-party mod still runs only once the user approves it.
+struct StagedMod {
+    std::wstring folder;  // where it is unpacked
+    std::wstring id, name, author, version;
+    bool replaces = false;     // mods\<id> is there already (it is kept as mods\.backup\<id>-<its version>)
+    std::wstring error;        // why it can't be added; empty: it can
+};
+StagedMod stage_mod_zip(const std::wstring& modsFolder, const std::wstring& zip);
+// Step 2: the staged mod into mods\<id> (one in place goes to mods\.backup, as an update's does).
+InstallResult add_staged_mod(const std::wstring& modsFolder, const StagedMod& staged, const std::wstring& oldVersion);
+
 InstallResult install_mod_release(const std::wstring& modsFolder, const std::wstring& id, const ModRelease& release,
                                   const std::wstring& oldVersion, const std::function<void(const InstallProgress&)>& progress);
 // Go back: the backup in place again, the mod in place to mods\.backup\<id>-<currentVersion>.
