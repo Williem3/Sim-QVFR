@@ -40,8 +40,8 @@ const wchar_t* color_name(OutlineColor color) {
 Settings load_settings(const std::wstring& ini) {
     Settings s;
     const wchar_t* const f = ini.c_str();
-    s.mode = parse_render_mode(read_string(ini, L"experiment", L"mode").c_str()) == IniRenderMode::TwoLoop ? RenderMode::TwoLoop
-                                                                                                          : RenderMode::Qvfr;
+    // Two-Loop is deprecated (the layer runs an ini still set to it as QVFR): read as QVFR, written as views4.
+    s.mode = RenderMode::Qvfr;
     s.width = ini_int(f, kFocusPercent);
     s.height = ini_int(f, kFocusHeightPercent, s.width);
     const int eyeScale = ini_raw(f, kEyeScale, kEyeScale.def);

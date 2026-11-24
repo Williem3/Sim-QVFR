@@ -201,6 +201,12 @@ void load_experiment() {
         logf("experiment: baseline=1: running as mode=off (ini mode=%ls), measuring", mode);
         wcscpy_s(mode, L"off");
     }
+    // Two-Loop (mode=quad, the two_loops experiment) is deprecated: none of its code runs. An ini still set to it runs
+    // QVFR (the launcher writes views4 at its next save).
+    if (parse_render_mode(mode) == IniRenderMode::TwoLoop) {
+        logf("experiment: mode=%ls is Two-Loop, which is deprecated: running as QVFR (views4)", mode);
+        wcscpy_s(mode, L"views4");
+    }
     // A game known by its identity alone (no QVFR yet, games/adapter.h): log only, whatever the ini says.
     // mode=off, the session and swapchain logging on (probes), and nothing that changes what it renders.
     // A game whose QVFR runs on its own path below the layer (the SCS games' D3D11 corner) is that too, as far as the

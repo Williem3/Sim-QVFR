@@ -87,7 +87,7 @@ int SIM_QVFR_TEST_MAIN() {
           "mode: views4 QVFR, quad and two_loops Two-loop, empty or off Off, the research modes Other");
     write_ini(ini, "[experiment]\r\nmode=two_loops\r\neye_scale=60\r\n");
     const launcher::Settings loop = launcher::load_settings(ini);
-    check(loop.mode == launcher::RenderMode::TwoLoop && loop.outer == 60, "mode=two_loops reads as Two-loop in the launcher");
+    check(loop.mode == launcher::RenderMode::Qvfr, "mode=two_loops (deprecated) reads as QVFR in the launcher");
     const std::wstring runtimeIni = temp_path(L"sim-qvfr-qvfr-settings-runtime.ini");
     write_ini(runtimeIni, "[runtime]\r\nlaunch_mode=two_loops\r\nlaunch_outer=60\r\n");
     check(launcher::load_launch_sizes(runtimeIni).mode == launcher::RenderMode::TwoLoop,
