@@ -164,7 +164,7 @@ add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/lay
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
   src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
   src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp src/layer/native_quad.cpp
-  src/layer/eye_off.cpp)
+  src/layer/eye_off.cpp src/layer/submit_trace.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
@@ -449,6 +449,13 @@ target_include_directories(eye_off_test PRIVATE src ${THIRD_PARTY}/openxr/includ
 target_compile_definitions(eye_off_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(eye_off_test PRIVATE /utf-8)
 target_link_libraries(eye_off_test PRIVATE sim_qvfr_core)
+
+# The submission's trace: layer lines, frame shapes, motion compensator names (tests/submit_trace_test.cpp).
+sim_qvfr_test(submit_trace_test tests/submit_trace_test.cpp)
+target_include_directories(submit_trace_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(submit_trace_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(submit_trace_test PRIVATE /utf-8)
+target_link_libraries(submit_trace_test PRIVATE sim_qvfr_core)
 
 # Offline check of native quad views (quad/native_quad.h, layer/native_quad.cpp) against a fake runtime offering
 # PRIMARY_QUAD_VARJO (tests/native_quad_test.cpp).

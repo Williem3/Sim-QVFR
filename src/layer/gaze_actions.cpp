@@ -40,6 +40,8 @@ bool gaze_skips_space(XrSpace space, XrTime time) {
 
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space) {
     const XrResult r = next.CreateReferenceSpace(session, info, space);
+    if (XR_SUCCEEDED(r) && info && space)
+        submit_trace_game_space(*space);
     if (XR_SUCCEEDED(r) && info && space && info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW) {
         std::lock_guard guard(headSpaces.mutex);
         headSpaces.view.push_back(*space);

@@ -1138,6 +1138,67 @@ int SIM_QVFR_TEST_MAIN() {
                   !gazeThread.thread.joinable(),
               "gaze thread: without ACE syncing actions, looked up inline as before (no thread started)");
     }
+    {
+        // The submission's trace (layer/submit_trace.cpp), under everything else: the compensator below is named, a
+        // frame's shape is logged once with each layer's space (the game's LOCAL, our VIEW), a new shape again.
+        layersBelow = "XR_APILAYER_MBUCCHIA_toolkit, XR_APILAYER_NOVENDOR_motion_compensation";
+        static int tracedEnds = 0;  // a runtime of its own: the frames here carry no images for the fake's rules
+        next.EndFrame = [](XrSession, const XrFrameEndInfo*) -> XrResult {
+            ++tracedEnds;
+            return XR_SUCCESS;
+        };
+        submit_trace_install();
+        const XrSession traced = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0x7ace));
+        XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+        spaceInfo.poseInReferenceSpace.orientation.w = 1;
+        spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        XrSpace gameLocal = XR_NULL_HANDLE, ourView = XR_NULL_HANDLE;
+        layerCreateReferenceSpace(traced, &spaceInfo, &gameLocal);  // the game's call, through the layer's hook
+        spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+        next.CreateReferenceSpace(traced, &spaceInfo, &ourView);  // the layer's own (the menu's, the overlay's)
+        XrCompositionLayerProjectionView eyes[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                                    {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+        XrCompositionLayerProjection scene{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+        scene.space = gameLocal;
+        scene.viewCount = 2;
+        scene.views = eyes;
+        XrCompositionLayerQuad panel{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        panel.space = ourView;
+        panel.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        const XrCompositionLayerBaseHeader* both[] = {reinterpret_cast<const XrCompositionLayerBaseHeader*>(&scene),
+                                                      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&panel)};
+        XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+        end.layers = both;
+        end.layerCount = 2;
+        bool passed = true;
+        for (int frame = 0; frame < 3; ++frame) {
+            end.layerCount = frame < 2 ? 2 : 1;  // the third without the panel: another shape
+            passed = XR_SUCCEEDED(next.EndFrame(traced, &end)) && passed;
+        }
+        std::string logged;
+        if (FILE* f = _wfopen(logPath.c_str(), L"rb")) {
+            char buffer[4096];
+            for (size_t n; (n = fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                logged.append(buffer, n);
+            fclose(f);
+        }
+        const auto count = [&](const char* text) {
+            size_t n = 0;
+            for (size_t at = logged.find(text); at != std::string::npos; at = logged.find(text, at + 1))
+                ++n;
+            return n;
+        };
+        for (size_t at = logged.find("submitted:"); at != std::string::npos; at = logged.find("submitted:", at + 1))
+            std::printf("     %s\n", logged.substr(at, logged.find_first_of("\r\n", at) - at).c_str());
+        check(passed && tracedEnds == 3, "submit trace: every frame goes on below");
+        check(count("motion compensation: layers below this one: [XR_APILAYER_NOVENDOR_motion_compensation]") == 1,
+              "submit trace: the motion compensator below is named once, at the session's first frame");
+        check(count("submitted: a new frame shape") == 2 && count("submitted: layer 1: quad for both eyes") == 1,
+              "submit trace: a frame's shape is logged once, a new shape again");
+        check(count("(LOCAL, the game's)") == 2 && count("(VIEW, ours)") == 1,
+              "submit trace: the game's LOCAL space and our VIEW space told apart");
+        submit_trace_session_ended();
+    }
     DeleteFileW(logPath.c_str());
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;

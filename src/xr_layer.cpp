@@ -450,6 +450,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     else
         gaze_init(*instance, gazeExtension == GazeExtension::Requested || gazeAdded);
     if (ok)
+        submit_trace_install();  // the last before whatever is below: the frame as it is handed down
+    if (ok)
         eye_off_install();  // right above the runtime: it sees the frame as the runtime will
     if (ok)
         native_quad_install(*instance, gipa);  // its wrappers below everything else of this layer's but eye off's
