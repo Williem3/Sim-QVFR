@@ -135,6 +135,8 @@ std::atomic<bool> rightFlipY{false};
 // The right eye evaluated from inputs of its own at x 0 (copies of its half of ACE's double-wide colour, motion and depth,
 // and an output of ours copied back): whether preset K mishandles the right eye's subrect bases (x past 0).
 std::atomic<bool> rightOwnInputs{false};
+// From a release of the game's (its settings menu, a rebuild) to its next DLSS feature: the right eye as the game gave it.
+std::atomic<bool> ownPaused{false};
 struct OwnCopy {
     ID3D12Resource* from = nullptr;  // the game's resource it was made for (by pointer and description)
     D3D12_RESOURCE_DESC fromDesc{};
@@ -162,15 +164,47 @@ int watched_state(int slot, ID3D12Resource* r) {
     return w.state.load();
 }
 
+// Ours replaced: released this many evaluations later (the GPU may still be copying into or out of them).
+struct OldCopy {
+    ID3D12Resource* ours;
+    uint64_t due;
+};
+std::vector<OldCopy> oldCopies;  // under `lock`
+std::atomic<int> copiesMade{0};
+bool same_desc(const D3D12_RESOURCE_DESC& a, const D3D12_RESOURCE_DESC& b) {
+    // (field by field: the struct has padding after Dimension, which GetDesc leaves undefined)
+    return a.Dimension == b.Dimension && a.Alignment == b.Alignment && a.Width == b.Width && a.Height == b.Height &&
+           a.DepthOrArraySize == b.DepthOrArraySize && a.MipLevels == b.MipLevels && a.Format == b.Format &&
+           a.SampleDesc.Count == b.SampleDesc.Count && a.SampleDesc.Quality == b.SampleDesc.Quality &&
+           a.Layout == b.Layout && a.Flags == b.Flags;
+}
 // Ours for one input or the output: a texture of the game's format, w x h (made again when the game's changes).
 ID3D12Resource* own_copy(int slot, ID3D12Resource* from, unsigned w, unsigned h, bool output) {
     OwnCopy& c = ownCopies[slot];
     const D3D12_RESOURCE_DESC d = from->GetDesc();
-    if (c.ours && c.from == from && c.w == w && c.h == h && std::memcmp(&c.fromDesc, &d, sizeof(d)) == 0)
+    const uint64_t now = evaluations.load();
+    for (size_t i = 0; i < oldCopies.size();)
+        if (now >= oldCopies[i].due) {
+            oldCopies[i].ours->Release();
+            oldCopies[i] = oldCopies.back();
+            oldCopies.pop_back();
+        } else {
+            ++i;
+        }
+    if (c.ours && c.from == from && c.w == w && c.h == h && same_desc(c.fromDesc, d))
         return c.ours;
     if (c.ours)
-        c.ours->Release();  // (one frame's evaluation may still read it: an experiment's risk, at a size change only)
+        oldCopies.push_back({c.ours, now + 64});  // released 64 evaluations later, not while the GPU may use it
     c = {};
+    const int made = copiesMade.fetch_add(1) + 1;
+    if (made <= 16 || made % 100 == 0)
+        logf("focus dlss: the right eye's own inputs: texture %d made (%d so far) for %s %ux%u", slot, made,
+             name_of(from).c_str(), w, h);
+    if (made > 40) {  // made again and again: something keeps changing; stop rather than churn
+        rightOwnInputs.store(false);
+        log_line("focus dlss: the right eye's own inputs: textures made too often; off for this session");
+        return nullptr;
+    }
     ID3D12Device* device = nullptr;
     if (FAILED(from->GetDevice(IID_PPV_ARGS(&device))) || !device)
         return nullptr;
@@ -369,6 +403,8 @@ NVSDK_NGX_Result allocateHook(Bag** out) {
 
 NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feature, Bag* bag, NVSDK_NGX_Handle** out) {
     if (feature == NVSDK_NGX_Feature_SuperSampling && bag) {
+        if (ownPaused.exchange(false))
+            log_line("focus dlss: the right eye's own inputs resume (the game makes its DLSS again)");
         CreateInfo c;
         c.seen = true;
         c.width = get_ui(bag, NVSDK_NGX_Parameter_Width);
@@ -830,7 +866,7 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
             if (traceIt)
                 logd("focus dlss:   evaluated by %s %p%s", use == h ? "the game's own feature" : "our remade feature",
                      static_cast<const void*>(use), fresh ? ", reset" : "");
-            if (eye == 1 && rightOwnInputs.load(std::memory_order_relaxed))
+            if (eye == 1 && rightOwnInputs.load(std::memory_order_relaxed) && !ownPaused.load(std::memory_order_relaxed))
                 return evaluate_own(l, use, const_cast<Bag*>(bag), e, callback);
             return evaluateOriginal(l, use, bag, callback);
         }
@@ -860,6 +896,8 @@ NVSDK_NGX_Result shut_down(const char* which, F original) {
         AcquireSRWLockExclusive(&lifeLock);
     generation.fetch_add(1);
     forget_game_features(which);
+    if (rightOwnInputs.load() && !ownPaused.exchange(true))
+        log_line("focus dlss: the right eye's own inputs paused (NGX shut down) until the game's next feature");
     if (const ReleaseObserver o = releaseObserver.load())
         o(nullptr);
     const NVSDK_NGX_Result r = original();
@@ -878,6 +916,8 @@ NVSDK_NGX_Result releaseHook(NVSDK_NGX_Handle* h) {
     AcquireSRWLockExclusive(&lock);
     const size_t gone = std::erase_if(gameFeatures, [&](const GameFeature& f) { return f.game == h; });
     ReleaseSRWLockExclusive(&lock);
+    if (rightOwnInputs.load() && !ownPaused.exchange(true))
+        log_line("focus dlss: the right eye's own inputs paused (the game releases its DLSS) until its next feature");
     if (releasesLogged.fetch_add(1) < 16)
         logd("focus dlss: the game released a feature (%p; %s)", static_cast<const void*>(h),
              gone ? "one of its eyes'" : "not one we saw made");
