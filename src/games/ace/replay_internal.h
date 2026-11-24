@@ -617,7 +617,8 @@ struct EyeLive {
     std::atomic<float> match{0}, mipBias{0}, biasNow{0};
     // The right eye's previous projection corrected (kPatchShader's fixPrev): asked (replay_dlss_right_prev_fix), and
     // as a frame's end took it (with DLSS on and the copies ready). With it ACE's stereo scene draws read our copy.
-    std::atomic<bool> rightPrevFix{false}, fixNow{false};
+    std::atomic<bool> rightPrevFix{false}, rightFlipY{false}, fixNow{false};
+    std::atomic<uint64_t> stereoOther{0};  // stereo draws with root 1 bound outside ACE's scene root (not ours)
     std::atomic<uint64_t> fixDraws{0};  // stereo scene draws that read our copy for it alone (eye_apply)
     // Detailed logs: ACE's pass constants as given and as our copy has them, for one list a frame over kDumps frames
     // (eye_record copies them to dumpRead; a frame's end logs each once its frame is kDumpAge old).
@@ -674,6 +675,11 @@ extern RecordTiming recordTiming;
 extern thread_local uint64_t skyCheckTicks, emitOps;
 extern std::atomic<int> cullProbePhase;
 extern EyeLive eyeLive;
+// kPatchShader's fixPrev: bit 0 the right eye's previous projection rebuilt, bit 1 its vertical jitter's sign flipped.
+inline uint32_t right_eye_fix_flags() {
+    return (eyeLive.rightPrevFix.load(std::memory_order_relaxed) ? 1u : 0u) |
+           (eyeLive.rightFlipY.load(std::memory_order_relaxed) ? 2u : 0u);
+}
 
 std::string debug_name(ID3D12Resource* r);  // here: called per draw (eye_apply) and per SRV write (tile_view_kind)
 void gpu_stamp(List* l, uint8_t kind);

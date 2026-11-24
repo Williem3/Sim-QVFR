@@ -937,6 +937,8 @@ void eye_apply(List* l, Stream* s) {
     }
     if (biased && s->eyeBias == 0)
         eyeLive.fixDraws.fetch_add(1, std::memory_order_relaxed);
+    if (s->eyeFix && !scene && !shadows && s->vpN == 2 && s->gfxCbvs[kPassConstantsRoot])
+        eyeLive.stereoOther.fetch_add(1, std::memory_order_relaxed);
     if ((want && scene) || biased) {
         const float fx = want ? now.fx : 1.0f, fy = want ? now.fy : 1.0f;
         cbvOriginal(l, kPassConstantsRoot,
@@ -2693,6 +2695,7 @@ void replay_probe_set_size(double k, double kY, double renderScale) {
 
 void replay_probe_set_stock(bool on) { stockWanted.store(on, std::memory_order_relaxed); }
 void replay_probe_set_right_prev_fix(bool on) { eyeLive.rightPrevFix.store(on, std::memory_order_relaxed); }
+void replay_probe_set_right_jitter_flip(bool on) { eyeLive.rightFlipY.store(on, std::memory_order_relaxed); }
 
 void replay_probe_set_eye_scale(double scale) {
     eyeLive.wanted.store(static_cast<float>(std::clamp(scale, 0.25, 1.0)), std::memory_order_relaxed);
@@ -2970,14 +2973,17 @@ void replay_probe_frame_end() {
                 logf("replay eye: periphery texture match: %.2f mip levels on ACE's own eye passes (%.0f%% of the %.2f "
                      "levels the focus views are sharper by%s)",
                      biasNext, share * 100, gap, fixed != 0 ? "; replay_periphery_mip_bias set" : "");
-            const bool fixNext = eyeLive.rightPrevFix.load(std::memory_order_relaxed) && focus.settings.dlss && ew >= 256 &&
-                                 eh >= 256 && eye_ready();
+            const bool fixNext = (eyeLive.rightPrevFix.load(std::memory_order_relaxed) ||
+                                  eyeLive.rightFlipY.load(std::memory_order_relaxed)) &&
+                                 focus.settings.dlss && ew >= 256 && eh >= 256 && eye_ready();
             if (!next && (fixNext || biasNext != 0) && ended % 900 == 0)
                 logd("replay eye: over 900 frames (launch size): %.2f of ACE's lists a frame read our constants (%.2f copies "
                      "a frame), %.2f copy lists run a frame; stereo scene draws read our copy for the right eye's previous "
-                     "projection alone %.2f a frame",
+                     "projection or vertical jitter alone %.2f a frame; stereo draws with root 1 bound under another root "
+                     "signature (left as ACE's) %.2f a frame",
                      eyeLive.lists.exchange(0) / 900.0, eyeLive.patches.exchange(0) / 900.0,
-                     eyeLive.executed.exchange(0) / 900.0, eyeLive.fixDraws.exchange(0) / 900.0);
+                     eyeLive.executed.exchange(0) / 900.0, eyeLive.fixDraws.exchange(0) / 900.0,
+                     eyeLive.stereoOther.exchange(0) / 900.0);
             if ((fixNext || biasNext != 0) && log_debug() && eyeLive.dumpRead && ended % 1800 == 600 &&
                 eyeLive.dumpBursts.fetch_add(1) < 3) {
                 eyeLive.dumpFrame.store(UINT64_MAX);
@@ -2989,8 +2995,9 @@ void replay_probe_frame_end() {
                     eye_dump_log(k, at - 1);
                 }
             if (fixNext != eyeLive.fixNow.exchange(fixNext, std::memory_order_relaxed))
-                logf("replay eye: the right eye's previous projection for DLSS's motion vectors %s",
-                     fixNext ? "corrected" : "as ACE's");
+                logf("replay eye: ACE's stereo draws read our pass constants for the right eye's vertical jitter / previous "
+                     "projection: %s",
+                     fixNext ? "on" : "off");
             if (next != reported || why != eyeLive.whyNot) {
                 reported = next;
                 eyeLive.whyNot = why;

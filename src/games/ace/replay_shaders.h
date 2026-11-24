@@ -24,9 +24,15 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
 // in prevProjectionUnjitteredRight (107-110: the same as 103-106), so the right eye's velocities lack the frame-to-frame
 // jitter change and DLSS smears its periphery (2026-11-24, preset K). fixPrev: the left eye's previous-to-current change
 // (25-28 minus 17-20) added to the right eye's current one. Per-eye lists are left as they are.
+// fixPrev bit 1: ACE's stereo lists draw the right eye with its vertical jitter the other way round from the left eye's
+// (96/104/108 .z = centre + jy where the left's 14/18/26 .z = -jy; 2026-11-24 dumps), while its velocity packing and
+// NGX take one jitter for both: the right eye's rows are given the left's sign.
 float4 row(uint r) {
-    if (fixPrev != 0 && r >= 107 && r <= 110 && src[112].z != 0) return src[r - 4] + (src[r - 82] - src[r - 90]);
-    return src[r];
+    const bool stereo = src[112].z != 0;
+    if ((fixPrev & 1) != 0 && r >= 107 && r <= 110 && stereo) return src[r - 4] + (src[r - 82] - src[r - 90]);
+    float4 v = src[r];
+    if ((fixPrev & 2) != 0 && stereo && (r == 96 || r == 104 || r == 108)) v.z -= 2 * src[85].y;
+    return v;
 }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 132) return;
@@ -51,7 +57,7 @@ float4 row(uint r) {
     const float2 g = prevRow ? (rightEye ? gazePrev.zw : gazePrev.xy) : (rightEye ? gaze.zw : gaze.xy);
     const float2 jitter = src[85].xy;
     const float ux = (left ? src[17].z : src[103].z) + jitter.x;  // each eye's own centre, without the jitter
-    const float uy = (left ? src[18].z : src[104].z) + jitter.y;
+    const float uy = (left ? src[18].z : row(104).z) + jitter.y;
     // eyeMode (the live periphery): the eye's own projection, drawn smaller: no remap, the jitter kept in pixels
     const float ox = eyeMode ? 0 : ux - g.x, oy = eyeMode ? 0 : uy - g.y;
     const bool remap = eyeMode == 0;

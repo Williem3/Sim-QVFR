@@ -1339,7 +1339,7 @@ void focus_record(List* gameList, const Stream& s, bool mono) {
     std::memcpy(params + 12, tileTo, sizeof(tileTo));
     params[20] = fogSrv;
     params[21] = shadowSrv;
-    params[22] = eyeLive.rightPrevFix.load(std::memory_order_relaxed) ? 1 : 0;  // fixPrev (the focus views' motion too)
+    params[22] = right_eye_fix_flags();  // fixPrev (the focus views too)
     // The sky maps (m % 4 = 2, 3) stay ACE's: the sky shader doesn't read them at the eye's screen position (10:23 run:
     // resampled, the focus sky came out uniformly darker).
     for (int m = 0; m < 8; ++m)
