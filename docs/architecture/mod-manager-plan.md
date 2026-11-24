@@ -29,12 +29,12 @@ against the SDK. The stable releases (1.2.x and on) don't change.
 - **Not offered to stable players.** The shipped launchers' updater takes the highest GitHub release that has a
   `sim-qvfr-*.zip` asset (`update_check.cpp` `package_zip`). Its version compare reads only the leading numbers, and
   a tag with no numbers compares equal to every version, so it is kept if it comes first in the list. So:
-  - a nightly published in the Sim-QVFR repository must **not** have an asset named `sim-qvfr-*.zip`. Name it
-    `sqvfr-nightly-<version>.zip`, or publish nightlies in a separate repository;
+  - a nightly published in the Sim-QVFR repository must **not** have an asset named `sim-qvfr-*.zip`. Decided
+    (the user, 2026-11-24): nightly packages are named `sqvfr-nightly-<version>.zip`;
   - this matters for launchers already out there, so it can't be fixed in their code. It is a rule for how nightly
     builds are published.
-- **The nightly launcher's own updater** follows the nightly channel only. It looks for `sqvfr-nightly-*.zip` or a
-  nightly repository, and offers going back to stable as an explicit choice.
+- **The nightly launcher's own updater** follows the nightly channel only. It looks for `sqvfr-nightly-*.zip`, and
+  offers going back to stable as an explicit choice.
 - **Settings and data.** A nightly install keeps its own folder. Its one-time migration (phase 2) works on a copy and
   never on a stable install's `sim-qvfr.ini`, so a tester can go back to stable.
 - **Signing.** Nightly builds are signed like releases, by hand, or left unsigned. An unsigned nightly can't start
@@ -150,7 +150,10 @@ Left for later:
 - `lmu/mvr_probe` stays where it is. It is reached as a service through the host, but it still lives in LMU's folder
   and includes LMU's YEBIS shaders.
 - Packaging the `mods` folder into a nightly ZIP.
-- The mod-side context-hook trampolines are exercised only in a game.
+- The mod-side context-hook trampolines are exercised only in a game. First headset run: ATS with
+  `SIM_QVFR_SCS_AS_MOD=ON`, 2026-11-24, ran fine for the user. The log shows the DLL loaded, the context hooks
+  installed through the host (44 d3d11 functions), the multi-view shaders through the host (93 converted, none
+  failed), and the corner and focus view on.
 
 ## What phase 4 has to solve first
 
