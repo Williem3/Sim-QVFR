@@ -116,6 +116,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         install_done(reinterpret_cast<InstallResult*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case kModWorkMessage:
+        mods_work_done(reinterpret_cast<ModWork*>(lParam));
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
     case kRestoreDoneMessage:
         restore_done(reinterpret_cast<InstallResult*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);

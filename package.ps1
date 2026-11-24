@@ -239,6 +239,12 @@ try {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
             Copy-Item -LiteralPath (Join-Path $work "build\Release\$file") -Destination $target
         }
+        # Each mod's version is this package's (the launcher's Settings > Mods compares it with a mod release's).
+        foreach ($manifest in ($firstPartyMods | Where-Object { $_ -like '*mod.json' })) {
+            $path = Join-Path $stage $manifest
+            $text = [IO.File]::ReadAllText($path) -replace '"version"\s*:\s*"[^"]*"', ('"version": "' + $Version + '"')
+            [IO.File]::WriteAllText($path, $text)
+        }
     }
     # Nothing under mods\ but this build's own mods: a file from anywhere else would be zipped, and its DLL signed, as ours.
     $modsStaged = Join-Path $stage 'mods'
@@ -325,6 +331,23 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Windows Defender flagged a file under $scanned (defender_scan above)" }
     }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive
+    # Each first-party mod on its own too (src/launcher/mod_update.h): sqvfr-mod-<id>-<version>.zip, the mod folder's
+    # (signed) files and their SHA256.txt, for a release tagged mod-<id>-v<version>.
+    if ($Nightly) {
+        $modIds = $firstPartyMods | ForEach-Object { ($_ -split '\\')[1] } | Sort-Object -Unique
+        foreach ($id in $modIds) {
+            $modFolder = Join-Path $stage "mods\$id"
+            Get-ChildItem -LiteralPath $modFolder -Recurse -File | Where-Object { $_.Name -ne 'SHA256.txt' } |
+                Sort-Object FullName | ForEach-Object {
+                    $relative = $_.FullName.Substring($modFolder.Length).TrimStart('\', '/').Replace('\', '/')
+                    '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $relative
+                } | Set-Content -LiteralPath (Join-Path $modFolder 'SHA256.txt') -Encoding ASCII
+            $modArchive = Join-Path (Split-Path -Parent $archive) "sqvfr-mod-$id-$Version.zip"
+            Compress-Archive -Path (Join-Path $modFolder '*') -DestinationPath $modArchive
+            Remove-Item -LiteralPath (Join-Path $modFolder 'SHA256.txt')
+            Write-Output "Mod archive:     $modArchive"
+        }
+    }
 } finally {
     Invoke-Native 'git worktree remove' { git -C $repo worktree remove --force $work } | Out-Null
 }

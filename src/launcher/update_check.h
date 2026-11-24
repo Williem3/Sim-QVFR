@@ -10,6 +10,8 @@ namespace simqvfr::launcher {
 inline constexpr wchar_t kReleasesApiHost[] = L"api.github.com";
 inline constexpr wchar_t kReleasesApiPath[] = L"/repos/Williem3/Sim-QVFR/releases?per_page=10";
 // The same repository's release pages: the only html_url the About pane opens.
+// The mods' updates (mod_update.h): their releases are among the app's, so more of the list is read.
+inline constexpr wchar_t kModReleasesApiPath[] = L"/repos/Williem3/Sim-QVFR/releases?per_page=100";
 inline constexpr wchar_t kReleasePagePrefix[] = L"https://github.com/Williem3/Sim-QVFR/releases/";
 
 // `url` (a release's html_url, from the network) is one of this repository's release pages: kReleasePagePrefix, then
@@ -48,6 +50,7 @@ bool known_version(const std::wstring& version);
 bool skipped_release(const std::wstring& tag, const std::wstring& skip);
 
 // GETs the releases JSON (WinHTTP). False with `error` set on failure.
-bool fetch_releases(std::string& body, std::wstring& error);
+// `path`: another page of the same repository's releases (the mods' updates read more of them).
+bool fetch_releases(std::string& body, std::wstring& error, const wchar_t* path = kReleasesApiPath);
 
 }  // namespace simqvfr::launcher

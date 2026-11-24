@@ -17,6 +17,7 @@
 #include "../launch_watch.h"
 #include "../lmu_game_settings.h"
 #include "../mod_catalog.h"
+#include "../mod_update.h"
 #include "../layer_order.h"
 #include "../preflight.h"
 #include "../session_history.h"
@@ -175,7 +176,9 @@ enum Ctl {
     kModSetting0, kModSettingLast = kModSetting0 + 8 * 16 - 1, kModsReload,
     // The Settings panel (the rail's Settings button, kSettings): the mods folder opened, a mod's Remove
     // (kModRemove0 + its index).
-    kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7
+    kSettings, kModsOpenFolder, kModRemove0, kModRemoveLast = kModRemove0 + 7,
+    // Sim-QVFR's own mods' updates (mod_update.h): check them all, a mod's Install and Go back (+ its index).
+    kModsCheck, kModInstall0, kModInstallLast = kModInstall0 + 7, kModRestore0, kModRestoreLast = kModRestore0 + 7
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -238,6 +241,12 @@ inline constexpr UINT kInstallProgressMessage = WM_APP + 3, kInstallDoneMessage 
 // Going back to the version an install replaced (install.h's restore_backup), done on a worker: its progress as
 // kInstallProgressMessage, its outcome a new InstallResult.
 inline constexpr UINT kRestoreDoneMessage = WM_APP + 9;
+
+// The mods' update check and a mod's install or Go back (mod_update.h), done on a worker: each message a new
+// ModWork (pane_mods.cpp mods_work_done).
+inline constexpr UINT kModWorkMessage = WM_APP + 10;
+struct ModWork;
+void mods_work_done(ModWork* work);
 
 // The Hotkeys pane catching a wheel or controller button: polled this often.
 inline constexpr UINT_PTR kCaptureTimer = 2;
@@ -549,6 +558,12 @@ struct App {
     std::vector<ModStatus> modStatus;
     bool modsRead = false;
     bool coreOfficial = false;
+    // Their updates: the newest release of each of Sim-QVFR's own mods (by id) as last checked; a check or an
+    // install running; what the last one said (tone 2: an error).
+    std::map<std::wstring, ModRelease> modReleases;
+    bool modsChecked = false, modsBusy = false;
+    std::wstring modsMessage;
+    int modsTone = 3;
     bool lmuGameRead = false;
     std::wstring lmuGameMessage;
     int lmuGameTone = 3;

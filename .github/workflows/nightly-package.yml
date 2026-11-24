@@ -36,6 +36,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sqvfr-nightly-${{ github.sha }}
-          path: ${{ runner.temp }}/dist/sqvfr-nightly-*.zip
+          path: |
+            ${{ runner.temp }}/dist/sqvfr-nightly-*.zip
+            ${{ runner.temp }}/dist/sqvfr-mod-*.zip
           if-no-files-found: error
           retention-days: 14

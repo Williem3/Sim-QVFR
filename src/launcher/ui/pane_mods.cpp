@@ -3,7 +3,9 @@
 // settings.json declares. The launcher only reads the mods' files and hashes their DLLs; it never loads one.
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -11,6 +13,9 @@
 
 #include "../launcher.h"
 #include "../mod_catalog.h"
+#include "../mod_update.h"
+#include "../update_check.h"
+#include "launcher_version.h"
 #include "../../games/game.h"
 #include "../../mod_api/mod_trust.h"
 #include "window_state.h"
@@ -21,6 +26,14 @@ namespace simqvfr::launcher::ui::win {
 
 namespace fs = std::filesystem;
 using mod_api::ModTrust;
+
+// A worker's outcome (kModWorkMessage): the update check's releases, or an install's or Go back's result.
+struct ModWork {
+    enum class Kind { Check, Install, Restore } kind = Kind::Check;
+    std::wstring id, error;
+    std::string body;  // Check: the releases JSON
+    InstallResult result;
+};
 
 namespace {
 
@@ -40,6 +53,70 @@ void write_mod_approval_now(const std::wstring& id, const mod_api::ModApproval& 
     if (!mod_api::write_mod_approval(app.ini, id, approval))
         notify(tr(L"Not saved"), tr(L"The approval couldn’t be written to sim-qvfr.ini."));
     mods_refresh();
+}
+
+void start_mods_check() {
+    if (app.modsBusy)
+        return;
+    app.modsBusy = true;
+    app.modsMessage.clear();
+    std::thread([hwnd = app.hwnd] {
+        auto* w = new ModWork;
+        w->kind = ModWork::Kind::Check;
+        fetch_releases(w->body, w->error, kModReleasesApiPath);
+        if (!PostMessageW(hwnd, kModWorkMessage, 0, reinterpret_cast<LPARAM>(w)))
+            delete w;
+    }).detach();
+}
+
+// Installs the newest release of mod `i` (as last checked), or (`back`) goes back to the version it replaced.
+void start_mod_install(size_t i, bool back) {
+    if (app.modsBusy)
+        return;
+    if (game_running()) {
+        app.modsMessage = tr(L"Close the game first: the mod’s DLL is in use.");
+        app.modsTone = 1;
+        return;
+    }
+    const ModEntry& m = app.mods[i];
+    const auto it = app.modReleases.find(m.id);
+    if (!back && it == app.modReleases.end())
+        return;
+    app.modsBusy = true;
+    app.modsMessage.clear();
+    const ModRelease release = back ? ModRelease{} : it->second;
+    std::thread([hwnd = app.hwnd, folder = mods_folder_path(), id = m.id, version = m.version, release, back] {
+        auto* w = new ModWork;
+        w->kind = back ? ModWork::Kind::Restore : ModWork::Kind::Install;
+        w->id = id;
+        w->result = back ? restore_mod_backup(folder, id, version)
+                         : install_mod_release(folder, id, release, version, [](const InstallProgress&) {});
+        if (!PostMessageW(hwnd, kModWorkMessage, 0, reinterpret_cast<LPARAM>(w)))
+            delete w;
+    }).detach();
+}
+
+// The update rows of one of Sim-QVFR's own mods: the newest release as last checked, Install, Go back.
+void update_rows(Body& b, size_t i) {
+    const ModEntry& m = app.mods[i];
+    if (!mod_api::first_party_mod(m.id) || !m.error.empty())
+        return;
+    const auto it = app.modReleases.find(m.id);
+    const bool newer = it != app.modReleases.end() && compare_mod_versions(m.version, it->second.version) < 0;
+    if (newer)
+        b.action(trf(L"Version {version} is available", {{L"version", it->second.version}}),
+                 game_running() ? tr(L"Close the game first: its DLL is in use.")
+                                : trf(L"You have {version}. The version in place is kept, so you can go back.",
+                                      {{L"version", m.version.empty() ? std::wstring(L"?") : m.version}}),
+                 static_cast<Ctl>(kModInstall0 + static_cast<int>(i)), tr(L"Install"), -1, Btn::Primary);
+    else if (app.modsChecked && it != app.modReleases.end())
+        b.info(tr(L"Updates"), tr(L"Up to date"));
+    else if (app.modsChecked)
+        b.info(tr(L"Updates"), tr(L"None released yet"));
+    std::wstring folder, version;
+    if (find_mod_backup(mods_folder_path(), m.id, folder, version))
+        b.action(trf(L"Go back to {version}", {{L"version", version}}), tr(L"The version the last update replaced."),
+                 static_cast<Ctl>(kModRestore0 + static_cast<int>(i)), tr(L"Go back"));
 }
 
 void ensure_read() {
@@ -230,6 +307,44 @@ void allow_online(size_t i) {
 
 }  // namespace
 
+void mods_work_done(ModWork* raw) {
+    const std::unique_ptr<ModWork> w(raw);
+    app.modsBusy = false;
+    if (w->kind == ModWork::Kind::Check) {
+        if (!w->error.empty()) {
+            app.modsMessage = w->error;
+            app.modsTone = 2;
+            return;
+        }
+        app.modReleases.clear();
+        const bool nightly = channel_named(SIM_QVFR_CHANNEL) == Channel::Nightly;
+        int available = 0;
+        for (const ModEntry& m : app.mods) {
+            ModRelease r;
+            if (!mod_api::first_party_mod(m.id) || !newest_mod_release(w->body, m.id, nightly, r))
+                continue;
+            if (compare_mod_versions(m.version, r.version) < 0)
+                ++available;
+            app.modReleases[m.id] = r;
+        }
+        app.modsChecked = true;
+        app.modsMessage = available ? trn(available, L"{count} update available", L"{count} updates available",
+                                          {{L"count", std::to_wstring(available)}})
+                                    : std::wstring(tr(L"Sim-QVFR’s mods are up to date"));
+        app.modsTone = available ? 1 : 0;
+        return;
+    }
+    if (w->result.ok) {
+        app.modsMessage = w->kind == ModWork::Kind::Install ? tr(L"Installed. It’s used from the next launch.")
+                                                             : tr(L"Went back. It’s used from the next launch.");
+        app.modsTone = 0;
+    } else {
+        app.modsMessage = w->result.error;
+        app.modsTone = 2;
+    }
+    mods_refresh();
+}
+
 void mods_refresh() {
     app.modsRead = true;
     const mod_api::ModFacts core = mod_api::read_mod_facts((fs::path(layer_folder()) / L"sim-qvfr.dll").wstring());
@@ -251,6 +366,22 @@ bool mods_press(Ctl id, int option) {
         std::error_code ec;
         fs::create_directories(folder, ec);
         ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
+    if (id == kModsCheck) {
+        start_mods_check();
+        return true;
+    }
+    if (id >= kModInstall0 && id <= kModInstallLast) {
+        const size_t i = static_cast<size_t>(id - kModInstall0);
+        if (i < app.mods.size())
+            start_mod_install(i, false);
+        return true;
+    }
+    if (id >= kModRestore0 && id <= kModRestoreLast) {
+        const size_t i = static_cast<size_t>(id - kModRestore0);
+        if (i < app.mods.size())
+            start_mod_install(i, true);
         return true;
     }
     if (id >= kModRemove0 && id <= kModRemoveLast) {
@@ -304,13 +435,19 @@ float settings_pane(float x, float y, float w, bool draw) {
                      {{L"count", std::to_wstring(app.mods.size())}}));
     b.note(tr(L"Sim-QVFR’s own mods are signed by Sim-QVFR. Any other mod runs only once you approve it, and online only "
               L"if its author signed it and you allow it."));
-    b.actions({{kModsOpenFolder, tr(L"Open the mods folder")}, {kModsReload, tr(L"Look again")}});
+    if (app.modsBusy)
+        b.note(tr(L"Working…"));
+    else if (!app.modsMessage.empty())
+        b.chip(app.modsTone, app.modsMessage);
+    b.actions({{kModsCheck, tr(L"Check for updates")}, {kModsOpenFolder, tr(L"Open the mods folder")},
+               {kModsReload, tr(L"Look again")}});
     for (size_t i = 0; i < app.mods.size() && i < app.modStatus.size(); ++i) {
         b.divider();
         b.group(app.mods[i].name);
         const auto [tone, text] = chip_of(app.modStatus[i]);
         b.chip(tone, text);
         trust_rows(b, i);
+        update_rows(b, i);
         b.actions({{static_cast<Ctl>(kModRemove0 + static_cast<int>(i)), tr(L"Remove…")}});
     }
     return b.height();

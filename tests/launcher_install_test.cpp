@@ -1,6 +1,7 @@
 // Offline check of the launcher's update check (update_check.h) and install (install.h): versions compared, the
 // newest release, the hash lists, a staged release installed into a folder and put back on a failure.
 #include "launcher_test_kit.h"
+#include "launcher/mod_update.h"
 
 int SIM_QVFR_TEST_MAIN() {
     folder = temp_path(L"simqvfr-launcher-install-test");
@@ -311,6 +312,64 @@ int SIM_QVFR_TEST_MAIN() {
                   read_file((app / "sim-qvfr-launcher.exe").wstring(), readBack) && readBack == "new launcher" &&
                   read_file((app / "VERSION.txt").wstring(), version) && version == "Sim-QVFR 2",
               "go back: a backup missing its launcher or layer is refused");
+    }
+
+    // Sim-QVFR's own mods' updates (mod_update.h): their releases among the app's, a staged mod checked, Go back.
+    {
+        const auto put = [](const fs::path& p, const std::string& text) {
+            fs::create_directories(p.parent_path());
+            write_file(p.wstring(), text);
+        };
+        const auto asset = [](const std::string& name, const std::string& url) {
+            return R"({"name": ")" + name + R"(", "size": 10, "digest": "sha256:)" + std::string(64, 'A') +
+                   R"(", "browser_download_url": ")" + url + R"("})";
+        };
+        const std::string dl = "https://github.com/Williem3/Sim-QVFR/releases/download/";
+        const std::string releases = "[" +
+            std::string(R"({"tag_name": "v1.3.0", "assets": [)") + asset("sim-qvfr-1.3.0.zip", dl + "v1.3.0/sim-qvfr-1.3.0.zip") + "]}," +
+            R"({"tag_name": "mod-scs-v1.2.0", "assets": [)" + asset("sqvfr-mod-scs-1.2.0.zip", dl + "mod-scs-v1.2.0/sqvfr-mod-scs-1.2.0.zip") + "]}," +
+            R"({"tag_name": "mod-scs-v1.4.0", "draft": true, "assets": [)" + asset("sqvfr-mod-scs-1.4.0.zip", dl + "x/sqvfr-mod-scs-1.4.0.zip") + "]}," +
+            R"({"tag_name": "mod-scs-v1.3.0-nightly.20261124", "prerelease": true, "assets": [)" +
+                asset("sqvfr-mod-scs-1.3.0-nightly.20261124.zip", dl + "y/sqvfr-mod-scs-1.3.0-nightly.20261124.zip") + "]}," +
+            R"({"tag_name": "mod-scs-v9.0.0", "assets": [)" + asset("sqvfr-mod-scs-9.0.0.zip", "https://evil.example/x.zip") + "]}," +
+            R"({"tag_name": "mod-scsx-v5.0.0", "assets": [)" + asset("sqvfr-mod-scsx-5.0.0.zip", dl + "z/sqvfr-mod-scsx-5.0.0.zip") + "]}" +
+            "]";
+        ModRelease r;
+        check(newest_mod_release(releases, L"scs", false, r) && r.version == L"1.2.0" && r.zipSize == 10 &&
+                  r.zipSha256 == std::string(64, 'a'),
+              "mod update: the newest stable release of that mod (not a draft, another mod, or a download elsewhere)");
+        check(newest_mod_release(releases, L"scs", true, r) && r.version == L"1.3.0-nightly.20261124",
+              "mod update: a nightly launcher also sees pre-releases");
+        check(!newest_mod_release(releases, L"ace", true, r), "mod update: a mod without releases has none");
+        check(compare_mod_versions(L"dev", L"1.0.0") < 0 && compare_mod_versions(L"1.2.0", L"1.2.0") == 0 &&
+                  compare_mod_versions(L"1.3.0", L"1.2.0") > 0,
+              "mod update: a development mod is older than any release");
+
+        const fs::path mods = folder / "mods";
+        const fs::path staged = mods / ".update" / "scs-staged";
+        put(staged / "mod.json", R"({"id":"scs","version":"1.2.0","dll":"sim-qvfr-scs.dll"})");
+        put(staged / "sim-qvfr-scs.dll", "new dll");
+        put(staged / "SHA256.txt", simqvfr::sha256_file((staged / "mod.json").c_str()) + "  mod.json\r\n" +
+                                       simqvfr::sha256_file((staged / "sim-qvfr-scs.dll").c_str()) + "  sim-qvfr-scs.dll\r\n");
+        check(check_staged_mod(staged.wstring(), L"scs").empty(), "mod update: a staged mod as its SHA256.txt says passes");
+        check(!check_staged_mod(staged.wstring(), L"ace").empty(), "mod update: another mod's zip is refused");
+        put(staged / "extra.dll", "not listed");
+        check(!check_staged_mod(staged.wstring(), L"scs").empty(), "mod update: a file its SHA256.txt doesn't list is refused");
+        fs::remove(staged / "extra.dll", ec);
+        put(staged / "sim-qvfr-scs.dll", "changed");
+        check(!check_staged_mod(staged.wstring(), L"scs").empty(), "mod update: a file that doesn't match is refused");
+
+        // Go back: the backup swapped in, the version in place kept as the new backup.
+        put(mods / "scs" / "mod.json", R"({"id":"scs","version":"1.2.0","dll":"sim-qvfr-scs.dll"})");
+        put(mods / ".backup" / "scs-1.1.0" / "mod.json", R"({"id":"scs","version":"1.1.0","dll":"sim-qvfr-scs.dll"})");
+        std::wstring backupFolder, backupVersion;
+        check(find_mod_backup(mods.wstring(), L"scs", backupFolder, backupVersion) && backupVersion == L"1.1.0",
+              "mod update: the backup and its version are found");
+        const InstallResult back = restore_mod_backup(mods.wstring(), L"scs", L"1.2.0");
+        std::string text;
+        check(back.ok && read_file((mods / "scs" / "mod.json").wstring(), text) && text.find("1.1.0") != std::string::npos &&
+                  find_mod_backup(mods.wstring(), L"scs", backupFolder, backupVersion) && backupVersion == L"1.2.0",
+              "mod update: Go back puts 1.1.0 in place and keeps 1.2.0 as the backup");
     }
 
     fs::remove_all(folder, ec);

@@ -38,6 +38,13 @@ std::vector<InstallStep> plan_install(const std::map<std::wstring, std::string>&
                                       const std::map<std::wstring, std::string>& oldRelease,
                                       const std::function<std::string(const std::wstring&)>& current);
 
+// Downloads `url` (HTTPS) into `file`: exactly `size` bytes, or it fails. `progress` is called as it goes.
+struct InstallProgress;
+bool download_asset(const std::string& url, const std::wstring& file, unsigned long long size,
+                    const std::function<void(const InstallProgress&)>& progress, std::wstring& error);
+// Windows' own tar.exe unpacks `zip` into `into` (nothing is run from the download).
+bool unpack_zip(const std::wstring& zip, const std::wstring& into, std::wstring& error);
+
 // The download URL a release asset may have: the repository's release downloads, over HTTPS.
 bool trusted_download(const std::string& url);
 

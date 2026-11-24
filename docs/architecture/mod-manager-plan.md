@@ -109,8 +109,16 @@ between Ko-fi and About.
 - **Game tab → Mod settings:** the `settings.json` controls of the mods that cover the shown game.
   - `settings.json` v1 has two setting types: `toggle`, and `choice` (2 to 4 options).
   - Values go to `[mod_<id>]` in sim-qvfr.ini and are shared by every game.
-- **Next:** first-party mods get Check for updates and Install, from GitHub releases tagged `mod-<id>-v<version>`.
-  The old folder is kept for rollback.
+- **Updates for first-party mods** (`src/launcher/mod_update.h`):
+  - **Check for updates** reads the repository's releases. A mod's release is tagged `mod-<id>-v<version>`, with
+    the asset `sqvfr-mod-<id>-<version>.zip`. Pre-releases are offered to nightly launchers only.
+  - **Install** downloads the zip and checks its SHA-256 and every file against its SHA256.txt. Its mod.json must
+    be the same mod.
+  - The installed mod moves to `mods/.backup/<id>-<version>` (one backup kept), and **Go back** swaps it back in.
+    Neither runs while a game is running.
+  - `package.ps1 -Nightly` stamps the package version into each first-party `mod.json` and writes
+    `sqvfr-mod-<id>-<version>.zip` (signed files plus SHA256.txt). CI uploads it with the nightly zip.
+  - Third-party mods are never offered updates: their authors ship them.
 - **Not yet:** sliders, and a mod reading its `[mod_<id>]` values through the host table.
 
 ## Phase 3, first step: the trust check (option A)

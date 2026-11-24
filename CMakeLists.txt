@@ -713,7 +713,7 @@ add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/set
   src/launcher/game_tabs.cpp src/launcher/lmu_game_settings.cpp src/launcher/game_settings_snapshot.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
-  src/launcher/log_retention.cpp src/launcher/signature_check.cpp src/launcher/mod_catalog.cpp src/mod_api/mod_trust.cpp
+  src/launcher/log_retention.cpp src/launcher/signature_check.cpp src/launcher/mod_catalog.cpp src/launcher/mod_update.cpp src/mod_api/mod_trust.cpp
   src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp src/quad/osd.cpp)
 target_include_directories(sim_qvfr_launcher_shared PRIVATE src)
 target_compile_definitions(sim_qvfr_launcher_shared PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)

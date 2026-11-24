@@ -40,8 +40,16 @@ std::wstring version_folder(const std::wstring& version) {
     return out.empty() ? L"previous" : out;
 }
 
-bool download(const std::string& url, const fs::path& file, unsigned long long size,
-              const std::function<void(const InstallProgress&)>& progress, std::wstring& error) {
+std::map<std::wstring, std::string> read_hash_list(const fs::path& file) {
+    std::string text;
+    return read_file(file.wstring(), text) ? parse_sha256_list(text) : std::map<std::wstring, std::string>{};
+}
+
+}  // namespace
+
+bool download_asset(const std::string& url, const std::wstring& fileText, unsigned long long size,
+                    const std::function<void(const InstallProgress&)>& progress, std::wstring& error) {
+    const fs::path file = fileText;
     const std::wstring wide = widen(url);
     URL_COMPONENTS parts{sizeof(parts)};
     wchar_t host[256] = {}, path[2048] = {};
@@ -109,7 +117,8 @@ bool download(const std::string& url, const fs::path& file, unsigned long long s
 }
 
 // Windows' own tar.exe (System32) unpacks the zip; nothing is run from the download.
-bool unpack(const fs::path& zip, const fs::path& into, std::wstring& error) {
+bool unpack_zip(const std::wstring& zipText, const std::wstring& intoText, std::wstring& error) {
+    const fs::path zip = zipText, into = intoText;
     wchar_t system[MAX_PATH] = {};
     GetSystemDirectoryW(system, MAX_PATH);
     const fs::path tar = fs::path(system) / L"tar.exe";
@@ -134,12 +143,6 @@ bool unpack(const fs::path& zip, const fs::path& into, std::wstring& error) {
     return true;
 }
 
-std::map<std::wstring, std::string> read_hash_list(const fs::path& file) {
-    std::string text;
-    return read_file(file.wstring(), text) ? parse_sha256_list(text) : std::map<std::wstring, std::string>{};
-}
-
-}  // namespace
 
 std::map<std::wstring, std::string> parse_sha256_list(const std::string& text) {
     std::map<std::wstring, std::string> out;
@@ -218,7 +221,7 @@ InstallResult install_release(const std::wstring& folderText, const std::string&
 
     // 1. Download, and the zip as GitHub has it.
     progress({tr(L"Downloading"), 0});
-    if (!download(url, zip, size, progress, r.error))
+    if (!download_asset(url, zip.wstring(), size, progress, r.error))
         return r;
     progress({tr(L"Checking the download"), 1});
     if (lower(sha256_file(zip.c_str())) != lower(sha256)) {
@@ -227,7 +230,7 @@ InstallResult install_release(const std::wstring& folderText, const std::string&
     }
     // 2. Unpacked, each file as its SHA256.txt says.
     progress({tr(L"Unpacking"), 0});
-    if (!unpack(zip, staged, r.error))
+    if (!unpack_zip(zip.wstring(), staged.wstring(), r.error))
         return r;
     return install_staged(folder.wstring(), staged.wstring(), oldVersion, progress);
 }

@@ -136,12 +136,12 @@ bool newest_release(const std::string& text, Release& release, Channel channel) 
     return true;
 }
 
-bool fetch_releases(std::string& body, std::wstring& error) {
+bool fetch_releases(std::string& body, std::wstring& error, const wchar_t* path) {
     body.clear();
     HINTERNET session = WinHttpOpen(L"sim-qvfr-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
     HINTERNET connect = session ? WinHttpConnect(session, kReleasesApiHost, INTERNET_DEFAULT_HTTPS_PORT, 0) : nullptr;
-    HINTERNET request = connect ? WinHttpOpenRequest(connect, L"GET", kReleasesApiPath, nullptr, WINHTTP_NO_REFERER,
+    HINTERNET request = connect ? WinHttpOpenRequest(connect, L"GET", path, nullptr, WINHTTP_NO_REFERER,
                                                      WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)
                                 : nullptr;
     bool ok = false;
