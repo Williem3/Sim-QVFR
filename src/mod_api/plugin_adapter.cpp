@@ -453,6 +453,18 @@ public:
         if (auto fn = entry(&SqvfrFocusImages::set_live_diag))
             fn(t_->self, bits);
     }
+    void set_dlss_presets(int eye, int focus) override {
+        if (auto fn = entry(&SqvfrFocusImages::set_dlss_presets))
+            fn(t_->self, eye, focus);
+    }
+    bool dlss_state(FocusDlssState& out) override {
+        auto fn = entry(&SqvfrFocusImages::dlss_state);
+        SqvfrFocusDlssState c = {};
+        if (!fn || !fn(t_->self, &c))
+            return false;
+        out = from_c(c);
+        return true;
+    }
 
 private:
     template <class Fn> Fn entry(Fn SqvfrFocusImages::* field) const {

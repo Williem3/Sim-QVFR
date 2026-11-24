@@ -219,6 +219,15 @@ typedef struct SqvfrFocusImage {
     float offset[2][2];   /* each eye's box centre off its forward axis (the gaze this frame used) */
 } SqvfrFocusImage;
 
+/* quad/focus_images.h FocusDlssState: what DLSS runs for the eyes and the focus views (the headset menu's note). */
+typedef struct SqvfrFocusDlssState {
+    int32_t seen, forcedDlaa;
+    int32_t gameQuality;  /* the in-game mode as the game asked (NGX's PerfQuality value) */
+    uint32_t width, height, outWidth, outHeight;  /* the eyes' feature as made */
+    int32_t eyePreset, focusPreset;
+    int32_t focusRunning;
+} SqvfrFocusDlssState;
+
 /* quad/focus_images.h FocusImages: a D3D12 mod's own focus views (SqvfrMod::focus_images). Every entry takes the
  * table's `self`; read each only where `size` covers it (null: not offered). Booleans as int32_t. */
 typedef struct SqvfrFocusImages {
@@ -242,6 +251,9 @@ typedef struct SqvfrFocusImages {
     void (*gpu_scope)(void* self, int32_t compositor);
     int32_t (*census)(void* self, uint32_t frames);           /* development builds: the draw census */
     void (*set_live_diag)(void* self, uint32_t bits);
+    /* DLSS: the eyes' and the focus views' presets (0: the game's own), at launch before `early` and live. */
+    void (*set_dlss_presets)(void* self, int32_t eye, int32_t focus);
+    int32_t (*dlss_state)(void* self, SqvfrFocusDlssState* out);  /* 0: nothing to report */
 } SqvfrFocusImages;
 
 /* ---- core -> mod ---- */

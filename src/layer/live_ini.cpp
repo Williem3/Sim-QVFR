@@ -28,7 +28,6 @@
 #include "dev_build.h"
 #include "layer/layer.h"
 #include "layer/config.h"
-#include "probe/focus_ngx.h"
 
 namespace simqvfr::layer {
 
@@ -427,7 +426,8 @@ void live_reload() {
     }
     if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
     {
-        focus_ngx::set_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
+        if (FocusImages* images = focus_images())
+            images->set_dlss_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
         static int scaleSent = 0;  // the Focus views mode, live
         if (scaleSent != s->menu.dlss.focusScale) {
             scaleSent = s->menu.dlss.focusScale;

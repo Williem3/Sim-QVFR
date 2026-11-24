@@ -135,6 +135,8 @@ public:
     virtual void gpu_scope(bool) {}
     virtual bool census(uint32_t) { return false; }
     virtual void set_live_diag(uint32_t) {}
+    virtual void set_dlss_presets(int32_t, int32_t) {}
+    virtual bool dlss_state(SqvfrFocusDlssState&) { return false; }
 };
 
 namespace detail {
@@ -305,6 +307,8 @@ inline SqvfrFocusImages focus_images_table(FocusImages& images) {
     t.gpu_scope = [](void* s, int32_t compositor) { as_images(s).gpu_scope(compositor != 0); };
     t.census = [](void* s, uint32_t frames) { return b(as_images(s).census(frames)); };
     t.set_live_diag = [](void* s, uint32_t bits) { as_images(s).set_live_diag(bits); };
+    t.set_dlss_presets = [](void* s, int32_t eye, int32_t focus) { as_images(s).set_dlss_presets(eye, focus); };
+    t.dlss_state = [](void* s, SqvfrFocusDlssState* out) { return b(out && as_images(s).dlss_state(*out)); };
     return t;
 }
 

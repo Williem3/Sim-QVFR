@@ -37,6 +37,15 @@ struct FocusImage {
     float offset[2][2] = {};              // each eye's box centre off its forward axis (the gaze this frame used)
 };
 
+// What DLSS runs for the eyes and the focus views (the headset menu's note). Not seen until the game made its feature.
+struct FocusDlssState {
+    bool seen = false, forcedDlaa = false;
+    int gameQuality = 0;        // the in-game mode as the game asked (NGX's PerfQuality value)
+    unsigned width = 0, height = 0, outWidth = 0, outHeight = 0;  // the eyes' feature as made
+    int eyePreset = 0, focusPreset = 0;  // as used (the game's own preset when not overridden)
+    bool focusRunning = false;
+};
+
 class FocusImages {
 public:
     virtual ~FocusImages() = default;
@@ -67,6 +76,10 @@ public:
     // Development builds: the draw census (the next `frames` frames into the log) and live diagnostic switches.
     virtual bool census(unsigned frames) = 0;
     virtual void set_live_diag(unsigned bits) = 0;
+    // DLSS (FocusImagesStart::dlss): the eyes' and the focus views' presets (0: the game's own), at launch before
+    // `early` and live from the headset menu; and what runs.
+    virtual void set_dlss_presets(int eye, int focus) = 0;
+    virtual bool dlss_state(FocusDlssState& out) = 0;
 };
 
 }  // namespace simqvfr

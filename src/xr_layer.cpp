@@ -17,7 +17,6 @@
 #include "probe/dred.h"
 #include "probe/cpp_exceptions.h"
 #include "probe/pix_capture.h"
-#include "probe/focus_ngx.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -296,14 +295,11 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // A game whose adapter draws the focus views at the D3D12 level (ACE's API path): its early steps, before the game
     // makes its renderer, swap chain or device (single-pass stereo, the sky's pipelines).
     if (experiment.replayProbe)
-        if (FocusImages* images = focus_images())
+        if (FocusImages* images = focus_images()) {
+            if (experiment.replayProbe == 3 && experiment.replayDlss)
+                images->set_dlss_presets(experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
             images->early(focus_images_start(nullptr, nullptr));
-    if (experiment.replayProbe == 3 && experiment.replayDlss)
-        focus_ngx::set_presets(experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
-    if (experiment.replayProbe == 3 && experiment.replayDlss)
-        focus_ngx::set_options(static_cast<float>(experiment.replayDlssJitterX), experiment.replayDlssPeripheryDlaa);
-    if (experiment.replayProbe == 3 && experiment.replayDlss)
-        focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
+        }
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
     runtime_info(L"live_pid", std::to_wstring(GetCurrentProcessId()));

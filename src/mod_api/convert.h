@@ -348,4 +348,34 @@ inline FocusImage from_c(const SqvfrFocusImage& c) {
     return f;
 }
 
+inline SqvfrFocusDlssState to_c(const FocusDlssState& d) {
+    SqvfrFocusDlssState c = {};
+    c.seen = to_c(d.seen);
+    c.forcedDlaa = to_c(d.forcedDlaa);
+    c.gameQuality = d.gameQuality;
+    c.width = d.width;
+    c.height = d.height;
+    c.outWidth = d.outWidth;
+    c.outHeight = d.outHeight;
+    c.eyePreset = d.eyePreset;
+    c.focusPreset = d.focusPreset;
+    c.focusRunning = to_c(d.focusRunning);
+    return c;
+}
+
+inline FocusDlssState from_c(const SqvfrFocusDlssState& c) {
+    FocusDlssState d;
+    d.seen = c.seen != 0;
+    d.forcedDlaa = c.forcedDlaa != 0;
+    d.gameQuality = c.gameQuality;
+    d.width = c.width;
+    d.height = c.height;
+    d.outWidth = c.outWidth;
+    d.outHeight = c.outHeight;
+    d.eyePreset = c.eyePreset;
+    d.focusPreset = c.focusPreset;
+    d.focusRunning = c.focusRunning != 0;
+    return d;
+}
+
 }  // namespace simqvfr::mod_api

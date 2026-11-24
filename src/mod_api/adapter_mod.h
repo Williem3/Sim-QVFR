@@ -38,6 +38,14 @@ public:
     void gpu_scope(bool compositor) override { i_.gpu_scope(compositor); }
     bool census(uint32_t frames) override { return i_.census(frames); }
     void set_live_diag(uint32_t bits) override { i_.set_live_diag(bits); }
+    void set_dlss_presets(int32_t eye, int32_t focus) override { i_.set_dlss_presets(eye, focus); }
+    bool dlss_state(SqvfrFocusDlssState& out) override {
+        simqvfr::FocusDlssState d;
+        if (!i_.dlss_state(d))
+            return false;
+        out = to_c(d);
+        return true;
+    }
 
 private:
     simqvfr::FocusImages& i_;

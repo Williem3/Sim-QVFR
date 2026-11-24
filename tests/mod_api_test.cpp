@@ -946,6 +946,21 @@ public:
         return true;
     }
     void set_live_diag(unsigned bits) override { diag = bits; }
+    int eyePreset = 0, focusPreset = 0;
+    void set_dlss_presets(int eye, int focus) override {
+        eyePreset = eye;
+        focusPreset = focus;
+    }
+    bool dlss_state(simqvfr::FocusDlssState& out) override {
+        out.seen = true;
+        out.gameQuality = 5;
+        out.width = out.outWidth = 2000;
+        out.height = out.outHeight = 1900;
+        out.eyePreset = 6;
+        out.focusPreset = 11;
+        out.focusRunning = true;
+        return true;
+    }
 };
 
 class ImagesAdapter final : public GameAdapter {
@@ -1023,6 +1038,12 @@ void focus_images_through_the_tables() {
               rec.mips == 1.5 && rec.allowed && rec.scope && rec.diag == 0x5 && rec.frameEnds == 1,
           "the live calls reach the game's focus views");
     check(images->census(4) && rec.censusFrames == 4, "the census forwards");
+    images->set_dlss_presets(6, 13);
+    check(rec.eyePreset == 6 && rec.focusPreset == 13, "the DLSS presets forward");
+    simqvfr::FocusDlssState d;
+    check(images->dlss_state(d) && d.seen && !d.forcedDlaa && d.gameQuality == 5 && d.width == 2000 &&
+              d.outHeight == 1900 && d.eyePreset == 6 && d.focusPreset == 11 && d.focusRunning,
+          "what DLSS runs comes back");
 
     simqvfr::FocusImage f;
     check(images->focus_image(f) && reinterpret_cast<uintptr_t>(f.image) == 0x1230 && f.state == 0x800 &&

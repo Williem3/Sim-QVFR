@@ -10,6 +10,7 @@
 #include <cwchar>
 
 #include "../../log.h"
+#include "../../probe/focus_ngx.h"
 #include "replay_probe.h"
 #include "stereo_flag.h"
 
@@ -82,6 +83,15 @@ public:
         const bool tyres = read_uint(ini, L"replay_tyres", 1) != 0;
         if (s.mode == 3 && ((sky && tiles) || tyres))
             simqvfr::replay_probe_early_sky();  // before the game makes its device and loads its pipelines
+        if (s.mode == 3 && s.dlss) {
+            // ACE's own DLSS switches: the share of ACE's x jitter NGX is told, and the eyes at DLAA in every mode.
+            const double jitterX = std::clamp(read_uint(ini, L"replay_dlss_jitter_x_percent", 50), 10u, 200u) / 100.0;
+            const bool dlaa = read_uint(ini, L"replay_dlss_periphery_dlaa", 0) != 0;
+            simqvfr::focus_ngx::set_options(static_cast<float>(jitterX), dlaa);
+            simqvfr::logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every "
+                          "in-game mode %s", jitterX * 100, dlaa ? "on" : "off");
+            simqvfr::focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
+        }
     }
     bool start(const FocusImagesStart& s) override {
         return simqvfr::replay_probe_start(s.device, s.mode, s.queue, read_switches(s));
@@ -112,6 +122,21 @@ public:
     void gpu_scope(bool compositor) override { simqvfr::replay_probe_gpu_scope(compositor); }
     bool census(unsigned frames) override { return simqvfr::replay_probe_census(frames); }
     void set_live_diag(unsigned bits) override { simqvfr::replay_probe_set_live_diag(bits); }
+    void set_dlss_presets(int eye, int focus) override { simqvfr::focus_ngx::set_presets(eye, focus); }
+    bool dlss_state(simqvfr::FocusDlssState& out) override {
+        const simqvfr::focus_ngx::State d = simqvfr::focus_ngx::state();
+        out.seen = d.seen;
+        out.forcedDlaa = d.forcedDlaa;
+        out.gameQuality = d.gameQuality;
+        out.width = d.width;
+        out.height = d.height;
+        out.outWidth = d.outWidth;
+        out.outHeight = d.outHeight;
+        out.eyePreset = d.eyePreset;
+        out.focusPreset = d.focusPreset;
+        out.focusRunning = d.focusRunning;
+        return true;
+    }
 };
 
 }  // namespace
