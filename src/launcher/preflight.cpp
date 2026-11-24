@@ -391,6 +391,11 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
                     L"its Turbo mode off while frame generation is on.",
                     {{L"game", shortName}}));
         }
+        if (rank(in.layers, kFrameGenerationLayer) >= 0) {
+            add("turbo_vectorxr", CheckTone::Warn, tr(L"Turbo mode stays off with VectorXR"),
+                tr(L"VectorXR’s frame generation is loaded for this launch, so Sim-QVFR keeps its Turbo mode off. Turn "
+                   L"VectorXR off for the game to use Turbo mode."));
+        }
         if (rank(in.layers, kToolkitLayer) >= 0 && in.toolkitTurbo == 1) {
             Check& c = add("turbo_twice", CheckTone::Warn, tr(L"Two Turbo modes are on"),
                            trf(L"Sim-QVFR’s Turbo mode and OpenXR Toolkit’s both take the frame wait off {game}: one "

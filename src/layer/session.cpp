@@ -376,6 +376,8 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
 namespace {
 
 TurboBlock turboShown = TurboBlock::Off;  // the state last logged (the game's xrWaitFrame thread)
+// The game's xrBeginFrame and xrEndFrame calls this session: more ends than begins is a frame generator above the layer.
+std::atomic<uint64_t> gameBegins{0}, gameEnds{0};
 
 // Whether turbo is armed for this xrWaitFrame, its changes logged.
 bool turbo_armed(const XrFrameWaitInfo* info, const XrFrameState* state) {
@@ -385,8 +387,11 @@ bool turbo_armed(const XrFrameWaitInfo* info, const XrFrameState* state) {
         twoLoopsActive = loops.active;
     }
     const bool wanted = experiment.turbo.load(std::memory_order_relaxed);
-    const TurboBlock b = turbo_block(wanted, experiment.cpuSettings, wanted && frame_generation_set(), twoLoopsActive,
-                                     (info && info->next) || state->next);
+    const bool vectorXr = experiment.vectorXrLoaded ||
+                          turbo_frames_generated(gameBegins.load(std::memory_order_relaxed),
+                                                 gameEnds.load(std::memory_order_relaxed));
+    const TurboBlock b = turbo_block(wanted, experiment.cpuSettings, wanted && frame_generation_set(), vectorXr,
+                                     twoLoopsActive, (info && info->next) || state->next);
     if (b != turboShown) {
         // Off from the start is the default: said once at load (config.cpp), not here.
         log_line(turbo_log_line(b));
@@ -407,6 +412,8 @@ void frame_waited(XrDuration predictedPeriod, double waitMs) {
 }
 
 }  // namespace
+
+void turbo_frame_ended() { gameEnds.fetch_add(1, std::memory_order_relaxed); }
 
 XrResult XRAPI_CALL layerEndSession(XrSession session) {
     if (turboWait.drain())  // the runtime's wait in flight finishes before the session ends
@@ -495,6 +502,7 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
 XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* info) {
     // Turbo: the runtime's wait for this frame, started in the game's xrWaitFrame, finishes before the runtime's
     // xrBeginFrame (its wait, begin, end order). Its hold is the frame's wait for the overlay and the pacing line.
+    gameBegins.fetch_add(1, std::memory_order_relaxed);
     if (const TurboWait::Begun b = turboWait.begin(); b.joined) {
         if (XR_FAILED(b.result)) {
             logf("turbo: the runtime's xrWaitFrame failed (%d); xrBeginFrame returns it, the next wait is the game's own",
@@ -528,6 +536,7 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
 }
 
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
+    gameBegins = gameEnds = 0;  // turbo's frame generator count, per session
     XrResult r = next.BeginSession(session, info);
     logf("xrBeginSession viewConfig=%d result=%d", info->primaryViewConfigurationType, r);
     if (XR_SUCCEEDED(r)) {

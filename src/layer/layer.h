@@ -87,6 +87,7 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
 XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* info);
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info);
 XrResult XRAPI_CALL layerEndSession(XrSession session);
+void turbo_frame_ended();  // the game's xrEndFrame (layerEndFrame): turbo's frame generator count
 XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* info, XrSwapchain* swapchain);
 XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* countOutput,
                                                   XrSwapchainImageBaseHeader* images);

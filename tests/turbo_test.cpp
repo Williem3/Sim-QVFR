@@ -163,12 +163,20 @@ int SIM_QVFR_TEST_MAIN() {
               "no period: unchanged");
     }
     {  // The guards, in order.
-        check(turbo_block(false, true, false, false, false) == TurboBlock::Off, "off when not asked for");
-        check(turbo_block(true, false, true, false, false) == TurboBlock::BaselineRun, "off in a baseline run");
-        check(turbo_block(true, true, true, false, false) == TurboBlock::FrameGeneration, "off with frame generation");
-        check(turbo_block(true, true, false, true, false) == TurboBlock::TwoLoops, "off while two_loops is armed");
-        check(turbo_block(true, true, false, false, true) == TurboBlock::Chained, "off with chained structures");
-        check(turbo_block(true, true, false, false, false) == TurboBlock::None, "armed otherwise");
+        check(turbo_block(false, true, false, false, false, false) == TurboBlock::Off, "off when not asked for");
+        check(turbo_block(true, false, true, true, false, false) == TurboBlock::BaselineRun, "off in a baseline run");
+        check(turbo_block(true, true, true, true, false, false) == TurboBlock::FrameGeneration,
+              "off with frame generation");
+        check(turbo_block(true, true, false, true, false, false) == TurboBlock::VectorXr,
+              "off with VectorXR's frame generation");
+        check(turbo_block(true, true, false, false, true, false) == TurboBlock::TwoLoops, "off while two_loops is armed");
+        check(turbo_block(true, true, false, false, false, true) == TurboBlock::Chained, "off with chained structures");
+        check(turbo_block(true, true, false, false, false, false) == TurboBlock::None, "armed otherwise");
+        check(!turbo_frames_generated(100, 100) && !turbo_frames_generated(100, 102) && turbo_frames_generated(100, 103) &&
+                  turbo_frames_generated(100, 200),
+              "a frame generator above: more xrEndFrame than xrBeginFrame calls, beyond two");
+        check(std::string(turbo_log_line(TurboBlock::VectorXr)) == "turbo: off (VectorXR frame generation)",
+              "VectorXR's log line");
         check(std::string(turbo_log_line(TurboBlock::FrameGeneration)) == "turbo: off (frame generation on)" &&
                   std::string(turbo_log_line(TurboBlock::Off)) == "turbo: off" &&
                   std::string(turbo_log_line(TurboBlock::None)).rfind("turbo: on", 0) == 0,
@@ -319,6 +327,16 @@ int SIM_QVFR_TEST_MAIN() {
             std::lock_guard guard(lrt.mutex);
             lrt.waited = false;  // the runtime's wait ended with the session
         }
+        for (int i = 0; i < 3; ++i) {  // a frame generator above the layer: frames of its own through xrEndFrame
+            {
+                std::lock_guard g(lrt.mutex);
+                lrt.begun = true;  // the fake runtime takes each as a frame
+            }
+            XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+            layerEndFrame(nullptr, &end);
+        }
+        const int generated = layer_frames(10, errors);
+        check(errors == 0 && generated == 0, "xrEndFrame outnumbering xrBeginFrame (VectorXR): turbo off");
         experiment.turbo = false;
         const int off = layer_frames(10, errors);
         check(errors == 0 && off == 0, "turbo off: every wait the game's own");

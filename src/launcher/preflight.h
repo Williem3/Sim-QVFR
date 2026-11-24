@@ -13,7 +13,7 @@
 // - With Cheeky on: its runtime and OpenXR layer found; OpenXR Toolkit nearer ACE than Cheeky's layer
 //   (ACE crashes at start otherwise); with its frame generation, Toolkit's Turbo mode off (ACE crashes).
 // - Sim-QVFR's Turbo mode and OpenXR Toolkit's both on (two turbos stacked): Toolkit's off; Sim-QVFR's with Cheeky's
-//   frame generation: a note that it stays off.
+//   frame generation or VectorXR's layer in the launch: a note that it stays off.
 // - Eye tracked foveation without eye tracking at the last launch.
 // - A game that reaches OpenXR through OpenComposite (ACC): OpenComposite's openvr_api.dll in its folder.
 // - With Cheeky on: the game's DLSS (GameInfo::dlssDll) new enough for Cheeky's own DLSS passes (the 310 series;

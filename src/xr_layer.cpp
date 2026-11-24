@@ -104,6 +104,7 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
     }
     logf("layers below this one: [%s]", names.c_str());
     layersBelow = names;
+    experiment.vectorXrLoaded = vectorxrBelow || GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll") != nullptr;
     if (!vectorxrBelow && GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll"))
         log_line("VectorXR is loaded above this layer: its frame generation would see the game's four-view image; move "
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");

@@ -99,6 +99,8 @@ struct Experiment {
     std::atomic<bool> turbo{false};  // [cpu] turbo asked for (layer/turbo.h; armed per frame by turbo_block), live
     // Cheeky's frame generation set to run ([cheeky] enabled, processing and fg, a game with it), live: turbo's guard.
     std::atomic<bool> fgSet{false};
+    // VectorXR's layer is loaded (below this one, or above it): its frame generation, turbo's guard (xr_layer.cpp).
+    bool vectorXrLoaded = false;
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)

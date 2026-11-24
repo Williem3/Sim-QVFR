@@ -332,7 +332,13 @@ int SIM_QVFR_TEST_MAIN() {
         in.cheekyFg = true;
         const Check* withFg = find(preflight_checks(in), "turbo_fg");
         check(withFg && withFg->tone == CheckTone::Warn, "preflight: Sim-QVFR's Turbo with frame generation: it stays off");
-        in.turbo = in.cheekyFg = false;
+        in.cheekyFg = false;
+        in.layers.below = {moved(kCheekyLayer), moved(kFrameGenerationLayer)};
+        const Check* vxr = find(preflight_checks(in), "turbo_vectorxr");
+        check(vxr && vxr->tone == CheckTone::Warn, "preflight: Sim-QVFR's Turbo with VectorXR: it stays off");
+        in.turbo = false;
+        check(!find(preflight_checks(in), "turbo_vectorxr"), "preflight: VectorXR without Turbo: no note");
+        in.layers.below = {moved(kCheekyLayer)};
         in.cheekyLoad = false;
 
         in.eyeTracker = EyeTracker::Missing;
