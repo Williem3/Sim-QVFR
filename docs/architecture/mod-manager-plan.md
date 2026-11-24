@@ -307,3 +307,16 @@ Found while sizing the boundary:
   first.
 - **X-Plane's early load** runs in `DllMain` under the loader lock. Its mod can't be loaded with `LoadLibrary` at
   that point.
+
+## Phase 4: ACE as its own DLL (done in code, 2026-11-24; not yet checked in a headset)
+
+- **The option.** `-DSIM_QVFR_ACE_AS_MOD=ON` (nightly: on) builds `mods\ace\sim-qvfr-ace.dll` with its `mod.json`.
+  Built in, the same entry (`ace/mod_entry.cpp`) runs through `through_mod`, so both builds use the mod ABI.
+- **Focus images.** The layer reaches ACE's replay only through `quad/focus_images.h` (`GameAdapter::focus_images`),
+  carried by the ABI as `SqvfrMod::focus_images` / `SqvfrFocusImages` (start, gaze, live sizes, the focus image, the
+  eye region, DLSS presets and state). Any D3D12 mod can render its own focus views this way.
+- **ACE's own switches.** The `replay_*` diagnostics and pass switches are read by ACE's mod (`ace/focus_images.cpp`);
+  the layer keeps only what it composes with. `focus_ngx` (ACE's NGX hooks) moved with ACE.
+- **Host entries added.** MinHook in steps (`hook_create` .. `hook_apply_queued`, so the process keeps one MinHook),
+  the pass census, and the probe observer. The stateless patch shapes are in `engine/code_shapes.cpp`, linked by both.
+- **Verified.** Stable and nightly configs build with no warnings; 81/81 tests in each.
