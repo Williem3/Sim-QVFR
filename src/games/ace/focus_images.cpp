@@ -92,26 +92,18 @@ public:
             const bool remake = read_uint(ini, L"replay_dlss_eye_remake", 0) != 0;
             simqvfr::focus_ngx::set_options(static_cast<float>(jitterX), dlaa, remake);
             // ACE draws the right eye's vertical jitter the other way round from the one its velocity packing and NGX
-            // take (the right-eye smear with preset K): drawn with the left's sign in our copy of the stereo constants
-            // (replay_dlss_right_jitter_y_flip). Telling NGX the flipped one instead (..._tell) left the packing's
-            // motion off (test 7).
+            // take: drawn with the left's sign in our copy of the stereo constants (replay_dlss_right_jitter_y_flip).
             const bool flipY = read_uint(ini, L"replay_dlss_right_jitter_y_flip", 1) != 0;
-            const bool tellY = read_uint(ini, L"replay_dlss_right_jitter_y_tell", 0) != 0;
             simqvfr::replay_probe_set_right_jitter_flip(flipY);
-            simqvfr::focus_ngx::set_right_jitter_flip(tellY);
-            // The right eye's DLSS from inputs of its own at x 0 (K and the double-wide target's subrect bases).
+            // The right eye's DLSS from inputs of its own at x 0: preset K smeared the right eye read at x 778 of ACE's
+            // double-wide targets (2026-11-24, test 9).
             const bool ownInputs = read_uint(ini, L"replay_dlss_right_own_inputs", 1) != 0;
             simqvfr::focus_ngx::set_right_own_inputs(ownInputs);
             simqvfr::logf("experiment: API path DLSS: the right eye's DLSS %s",
                           ownInputs ? "from inputs of its own at x 0 (replay_dlss_right_own_inputs=1)"
                                     : "from ACE's double-wide inputs at their x offset");
-            // (2026-11-24 test: the right eye's previous projection rebuilt from the left's; a no-op, as the dumps showed)
-            const bool rightFix = read_uint(ini, L"replay_dlss_right_prev_fix", 0) != 0;
-            simqvfr::replay_probe_set_right_prev_fix(rightFix);
-            simqvfr::logf("experiment: API path DLSS: the right eye's vertical jitter %s%s; its previous projection %s",
-                          flipY ? "drawn with the left eye's sign" : "as ACE draws it (replay_dlss_right_jitter_y_flip=0)",
-                          tellY ? ", NGX told it negated (replay_dlss_right_jitter_y_tell=1)" : "",
-                          rightFix ? "rebuilt (replay_dlss_right_prev_fix=1)" : "as ACE's");
+            simqvfr::logf("experiment: API path DLSS: the right eye's vertical jitter %s",
+                          flipY ? "drawn with the left eye's sign" : "as ACE draws it (replay_dlss_right_jitter_y_flip=0)");
             simqvfr::logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every "
                           "in-game mode %s; a live eye preset %s", jitterX * 100, dlaa ? "on" : "off",
                           remake ? "remakes ACE's feature" : "waits for ACE's next feature");

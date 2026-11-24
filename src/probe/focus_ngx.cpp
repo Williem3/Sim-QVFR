@@ -49,7 +49,6 @@ bool in_lifetime(uint64_t life, const std::function<void()>& run) {
     return true;
 }
 void set_eye_live(uint64_t) {}
-void set_right_jitter_flip(bool) {}
 void set_right_own_inputs(bool) {}
 bool watching() { return false; }
 void note_transition(ID3D12Resource*, D3D12_RESOURCE_STATES) {}
@@ -129,9 +128,6 @@ bool trace_due(const NVSDK_NGX_Handle* h) {
 std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
 std::atomic<bool> eyeRemake{false};             // set_options: a live eye preset remakes the game's feature
 std::atomic<float> jitterX{1.0f};        // set_options
-// ACE's single-pass stereo draws the right eye with its vertical jitter the other way round from the left eye's (and
-// from the one jitter it gives NGX for both: 2026-11-24 constants dumps). On: NGX is told the right eye's as drawn.
-std::atomic<bool> rightFlipY{false};
 // The right eye evaluated from inputs of its own at x 0 (copies of its half of ACE's double-wide colour, motion and depth,
 // and an output of ours copied back): whether preset K mishandles the right eye's subrect bases (x past 0).
 std::atomic<bool> rightOwnInputs{false};
@@ -815,7 +811,7 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
                 logd("focus dlss:   jitter %.4f,%.4f (NGX told %.4f,%.4f); exposure texture %s; pre-exposure %s%.4g; exposure "
                      "scale %s%.4g; sharpness %.3g; frame time %s%.3g ms; reset %d; transparency mask %s; bias mask %s",
                      e.jitter[0], e.jitter[1], e.jitter[0] * jitterX.load(),
-                     eye == 1 && rightFlipY.load() ? -e.jitter[1] : e.jitter[1], describe(e.exposure).c_str(),
+                     e.jitter[1], describe(e.exposure).c_str(),
                      e.hasPreExposure ? "" : "(unset) ", e.preExposure, e.hasExposureScale ? "" : "(unset) ",
                      e.exposureScale, e.sharpness, e.hasFrameTime ? "" : "(unset) ", e.frameTime, e.reset,
                      describe(e.transparency).c_str(), describe(e.bias).c_str());
@@ -823,8 +819,6 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
             // The horizontal jitter NGX is told, as really drawn (set_options): the kept evaluation holds the game's.
             if (const float sx = jitterX.load(); sx != 1.0f)
                 const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Jitter_Offset_X, e.jitter[0] * sx);
-            if (eye == 1 && rightFlipY.load(std::memory_order_relaxed))  // the right eye's vertical jitter, as drawn
-                const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Jitter_Offset_Y, -e.jitter[1]);
             bool fresh = false;
             // The live periphery: the eye is drawn smaller, into the top left of its targets: the regions NGX is given,
             // and a feature of ours of that size. (The kept evaluation `e` holds the game's own values.)
@@ -1072,7 +1066,6 @@ void set_options(float jitter, bool dlaa, bool remakeEyes) {
 }
 
 float jitter_x() { return jitterX.load(); }
-void set_right_jitter_flip(bool on) { rightFlipY.store(on); }
 void set_right_own_inputs(bool on) { rightOwnInputs.store(on); }
 bool watching() { return watchOn.load(std::memory_order_relaxed); }
 void note_transition(ID3D12Resource* r, D3D12_RESOURCE_STATES after) {

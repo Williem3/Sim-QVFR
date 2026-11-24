@@ -166,7 +166,6 @@ void replay_probe_set_eye_scale(double scale);
 // uncomposed. The layer asks only when that size is the native eye (periphery 100%, no crop at launch).
 void replay_probe_set_stock(bool on);
 // ACE's stereo lists: the right eye's previous projection corrected for DLSS's motion vectors (on by default).
-void replay_probe_set_right_prev_fix(bool on);
 // ACE's stereo lists: the right eye drawn with the left eye's vertical jitter sign (as its packing and NGX assume).
 void replay_probe_set_right_jitter_flip(bool on);
 void replay_probe_eye_allow(bool composed);

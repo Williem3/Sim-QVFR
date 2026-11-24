@@ -2706,7 +2706,6 @@ void replay_probe_set_size(double k, double kY, double renderScale) {
 }
 
 void replay_probe_set_stock(bool on) { stockWanted.store(on, std::memory_order_relaxed); }
-void replay_probe_set_right_prev_fix(bool on) { eyeLive.rightPrevFix.store(on, std::memory_order_relaxed); }
 void replay_probe_set_right_jitter_flip(bool on) { eyeLive.rightFlipY.store(on, std::memory_order_relaxed); }
 
 void replay_probe_set_eye_scale(double scale) {
@@ -2985,13 +2984,12 @@ void replay_probe_frame_end() {
                 logf("replay eye: periphery texture match: %.2f mip levels on ACE's own eye passes (%.0f%% of the %.2f "
                      "levels the focus views are sharper by%s)",
                      biasNext, share * 100, gap, fixed != 0 ? "; replay_periphery_mip_bias set" : "");
-            const bool fixNext = (eyeLive.rightPrevFix.load(std::memory_order_relaxed) ||
-                                  eyeLive.rightFlipY.load(std::memory_order_relaxed)) &&
+            const bool fixNext = eyeLive.rightFlipY.load(std::memory_order_relaxed) &&
                                  focus.settings.dlss && ew >= 256 && eh >= 256 && eye_ready();
             if (!next && (fixNext || biasNext != 0) && ended % 900 == 0)
                 logd("replay eye: over 900 frames (launch size): %.2f of ACE's lists a frame read our constants (%.2f copies "
-                     "a frame), %.2f copy lists run a frame; stereo scene draws read our copy for the right eye's previous "
-                     "projection or vertical jitter alone %.2f a frame; stereo draws with root 1 bound under another root "
+                     "a frame), %.2f copy lists run a frame; stereo scene draws read our copy for the right eye's vertical "
+                     "jitter alone %.2f a frame; stereo draws with root 1 bound under another root "
                      "signature (left as ACE's) %.2f a frame",
                      eyeLive.lists.exchange(0) / 900.0, eyeLive.patches.exchange(0) / 900.0,
                      eyeLive.executed.exchange(0) / 900.0, eyeLive.fixDraws.exchange(0) / 900.0,
@@ -3007,8 +3005,7 @@ void replay_probe_frame_end() {
                     eye_dump_log(k, at - 1);
                 }
             if (fixNext != eyeLive.fixNow.exchange(fixNext, std::memory_order_relaxed))
-                logf("replay eye: ACE's stereo draws read our pass constants for the right eye's vertical jitter / previous "
-                     "projection: %s",
+                logf("replay eye: ACE's stereo draws read our pass constants for the right eye's vertical jitter: %s",
                      fixNext ? "on" : "off");
             if (next != reported || why != eyeLive.whyNot) {
                 reported = next;
