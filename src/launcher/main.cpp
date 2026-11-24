@@ -441,7 +441,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     // Each game's launches log into its own folder, games\<id>\logs (profile/profiles.h game_logs_folder); the
     // launcher's own logs (the OpenXR registrations, the registry backups) stay in <launcher>\logs.
     const fs::path sharedLogs = here / L"logs";
-    const fs::path logs = game_logs_folder(ini.wstring(), games::wide_id(info)),
+    const fs::path logs = simqvfr::game_logs_folder(ini.wstring(), games::wide_id(info)),
                    runFolder = logs / (std::wstring(L"run-") + stamp);
 #ifndef SIM_QVFR_LOCAL_ANALYSIS
     // Copies of the game's program an older Sim-QVFR left in its log folders, and nothing else (leftovers.h); a dry run
