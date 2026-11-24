@@ -618,6 +618,14 @@ struct EyeLive {
     // The right eye's previous projection corrected (kPatchShader's fixPrev): asked (replay_dlss_right_prev_fix), and
     // as a frame's end took it (with DLSS on and the copies ready). With it ACE's stereo scene draws read our copy.
     std::atomic<bool> rightPrevFix{true}, fixNow{false};
+    std::atomic<uint64_t> fixDraws{0};  // stereo scene draws that read our copy for it alone (eye_apply)
+    // Detailed logs: ACE's pass constants as given and as our copy has them, for one list a frame over kDumps frames
+    // (eye_record copies them to dumpRead; a frame's end logs each once its frame is kDumpAge old).
+    static constexpr int kDumps = 8, kDumpAge = 8;
+    ComPtr<ID3D12Resource> dumpRaw, dumpRead;  // kDumps x 2 KB (UAV), kDumps x 4 KB (readback, mapped)
+    const uint8_t* dumpMapped = nullptr;
+    std::atomic<int> dumpLeft{0}, dumpBursts{0};
+    std::atomic<uint64_t> dumpFrame{UINT64_MAX}, dumpAt[kDumps] = {};
     ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
     ComPtr<ID3D12PipelineState> pso;   // kEyeShader
     std::atomic<uint32_t> nextSlot{0};
@@ -727,6 +735,8 @@ void focus_post_record(List* gameList, const Stream& s);
 
 // ---- replay_eye_live.cpp
 bool eye_ready();
+// A frame's end: one dump of ACE's pass constants (EyeLive::dumpRead slot k, from frame `at`) logged.
+void eye_dump_log(int k, uint64_t at);
 Replay* eye_acquire();
 void eye_record(List* gameList, const Stream& s);
 // The region of a borrowed eye image in use (the live periphery); `output`: an image after the game's DLSS (its output size).

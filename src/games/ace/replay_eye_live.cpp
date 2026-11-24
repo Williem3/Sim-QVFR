@@ -7,7 +7,9 @@
 
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "../../log.h"
@@ -79,7 +81,43 @@ bool eye_ready() {
         return false;
     }
     eyeLive.ready = true;
+    {  // Detailed logs: the dumps' buffers (none: no dumps)
+        const D3D12_HEAP_PROPERTIES readHeap{D3D12_HEAP_TYPE_READBACK};
+        D3D12_RESOURCE_DESC raw = buffer, read = buffer;
+        raw.Width = UINT64{EyeLive::kDumps} * 2048;
+        read.Width = UINT64{EyeLive::kDumps} * 4096;
+        read.Flags = D3D12_RESOURCE_FLAG_NONE;
+        void* mapped = nullptr;
+        const D3D12_RANGE all{0, 0};
+        if (log_debug() &&
+            SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &raw, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                                      nullptr, IID_PPV_ARGS(&eyeLive.dumpRaw))) &&
+            SUCCEEDED(device->CreateCommittedResource(&readHeap, D3D12_HEAP_FLAG_NONE, &read, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                      nullptr, IID_PPV_ARGS(&eyeLive.dumpRead))) &&
+            SUCCEEDED(eyeLive.dumpRead->Map(0, &all, &mapped)) && mapped) {
+            eyeLive.dumpMapped = static_cast<const uint8_t*>(mapped);
+        } else {
+            eyeLive.dumpRaw.Reset();
+            eyeLive.dumpRead.Reset();
+        }
+    }
     return true;
+}
+
+void eye_dump_log(int k, uint64_t at) {
+    const auto rows = [&](int half, const char* which) {
+        const float* f = reinterpret_cast<const float*>(eyeLive.dumpMapped + size_t(k) * 4096 + size_t(half) * 2048);
+        static const int kRows[] = {84, 85, 112, 13, 17, 21, 25, 14, 18, 22, 26, 16, 95, 103, 107, 96, 104, 108, 98, 110};
+        std::string line;
+        char cell[96];
+        for (const int r : kRows) {
+            std::snprintf(cell, sizeof(cell), " %d:%.6g,%.6g,%.6g,%.6g", r, f[r * 4], f[r * 4 + 1], f[r * 4 + 2], f[r * 4 + 3]);
+            line += cell;
+        }
+        logd("replay eye: constants dump frame %llu %s:%s", static_cast<unsigned long long>(at), which, line.c_str());
+    };
+    rows(0, "ACE's");
+    rows(1, "ours");
 }
 
 // Under focus.lock: a list of ours for the copies (the pool grows as needed: a list that redirected its constants
@@ -123,6 +161,9 @@ void eye_record(List* gameList, const Stream& s) {
     gpu_stamp(l, kStepEyeCopies);
     barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->SetComputeRootSignature(focus.patchRoot.Get());
+    const Stream::EyePatch* dump = nullptr;
+    int dumpSlot = 0;
+    uint64_t dumpFrameAt = 0;
     for (const Stream::EyePatch& p : s.eyePatches) {
         uint32_t params[kPatchParams] = {};
         if (p.mode == 0) {
@@ -142,9 +183,39 @@ void eye_record(List* gameList, const Stream& s) {
         l->SetComputeRootConstantBufferView(0, p.from);
         l->SetComputeRootUnorderedAccessView(2, p.to);
         l->Dispatch(p.mode == 0 ? 3 : 1, 1, 1);
+        // Detailed logs: this list's pass constants as ACE gave them and as ours, one list a frame
+        if (p.mode == 0 && !dump && eyeLive.dumpMapped && eyeLive.dumpLeft.load(std::memory_order_relaxed) > 0) {
+            const uint64_t f = focus.frame.load(std::memory_order_relaxed);
+            uint64_t was = eyeLive.dumpFrame.load();
+            if (was != f && eyeLive.dumpFrame.compare_exchange_strong(was, f)) {
+                const int slot = eyeLive.dumpLeft.fetch_sub(1) - 1;
+                if (slot >= 0) {
+                    params[23] = 1;  // rawCopy
+                    l->SetComputeRoot32BitConstants(1, kPatchParams, params, 0);
+                    l->SetComputeRootUnorderedAccessView(2, eyeLive.dumpRaw->GetGPUVirtualAddress() + UINT64(slot) * 2048);
+                    l->Dispatch(3, 1, 1);
+                    dump = &p;
+                    dumpSlot = slot;
+                    dumpFrameAt = f;
+                }
+            }
+        }
     }
-    barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    if (dump) {
+        barrier(l, eyeLive.dumpRaw.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        const UINT64 at = UINT64(dumpSlot) * 4096;
+        l->CopyBufferRegion(eyeLive.dumpRead.Get(), at, eyeLive.dumpRaw.Get(), UINT64(dumpSlot) * 2048, 2048);
+        l->CopyBufferRegion(eyeLive.dumpRead.Get(), at + 2048, eyeLive.constants.Get(),
+                            dump->to - eyeLive.constants->GetGPUVirtualAddress(), 2048);
+        barrier(l, eyeLive.dumpRaw.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    } else {
+        barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    }
     l->Close();
+    if (dump)
+        eyeLive.dumpAt[dumpSlot].store(dumpFrameAt + 1);  // (+1: 0 is a free slot)
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
     Replay*& slot = eyeLive.before[gameList];

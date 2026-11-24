@@ -17,7 +17,7 @@ namespace simqvfr::replay_detail {
 // (the eye's NDC jitter x eye size / focus size), not the box's magnification of it: DLSS takes sub-pixel jitter.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint fixPrev; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; uint eyeMode; float mipBias; float4 gaze; float4 gazePrev; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint fixPrev; uint rawCopy; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; uint eyeMode; float mipBias; float4 gaze; float4 gazePrev; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 // ACE's single-pass stereo lists (eyeHalfWidthPixels, 112.z, set) carry the right eye's current unjittered projection
@@ -30,6 +30,10 @@ float4 row(uint r) {
 }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 132) return;
+    if (rawCopy != 0) {  // (Detailed logs: the constants as ACE gave them)
+        if (i < 128) dst.Store4(i * 16, asuint(src[i]));
+        return;
+    }
     if (i >= 128) {
         const uint from[4] = {17, 18, 103, 104};
         float4 kept = src[from[i - 128]];
@@ -100,7 +104,7 @@ float4 row(uint r) {
 )";
 
 // kPatchShader's Params as 32-bit values, at HLSL's packing (a vector never straddles a 16-byte register): 0-3 the
-// floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, 22 fixPrev, (23 padding), 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
+// floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, 22 fixPrev, 23 rawCopy, 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
 // fogSrv1, 34 eyeMode, 35 mipBias, 36-39 gaze, 40-43 gazePrev.
 constexpr UINT kPatchParams = 44;
 // ACE's tyre shaders have no single-pass-stereo variant (the vertex shader takes no instance id and writes no viewport

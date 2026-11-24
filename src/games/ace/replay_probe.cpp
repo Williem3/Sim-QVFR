@@ -935,6 +935,8 @@ void eye_apply(List* l, Stream* s) {
                      (v.TopLeftX == 0 || std::fabs(v.TopLeftX - v.Width) <= 1);
         }
     }
+    if (biased && s->eyeBias == 0)
+        eyeLive.fixDraws.fetch_add(1, std::memory_order_relaxed);
     if ((want && scene) || biased) {
         const float fx = want ? now.fx : 1.0f, fy = want ? now.fy : 1.0f;
         cbvOriginal(l, kPassConstantsRoot,
@@ -2970,6 +2972,21 @@ void replay_probe_frame_end() {
                      biasNext, share * 100, gap, fixed != 0 ? "; replay_periphery_mip_bias set" : "");
             const bool fixNext = eyeLive.rightPrevFix.load(std::memory_order_relaxed) && focus.settings.dlss && ew >= 256 &&
                                  eh >= 256 && eye_ready();
+            if (!next && (fixNext || biasNext != 0) && ended % 900 == 0)
+                logd("replay eye: over 900 frames (launch size): %.2f of ACE's lists a frame read our constants (%.2f copies "
+                     "a frame), %.2f copy lists run a frame; stereo scene draws read our copy for the right eye's previous "
+                     "projection alone %.2f a frame",
+                     eyeLive.lists.exchange(0) / 900.0, eyeLive.patches.exchange(0) / 900.0,
+                     eyeLive.executed.exchange(0) / 900.0, eyeLive.fixDraws.exchange(0) / 900.0);
+            if (fixNext && log_debug() && eyeLive.dumpRead && ended % 1800 == 600 && eyeLive.dumpBursts.fetch_add(1) < 3) {
+                eyeLive.dumpFrame.store(UINT64_MAX);
+                eyeLive.dumpLeft.store(EyeLive::kDumps);
+            }
+            for (int k = 0; k < EyeLive::kDumps && eyeLive.dumpMapped; ++k)
+                if (const uint64_t at = eyeLive.dumpAt[k].load(); at && ended >= at + EyeLive::kDumpAge) {
+                    eyeLive.dumpAt[k].store(0);
+                    eye_dump_log(k, at - 1);
+                }
             if (fixNext != eyeLive.fixNow.exchange(fixNext, std::memory_order_relaxed))
                 logf("replay eye: the right eye's previous projection for DLSS's motion vectors %s",
                      fixNext ? "corrected" : "as ACE's");
