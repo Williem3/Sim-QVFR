@@ -158,6 +158,8 @@ void sheet_card() {
         const Rect r{bx, y, bw, t::kControlHeight};
         button(kSheetButton, r, s.buttons[i], i == main ? (s.danger ? Btn::Danger : Btn::Primary) : Btn::Secondary);
         app.hits.back().option = i;
+        if (i == main && s.danger)  // a Danger button has no fill at rest: its edge shows it is one (as Delete's)
+            cv.stroke(r.inset(0.5f, 0.5f), col(app.c->danger, 0.5f), 1, t::kRadiusControl);
         if (s.focus == i)  // Return presses it: shown as a dialog's default button is
             focus_ring(r, t::kRadiusControl);
         bx -= t::kSpace2;

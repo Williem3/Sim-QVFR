@@ -124,6 +124,7 @@ void use_profile(const std::wstring& name) {
     }
     set_current_profile(app.ini.c_str(), p.name);
     app.s = load_settings(app.ini);
+    app.cardColumns.clear();  // every card may change: the pages laid out afresh, balanced (card.cpp card_grid)
     changed();  // saved as the launcher saves, and to a running game
     app.profileMessage = trf(L"Using {name}.", {{L"name", p.name}});
     refresh_profiles();

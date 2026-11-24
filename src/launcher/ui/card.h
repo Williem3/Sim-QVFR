@@ -115,7 +115,8 @@ struct Card {
 
 // The cards in columns (as many of at least 360 px as fit in `w`, up to four), each in the shortest column, in order,
 // from (x, y) across `w`; a card then keeps its column while the page, the game and the column count stay the same
-// (app.cardColumns), so one growing moves only those under it. Returns the height of the tallest column.
+// (app.cardColumns), so one growing moves only those under it; a profile used or a card reset lays them out afresh.
+// Returns the height of the tallest column.
 float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool draw);
 
 // The cards each Game tab's part makes (pane_checks.cpp, pane_diagnostics.cpp, pane_report.cpp, pane_games.cpp,

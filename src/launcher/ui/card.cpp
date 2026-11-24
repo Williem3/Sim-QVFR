@@ -290,6 +290,8 @@ void Body::actions(const std::vector<ButtonSpec>& list) {
     if (draw_)
         for (size_t i = 0; i < list.size(); ++i) {
             button(list[i].id, rects[i], list[i].label, list[i].style, list[i].icon, list[i].option);
+            if (list[i].style == Btn::Secondary)  // its edge as popup_button's: the fill alone is too close to the card
+                app.canvas.stroke(rects[i].inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
             record(list[i].label, rects[i]);  // Find a setting finds a button (Report an issue…)
         }
     h_ += y + t::kControlHeight;
@@ -560,6 +562,7 @@ void reset_card(int index) {
         if (button != 1)
             return;
         reset(app.s);
+        app.cardColumns.clear();  // the page laid out afresh, balanced: the player just confirmed, not tracking a card
         changed();  // saved, and sent to a running game, as any change
     };
     open_sheet(std::move(s));

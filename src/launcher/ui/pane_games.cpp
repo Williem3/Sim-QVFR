@@ -166,7 +166,9 @@ std::wstring game_note(const games::GameInfo& game) {
                     : tr(L"Hidden. Its settings are kept for when you show it again.");
 }
 
-constexpr float kGameTextX = 36;
+// A game's colour button (game_row), and where its name starts after it.
+constexpr float kSwatchW = 40, kSwatchH = 28;
+constexpr float kGameTextX = kSwatchW + t::kSpace3;
 
 // A game's row's height in a card `w` wide: its name, and its note under it.
 float game_row_height(size_t i, float w) {
@@ -184,15 +186,22 @@ void game_row(const Rect& r, size_t i) {
     const std::wstring desc = game_note(*game);
     Canvas& cv = app.canvas;
     const t::Accent a = game_accent(*game);
-    const Rect swatch{r.x, r.y + (r.h - 22) / 2, 22, 22};
-    cv.circle(swatch.x + 11, swatch.y + 11, 9, col(a.accent_fill), true);
-    if (static_cast<int>(i) == color_game_index())  // the game the colour row edits
-        cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
-    else if (pointer_in(swatch.inset(-4, -4)))  // under the pointer: the ring it would get, faint
-        cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label_muted), false, 1.5f);
+    // Its colour as a small pop-up button (popup_button's fill and edge): the dot, then a chevron down to the colour row
+    // it opens. The game the colour row edits: edged in the label's colour.
+    const Rect swatch{r.x, r.y + (r.h - kSwatchH) / 2, kSwatchW, kSwatchH};
+    const bool editing = static_cast<int>(i) == color_game_index();
+    const bool down = app.pressed == kColorGame && swatch.contains(app.mouseX, app.mouseY);
+    cv.fill(swatch, col(down || pointer_in(swatch) ? app.c->control_hover : app.c->control_bg), t::kRadiusControl);
+    if (down)  // a shade under the hover, as Btn::Secondary's
+        cv.fill(swatch, col(0x000000, 0.08f), t::kRadiusControl);
+    cv.stroke(swatch.inset(0.5f, 0.5f), col(editing ? app.c->label : app.c->control_border), editing ? 1.5f : 1.0f,
+              t::kRadiusControl);
+    cv.circle(swatch.x + 13, swatch.y + kSwatchH / 2, 7, col(a.accent_fill), true);
+    cv.path("M1.5 4.5L5 8l3.5-3.5", {swatch.x + 25, swatch.y + (kSwatchH - 12) / 2, 10, 12}, 10, col(app.c->label_secondary),
+            1.5f);
     if (focused(kColorGame) && app.focusOption == static_cast<int>(i))
-        focus_ring(swatch, 11);
-    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i),
+        focus_ring(swatch, t::kRadiusControl);
+    app.hits.push_back({kColorGame, swatch, static_cast<int>(i),
                         trf(L"Change {game}’s colour", {{L"game", game->shortName}}), tr(L"Change its colour")});
     const float tx = r.x + kGameTextX, tw = r.w - kGameTextX - kSwitchW - t::kSpace4;
     const float dh = desc.empty() ? 0 : cv.measure_height(desc, t::kCallout, tw);
@@ -230,8 +239,14 @@ void color_row(const Rect& r) {
     const std::wstring label = trf(L"Colour for {game}", {{L"game", game.shortName}});
     cv.text(fit(label, t::kBody, r.w), t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
     app.drawnLabels.push_back({tr(L"Colour"), app.drawingSection, r});
-    float x = r.x;
+    // Every place fixed, whatever is chosen: the game's own, the presets, Custom…, then the colour of its own when it has
+    // one (after the button, so the button never moves). The gaps narrow (to 4) before anything overlaps in a narrow card.
+    const std::wstring customLabel = tr(L"Custom…");
     const float y = r.y + 28, d = 26;
+    constexpr int kSlots = static_cast<int>(std::size(kColorPresets)) + 2;  // own, presets, its own colour
+    const float bw = std::min(button_width(customLabel), std::max(0.0f, r.w - kSlots * (d + 4)));
+    const float step = d + std::clamp((r.w - bw - kSlots * d) / kSlots, 4.0f, 10.0f);
+    float x = r.x;
     const auto swatch = [&](Ctl id, int option, uint32_t rgb, bool chosen, const std::wstring& tip) {
         const Rect s{x, y, d, d};
         cv.circle(s.x + d / 2, s.y + d / 2, d / 2 - 2, col(rgb), true);
@@ -242,7 +257,7 @@ void color_row(const Rect& r) {
         if (focused(id) && (option < 0 || app.focusOption == option))
             focus_ring(s, d / 2);
         app.hits.push_back({id, s.inset(-2, -2), option, tip, tip, chosen ? 1 : 0});
-        x += d + 10;
+        x += step;
     };
     swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom,
            trf(L"{game}’s own colour", {{L"game", game.shortName}}));
@@ -250,11 +265,12 @@ void color_row(const Rect& r) {
         swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p],
                tr(kColorPresetNames[p]));
     const bool other = hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets);
-    const std::wstring customLabel = tr(L"Custom…");
-    const float bw = button_width(customLabel);
-    if (other)  // a colour of its own: shown before Custom…
+    button(kColorCustom, {x, y - 4, bw, t::kControlHeight}, customLabel, Btn::Secondary);
+    // Its edge as popup_button's (the fill alone is too close to the card to read as a button).
+    cv.stroke(Rect{x, y - 4, bw, t::kControlHeight}.inset(0.5f, 0.5f), col(app.c->control_border), 1, t::kRadiusControl);
+    x += bw + (step - d);
+    if (other)  // a colour of its own: after Custom…
         swatch(kColorCustom, -1, custom->second, true, tr(L"Its own colour"));
-    button(kColorCustom, {std::min(x, r.right() - bw), y - 4, bw, t::kControlHeight}, customLabel, Btn::Secondary);
 }
 
 }  // namespace

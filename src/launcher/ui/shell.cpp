@@ -265,7 +265,8 @@ void rail(float H) {
     cv.fill({0, 0, W, H}, col(app.c->rail));
     brand_mark(W / 2, (top - 20) / 2, 20);
     // The bottom first: the blocks take what is left above it.
-    const float aboutH = 26, heartR = compact ? 14.0f : 16.0f;  // the About button: the kit's small control height
+    // The About button: the kit's small control height; compact, two lines (the icon over the version number).
+    const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;
     const float bottomH = t::kSpace4 + 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight) + t::kSpace3 + aboutH +
                           t::kSpace4;
     std::size_t count = 0;
@@ -336,41 +337,41 @@ void rail(float H) {
         known_version(built) ? L"v" + built.substr(0, built.find(L' ')) : L"v" + widen(SIM_QVFR_RELEASE) + L" dev";
     const std::wstring number = version.substr(0, std::min(version.find(L'-'), version.find(L' ')));  // "v1.0.5"
     const Rect br{6, by, W - 12, aboutH};
-    const Rect aboutHit{0, by, W, aboutH};  // the rail's width, 26 high: no smaller than the version's target was
+    const Rect aboutHit{0, by, W, aboutH};  // the rail's width, 26 (compact 35) high: no smaller than the version's was
     const bool aboutHover = pointer_in(aboutHit);
     cv.fill(br, col(0xffffff, aboutHover ? 0.12f : 0.05f), t::kRadiusControl);
     cv.stroke(br.inset(0.5f, 0.5f), col(0xffffff, aboutHover ? 0.36f : 0.18f), 1, t::kRadiusControl);
     if (app.pressed == kVersion && aboutHit.contains(app.mouseX, app.mouseY))  // held: a shade darker, as a button's
         cv.fill(br, col(0, 0.16f), t::kRadiusControl);
-    // The longest label that fits beside the icon; compact: the number, or the icon alone (the name says the rest).
-    const float iconS = compact ? 12.0f : 14.0f, gap = compact ? 3.0f : 4.0f, pad = compact ? 5.0f : 7.0f;
-    const float textW = br.w - 2 * pad - iconS - gap;
+    // The longest label that fits beside the icon; compact: the icon over the number (cut to the button).
+    const float iconS = compact ? 12.0f : 14.0f, gap = 4.0f, pad = compact ? 4.0f : 7.0f;
+    const float textW = compact ? br.w - 2 * pad : br.w - 2 * pad - iconS - gap;
     const std::wstring dot = L" · ";
     const std::wstring about = tr(L"About");
-    std::vector<std::wstring> labels;
-    if (!compact) {
-        labels.push_back(about + dot + version);
-        labels.push_back(about + dot + number);
-        labels.push_back(version);
-    }
-    labels.push_back(number);
     std::wstring label;
-    for (const std::wstring& l : labels)
-        if (cv.measure(l, t::kRailName) <= textW) {
-            label = l;
-            break;
-        }
-    if (label.empty() && !compact)
+    if (compact) {
         label = fit(number, t::kRailName, textW);
+    } else {
+        for (const std::wstring& l : {about + dot + version, about + dot + number, version, number})
+            if (cv.measure(l, t::kRailName) <= textW) {
+                label = l;
+                break;
+            }
+        if (label.empty())
+            label = fit(number, t::kRailName, textW);
+    }
     const float labelW = label.empty() ? 0.0f : cv.measure(label, t::kRailName);
-    const float groupW = iconS + (label.empty() ? 0.0f : gap + labelW);
-    const float gx = br.x + (br.w - groupW) / 2, my = br.y + br.h / 2;
+    const float lh = t::kRailName.lineHeight;
+    // The icon's top-left: compact, centred over the number (4 from the top, 2 above it); else before the label.
+    const float gx = compact ? br.x + (br.w - iconS) / 2 : br.x + (br.w - iconS - (label.empty() ? 0.0f : gap + labelW)) / 2;
+    const float my = compact ? br.y + 4 + iconS / 2 : br.y + br.h / 2;
     const Color ink = col(app.c->rail_text);
     cv.circle(gx + iconS / 2, my, iconS / 2 - 0.75f, ink, false, 1.4f);  // the info icon: a ring, a stem and a dot
     cv.path("M8 7.25V11.75", {gx, my - iconS / 2, iconS, iconS}, 16, ink, 1.6f);
     cv.circle(gx + iconS / 2, my - iconS * 0.19f, iconS * 0.07f + 0.3f, ink, true);
-    const float lh = t::kRailName.lineHeight;
-    if (!label.empty())
+    if (compact && !label.empty())
+        cv.text(label, t::kRailName, {br.x, my + iconS / 2 + 2, br.w, lh}, ink, Align::Center);
+    else if (!label.empty())
         cv.text(label, t::kRailName, {gx + iconS + gap, my - lh / 2, labelW + 2, lh}, ink, Align::Leading);
     if (app.update == Update::Available) {  // on the button's corner, ringed in the rail's colour
         cv.circle(br.right() - 2, br.y + 2, 5, col(app.c->rail), true);
