@@ -91,6 +91,8 @@ struct Settings {
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
     // [cpu] isolate_main_thread (probe/cpu_isolation.h): the game's main thread gets a core to itself (live).
     bool cpuIsolateMain = kCpuIsolateMain.def != 0;
+    // [cpu] turbo (layer/turbo.h): the game's xrWaitFrame returns at once, the runtime's wait beside its CPU work (live).
+    bool turbo = kTurbo.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     ClockPlacement clock;     // [clock]: the clock's card, on or off, its place and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the

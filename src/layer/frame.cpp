@@ -21,6 +21,7 @@
 namespace simqvfr::layer {
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
+    turbo_frame_ended();
     hang_watch_frame();
     cpu_profile_mark_frame();  // the game's frame ends here: a running capture's samples go to their frames
     cpu_load_render_thread(GetCurrentThreadId());

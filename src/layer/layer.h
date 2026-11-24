@@ -86,6 +86,8 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session);
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state);
 XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* info);
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info);
+XrResult XRAPI_CALL layerEndSession(XrSession session);
+void turbo_frame_ended();  // the game's xrEndFrame (layerEndFrame): turbo's frame generator count
 XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* info, XrSwapchain* swapchain);
 XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* countOutput,
                                                   XrSwapchainImageBaseHeader* images);
@@ -203,8 +205,14 @@ void notice_set(std::wstring title, std::vector<std::wstring> lines);
 bool notice_pending();
 void osd_waited(XrDuration period);
 bool frame_generation_on();
+bool frame_generation_set();  // turbo's guard: Cheeky's frame generation on, or set to run
+// [cheeky] asks for frame generation in a game with it (enabled, processing and fg): turbo's guard (Experiment::fgSet).
+bool cheeky_fg_set(const CheekySettings& c);
 bool osd_shown(OsdSummary& out);
 void osd_wait_returned(double waitMs);
+// Turbo (layer/turbo.h): the runtime's wait held the game in xrBeginFrame for `heldMs` (`heldTicks` QPC ticks) after
+// its xrWaitFrame returned at once: taken as the frame's wait, and out of its work.
+void osd_wait_held(double heldMs, int64_t heldTicks);
 void osd_measure(XrTime displayTime);  // xrEndFrame's: the frame's display time
 void osd_placement_changed();
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);

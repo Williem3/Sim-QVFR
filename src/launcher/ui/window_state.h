@@ -117,6 +117,8 @@ enum Ctl {
     kHotkeyFooter,
     // The Game tab's CPU card: the game's main thread on a core of its own ([cpu] isolate_main_thread).
     kCpuIsolateMain,
+    // The same card's Turbo mode ([cpu] turbo, layer/turbo.h).
+    kTurbo,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
     // The About pane's language ([launcher] language; lang.h): a pop-up of Windows' language, English and lang\*.ini.

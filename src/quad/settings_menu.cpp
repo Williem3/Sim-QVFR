@@ -143,6 +143,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Profile, I18N(L"Profile"), 0, 0, 1},
     {MenuItem::HotkeyFooter, I18N(L"Show the hotkeys under the menu"), 0, 1, 1},
     spec_of(MenuItem::CpuIsolateMain, I18N(L"Give the main thread a core of its own"), kCpuIsolateMain),
+    spec_of(MenuItem::Turbo, I18N(L"Turbo mode"), kTurbo),
     // The DLSS page (Sim-QVFR's own; engine/dlss_settings.h's choices).
     {MenuItem::DlssOn, I18N(L"Use DLSS"), 0, 1, 1},
     {MenuItem::DlssUpscaler, I18N(L"Upscaler"), 0, 1, 1},
@@ -333,7 +334,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (l.showcase)  // a game with it: Stock or QVFR, and the overlay's A/B table
             add({MenuItem::HeadShowcase, MenuItem::ShowcaseStock, MenuItem::AbTable});
     } else if (page == MenuPage::Game) {
-        add({MenuItem::HeadCpu, MenuItem::CpuIsolateMain});
+        add({MenuItem::HeadCpu, MenuItem::CpuIsolateMain, MenuItem::Turbo});
     } else if (page == MenuPage::Color) {  // the launcher's Colour card: the switch, its values while it is on
         add({MenuItem::HeadColor, MenuItem::ColorOn});
         if (v.color.on)
@@ -684,6 +685,7 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
         item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain ||
+        item == MenuItem::Turbo ||
         item == MenuItem::ColorOn || item == MenuItem::CarLightOn || item == MenuItem::CarLightShadows ||
         item == MenuItem::CarLightDetail || item == MenuItem::CarLightReflections ||
         item == MenuItem::CarLightHeadlights || item == MenuItem::CarLightGround || item == MenuItem::CarLightNightVision ||
@@ -702,6 +704,7 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
                      : item == MenuItem::CarLightNightVision ? menu.values.carLight.nightVision
                      : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
                      : item == MenuItem::CpuIsolateMain ? menu.values.cpuIsolateMain
+                     : item == MenuItem::Turbo       ? menu.values.turbo
                      : item == MenuItem::Shape       ? menu.values.shape.custom
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
                      : item == MenuItem::Crop        ? menu.values.crop
@@ -753,6 +756,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.placement = read_menu_placement(ini);
     v.hotkeyFooter = ini_flag(ini, kHotkeyFooter);
     v.cpuIsolateMain = ini_flag(ini, kCpuIsolateMain);
+    v.turbo = ini_flag(ini, kTurbo);
     v.crop = ini_flag(ini, kCropEnabled);
     v.cropTop = ini_int(ini, kCropTop);
     v.cropBottom = ini_int(ini, kCropBottom);
@@ -827,6 +831,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     ok &= write(ini, L"menu", L"width", v.placement.width);
     ok &= write(ini, kHotkeyFooter, v.hotkeyFooter ? 1 : 0);
     ok &= write(ini, kCpuIsolateMain, v.cpuIsolateMain ? 1 : 0);
+    ok &= write(ini, kTurbo, v.turbo ? 1 : 0);
     return ok;
 }
 
@@ -984,6 +989,11 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         notes.push_back(L"Stock: the game's eyes at full resolution, no focus views; each launch starts in QVFR");
         if (menu.values.overlay.abTable)
             notes.push_back(L"The table counts each side from its first 1.5 s on: turn it off and on to start again");
+        return notes;
+    }
+    if (section == MenuItem::HeadCpu) {
+        if (menu.values.turbo && menu.cheeky.available && menu.cheeky.values.fg)
+            notes.push_back(lang::tr(L"Turbo mode stays off while frame generation is on"));
         return notes;
     }
     if (page == MenuPage::Headset || page == MenuPage::Game)
@@ -1268,6 +1278,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = on_off(v.hotkeyFooter);
         else if (items[i] == MenuItem::CpuIsolateMain)
             line.value = on_off(v.cpuIsolateMain);
+        else if (items[i] == MenuItem::Turbo)
+            line.value = on_off(v.turbo);
         else if (items[i] == MenuItem::ColorOn)
             line.value = on_off(v.color.on);
         else if (items[i] == MenuItem::CarLightOn)

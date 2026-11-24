@@ -54,6 +54,7 @@ struct Dispatch {
     PFN_xrCreateSession CreateSession = nullptr;
     PFN_xrDestroySession DestroySession = nullptr;
     PFN_xrBeginSession BeginSession = nullptr;
+    PFN_xrEndSession EndSession = nullptr;
     PFN_xrWaitFrame WaitFrame = nullptr;
     PFN_xrBeginFrame BeginFrame = nullptr;
     PFN_xrCreateSwapchain CreateSwapchain = nullptr;
@@ -95,6 +96,11 @@ struct Experiment {
     // The layer may change the game's CPU scheduling ([cpu], probe/cpu_isolation.h): not in a baseline or a log-only run.
     bool cpuSettings = false;
     int cpuIsolate = 0;  // core isolation's mode in effect (LiveSettings::cpuIsolate)
+    std::atomic<bool> turbo{false};  // [cpu] turbo asked for (layer/turbo.h; armed per frame by turbo_block), live
+    // Cheeky's frame generation set to run ([cheeky] enabled, processing and fg, a game with it), live: turbo's guard.
+    std::atomic<bool> fgSet{false};
+    // VectorXR's layer is loaded (below this one, or above it): its frame generation, turbo's guard (xr_layer.cpp).
+    bool vectorXrLoaded = false;
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
@@ -287,6 +293,7 @@ struct LiveSettings {
     // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames
     // a side), else [cpu] isolate_main_thread (1 on, 0 off).
     int cpuIsolate = 0;
+    bool turbo = false;  // [cpu] turbo (layer/turbo.h)
     int focusMaskMargin = 16;     // [experiment] focus_mask_margin, focus view texels
 };
 

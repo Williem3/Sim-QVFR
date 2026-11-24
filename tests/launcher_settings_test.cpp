@@ -271,9 +271,8 @@ int SIM_QVFR_TEST_MAIN() {
         save_settings(ini, s);
         const Settings loop = load_settings(ini);
         read_file(ini, iniText);
-        check(loop.mode == RenderMode::TwoLoop && loop.outer == 30 && iniText.find("mode=quad") != std::string::npos &&
-                  iniText.find("eye_scale=30") != std::string::npos,
-              "settings: Two-loop writes mode=quad with the outer resolution as eye_scale");
+        check(loop.mode == RenderMode::Qvfr && iniText.find("mode=quad") != std::string::npos,
+              "settings: an ini set to Two-loop (deprecated) reads as QVFR");
 
         Settings big;
         big.outer = 200;

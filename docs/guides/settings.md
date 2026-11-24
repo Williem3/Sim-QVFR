@@ -104,6 +104,10 @@ These are off until you turn them on.
   of your view that a helmet would hide anyway, for extra frames.
 - **Helmet overlay** (Le Mans Ultimate, Assetto Corsa EVO, Assetto Corsa Competizione): a helmet visor around your
   view. You can swap in your own helmet images.
+- **Turbo mode** (all games; **Game › CPU** or the headset menu's Game page): the game stops waiting for the headset
+  at the start of each frame and starts its next frame's work while the headset waits for its display slot. It can
+  give more frames when the CPU limits them, perhaps with a little more latency. Don't turn on OpenXR Toolkit's
+  Turbo mode as well (the Launch checks tell you); it stays off while Cheeky's or VectorXR's frame generation is on.
 - **Eye off** (Le Mans Ultimate; **Headset**): for a player who sees with one eye. The chosen eye shows black and the
   game draws much less for it. With both eyes seeing, leave it at None.
 - **DLSS** (Le Mans Ultimate, Assetto Corsa EVO; NVIDIA RTX) **or FSR** (Le Mans Ultimate, other cards): see the

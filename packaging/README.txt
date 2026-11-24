@@ -199,6 +199,11 @@ Game
   more cores and two threads per core, and stays off if another tool (such as Process Lasso) already
   set the game's CPU sets or affinity. Try it on and watch your frames; it applies live, also from the
   headset menu's Game tab.
+  Turbo mode (off by default): the game doesn't wait for the headset at the start of each frame; it
+  starts its next frame's work while the headset runtime waits for the display slot, for more frames
+  when the CPU limits them, perhaps with a little more latency. Like OpenXR Toolkit's Turbo mode: turn
+  Toolkit's off with it (the Launch checks say so). It stays off while Cheeky's or VectorXR's frame generation is on.
+  Live, also from the headset menu's Game tab.
 - Diagnostics: the last session's numbers (frame rate against the headset's, slow frames against the
   frame's budget, CPU and GPU time, what limited the frame, the game's busiest threads, and how much
   of the session the headset runtime ran the game at half rate, as Varjo's motion smoothing does), to

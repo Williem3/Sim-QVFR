@@ -310,6 +310,7 @@ void activate(Ctl id, int option) {
     case kClockOn: app.s.clock.enabled = !app.s.clock.enabled; changed(); return;
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kCpuIsolateMain: app.s.cpuIsolateMain = !app.s.cpuIsolateMain; changed(); return;
+    case kTurbo: app.s.turbo = !app.s.turbo; changed(); return;
     case kUpdateCheck:
         app.s.updateCheck = !app.s.updateCheck;
         app.s.updateAsked = true;  // a choice: the first start's question is answered
@@ -573,6 +574,7 @@ bool space_control(Ctl id) {
     case kClockOn:
     case kHotkeyFooter:
     case kCpuIsolateMain:
+    case kTurbo:
     case kUpdateCheck:
     case kCropOn:
     case kHelmetOn:

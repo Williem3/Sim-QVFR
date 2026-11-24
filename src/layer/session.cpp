@@ -28,8 +28,24 @@
 #include "quad/session_graphics.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "layer/turbo.h"
 
 namespace simqvfr::layer {
+
+namespace {
+
+int64_t qpc_ns() {
+    static const double nsPerTick = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return 1e9 / static_cast<double>(f.QuadPart);
+    }();
+    return static_cast<int64_t>(static_cast<double>(qpc_now()) * nsPerTick);
+}
+
+TurboWait turboWait(qpc_ns);
+
+}  // namespace
 
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
@@ -233,6 +249,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     game->session_running(false);
+    turboWait.stop();  // no runtime wait of the session's left on the worker
     // First: the gaze thread locates spaces in the runtime; nothing of the session may go while it still runs (it crashed
     // inside the runtime at a game exit, 2026-11-10 15:56, with the teardown below under way).
     gaze_thread_stop();
@@ -357,18 +374,85 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     return next.DestroySession(session);
 }
 
+namespace {
+
+TurboBlock turboShown = TurboBlock::Off;  // the state last logged (the game's xrWaitFrame thread)
+// The game's xrBeginFrame and xrEndFrame calls this session: more ends than begins is a frame generator above the layer.
+std::atomic<uint64_t> gameBegins{0}, gameEnds{0};
+
+// Whether turbo is armed for this xrWaitFrame, its changes logged.
+bool turbo_armed(const XrFrameWaitInfo* info, const XrFrameState* state) {
+    bool twoLoopsActive = false;
+    if (experiment.twoLoops) {
+        std::lock_guard guard(loops.mutex);
+        twoLoopsActive = loops.active;
+    }
+    const bool wanted = experiment.turbo.load(std::memory_order_relaxed);
+    const bool vectorXr = experiment.vectorXrLoaded ||
+                          turbo_frames_generated(gameBegins.load(std::memory_order_relaxed),
+                                                 gameEnds.load(std::memory_order_relaxed));
+    const TurboBlock b = turbo_block(wanted, experiment.cpuSettings, wanted && frame_generation_set(), vectorXr,
+                                     twoLoopsActive, (info && info->next) || state->next);
+    if (b != turboShown) {
+        // Off from the start is the default: said once at load (config.cpp), not here.
+        log_line(turbo_log_line(b));
+        turboShown = b;
+    }
+    return b == TurboBlock::None;
+}
+
+// The frame's wait as the overlay, the optimizer and the pacing line count it: the steady period, and how long the
+// game was held (in xrWaitFrame, or with turbo in xrBeginFrame).
+void frame_waited(XrDuration predictedPeriod, double waitMs) {
+    const XrDuration period = pacing_waited(predictedPeriod);
+    osd_waited(period);  // the overlay's and the optimizer's budget: the steady period, not a half-rate spell
+    if ((experiment.views4 || experiment.measure) && pacing.wait.size() < 4 * kCpuReportFrames) {
+        pacing.wait.push_back(static_cast<float>(waitMs));
+        pacing.periodMs = static_cast<double>(period) / 1e6;
+    }
+}
+
+}  // namespace
+
+void turbo_frame_ended() { gameEnds.fetch_add(1, std::memory_order_relaxed); }
+
+XrResult XRAPI_CALL layerEndSession(XrSession session) {
+    if (turboWait.drain())  // the runtime's wait in flight finishes before the session ends
+        log_line("turbo: a pending wait joined at xrEndSession");
+    return next.EndSession(session);
+}
+
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
+    // Turbo first (layer/turbo.h): it takes the frame loop over before the deprecated two_loops can arm.
+    const bool armed = state && turbo_armed(info, state);
+    if (state && (armed || turboWait.active())) {
+        if (!armed && ((info && info->next) || state->next)) {
+            turboWait.drain();  // chained structures: the runtime's own wait with the game's structures, below
+        } else {
+            // A copy of the game's wait info: the worker calls the runtime after this call has returned.
+            const bool hasInfo = info != nullptr;
+            const TurboWait::RealWait real = [session, hasInfo](XrFrameState& s) {
+                XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+                return next.WaitFrame(session, hasInfo ? &waitInfo : nullptr, &s);
+            };
+            const int64_t t0 = qpc_now();
+            TurboWait::Waited w;
+            const XrResult r = turboWait.wait(armed, real, *state, w);
+            if (XR_SUCCEEDED(r)) {
+                const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
+                if (w.kind != TurboWait::Kind::Async)
+                    frame_waited(w.real.predictedDisplayPeriod, waitMs);
+                osd_wait_returned(w.kind == TurboWait::Kind::Async ? 0.0 : waitMs);  // the frame's work starts here
+            }
+            return r;
+        }
+    }
     if (!experiment.twoLoops) {
         const int64_t t0 = qpc_now();
         const XrResult r = next.WaitFrame(session, info, state);
         if (XR_SUCCEEDED(r)) {
-            const XrDuration period = pacing_waited(state->predictedDisplayPeriod);
-            osd_waited(period);  // the overlay's and the optimizer's budget: the steady period, not a half-rate spell
             const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
-            if ((experiment.views4 || experiment.measure) && pacing.wait.size() < 4 * kCpuReportFrames) {
-                pacing.wait.push_back(static_cast<float>(waitMs));
-                pacing.periodMs = static_cast<double>(period) / 1e6;
-            }
+            frame_waited(state->predictedDisplayPeriod, waitMs);
             osd_wait_returned(waitMs);
         }
         return r;
@@ -417,6 +501,24 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
 }
 
 XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* info) {
+    // Turbo: the runtime's wait for this frame, started in the game's xrWaitFrame, finishes before the runtime's
+    // xrBeginFrame (its wait, begin, end order). Its hold is the frame's wait for the overlay and the pacing line.
+    gameBegins.fetch_add(1, std::memory_order_relaxed);
+    if (const TurboWait::Begun b = turboWait.begin(); b.joined) {
+        if (XR_FAILED(b.result)) {
+            logf("turbo: the runtime's xrWaitFrame failed (%d); xrBeginFrame returns it, the next wait is the game's own",
+                 b.result);
+            return b.result;
+        }
+        const int64_t heldTicks = static_cast<int64_t>(static_cast<double>(b.heldNs) * static_cast<double>(qpc_ms(1000)) / 1e9);
+        const double heldMs = static_cast<double>(b.heldNs) / 1e6;
+        frame_waited(b.real.predictedDisplayPeriod, heldMs);
+        osd_wait_held(heldMs, heldTicks);
+        const XrResult r = next.BeginFrame(session, info);
+        if (XR_SUCCEEDED(r))
+            gpu_frame_timer_mark(GpuMark::kBegin);
+        return r;
+    }
     if (!experiment.twoLoops) {
         const XrResult r = next.BeginFrame(session, info);
         if (XR_SUCCEEDED(r))
@@ -435,6 +537,7 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
 }
 
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
+    gameBegins = gameEnds = 0;  // turbo's frame generator count, per session
     XrResult r = next.BeginSession(session, info);
     logf("xrBeginSession viewConfig=%d result=%d", info->primaryViewConfigurationType, r);
     if (XR_SUCCEEDED(r)) {

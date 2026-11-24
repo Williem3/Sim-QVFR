@@ -313,6 +313,7 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
             out.push_back(L"DLSS-NR options");
     }
     on_off(L"Main thread’s own core", a.cpuIsolateMain, b.cpuIsolateMain);  // CPU boost: the main thread's frame time
+    on_off(L"Turbo mode", a.turbo, b.turbo);
     return out;
 }
 

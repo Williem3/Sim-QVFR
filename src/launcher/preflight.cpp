@@ -382,6 +382,31 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         }
     }
 
+    // Turbo mode: Sim-QVFR's and OpenXR Toolkit's would stack (each takes the game's xrWaitFrame off the runtime's
+    // throttle); with Cheeky's frame generation the layer keeps Sim-QVFR's off (the game crashed with Toolkit's).
+    if (in.turbo) {
+        if (in.cheekyFg && in.cheekyLoad) {
+            add("turbo_fg", CheckTone::Warn, tr(L"Turbo mode stays off with frame generation"),
+                trf(L"{game} can crash with a Turbo mode and Cheeky’s frame generation together, so Sim-QVFR keeps "
+                    L"its Turbo mode off while frame generation is on.",
+                    {{L"game", shortName}}));
+        }
+        if (rank(in.layers, kFrameGenerationLayer) >= 0) {
+            add("turbo_vectorxr", CheckTone::Warn, tr(L"Turbo mode stays off with VectorXR"),
+                tr(L"VectorXR’s frame generation is loaded for this launch, so Sim-QVFR keeps its Turbo mode off. Turn "
+                   L"VectorXR off for the game to use Turbo mode."));
+        }
+        if (rank(in.layers, kToolkitLayer) >= 0 && in.toolkitTurbo == 1) {
+            Check& c = add("turbo_twice", CheckTone::Warn, tr(L"Two Turbo modes are on"),
+                           trf(L"Sim-QVFR’s Turbo mode and OpenXR Toolkit’s both take the frame wait off {game}: one "
+                               L"is enough, and both together can upset the frame pacing. Turning Toolkit’s off "
+                               L"changes its setting for {game} only.",
+                               {{L"game", shortName}}));
+            c.fix = CheckFix::TurboOff;
+            c.fixLabel = tr(L"Turn off");
+        }
+    }
+
     // Eye tracking at the last launch.
     // The runtime never gave the game input focus: no OpenXR action is active then, so the tracker isn't to blame.
     if (method && in.eyeTracked && in.eyeTracker == EyeTracker::Missing) {

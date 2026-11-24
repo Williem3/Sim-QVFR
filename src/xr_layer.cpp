@@ -68,6 +68,7 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         SIMQVFR_INTERCEPT(CreateSession)
         SIMQVFR_INTERCEPT(DestroySession)
         SIMQVFR_INTERCEPT(BeginSession)
+        SIMQVFR_INTERCEPT(EndSession)  // turbo's pending wait joined first (layer/turbo.h)
         SIMQVFR_INTERCEPT(WaitFrame)
         SIMQVFR_INTERCEPT(BeginFrame)
         SIMQVFR_INTERCEPT(CreateSwapchain)
@@ -103,6 +104,7 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
     }
     logf("layers below this one: [%s]", names.c_str());
     layersBelow = names;
+    experiment.vectorXrLoaded = vectorxrBelow || GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll") != nullptr;
     if (!vectorxrBelow && GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll"))
         log_line("VectorXR is loaded above this layer: its frame generation would see the game's four-view image; move "
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");
@@ -407,6 +409,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(CreateSession)
     SIMQVFR_LOAD(DestroySession)
     SIMQVFR_LOAD(BeginSession)
+    SIMQVFR_LOAD(EndSession)
     SIMQVFR_LOAD(WaitFrame)
     SIMQVFR_LOAD(BeginFrame)
     SIMQVFR_LOAD(CreateSwapchain)
