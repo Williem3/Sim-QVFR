@@ -84,8 +84,8 @@ Picture
   looks too dark, washed out or dull in your headset. The periphery and the focus area change alike;
   menus and loading screens show as the game draws them, and the truck sims aren't corrected yet. It
   applies live, also from the headset menu's Color page.
-  Night cars (experimental; LMU only, off by default): an optional extra lighting pass for the cars at
-  night. With it on, the cars get highlights from the floodlights and other cars' headlights
+  Game Lighting Enhancement (experimental; LMU only, off by default; called Night cars before): an
+  optional extra lighting pass for the cars at night. With it on, the cars get highlights from the floodlights and other cars' headlights
   on their paint, shading in their creases and under the body, reflections in the lacquer and shadows
   on the track around them. Quality is Low, Medium or High (High costs the most GPU time, Low about a
   third less). The switch takes effect at the next launch; its values apply live, also from the

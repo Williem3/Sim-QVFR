@@ -115,7 +115,7 @@ void live_apply(const LiveSettings& l) {
     }
     if (car_lighting() != l.carLight) {
         set_car_lighting(l.carLight);
-        logf("live: night car lighting %s", car_lighting_log(l.carLight).c_str());
+        logf("live: game lighting enhancement %s", car_lighting_log(l.carLight).c_str());
     }
     if (eye_off() != l.eyeOff) {
         set_eye_off(l.eyeOff);

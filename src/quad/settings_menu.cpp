@@ -48,8 +48,8 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::ColorBrightness, I18N(L"Brightness"), kColorBrightness),
     spec_of(MenuItem::ColorContrast, I18N(L"Contrast"), kColorContrast),
     spec_of(MenuItem::ColorSaturation, I18N(L"Saturation"), kColorSaturation),
-    // Night cars (car_lighting.h): the switch, then percent each.
-    spec_of(MenuItem::CarLightOn, I18N(L"Night car lighting"), kCarLight),
+    // Game Lighting Enhancement (car_lighting.h): the switch, then percent each.
+    spec_of(MenuItem::CarLightOn, I18N(L"Game Lighting Enhancement"), kCarLight),
     {MenuItem::CarLightQuality, I18N(L"Quality"), 0, kCarLightPresets - 1, 1},
     spec_of(MenuItem::CarLightFill, I18N(L"Fill light"), kCarLightFill),
     spec_of(MenuItem::CarLightOcclusion, I18N(L"Ambient occlusion"), kCarLightOcclusion),
@@ -180,7 +180,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HeadShowcase, I18N(L"Showcase"), 0, 0, 0},
     {MenuItem::HeadCpu, L"CPU", 0, 0, 0},
     {MenuItem::HeadColor, I18N(L"Color"), 0, 0, 0},
-    {MenuItem::HeadCarLight, I18N(L"Night cars"), 0, 0, 0},
+    {MenuItem::HeadCarLight, I18N(L"Game Lighting Enhancement"), 0, 0, 0},
 };
 
 // AMD FSR runs the DLSS page's views: a PC without an NVIDIA RTX card, or the experiment's Upscaler on FSR.
@@ -338,7 +338,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         add({MenuItem::HeadColor, MenuItem::ColorOn});
         if (v.color.on)
             add({MenuItem::ColorExposure, MenuItem::ColorBrightness, MenuItem::ColorContrast, MenuItem::ColorSaturation});
-        if (menu.launch.carLighting) {  // Night cars: the switch, its values while it is on
+        if (menu.launch.carLighting) {  // Game Lighting Enhancement: the switch, its values while it is on
             add({MenuItem::HeadCarLight, MenuItem::CarLightOn});
             if (v.carLight.on)
                 add({MenuItem::CarLightQuality, MenuItem::CarLightFill, MenuItem::CarLightOcclusion,

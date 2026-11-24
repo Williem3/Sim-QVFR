@@ -227,24 +227,25 @@ Card color_card() {
     return c;
 }
 
-// ---- Night cars ---------------------------------------------------------------------------------
+// ---- Game Lighting Enhancement -----------------------------------------------------------------
 
-// Night car lighting (quad/car_lighting.h): LMU's cars relit at night; the headset menu's Color page, Night cars, holds
+// Game Lighting Enhancement (quad/car_lighting.h; "Night cars" before 2026-11-23, its ini keys still car_light*): LMU's
+// cars relit at night; the headset menu's Color page, Game Lighting Enhancement, holds
 // the same. The switch takes effect at the next launch (it hooks the game's shaders as they're made); the rest changes
 // while you drive.
 Card night_cars_card() {
-    Card c{Tab::Picture, tr(L"Night cars (experimental)"), Applies::Live};
+    Card c{Tab::Picture, tr(L"Game Lighting Enhancement (experimental)"), Applies::Live};
     c.body = [](Body& b) {
         if (!qvfr()) {
-            b.note(tr(L"Night car lighting is available in Quad View Foveated Rendering."));
+            b.note(tr(L"Game Lighting Enhancement is available in Quad View Foveated Rendering."));
             return;
         }
         const CarLighting& l = app.s.carLight;
-        b.toggle(kNightOn, tr(L"Night car lighting"), l.on,
+        b.toggle(kNightOn, tr(L"Game Lighting Enhancement"), l.on,
                  l.on ? tr(L"Relights the cars at night: highlights from the floodlights and headlights, shading in the "
                            L"creases.")
                       : tr(L"Off"));
-        b.reveal(kNightOn, l.on, tr(L"Night car lighting"),
+        b.reveal(kNightOn, l.on, tr(L"Game Lighting Enhancement"),
                  {tr(L"Quality"), tr(L"Fill light"), tr(L"Ambient occlusion"), tr(L"Highlights"), tr(L"Paint gloss"),
                   tr(L"Smoothing"), tr(L"Floodlight shadows"), tr(L"Paint detail"), tr(L"Lacquer reflections"),
                   tr(L"Headlight highlights"), tr(L"Shadows on the ground"), tr(L"Night vision color")},
@@ -268,9 +269,9 @@ Card night_cars_card() {
                      tr(L"The cars’ shadows on the track and walls around them."));
             r.toggle(kNightVision, tr(L"Night vision color"), cl.nightVision,
                      tr(L"The dark loses its colour and turns a little blue, as eyes see at night."));
-            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low takes about a third "
-                      L"less GPU time than High. Night car lighting itself starts at the next launch; everything else "
-                      L"changes while you drive."));
+            r.note(tr(L"Quality sets how finely each effect is worked out, not which are on: Low takes a quarter to a "
+                      L"third less GPU time than High. Game Lighting Enhancement itself starts at the next launch; "
+                      L"everything else changes while you drive."));
         });
     };
     c.reset = [](Settings& s) { s.carLight = Settings{}.carLight; };

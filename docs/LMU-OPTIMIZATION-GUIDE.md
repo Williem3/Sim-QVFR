@@ -154,6 +154,20 @@ opponents' cockpits and the interface refresh rate). It edits LMU's own
 files while LMU is closed and applies at LMU's next start. Only the settings you change are rewritten, and a copy of
 each file is kept first, so **Put back the originals** undoes everything.
 
+### 3.8 Game Lighting Enhancement (Picture tab)
+
+**Game Lighting Enhancement** (experimental, off by default; called Night cars before) relights the other cars at
+night. It costs GPU time only while it is on: about 1 ms with everything on at High in a quiet scene, 2 to 3.7 ms in
+race traffic. To keep it cheaper:
+
+- **Quality Low** takes a quarter to a third less than High and looks a little grainier.
+- **Shadows on the ground** and **Floodlight shadows** are its two dearest switches (about 0.2 to 0.55 ms each);
+  **Lacquer reflections**, **Paint detail**, **Headlight highlights** and **Night vision color** cost 0.15 ms or less.
+- **Fill light**, **Ambient occlusion**, **Highlights** and **Paint gloss** cost the same at any value.
+
+The switch itself starts at the next launch; everything else changes while you drive. Hover each setting's ⓘ in the
+launcher for its measured cost.
+
 ---
 
 ## 4. If the CPU holds you back
@@ -279,6 +293,8 @@ and the session; use them to compare settings, not as promises.
 | DLSS-NR | About +2 ms per million pixels, per view | Small | Live |
 | Sim-QVFR's multi-view (SMVR) instead of NVIDIA's (MVR) | About +0.4 ms | About +0.1 ms | Automatic |
 | Sharpening | A little | None | Live |
+| Game Lighting Enhancement (everything on, High) | About 1 ms, 2 to 3.7 ms in race traffic | About 0.4 to 0.9 ms | Next launch (its values live) |
+| Game Lighting Enhancement Quality Low | A quarter to a third less than High | — | Live |
 | Performance overlay | — | A little while it shows | Live |
 | Run with anti-cheat | — | Up to about 2.5-3 times LMU's CPU time (one tester) | Next launch |
 
