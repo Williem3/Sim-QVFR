@@ -51,6 +51,8 @@ bool in_lifetime(uint64_t life, const std::function<void()>& run) {
 void set_eye_live(uint64_t) {}
 void set_right_jitter_flip(bool) {}
 void set_right_own_inputs(bool) {}
+bool watching() { return false; }
+void note_transition(ID3D12Resource*, D3D12_RESOURCE_STATES) {}
 void set_eye_live_out(uint64_t) {}
 void set_release_observer(ReleaseObserver) {}
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
@@ -141,6 +143,24 @@ struct OwnCopy {
 };
 OwnCopy ownCopies[5];  // colour, motion, depth, output, bias mask; under `lock`
 std::atomic<int> ownLogged{0};
+// The states the game left them in (note_transition): colour, motion, depth, output, bias mask. -1: no transition seen.
+struct Watch {
+    std::atomic<ID3D12Resource*> r{nullptr};
+    std::atomic<int> state{-1};
+};
+Watch watched[5];
+std::atomic<bool> watchOn{false};
+// The state `r` was last transitioned to (watching it from now on if it wasn't); -1 not known yet.
+int watched_state(int slot, ID3D12Resource* r) {
+    Watch& w = watched[slot];
+    if (w.r.load() != r) {
+        w.state.store(-1);
+        w.r.store(r);
+        watchOn.store(true);
+        return -1;
+    }
+    return w.state.load();
+}
 
 // Ours for one input or the output: a texture of the game's format, w x h (made again when the game's changes).
 ID3D12Resource* own_copy(int slot, ID3D12Resource* from, unsigned w, unsigned h, bool output) {
@@ -613,34 +633,58 @@ NVSDK_NGX_Result evaluate_own(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
     ReleaseSRWLockExclusive(&lock);
     const unsigned biasBase[2] = {get_ui(b, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X),
                                   get_ui(b, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y)};
+    // The states the game left each in (its last transition of it): not assumed. Until each has been seen in a
+    // transition of the game's, the right eye runs as the game gave it.
+    int st[5] = {-1, -1, -1, -1, -1};
+    ID3D12Resource* const games[5] = {e.color, e.motion, e.depth, e.output, e.bias};
+    ID3D12Resource* const ourList[5] = {c, m, d, o, bm};
+    bool known = true;
+    for (int k = 0; k < 5; ++k)
+        if (ourList[k] && (st[k] = watched_state(k, games[k])) < 0)
+            known = false;
+    if (!known) {
+        static std::atomic<int> waited{0};
+        if (waited.fetch_add(1) < 2)
+            logd("focus dlss: the right eye's own inputs wait for the game's transitions of its inputs (states not seen yet)");
+        return evaluateOriginal(l, use, b, callback);
+    }
+    static std::atomic<bool> statesLogged{false};
+    if (!statesLogged.exchange(true))
+        logf("focus dlss: the right eye's inputs as the game left them: colour 0x%x, motion 0x%x, depth 0x%x, output 0x%x, "
+             "bias mask 0x%x (-1: not ours)",
+             st[0], st[1], st[2], st[3], st[4]);
     if (ownLogged.fetch_add(1) < 2)
         logf("focus dlss: the right eye from inputs of its own at x 0: colour %s, motion %s, depth %s, bias mask %s (its "
              "base %u,%u), output %s (render %ux%u, output %ux%u)",
              c ? "ours" : "the game's", m ? "ours" : "the game's", d ? "ours" : "the game's",
              bm ? "ours" : e.bias ? "the game's" : "none", biasBase[0], biasBase[1], o ? "ours" : "the game's", rw, rh, ow, oh);
-    const D3D12_RESOURCE_STATES srv = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     const D3D12_RESOURCE_STATES mine = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const struct {
         ID3D12Resource *ours, *game;
         const unsigned* base;
         const char *key, *bx, *by;
+        int state;
     } in[4] = {{c, e.color, e.colorBase, NVSDK_NGX_Parameter_Color, NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_X,
-                NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_Y},
+                NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_Y, st[0]},
                {m, e.motion, e.motionBase, NVSDK_NGX_Parameter_MotionVectors, NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X,
-                NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y},
+                NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, st[1]},
                {d, e.depth, e.depthBase, NVSDK_NGX_Parameter_Depth, NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X,
-                NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y},
+                NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, st[2]},
                {bm, e.bias, biasBase, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask,
                 NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X,
-                NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y}};
+                NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y, st[4]}};
     for (const auto& x : in) {
         if (!x.ours)
             continue;
-        transition(l, x.game, srv, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        const auto was = static_cast<D3D12_RESOURCE_STATES>(x.state);
+        const bool readable = (was & D3D12_RESOURCE_STATE_COPY_SOURCE) != 0;  // (a read state with the copy in it)
+        if (!readable)
+            transition(l, x.game, was, D3D12_RESOURCE_STATE_COPY_SOURCE);
         transition(l, x.ours, mine, D3D12_RESOURCE_STATE_COPY_DEST);
         copy_region(l, x.ours, 0, 0, x.game, x.base[0], x.base[1], rw, rh);
         transition(l, x.ours, D3D12_RESOURCE_STATE_COPY_DEST, mine);
-        transition(l, x.game, D3D12_RESOURCE_STATE_COPY_SOURCE, srv);
+        if (!readable)
+            transition(l, x.game, D3D12_RESOURCE_STATE_COPY_SOURCE, was);
         b->Set(x.key, x.ours);
         b->Set(x.bx, 0u);
         b->Set(x.by, 0u);
@@ -653,9 +697,12 @@ NVSDK_NGX_Result evaluate_own(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
     const NVSDK_NGX_Result r = evaluateOriginal(l, use, b, callback);
     if (o) {
         transition(l, o, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        transition(l, e.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+        const auto was = static_cast<D3D12_RESOURCE_STATES>(st[3]);
+        if (was != D3D12_RESOURCE_STATE_COPY_DEST)
+            transition(l, e.output, was, D3D12_RESOURCE_STATE_COPY_DEST);
         copy_region(l, e.output, e.outputBase[0], e.outputBase[1], o, 0, 0, ow, oh);
-        transition(l, e.output, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        if (was != D3D12_RESOURCE_STATE_COPY_DEST)
+            transition(l, e.output, D3D12_RESOURCE_STATE_COPY_DEST, was);
         transition(l, o, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         b->Set(NVSDK_NGX_Parameter_Output, e.output);
         b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, e.outputBase[0]);
@@ -986,6 +1033,12 @@ void set_options(float jitter, bool dlaa, bool remakeEyes) {
 float jitter_x() { return jitterX.load(); }
 void set_right_jitter_flip(bool on) { rightFlipY.store(on); }
 void set_right_own_inputs(bool on) { rightOwnInputs.store(on); }
+bool watching() { return watchOn.load(std::memory_order_relaxed); }
+void note_transition(ID3D12Resource* r, D3D12_RESOURCE_STATES after) {
+    for (Watch& w : watched)
+        if (w.r.load(std::memory_order_relaxed) == r)
+            w.state.store(static_cast<int>(after), std::memory_order_relaxed);
+}
 
 void note_focus_running(bool running) { focusRunning.store(running); }
 

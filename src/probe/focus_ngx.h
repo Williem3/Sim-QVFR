@@ -60,6 +60,9 @@ float jitter_x();
 void set_right_jitter_flip(bool on);
 // The right eye evaluated from copies of its inputs at x 0, its output copied back (does K mishandle subrect bases?).
 void set_right_own_inputs(bool on);
+// The game's resource transitions (its lists' ResourceBarrier): the right eye's inputs' states, for those copies.
+bool watching();
+void note_transition(ID3D12Resource* r, D3D12_RESOURCE_STATES after);
 // What runs, for the headset menu. Not seen until the game has made its DLSS feature.
 struct State {
     bool seen = false, forcedDlaa = false;
