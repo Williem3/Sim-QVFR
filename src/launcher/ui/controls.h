@@ -64,7 +64,8 @@ void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabl
 float segmented_choice_width(const std::vector<std::wstring>& items);
 void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& items, int selected, bool disabled);
 float checkbox_height(const std::wstring& desc, float width);
-void switch_track(const Rect& s, bool on, bool disabled);
+// `state`: 0 at rest, 1 hovered, 2 pressed (a checkbox row's feedback, for a switch drawn on its own).
+void switch_track(const Rect& s, bool on, bool disabled, int state = 0);
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,
               bool disabled = false);
 float segmented_width();

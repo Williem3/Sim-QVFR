@@ -20,14 +20,15 @@ float about_pane(float x, float y, float w, bool draw) {
     if (draw) {
         app.canvas.text(L"Sim-QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
         const std::wstring starts = trf(L"Starts {game} with foveated rendering enabled.", {{L"game", game_name()}});
-        app.canvas.text(starts, t::kBody,
+        // One line each, cut with an ellipsis in a narrow window; the reader text below keeps them whole.
+        app.canvas.text(fit(starts, t::kBody, w), t::kBody,
                         {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
         // A packaged build has its release's version; a development build ("dev") names the release it is headed for.
         const std::wstring version = known_version(widen(SIM_QVFR_VERSION))
                                          ? widen(SIM_QVFR_VERSION)
                                          : trf(L"{version} · development build", {{L"version", widen(SIM_QVFR_RELEASE)}});
         const std::wstring versionLine = trf(L"Version {version}", {{L"version", version}});
-        app.canvas.text(versionLine, t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
+        app.canvas.text(fit(versionLine, t::kBody, w), t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
                         col(app.c->label_secondary));
         reader_text({x, y, w, t::kTitle1.lineHeight}, L"Sim-QVFR Launcher", 2);
         reader_text({x, y + t::kTitle1.lineHeight + 8, w, 2 * lh + 4},

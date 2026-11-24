@@ -206,12 +206,17 @@ void game_row(const Rect& r, size_t i) {
     if (dh > 0)
         cv.text(desc, t::kCallout, {tx, ty + t::kBody.lineHeight + 2, tw, dh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
     const Rect sw{r.right() - kSwitchW, r.y + (r.h - kSwitchH) / 2, kSwitchW, kSwitchH};
-    switch_track(sw, shown, locked);
+    // Its hit is the row from the name on, so the switch answers the pointer anywhere there (a checkbox row's look).
+    const Rect hit{tx, r.y, r.right() - tx, r.h};
+    const int state = locked                                                             ? 0
+                      : app.pressed == kGameShown && hit.contains(app.mouseX, app.mouseY) ? 2
+                      : pointer_in(hit)                                                    ? 1
+                                                                                           : 0;
+    switch_track(sw, shown, locked, state);
     if (!locked) {
         if (focused(kGameShown) && app.focusOption == static_cast<int>(i))
             focus_ring(sw, t::kRadiusSwitch);
-        app.hits.push_back(
-            {kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i), L"", tr(L"In the rail"), shown ? 1 : 0});
+        app.hits.push_back({kGameShown, hit, static_cast<int>(i), L"", tr(L"In the rail"), shown ? 1 : 0});
     }
     app.drawnLabels.push_back({game->name, app.drawingSection, r});
 }

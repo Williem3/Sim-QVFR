@@ -66,6 +66,11 @@ float placement_preview(float x, float y, float w, bool draw) {
         // The panel as the headset shows it: title, resolution line, the settings rows (the first
         // selected) and the hint, in its own colours (in panel pixels, 1024 x 972).
         const bool active = app.dragging == kMenuPanel;
+        // Under the pointer (and on top there): its edge in a faint accent, before it is held.
+        const auto over = [](Ctl id, const Rect& r) {
+            return pointer_in(r) && app.hover == id && app.hoverOption == 1;
+        };
+        const bool menuOver = !active && over(kMenuPanel, panel);
         app.canvas.fill({panel.x, panel.y + 2, panel.w, panel.h}, {0, 0.35f}, 4);
         app.canvas.fill(panel, col(kMenuBackground, 0.92f), 4);
         const float m = pw * 36 / 1024, u = ph / 972;
@@ -84,7 +89,9 @@ float placement_preview(float x, float y, float w, bool draw) {
             bar(pw - m - vw, ry + 8, vw, 18, col(kMenuLabel, 0.85f));
         }
         bar(m, 880, pw * 0.6f, 14, col(kMenuDim, 0.7f));
-        app.canvas.stroke(panel, col(active ? app.c->accent : app.c->preview_label, active ? 1 : 0.45f), active ? 1.5f : 0.75f, 4);
+        app.canvas.stroke(panel, col(active || menuOver ? app.c->accent : app.c->preview_label,
+                              active ? 1 : menuOver ? 0.7f : 0.45f),
+                          active ? 1.5f : menuOver ? 1 : 0.75f, 4);
         if (focused(kMenuPanel))
             focus_ring(panel, 4);
         // The performance overlay, when it is on: four number tiles, the frame-time strip and its cells.
@@ -93,7 +100,7 @@ float placement_preview(float x, float y, float w, bool draw) {
             const float cw = app.s.osd.width * k, ch = osd_height_deg(app.s.osd.width) * k;
             const float ccx = x + (kRefFovX / 2 + app.s.osd.yaw) * k, ccy = y + (kRefFovY / 2 - app.s.osd.pitch) * k;
             card = {ccx - cw / 2, ccy - ch / 2, cw, ch};
-            const bool held = app.dragging == kOsdPanel;
+            const bool held = app.dragging == kOsdPanel, cardOver = !held && over(kOsdPanel, card);
             const float r = std::max(2.0f, cw * 32 / kOsdWidth), cu = cw / kOsdWidth, cv = ch / kOsdHeight;
             app.canvas.fill({card.x, card.y + 2, card.w, card.h}, {0, 0.35f}, r);
             app.canvas.fill(card, col(kOsdCard, 0.9f), r);
@@ -113,7 +120,9 @@ float placement_preview(float x, float y, float w, bool draw) {
                 block(cx2, cy2, 100, 12, col(kMenuDim, 0.8f));
                 block(cx2, cy2 + 30, 150, 22, i % 3 == 1 || i == 5 ? col(kOsdGreen, 0.55f) : col(kMenuLabel, 0.85f));
             }
-            app.canvas.stroke(card, col(held ? app.c->accent : app.c->preview_label, held ? 1 : 0.45f), held ? 1.5f : 0.75f, r);
+            app.canvas.stroke(card, col(held || cardOver ? app.c->accent : app.c->preview_label,
+                                  held ? 1 : cardOver ? 0.7f : 0.45f),
+                              held ? 1.5f : cardOver ? 1 : 0.75f, r);
             if (focused(kOsdPanel))
                 focus_ring(card, r);
         }
@@ -123,12 +132,14 @@ float placement_preview(float x, float y, float w, bool draw) {
             const float cw = app.s.clock.width * k, ch = clock_height_deg(app.s.clock.width) * k;
             const float ccx = x + (kRefFovX / 2 + app.s.clock.yaw) * k, ccy = y + (kRefFovY / 2 - app.s.clock.pitch) * k;
             clock = {ccx - cw / 2, ccy - ch / 2, cw, ch};
-            const bool held = app.dragging == kClockPanel;
+            const bool held = app.dragging == kClockPanel, clockOver = !held && over(kClockPanel, clock);
             const float r = std::max(2.0f, cw * 28 / kClockWidth);
             app.canvas.fill({clock.x, clock.y + 2, clock.w, clock.h}, {0, 0.35f}, r);
             app.canvas.fill(clock, col(kOsdCard, 0.9f), r);
             app.canvas.fill({clock.x + cw * 0.2f, clock.y + ch * 0.32f, cw * 0.6f, std::max(1.5f, ch * 0.36f)}, col(kMenuLabel), 1);
-            app.canvas.stroke(clock, col(held ? app.c->accent : app.c->preview_label, held ? 1 : 0.45f), held ? 1.5f : 0.75f, r);
+            app.canvas.stroke(clock, col(held || clockOver ? app.c->accent : app.c->preview_label,
+                                  held ? 1 : clockOver ? 0.7f : 0.45f),
+                              held ? 1.5f : clockOver ? 1 : 0.75f, r);
             if (focused(kClockPanel))
                 focus_ring(clock, r);
         }

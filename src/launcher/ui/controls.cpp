@@ -220,7 +220,7 @@ void switch_track_in(const Rect& s, bool on, bool disabled, int state) {
 
 }  // namespace
 
-void switch_track(const Rect& s, bool on, bool disabled) { switch_track_in(s, on, disabled, 0); }
+void switch_track(const Rect& s, bool on, bool disabled, int state) { switch_track_in(s, on, disabled, state); }
 
 // A setting that is on or off: its label (and description) leading, a switch trailing; the whole row toggles it.
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,

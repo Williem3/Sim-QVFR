@@ -274,8 +274,9 @@ float report_zip_section(float x, float y, float w, bool draw) {
     zip.fullHeight = [](float) { return kTileH; };
     zip.full = [](const Rect& r) {
         const Rect tile{r.x, r.y, r.w, kTileH};
-        const bool over = pointer_in(tile);
-        app.canvas.fill(tile, col(app.c->accent_fill, over ? 0.16f : 0.1f), t::kRadiusControl);
+        // Pressed a step stronger than hovered.
+        const bool over = pointer_in(tile), down = app.pressed == kDiagZip && tile.contains(app.mouseX, app.mouseY);
+        app.canvas.fill(tile, col(app.c->accent_fill, down ? 0.22f : over ? 0.16f : 0.1f), t::kRadiusControl);
         app.canvas.stroke(tile, col(app.c->accent, 0.6f), 1, t::kRadiusControl);
         if (focused(kDiagZip))
             focus_ring(tile, t::kRadiusControl);
@@ -286,9 +287,10 @@ float report_zip_section(float x, float y, float w, bool draw) {
         const float tx = tile.x + t::kSpace4 + iw + t::kSpace3, tw = tile.right() - t::kSpace4 - tx;
         const size_t slash = app.reportZip.find_last_of(L'\\');
         const std::wstring name = slash == std::wstring::npos ? app.reportZip : app.reportZip.substr(slash + 1);
-        app.canvas.text(tr(L"Drag this onto the GitHub issue"), t::kHeadline,
+        // Cut with an ellipsis in a narrow window (a long zip name).
+        app.canvas.text(fit(tr(L"Drag this onto the GitHub issue"), t::kHeadline, tw), t::kHeadline,
                         {tx, tile.y + 9, tw, t::kHeadline.lineHeight}, col(app.c->label));
-        app.canvas.text(name + L"  ·  " + tr(L"click to show it in Explorer"), t::kCallout,
+        app.canvas.text(fit(name + L"  ·  " + tr(L"click to show it in Explorer"), t::kCallout, tw), t::kCallout,
                         {tx, tile.y + 9 + t::kHeadline.lineHeight + 2, tw, t::kCallout.lineHeight}, col(app.c->label_secondary));
         app.hits.push_back({kDiagZip, tile});
     };
