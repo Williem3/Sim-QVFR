@@ -61,6 +61,69 @@ namespace {
 
 double native_center_ppd();  // below
 
+// What the running game launched with, as the menu's pages, notes and pixel counts take it (MenuLaunch): the views'
+// launch sizes, the native eye, the crop, what the game has, the output cap. No file access: the A/B table's pixel
+// rows (ab_pixels) take it on the frame thread too.
+MenuLaunch menu_launch_sizes() {
+    MenuLaunch m;
+    const Views4Layout& l = experiment.views4Layout;
+    {
+        std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
+        m = {experiment.views4, l.outer * 100, l.focus * 100, l.focusHeight * 100,
+             static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0, experiment.eyeScale * 100};
+    }
+    if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
+        m.qvfr = true;
+    m.cropWidth = l.cropWidth * 100;  // the launch crop
+    m.cropHeight = l.cropHeight * 100;
+    const games::GameFeatures features = game_features();  // what the game has: the rest is left out
+    m.cropPage = features.fovCrop;
+    m.helmetPage = features.helmet;
+    m.fgPage = features.frameGeneration;
+    m.objectDetail = features.objectDetail;  // X-Plane only
+    m.sharpening = features.sharpening;
+    m.textureMatch = features.peripheryTextureMatch && experiment.replayCompose;  // ACE's API path
+    m.eyeOff = features.eyeOff;
+    m.showcase = features.showcase;
+    if (const char* why = m.showcase ? stock_refusal() : nullptr)
+        m.stockBlocked.assign(why, why + std::strlen(why));
+    m.carLighting = features.carLighting && experiment.views4;  // night cars: QVFR's multi-view path
+    m.carLightReady = m.carLighting && experiment.carLightAtLaunch;
+    m.focusMask = features.focusMask;  // the pixels saved leave out what it skips (LMU)
+    m.focusCorridor = features.focusCorridor && experiment.views4;  // road focus: QVFR's (LMU)
+    m.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
+    m.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
+    m.runtimeFocusWidth = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareX * 100) : 0;
+    m.runtimeFocusHeight = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareY * 100) : 0;
+    m.liveResolution = features.liveResolution;
+    if (experiment.replayCompose)
+        m.liveResolution = false;  // periphery and density: the next launch
+    if (game->shows_overlay()) {  // QVFR at the D3D11 level (ATS): the settings page, its sizes live
+        m.qvfr = true;
+        m.liveResolution = true;
+        m.cropPage = false;  // no view crop, helmet, focus shape or optimizer on this path
+        m.helmetPage = false;
+        m.shapePage = false;
+        m.optimize = false;
+        m.cornerFit = true;  // the sizes in effect by the SCS corner's rule (quad/corner_fit.h)
+    }
+    {
+        std::lock_guard guard(quad.mutex);
+        m.helmetPieces = quad.helmetPiecesLoaded;
+        // The output's largest size (quad/output_density.h): the D3D12 chain is made once at launch.
+        double cap = 0;
+        if (experiment.composing() && !nativeQuad.active && experiment.focusLayer == 0) {
+            cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
+                                     experiment.outputDensityMax.load(std::memory_order_relaxed));
+            if (!experiment.views4ComposeD3D11 && quad.outChain)
+                cap = std::min(cap, quad.outDensity.chainScale);
+        }
+        m.outputCap = cap * 100;
+    }
+    m.nativePpd = native_center_ppd();  // takes quad.mutex itself
+    return m;
+}
+
 void menu_place(const MenuPlacement& placement) {
     const MenuPose pose = menu_pose(placement, static_cast<float>(kPanelHeight) / kPanelWidth);
     menu.layer.pose.position = {pose.position[0], pose.position[1], pose.position[2]};
@@ -206,13 +269,7 @@ void menu_open(int64_t now) {
             menu.model.values = read_menu_values(live.ini.c_str());
         menu.model.cheeky = {cheeky_running(), cheeky_version(),
                              stepPending ? menu.model.cheeky.values : read_cheeky_settings(live.ini.c_str())};
-        const Views4Layout& l = experiment.views4Layout;
-        {
-            std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
-            menu.model.launch = {experiment.views4, l.outer * 100, l.focus * 100, l.focusHeight * 100,
-                                 static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0,
-                                 experiment.eyeScale * 100};
-        }
+        menu.model.launch = menu_launch_sizes();
         menu.model.launch.apiPath = experiment.replayCompose;
         menu.model.launch.apiDlss = experiment.replayCompose && experiment.replayDlss != 0;
         menu.model.launch.apiFocusScale = experiment.replayDlssFocusScale;
@@ -248,38 +305,7 @@ void menu_open(int64_t now) {
                                                      {{L"eye", letter(d.eyePreset)}});
             }
         }
-        if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
-            menu.model.launch.qvfr = true;
-        menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
-        menu.model.launch.cropHeight = l.cropHeight * 100;
-        const games::GameFeatures features = game_features();  // what the game has: the rest is left out
-        menu.model.launch.cropPage = features.fovCrop;
-        menu.model.launch.helmetPage = features.helmet;
-        menu.model.launch.fgPage = features.frameGeneration;
-        menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
-        menu.model.launch.sharpening = features.sharpening;
-        menu.model.launch.textureMatch = features.peripheryTextureMatch && experiment.replayCompose;  // ACE's API path
-        menu.model.launch.eyeOff = features.eyeOff;
-        menu.model.launch.carLighting = features.carLighting && experiment.views4;  // night cars: QVFR's multi-view path
-        menu.model.launch.carLightReady = menu.model.launch.carLighting && experiment.carLightAtLaunch;
-        menu.model.launch.focusMask = features.focusMask;  // the pixels saved leave out what it skips (LMU)
-        menu.model.launch.focusCorridor = features.focusCorridor && experiment.views4;  // road focus: QVFR's (LMU)
-        menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
-        menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
-        menu.model.launch.runtimeFocusWidth = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareX * 100) : 0;
-        menu.model.launch.runtimeFocusHeight = nativeQuad.active ? static_cast<int>(nativeQuad.regionShareY * 100) : 0;
-        menu.model.launch.liveResolution = features.liveResolution;
-        if (experiment.replayCompose)
-            menu.model.launch.liveResolution = false;  // periphery and density: the next launch
-        if (game->shows_overlay()) {  // QVFR at the D3D11 level (ATS): the settings page, its sizes live
-            menu.model.launch.qvfr = true;
-            menu.model.launch.liveResolution = true;
-            menu.model.launch.cropPage = false;  // no view crop, helmet, focus shape or optimizer on this path
-            menu.model.launch.helmetPage = false;
-            menu.model.launch.shapePage = false;
-            menu.model.launch.optimize = false;
-            menu.model.launch.cornerFit = true;  // the sizes in effect by the SCS corner's rule (quad/corner_fit.h)
-        }
+        const games::GameFeatures features = game_features();
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
@@ -297,20 +323,6 @@ void menu_open(int64_t now) {
                 menu.model.launch.ownDlss && !menu.model.launch.fsrPc && !folder.empty() &&
                 GetFileAttributesW((folder + L"\\nvngx_dlssnr.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
         }
-        {
-            std::lock_guard guard(quad.mutex);
-            menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
-            // The output's largest size (quad/output_density.h): the D3D12 chain is made once at launch.
-            double cap = 0;
-            if (experiment.composing() && !nativeQuad.active && experiment.focusLayer == 0) {
-                cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
-                                         experiment.outputDensityMax.load(std::memory_order_relaxed));
-                if (!experiment.views4ComposeD3D11 && quad.outChain)
-                    cap = std::min(cap, quad.outDensity.chainScale);
-            }
-            menu.model.launch.outputCap = cap * 100;
-        }
-        menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
         if (!optimize.optimizer.running()) {  // a finished run's detail is not kept over a reopen
             optimize.shown = false;
             optimize.note.clear();
@@ -360,8 +372,9 @@ void menu_press(MenuKey key, int64_t now) {
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
                      eyeOff = menu.model.launch.eyeOff, carLighting = menu.model.launch.carLighting,
                      corridor = menu.model.launch.focusCorridor, match = menu.model.launch.textureMatch,
+                     showcase = menu.model.launch.showcase,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match, showcase);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -695,6 +708,20 @@ void menu_shutdown() {
     menu.pending = {};
     menu.visible = menu.uploaded = menu.failed = false;
     menu.dirty = true;
+}
+
+AbPixels ab_pixels(const MenuValues& values) {
+    SettingsMenu m;
+    m.launch = menu_launch_sizes();
+    m.values = values;
+    const MenuStats s = menu_stats(m);
+    AbPixels p;
+    p.stockPixels = s.nativePixels;  // Stock: both eyes at the native size
+    p.qvfrPixels = s.renderedPixels;
+    p.stockPpd = m.launch.nativePpd;
+    p.focusPpd = s.centerPpd;
+    p.peripheryPpd = s.peripheryPpd;
+    return p;
 }
 
 }  // namespace simqvfr::layer

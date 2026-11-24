@@ -18,7 +18,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // there). The focus mask on the API path's focus views (replay_focus.cpp: drawn after their clear; 2026-11-16 A/B
     // about -0.2 to -0.3 ms GPU for a 30% trapezoid).
     // Periphery texture match (replay_eye_live.cpp: the eyes' pass constants with a mip bias).
-    {false, true, true, true, false, false, false, false, true, false, false, false, true, false, false, true},
+    {false, true, true, true, false, false, false, false, true, false, false, false, true, false, false, true, true},  // ..., the showcase
     kBuilds, std::size(kBuilds),
 };
 

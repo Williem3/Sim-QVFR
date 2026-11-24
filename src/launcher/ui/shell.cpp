@@ -28,10 +28,12 @@ const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Picture},
     {Pane::Headset},
     {Pane::Game, Pane::LmuGame},  // the second only for LMU (pane_shown)
+    {Pane::Developer},
 };
 
 // English, as identities; tab_label() and the top bar show them through tr().
-constexpr const wchar_t* kTabLabels[kTabs] = {I18N(L"Overview"), I18N(L"Picture"), I18N(L"Headset"), I18N(L"Game")};
+constexpr const wchar_t* kTabLabels[kTabs] = {I18N(L"Overview"), I18N(L"Picture"), I18N(L"Headset"), I18N(L"Game"),
+                                                   I18N(L"Developer")};
 
 // A tab's colour (its shape, its underline): ink for Overview, then blue, red and yellow.
 uint32_t tab_color(Tab tab) {
@@ -39,6 +41,7 @@ uint32_t tab_color(Tab tab) {
     case Tab::Picture: return app.c->blue;
     case Tab::Headset: return app.c->red;
     case Tab::Game: return app.c->yellow;
+    case Tab::Developer: return app.c->text_muted;
     default: return app.c->text;
     }
 }
@@ -51,6 +54,7 @@ void tab_shape(Tab tab, float cx, float cy, float s) {
     case Tab::Picture: app.canvas.fill({cx - s / 2, cy - s / 2, s, s}, c); break;
     case Tab::Headset: app.canvas.circle(cx, cy, s / 2, c, true); break;
     case Tab::Game: app.canvas.path("M0 10L5 0.5L10 10Z", {cx - s / 2, cy - s / 2, s, s}, 10, c, 0, true); break;
+    case Tab::Developer: app.canvas.circle(cx, cy, s / 2, c, false, 1.6f); break;  // an outlined circle: not a player's
     }
 }
 
@@ -208,6 +212,8 @@ uint32_t section_color(Tab tab) { return tab_color(tab); }
 void section_shape(Tab tab, float cx, float cy, float size) { tab_shape(tab, cx, cy, size); }
 
 // ---- Tabs and pages ----------------------------------------------------------------------------
+
+int tab_count() { return app.s.developer ? kTabs : kTabs - 1; }
 
 Tab tab_of(Pane pane) {
     for (int t = 0; t < kTabs; ++t)
@@ -371,7 +377,7 @@ void topbar(float W) {
     // Tabs' widths at full spacing.
     const auto tabs_width = [&](float tabPad) {
         float w = 0;
-        for (int i = 0; i < kTabs; ++i)
+        for (int i = 0; i < tab_count(); ++i)
             w += tabPad + 10 + 8 + std::ceil(cv.measure(tab_label(static_cast<Tab>(i)), t::kTabLabel)) + tabPad;
         return w;
     };
@@ -453,9 +459,9 @@ void topbar(float W) {
     // too wide, each name is cut to an equal share of the room ("…"; the full name as its tip and accessible name).
     const Tab current = tab_of(app.pane);
     const float tabsRoom = x - 16 - (x0 + pad);
-    const float labelMax = tabs_width(tabPad) > tabsRoom ? std::max(24.0f, tabsRoom / kTabs - (2 * tabPad + 18)) : 1e9f;
+    const float labelMax = tabs_width(tabPad) > tabsRoom ? std::max(24.0f, tabsRoom / tab_count() - (2 * tabPad + 18)) : 1e9f;
     float tx = x0 + pad;
-    for (int i = 0; i < kTabs; ++i) {
+    for (int i = 0; i < tab_count(); ++i) {
         const Tab tab = static_cast<Tab>(i);
         const std::wstring full = tab_label(tab);
         const std::wstring label = std::ceil(cv.measure(full, t::kTabLabel)) > labelMax ? fit(full, t::kTabLabel, labelMax) : full;

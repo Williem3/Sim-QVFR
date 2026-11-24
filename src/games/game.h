@@ -52,6 +52,9 @@ struct GameFeatures {
     // Periphery texture match ([quad] periphery_texture_match, live; ACE's replay_probe_set_eye_texture_match): the
     // periphery's textures sampled as sharp as the focus views', so see-through surfaces look the same in both.
     bool peripheryTextureMatch = false;
+    // The showcase ([quad] stock, live; quad/showcase.h): the game switches between Stock and QVFR at a frame boundary,
+    // for recording both in one session, and the overlay's A/B table compares them.
+    bool showcase = false;
 };
 
 // How the layer offers the game its QVFR views (GameAdapter::qvfr_eye_columns, qvfr_one_view_size, qvfr_separate_views,

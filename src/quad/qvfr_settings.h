@@ -103,6 +103,9 @@ inline constexpr IniInt kCarLightQuality{L"quad", L"car_light_quality", 2, 0, 2,
 // runtime's largest image caps it too. 100: composed at the native size, as before. Live.
 inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};
 inline constexpr IniInt kEyeOff{L"quad", L"eye_off", 0, 0, 2, 1};  // 0 both eyes on, 1 the left off, 2 the right
+// The showcase (quad/showcase.h): 1 the game renders Stock (its eyes at the native size, no focus views), 0 QVFR. Live;
+// written to the ini the layer reloads only, so every launch starts in QVFR.
+inline constexpr IniInt kStock{L"quad", L"stock", 0, 0, 1, 1};
 // [crop] (QVFR): fov_crop.h's kCropMax is the sides' 40.
 inline constexpr IniInt kCropEnabled{L"crop", L"enabled", 0, 0, 1, 1};
 inline constexpr IniInt kCropTop{L"crop", L"top", 0, 0, 40, 1};

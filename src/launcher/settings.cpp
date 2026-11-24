@@ -55,6 +55,9 @@ Settings load_settings(const std::wstring& ini) {
     s.textureMatch = ini_int(f, kPeripheryTextureMatch);
     s.grade = read_color_grade(f);
     s.carLight = read_car_lighting(f);
+    s.developer = GetPrivateProfileIntW(L"launcher", L"developer", 0, f) != 0;
+    for (int i = 0; i < kDevSwitchCount; ++i)
+        s.dev[i] = static_cast<int>(GetPrivateProfileIntW(kDevSwitches[i].section, kDevSwitches[i].key, 0, f));
     s.eyeOff = ini_int(f, kEyeOff);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     if (read_int(ini, L"launcher", L"native_quad_reset", 0) == 0)  // its card is gone: an off it saved goes back to auto
@@ -142,6 +145,7 @@ Settings restored_defaults(const Settings& current) {
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
+    s.developer = current.developer;  // the Developer tab stays (its switches go back to off)
     s.nr.folder = current.nr.folder;  // where the player's nvngx_dlssnr.dll is: not a setting to lose (Sim-QVFR has none)
     return s;  // [dlss] folder too: back to the nvngx_dlss.dll Sim-QVFR includes
 }
@@ -189,6 +193,8 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
                                              ini.c_str()) != 0 || it == s.gameColors.end();  // no colour: the key goes
         }
     }
+    for (int i = 0; i < kDevSwitchCount; ++i)  // the Developer tab's (at the next launch; [launcher] developer is the user's)
+        ok &= write(ini, kDevSwitches[i].section, kDevSwitches[i].key, n(s.dev[i]));
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }
@@ -270,6 +276,9 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
 }
 
 bool per_game_key(const std::wstring& section, const std::wstring& key) {
+    for (const DevSwitch& d : kDevSwitches)  // the Developer tab's: every game's, in no profile
+        if (section == d.section && key == d.key)
+            return false;
     return !(section == L"menu" || section == L"osd" || section == L"clock" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
              (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||

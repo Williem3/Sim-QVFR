@@ -21,6 +21,7 @@
 #include "../../probe/frame_parts.h"
 #include "../../quad/eye_off.h"
 #include "../../dev_build.h"
+#include "../../quad/showcase.h"
 #include "../../sha256_file.h"
 #include "abi.h"
 #include "car_light.h"
@@ -552,6 +553,42 @@ void eye_off_frame_begin() {
 }
 bool off_pass(int p) { return p < 2 && p == frameEyeOff; }
 
+// ---- The showcase's Stock ([quad] stock, quad/showcase.h; GameFeatures::showcase) ----
+// Taken at each frame's pass 0, as eye_off is: the eyes alone, as recovery's plain frames (no focus views, no twins,
+// no focus post or mask, the layer submits each eye's rendered part), but cut to the native eye at the game's own render
+// scale (the launch targets hold the room beside each eye), no Sim-QVFR DLSS (mvr_stock: nor its jitter, the frame
+// after) and no car tracking; no recovery tries meanwhile. The badge and the A/B table go by set_stock_active.
+bool stockFrame = false;
+bool stockLogged = false;
+void stock_frame_begin() {
+    const bool stock = simqvfr::stock_wanted() && cfg.trackerDrives && cfg.mvr;
+    if (stock != stockFrame || !stockLogged) {
+        if (stockLogged || stock)
+            simqvfr::logf("lmu qvfr: frame %llu: showcase: %s", frames,
+                          stock ? "Stock (the eyes at the native size at the game's render scale, no focus views, no "
+                                  "DLSS of Sim-QVFR's, no car tracking)"
+                                : "QVFR");
+        stockLogged = true;
+    }
+    if (stock && !stockFrame) {
+        // QVFR's own images let go while Stock shows (made again at the first frame back: the atlas at the frame end,
+        // the DLSS features at their passes): left alone, Windows pages them out for the native-size eyes and back in
+        // at the switch, a 5 s freeze on a 16 GB card at native-size targets (2026-11-17).
+        const double atlasMb = atlas ? 4.0 * 4 * viewW * viewH / (1024.0 * 1024.0) : 0;
+        if (atlas) {
+            atlas->Release();
+            atlas = nullptr;  // ensure_atlas makes it again (viewW/viewH kept: the passes' sizes go by them)
+        }
+        const int features = simqvfr::dlss_release_views();
+        simqvfr::logf("lmu qvfr: frame %llu: showcase: Stock: QVFR's own images let go (the atlas ~%.0f MB, %d DLSS "
+                      "feature%s), made again at the switch back",
+                      frames, atlasMb, features, features == 1 ? "" : "s");
+    }
+    stockFrame = stock;
+    mvr_stock(stock);
+    simqvfr::set_stock_active(stock);
+}
+
 // At a pass's start: the game's own scale (first seen, or changed by the game: its video settings) and the size the pass's
 // eye is cut to (the whole of the main targets while recovery shows the eyes alone).
 void qvfr_before_pass(int p) {
@@ -571,7 +608,12 @@ void qvfr_before_pass(int p) {
     main_size(m);
     sceneW[p] = m[0] ? m[0] : 1u;
     sceneH[p] = m[1] ? m[1] : 1u;
-    if (gameScale > 0 && m[0] && m[1] && !plain_now()) {
+    if (gameScale > 0 && m[0] && m[1] && stockFrame) {  // the native eye at the game's scale (stock_frame_begin)
+        std::uint32_t rec[2];
+        real_recommended(rec);
+        sceneW[p] = scaled_size(static_cast<std::uint32_t>(std::lround(rec[0] / std::max(layerShare[0], 1.0))), gameScale);
+        sceneH[p] = scaled_size(static_cast<std::uint32_t>(std::lround(rec[1] / std::max(layerShare[1], 1.0))), gameScale);
+    } else if (gameScale > 0 && m[0] && m[1] && !plain_now()) {
         float share;
         {
             std::lock_guard guard(liveMutex);
@@ -603,7 +645,7 @@ void qvfr_before_pass(int p) {
 // The focus views stopped coming (mvr_recovery.h): the eyes at full resolution meanwhile, a try again after a wait. No
 // fallback for the session from it.
 MvrRecovery recovery;
-bool plain_now() { return cfg.trackerDrives && recovery.plain(); }
+bool plain_now() { return cfg.trackerDrives && (recovery.plain() || stockFrame); }
 int recoveryLogged = 0;
 unsigned long long eyesOnlyRun = 0;  // scene frames in a row without focus views (the overlay's badge)
 // A frame with eye passes but no four views: the part of each eye's image its pass rendered (the top-left, at the live
@@ -747,8 +789,9 @@ void mvr_before_pass(int p) {
                 mvr_frame_mode(carSide);
             } else if (carsOn) {  // DLSS or the cars' motion turned off while the game runs: no tracking for nothing
                 // (night car lighting on keeps them: it reads the slots)
-                const bool pause = !carsWanted.load(std::memory_order_relaxed) &&
-                                   !(cfg.carLight && simqvfr::car_lighting().on);
+                const bool pause = (!carsWanted.load(std::memory_order_relaxed) &&
+                                    !(cfg.carLight && simqvfr::car_lighting().on)) ||
+                                   stockFrame;  // (Stock: none)
                 if (pause != carsPaused) {
                     carsPaused = pause;
                     mvr_car_active(!pause);
@@ -832,7 +875,7 @@ void mvr_before_pass(int p) {
     bool draw = false;
     if (off_pass(p)) {
         // The eye that's off: no focus view (nothing of it is shown).
-    } else if (p < 2 && frozen[p] && gameScale > 0 && !recovery.plain()) {  // (plain: no focus view asked for)
+    } else if (p < 2 && frozen[p] && gameScale > 0 && !plain_now()) {  // (plain, Stock: no focus view asked for)
         const ClipRemap& r = frozenRemap[p];
         v.eye = p;
         v.remap[0] = static_cast<float>(r.a);
@@ -1052,6 +1095,7 @@ void pass_begin(int p) {
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
         frameFinalsOk = false;
         eye_off_frame_begin();
+        stock_frame_begin();
     }
     unsigned long long hook0 = thread_cycles();
     qvfr_before_pass(p);  // live resolution: the size this pass renders at
@@ -1062,7 +1106,7 @@ void pass_begin(int p) {
             ++offEyePasses;
             mvr_size_cut(true, m[0], m[1], std::min(kOffEyeSize, m[0]), std::min(kOffEyeSize, m[1]));
         } else {
-            mvr_size_cut(!plain_now(), m[0], m[1], sceneW[p], sceneH[p]);
+            mvr_size_cut(!plain_now() || stockFrame, m[0], m[1], sceneW[p], sceneH[p]);  // Stock: the native eye
         }
         mvr_before_pass(p);
     }
@@ -1371,7 +1415,7 @@ void capture_views() {
         return;
     std::vector<std::uint8_t> px;
     unsigned w = 0, h = 0;
-    if (!simqvfr::d3d11_read_bgra8(atlas, px, w, h) || w < 2 * viewW || h < 2 * viewH) {
+    if (!atlas || !simqvfr::d3d11_read_bgra8(atlas, px, w, h) || w < 2 * viewW || h < 2 * viewH) {
         simqvfr::logf("lmu qvfr: frame capture: frame %llu's views couldn't be read back", frames);
         return;
     }
@@ -1576,7 +1620,8 @@ void qvfr_frame_frame_end() {
             if (recovery.plain() && passes >= 2 && !mvr_shape_ready() && frames % 900 == 0)
                 simqvfr::logf("lmu mvr: frame %llu: the eyes alone, no try: eye 0's pass has %s, eye 1's %s", frames,
                               mvr_shape_missing(0), mvr_shape_missing(1));
-            switch (recovery.frame(passes, frameFinalsOk, now_ms(), mvr_shape_ready())) {
+            // Stock: no focus views asked for, so none missing; recovery neither goes plain nor tries meanwhile.
+            switch (stockFrame ? MvrRecovery::Event::none : recovery.frame(passes, frameFinalsOk, now_ms(), mvr_shape_ready())) {
             case MvrRecovery::Event::wentPlain:
                 if (recovery.timesPlain == 1 && twoPassFrames)
                     log_multi_view_summary();  // what the focus views didn't get past, once
@@ -1612,6 +1657,8 @@ void qvfr_frame_frame_end() {
         // The backend's name only while focus views are being made: scene frames without them (plain, or no eye pass
         // found at all, by the frame's draw count) say so.
         const bool scene = passes >= 1 || mvr_track_stats().lastFrameDraws >= 1000;
+        if (passes >= 1)  // eye passes tracked: the track drawn (quad/showcase.h)
+            simqvfr::note_scene_frame();
         if (scene)
             eyesOnlyRun = frameFinalsOk ? 0 : eyesOnlyRun + 1;
         way = recovery.plain() || eyesOnlyRun >= MvrRecovery::kNoFinalsFrames ? QvfrMultiView::eyesOnly

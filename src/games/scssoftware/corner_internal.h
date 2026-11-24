@@ -259,6 +259,9 @@ struct State {
     // resamples (ETS2 at 75%: 3896x3128 into 5192x4168, 2026-11-15). The path doesn't handle that and stays off for the
     // session's frames: the game draws as without Sim-QVFR. Checked whenever the eye's size is (re)learned.
     bool scaleMismatch = false;
+    // The showcase's Stock (quad/showcase.h), taken at the frame's end: the corner doesn't start, the frame is the game's.
+    bool stock = false;
+    bool sceneThisFrame = false;  // the eye's G-buffer bound this frame, either side (the A/B table's track frames)
     int remapEye = -1;       // the eye whose remap the scene draws' constant buffer holds
     // The eye of the frame's first and second pass: set at the first scene's G-buffer bind from the order learned for
     // the headset image being drawn (below); where that isn't known yet, the order of the frame before's final blits

@@ -27,6 +27,7 @@
 #include "../../xr.h"
 #include "../../probe/d3d11_capture.h"  // write_png_bgra
 #include "../../probe/focus_ngx.h"
+#include "../../quad/showcase.h"
 #include "replay_internal.h"
 #include "replay_shaders.h"
 #include "stereo_flag.h"
@@ -176,6 +177,11 @@ std::atomic<bool> installed{false};
 int probeMode = 0;
 std::atomic<bool> replayOn{true};
 std::atomic<bool> focusActive{true};  // mode 3 cost A/B: the focus replays recorded at all
+// The showcase's Stock (quad/showcase.h): asked (replay_probe_set_stock), and as each frame's end took it (stockOn): no
+// focus replays queued (the streams still record: the right eye's tyres), so no fresh focus image and no composition,
+// the periphery at its launch size: ACE's own eyes go to the headset as it made them.
+std::atomic<bool> stockWanted{false}, stockOn{false};
+std::atomic<bool> sceneThisFrame{false};  // a scene list (stereo, replayable) closed this frame: the A/B table's
 uint32_t minDraws = 16;
 float minWidth = 512.0f;
 double msPerTick = 0, msPerCycle = 0;
@@ -1574,6 +1580,10 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     hookCycles.fetch_add(s->hookCycles, std::memory_order_relaxed);
     if (!s->eyePatches.empty())  // (whatever Close returned: the list's bindings name our copies)
         eye_record(list, *s);
+    if (SUCCEEDED(hr) && probeMode == 3 && s->replayable(focus.settings.allTargets))
+        sceneThisFrame.store(true, std::memory_order_relaxed);  // the track drawn (menus tonemap without a scene)
+    if (probeMode == 3 && stockOn.load(std::memory_order_relaxed))
+        return hr;  // the showcase's Stock: ACE's own frame only
     if (SUCCEEDED(hr) && probeMode == 3 && focusActive.load(std::memory_order_relaxed) && !s->visDispatches.empty() &&
         cull.mode.load(std::memory_order_relaxed))
         focus_cull_record(list, *s);
@@ -2677,6 +2687,8 @@ void replay_probe_set_size(double k, double kY, double renderScale) {
         focus.renderScaleWanted.store(renderScale);
 }
 
+void replay_probe_set_stock(bool on) { stockWanted.store(on, std::memory_order_relaxed); }
+
 void replay_probe_set_eye_scale(double scale) {
     eyeLive.wanted.store(static_cast<float>(std::clamp(scale, 0.25, 1.0)), std::memory_order_relaxed);
 }
@@ -2778,6 +2790,15 @@ void replay_probe_frame_end() {
     if (probeMode == 3 && focus.settings.dlss && !focus_ngx::installed() && frames.load() % 90 == 0)
         focus_ngx::install();
     if (probeMode == 3) {
+        if (const bool stock = stockWanted.load(std::memory_order_relaxed); stock != stockOn.load(std::memory_order_relaxed)) {
+            stockOn.store(stock, std::memory_order_relaxed);
+            logf("replay focus: showcase: %s from frame %llu", stock ? "Stock (no focus replays, ACE's eyes at their launch size)"
+                                                                     : "QVFR",
+                 static_cast<unsigned long long>(focus.frame.load()));
+        }
+        simqvfr::set_stock_active(stockOn.load(std::memory_order_relaxed));
+        if (sceneThisFrame.exchange(false, std::memory_order_relaxed))
+            simqvfr::note_scene_frame();
         const uint64_t ended = focus.frame.fetch_add(1);  // the frame that just ended
         focus_fixation_frame_end(ended);
         if (focus.settings.cullProbe && ended % 900 == 0) {  // the window that just ended, then the next one's phase
@@ -2887,7 +2908,7 @@ void replay_probe_frame_end() {
             const uint64_t before = eyeLive.state.load(std::memory_order_relaxed);
             uint64_t next = before;
             int why = 0;
-            if (held >= 0.995f)
+            if (held >= 0.995f || stockOn.load(std::memory_order_relaxed))  // (Stock: the launch size)
                 next = 0;
             else if (!eyeLive.allowed.load(std::memory_order_relaxed))
                 next = 0, why = 1;

@@ -46,6 +46,16 @@ games::GameFeatures game_features() {
     return f;
 }
 
+const char* stock_refusal() {
+    if (experiment.crop().on())
+        return "the FOV crop is on: Stock is the whole view (turn the crop off)";
+    const Views4Layout& l = experiment.views4Layout;
+    if (experiment.replayCompose && (experiment.eyeScale < 0.995 || l.cropWidth < 0.999 || l.cropHeight < 0.999))
+        return "ACE launched below the native eye (periphery under 100% or a crop): Stock needs periphery 100% and no "
+               "crop at launch, QVFR then lowers the periphery live";
+    return nullptr;
+}
+
 LiveSettings read_live(const wchar_t* ini) {
     LiveSettings l;
     const games::GameFeatures features = game_features();
@@ -66,6 +76,8 @@ LiveSettings read_live(const wchar_t* ini) {
     l.outputDensityMax = ini_int(ini, kOutputDensityMax);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
+    if (features.showcase)
+        l.stock = ini_flag(ini, kStock);
     const int isolateExperiment = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
     l.cpuIsolate = isolateExperiment ? isolateExperiment : ini_flag(ini, kCpuIsolateMain) ? 1 : 0;
     l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include "../../dev_build.h"
 #include "../../engine/nvapi_stereo.h"
@@ -15,6 +16,7 @@
 #include "../../probe/aftermath.h"
 #include "../../probe/hang_watch.h"
 #include "../../quad/corner_fit.h"
+#include "../../quad/showcase.h"
 #include "corner_rules.h"
 #include "fixation.h"
 #include "pass_probe.h"
@@ -54,6 +56,8 @@ void take_frame_end() {
     mirror_diag_frame_end();
     anomaly_frame_end();
     fixation_frame_end();
+    if (std::exchange(g.sceneThisFrame, false))  // the frame that ended drew the road (quad/showcase.h)
+        simqvfr::note_scene_frame();
     if (g.stats.frames % kEvictFrames == 0)
         evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
@@ -140,7 +144,15 @@ void take_frame_end() {
     if (g.stats.frames % kEvictFrames == 0)
         evict_mirrors();  // after our copies were swapped back out (above)
     release_orphans();    // every frame: what the game let go since the last
-    g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch ? 0
+    // The showcase (quad/showcase.h): Stock from the next frame on, as a Scaling mismatch's frames are (the game's eyes
+    // at the headset's size, no corner, no focus view, its frame submitted as it made it).
+    if (const bool stock = simqvfr::stock_wanted(); stock != g.stock) {
+        g.stock = stock;
+        simqvfr::logf("scs corner: showcase: %s from frame %llu", stock ? "Stock" : "QVFR",
+                      static_cast<unsigned long long>(g.stats.frames));
+    }
+    simqvfr::set_stock_active(g.stock);
+    g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch || g.stock ? 0
                 : g.focusOff ? 3
                 : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,
                 std::memory_order_relaxed);
@@ -309,7 +321,9 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
     if (!(g.depthBound && g.fullSize))
         two_views(false);
     const bool wasCut = g.active && g.cut;
-    if (gbuffer && w == g.eyeW && h == g.eyeH && !g.active && !g.scaleMismatch) {
+    if (gbuffer && w == g.eyeW && h == g.eyeH)
+        g.sceneThisFrame = true;
+    if (gbuffer && w == g.eyeW && h == g.eyeH && !g.active && !g.scaleMismatch && !g.stock) {
         g.active = true;
         g.thisFrameCornered = true;
         g.cornerNow.store(true, std::memory_order_release);

@@ -273,6 +273,7 @@ struct LiveSettings {
     ColorGrade color;        // [quad] color_correction and its values (a game with GameFeatures::sharpening)
     CarLighting carLight;    // [quad] car_light and its values (a game with GameFeatures::carLighting)
     int outputDensityMax = 400;  // [quad] output_density_max, percent of the native eye (100: composed at native size)
+    bool stock = false;      // [quad] stock (a game with GameFeatures::showcase; quad/showcase.h)
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)

@@ -415,6 +415,7 @@ ID3D11Texture2D* mvr_car_slot_texture() { return g.slotTex.Get(); }
 
 void mvr_car_active(bool on) { g.carActive = on; }
 void mvr_eye_off(int eye) { g.eyeOff = eye == 0 || eye == 1 ? eye : -1; }
+void mvr_stock(bool on) { g.stock = on; }
 
 void mvr_car_slot_images(bool on) { g.slotImages = on; }
 

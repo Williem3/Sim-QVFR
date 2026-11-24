@@ -15,8 +15,9 @@
 
 namespace simqvfr {
 
-enum class HotkeyAction { MenuToggle, MenuUp, MenuDown, MenuLeft, MenuRight, Overlay, Visor, CpuCapture, FrameCapture };
-inline constexpr int kHotkeyActions = 9;
+// ShowcaseStock: Stock or QVFR (quad/showcase.h), a game with GameFeatures::showcase.
+enum class HotkeyAction { MenuToggle, MenuUp, MenuDown, MenuLeft, MenuRight, Overlay, Visor, CpuCapture, FrameCapture, ShowcaseStock };
+inline constexpr int kHotkeyActions = 10;
 
 struct KeyCombo {
     int vk = 0;  // 0: none
@@ -46,7 +47,7 @@ struct Hotkey {
 };
 using Hotkeys = std::array<Hotkey, kHotkeyActions>;
 
-// Ctrl+Alt+arrows for the menu (its first press opens it), Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C and Ctrl+Alt+F; no wheel
+// Ctrl+Alt+arrows for the menu (its first press opens it), Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C, Ctrl+Alt+F and Ctrl+Alt+S; no wheel
 // buttons.
 Hotkeys default_hotkeys();
 Hotkeys read_hotkeys(const wchar_t* ini);

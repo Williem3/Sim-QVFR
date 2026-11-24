@@ -23,6 +23,7 @@
 #include "quad/helmet.h"
 #include "quad/osd.h"
 #include "quad/settings_menu.h"
+#include "quad/showcase.h"
 #include "xr.h"
 #include "dev_build.h"
 #include "layer/layer.h"
@@ -119,6 +120,20 @@ void live_apply(const LiveSettings& l) {
     if (eye_off() != l.eyeOff) {
         set_eye_off(l.eyeOff);
         logf("live: %s", eye_off_name(l.eyeOff));
+    }
+    {  // the showcase: the game takes it at its next frame boundary (quad/showcase.h)
+        static bool refusedLogged = false;
+        const char* why = l.stock ? stock_refusal() : nullptr;
+        const bool stock = l.stock && !why;
+        if (why && !refusedLogged)
+            logf("live: showcase: Stock asked, but %s: QVFR stays", why);
+        refusedLogged = why != nullptr;
+        if (stock_wanted() != stock) {
+            set_stock_wanted(stock);
+            logf("live: showcase: %s", stock ? "Stock (the eyes at the native size, no focus views)" : "QVFR");
+        }
+        if (experiment.replayCompose)
+            replay_probe_set_stock(stock);
     }
     if (experiment.focusLayer == 2 && experiment.focusQuadDistance.exchange(l.focusQuadDistance) != l.focusQuadDistance)
         logf("live: focus_layer=2: the focus quads %d m out", l.focusQuadDistance);
@@ -421,6 +436,7 @@ void live_reload() {
         }
     }
     menu_values_changed(*s);
+    ab_values_changed(s->menu);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);
     clock_placement_changed(s->clock);

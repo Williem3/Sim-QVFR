@@ -110,6 +110,8 @@ void settings_round_trip_checks() {
     s.hiddenGames = L"xplane";
     s.shownGames = L"lmu";
     s.gameColors[L"ace"] = 0x123456;
+    for (int i = 0; i < kDevSwitchCount; ++i)  // the Developer tab's switches, each on (an A/B at its own frames)
+        s.dev[i] = std::wstring(kDevSwitches[i].key) == L"lmu_car_vectors_ab" ? 300 : kDevSwitches[i].on;
     const std::wstring a = (dir / L"a.ini").wstring(), b = (dir / L"b.ini").wstring();
     check(save_settings(a, s), "round trip: a user's settings, none at its default, save");
     const auto keysA = ini_keys(a);
@@ -120,7 +122,8 @@ void settings_round_trip_checks() {
     check(read_text(a) == before, "round trip: saving what was loaded leaves the file byte for byte as it was");
     bool spotted = keysA.at(L"quad/gaze") == L"0" && keysA.at(L"experiment/focus_density") == L"155" &&
                    keysA.at(L"helmet/visor") == L"half" && keysA.at(L"cheeky/fg_release") == L"3" &&
-                   keysA.at(L"dlss_nr/max_gain") == L"200" && keysA.at(L"launcher/color_ace") == L"123456";
+                   keysA.at(L"dlss_nr/max_gain") == L"200" && keysA.at(L"launcher/color_ace") == L"123456" &&
+                   keysA.at(L"experiment/lmu_car_vectors_ab") == L"300" && keysA.at(L"experiment/views4_menu_scale") == L"100";
     check(spotted, "round trip: the values are the ones set (not defaults)");
 
     // A profile of them: saved, read back and applied to another ini, it holds the same keys.
@@ -134,6 +137,18 @@ void settings_round_trip_checks() {
     check(apply_profile(c.c_str(), q) && settings_profile(load_settings(c), L"Mine").keys == p.keys,
           "round trip: applied to fresh settings, a profile gives back the same picture");
 
+    // The Developer tab's switches are in no profile, and [launcher] developer is the user's: a save never writes it.
+    check(std::none_of(p.keys.begin(), p.keys.end(),
+                       [](const ProfileKey& k) {
+                           return std::any_of(std::begin(kDevSwitches), std::end(kDevSwitches),
+                                              [&](const DevSwitch& d) { return k.key == d.key; });
+                       }) &&
+              !keysA.count(L"launcher/developer"),
+          "round trip: the Developer tab's switches stay out of profiles; [launcher] developer isn't written");
+    WritePrivateProfileStringW(L"launcher", L"developer", L"1", a.c_str());
+    check(load_settings(a).developer && restored_defaults(load_settings(a)).developer &&
+              restored_defaults(load_settings(a)).dev == DevValues{},
+          "round trip: [launcher] developer=1 shows the tab, kept by Restore Defaults, which turns its switches off");
     // The theme button's key: one for every game, kept by a save.
     WritePrivateProfileStringW(L"launcher", L"ui_theme", L"dark", a.c_str());
     save_settings(a, load_settings(a));

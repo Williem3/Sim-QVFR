@@ -3,6 +3,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,6 +27,9 @@
 #include "quad/osd.h"
 #include "quad/session_graphics.h"
 #include "quad/settings_menu.h"
+#include "quad/showcase.h"
+#include "quad/qvfr_settings.h"
+#include "ini_put.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -42,7 +46,28 @@ constexpr int64_t kNoticeMs = 30000;
 
 constexpr OsdPlacement kNoticePlacement{true, 0, -6, 34};
 
+// The showcase (quad/showcase.h): the overlay's card as the A/B table, its pixel rows from the menu's values of the
+// latest live reload, and the Stock / QVFR hotkey. On the frame thread.
+constexpr int kShowcaseVramFrames = 180;  // about 2 s at 90 Hz
+
+struct Showcase {
+    AbTable table;
+    std::optional<MenuValues> values;  // the latest live reload's
+    bool pixelsDirty = true;
+    AbPixels pixels;
+    std::wstring qvfrName = L"QVFR";  // with the multi-view badge QVFR last showed ("QVFR · MVR")
+    bool hotkeyHeld = false;
+    int activeLogged = -1;  // stock_active as last logged
+    int vramLogIn = 0;      // frames until VRAM is logged again after a switch
+    uint64_t sceneFrames = 0;  // scene_frames() at the last window
+} showcase;
+
 }  // namespace
+
+void ab_values_changed(const MenuValues& values) {
+    showcase.values = values;
+    showcase.pixelsDirty = true;
+}
 
 void notice_set(std::wstring title, std::vector<std::wstring> lines) {
     notice.title = std::move(title);
@@ -184,6 +209,19 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
         osd.lastDisplay = 0;
         osd.nextDraw = 0;
     }
+    // The A/B table (quad/showcase.h): counted afresh each time it shows; its pixel rows want the menu's values, which
+    // a write-less pass of the ini worker reads (the snapshot reaches ab_values_changed).
+    const bool tableNow = placement.enabled && placement.abTable, tableBefore = osd.placement.enabled && osd.placement.abTable;
+    if (tableNow && !tableBefore) {
+        showcase.table.reset();
+        showcase.sceneFrames = scene_frames();
+        osd.nextDraw = 0;
+        if (!showcase.values)
+            ini_write_later([] {});
+        logf("showcase: A/B table on (now %s)", stock_active() ? "Stock" : "QVFR");
+    } else if (!tableNow && tableBefore) {
+        log_line("showcase: A/B table off");
+    }
     osd.placement = placement;
     osd.read = true;
     osd_place();
@@ -232,6 +270,33 @@ void osd_hotkey() {
         osd_placement_changed(placement, osd.cheeky);  // at once; the ini on the worker
     }
     osd.hotkeyHeld = held;
+}
+
+// The Stock / QVFR hotkey (Ctrl+Alt+S by default; quad/showcase.h): [quad] stock flipped in the ini the layer reloads
+// (not the launcher's: each launch starts in QVFR), applied by the live reload as the menu's step is. Logs the game's
+// side when it changes, whatever changed it.
+void showcase_hotkey() {
+    if (!game_features().showcase)
+        return;
+    const bool held = hotkey_held(HotkeyAction::ShowcaseStock);
+    if (held && !showcase.hotkeyHeld) {
+        const bool stock = !stock_wanted();
+        ini_write_later([ini = live.ini, stock] { ini_put(ini.c_str(), kStock.section, kStock.key, stock ? 1 : 0); });
+        logf("showcase: hotkey: %s", stock ? "Stock" : "QVFR");
+    }
+    showcase.hotkeyHeld = held;
+    const int active = stock_active() ? 1 : 0;
+    if (active != showcase.activeLogged) {
+        if (showcase.activeLogged >= 0 || active)
+            logf("showcase: the game renders %s", active ? "Stock" : "QVFR");
+        if (showcase.activeLogged >= 0) {
+            log_vram(active ? "the switch to Stock" : "the switch to QVFR");
+            showcase.vramLogIn = kShowcaseVramFrames;  // and again once the other side settled
+        }
+        showcase.activeLogged = active;
+    }
+    if (showcase.vramLogIn > 0 && --showcase.vramLogIn == 0)
+        log_vram(active ? "Stock, 2 s after the switch" : "QVFR, 2 s after the switch");
 }
 
 bool osd_resources(XrSession session) {
@@ -398,6 +463,15 @@ OsdInput osd_input(int64_t now) {
         case games::QvfrMultiView::eyesOnly: in.multiView = OsdMultiView::EyesOnly; break;
         }
     }
+    if (!stock_active()) {  // QVFR's name in the A/B table, with its multi-view badge
+        const std::wstring badge = osd_badge(in).value;
+        const std::wstring mv = badge.substr(0, badge.find(L" + "));  // without the upscaler
+        showcase.qvfrName = mv.empty() || in.multiView == OsdMultiView::EyesOnly || in.multiView == OsdMultiView::Fallback
+                                ? std::wstring(L"QVFR")
+                                : L"QVFR · " + mv;
+    } else {
+        in.multiView = OsdMultiView::Stock;  // the showcase (quad/showcase.h)
+    }
     {  // DLSS: views evaluated since the card's last drawing
         static unsigned long long seen = 0;
         const unsigned long long total = dlss_evaluations_total();
@@ -447,6 +521,7 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         osd_placement_changed();
     osd_hotkey();
     visor_hotkey();
+    showcase_hotkey();
     if (!osd.placement.enabled || !osd_resources(session))
         return nullptr;
     if (now >= osd.nextDraw && !osd.drawing.valid()) {
@@ -456,13 +531,35 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         osd.shownValid = true;
         if (menu.visible)
             menu_frame_line();
-        SYSTEMTIME local{};
-        GetLocalTime(&local);  // the card's clock (redrawn every kOsdDrawMs: the minute turns over in time)
-        osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
-                                                      history = std::vector<OsdFrame>(osd.history.begin(), osd.history.end()),
-                                                      clock = osd_clock(local.wHour, local.wMinute)] {
-            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in), clock);
-        });
+        if (osd.placement.abTable) {  // the showcase's A/B table in the card's place (quad/showcase.h)
+            const int64_t nowMs = now * 1000 / qpc_ms(1000);
+            const bool stock = stock_active();
+            std::vector<double> frameMs;
+            frameMs.reserve(in.frames.size());
+            for (const OsdFrame& f : in.frames)
+                frameMs.push_back(f.intervalMs);
+            const uint64_t scenes = scene_frames();
+            showcase.table.add(stock, frameMs, osd.shown.cpuMs, osd.shown.gpuMs, nowMs, scenes - showcase.sceneFrames);
+            showcase.sceneFrames = scenes;
+            // The pixel rows: again after a reload, and until the native sharpness is known (after the first frames).
+            if (showcase.values && (showcase.pixelsDirty || showcase.pixels.stockPpd <= 0)) {
+                showcase.pixels = ab_pixels(*showcase.values);
+                showcase.pixelsDirty = false;
+            }
+            const AbStats s = ab_stats(showcase.table.side(true)), q = ab_stats(showcase.table.side(false));
+            const AbHeading heading{stock, showcase.table.settling(nowMs), showcase.qvfrName, s.seconds, q.seconds};
+            osd.drawing = std::async(std::launch::async, [heading, lines = ab_lines(s, q, showcase.pixels)] {
+                return draw_ab_panel(heading, lines);
+            });
+        } else {
+            SYSTEMTIME local{};
+            GetLocalTime(&local);  // the card's clock (redrawn every kOsdDrawMs: the minute turns over in time)
+            osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
+                                                          history = std::vector<OsdFrame>(osd.history.begin(), osd.history.end()),
+                                                          clock = osd_clock(local.wHour, local.wMinute)] {
+                return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in), clock);
+            });
+        }
     }
     if (osd.drawing.valid() && osd.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::vector<uint32_t> pixels = osd.drawing.get();

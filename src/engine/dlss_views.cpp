@@ -1623,6 +1623,20 @@ ID3D11CommandList* dlss_depth_copy_list(ID3D11DepthStencilView* depth, unsigned 
     return c.list.Get();
 }
 
+int dlss_release_views() {
+    int released = 0;
+    for (Slot& s : d.slots) {
+        released += s.feature || s.fsrView ? 1 : 0;
+        release_slot(s);
+    }
+    d.copy = State::DepthCopy{};  // the depth's copy before the transparents, made again at its next pass
+    std::lock_guard guard(d.mutex);  // the jitter reads these on xrLocateViews' thread
+    d.lastFrameOk = false;
+    d.focusOk[0] = d.focusOk[1] = false;
+    d.evaluated[0] = d.evaluated[1] = d.focusEvaluated[0] = d.focusEvaluated[1] = false;
+    return released;
+}
+
 void dlss_shutdown() {
     nr_shutdown();  // its features and its views of this device first
     if (!d.device)

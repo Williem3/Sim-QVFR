@@ -15,6 +15,7 @@
 #include "quad/helmet.h"
 #include "quad/native_quad.h"
 #include "quad/output_density.h"
+#include "quad/showcase.h"
 #include "xr.h"
 #include "layer/layer.h"
 #include "layer/views4_internal.h"
@@ -119,6 +120,31 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
          density.chainScale * 100, nativeW, nativeH, density.cap * 100,
          experiment.box_x() * 100, experiment.box_y() * 100, experiment.feather * 100);
     return true;
+}
+
+// The showcase's Stock (quad/showcase.h): after kStockIdleFrames frames of the eyes submitted as they are, the output
+// chain is let go, and v4d3d11_resources makes it again at the first composition back. Left alone while Stock shows,
+// Windows pages it out to make room for the native-size eyes and back in at the switch: a 5 s freeze on a 16 GB card at
+// native-size targets (2026-11-17).
+constexpr int kStockIdleFrames = 8;  // the runtime is surely done with the chain's last image
+int stockIdleFrames = 0;
+void v4d3d11_release_for_stock() {
+    if (v4d3d11.retiredChain) {
+        next.DestroySwapchain(v4d3d11.retiredChain);
+        v4d3d11.retiredChain = XR_NULL_HANDLE;
+        v4d3d11.retiredFrames = 0;
+    }
+    if (!v4d3d11.outChain || v4d3d11.outPending.acquired)
+        return;
+    const double mb = 4.0 * 2 * v4d3d11.outW * v4d3d11.outH * static_cast<double>(v4d3d11.outImages.size()) /
+                      (1024.0 * 1024.0);
+    next.DestroySwapchain(v4d3d11.outChain);
+    v4d3d11.outChain = XR_NULL_HANDLE;
+    v4d3d11.outImages.clear();
+    v4d3d11.outW = v4d3d11.outH = 0;
+    v4d3d11.growFailed = false;
+    logf("views4 d3d11: showcase: Stock: the output chain let go (~%.0f MB), made again at the switch back", mb);
+    log_vram("Stock, the output chain let go");
 }
 
 // focus_layer: the compositor (no output chain: nothing is composed at native size). False: v4d3d11.failed.
@@ -710,9 +736,13 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
             FramePartTimer part(FramePart::atlas);
             views = game->qvfr_views_atlas(eyeImages, atlasUv);
         }
-        if (!views)
+        if (!views) {
+            if (stock_active() && ++stockIdleFrames >= kStockIdleFrames && (v4d3d11.outChain || v4d3d11.retiredChain))
+                v4d3d11_release_for_stock();
             return fallback("no four views this frame");
+        }
     }
+    stockIdleFrames = 0;
     D3D11_TEXTURE2D_DESC desc;
     views->GetDesc(&desc);
     const float texW = static_cast<float>(desc.Width), texH = static_cast<float>(desc.Height);
