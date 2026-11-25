@@ -27,6 +27,9 @@ bool log_debug();
 std::wstring log_directory();
 // <log folder>/captures, created if missing (the frame captures' folder).
 std::wstring captures_directory();
+// The core's own folder (the module this is linked into: the layer's DLL, a check's or test's exe): where the NVIDIA and
+// AMD runtime DLLs it ships sit. From a game mod, the host's (mod_api/core_shim.cpp).
+std::wstring core_directory();
 // The log file itself.
 std::wstring log_file();
 // On (the layer, while a game's session runs): lines are queued and a thread of ours writes them, so the thread that logs

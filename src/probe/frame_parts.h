@@ -37,6 +37,9 @@ struct FramePartSpan {
 };
 // The core's one copy (quad/shared_state.cpp): a game mod's DLL has none of its own.
 extern FramePartSpan framePartSpans[static_cast<int>(FramePart::count)];
+// Adds `ticks` (QueryPerformanceCounter) to `part` and counts one call: the core's array (quad/shared_state.cpp), or
+// from a game mod the host's (mod_api/core_shim.cpp).
+void frame_part_add(FramePart part, uint64_t ticks);
 
 // Times its scope into `part`.
 struct FramePartTimer {
@@ -46,9 +49,7 @@ struct FramePartTimer {
     ~FramePartTimer() {
         LARGE_INTEGER t1;
         QueryPerformanceCounter(&t1);
-        FramePartSpan& s = framePartSpans[static_cast<int>(part)];
-        s.ticks.fetch_add(static_cast<uint64_t>(t1.QuadPart - t0.QuadPart), std::memory_order_relaxed);
-        s.calls.fetch_add(1, std::memory_order_relaxed);
+        frame_part_add(part, static_cast<uint64_t>(t1.QuadPart - t0.QuadPart));
     }
     FramePartTimer(const FramePartTimer&) = delete;
     FramePartTimer& operator=(const FramePartTimer&) = delete;

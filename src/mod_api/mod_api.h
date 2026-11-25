@@ -191,6 +191,19 @@ enum {
     SQVFR_MVS_CB_ROWS = 3          /* mvr_probe_cb_rows */
 };
 enum { SQVFR_MVS_BACKEND_NONE = 0, SQVFR_MVS_BACKEND_NVAPI = 1, SQVFR_MVS_BACKEND_INSTANCED = 2 };
+/* SqvfrHost::multi_view_shaders_count: the service's flags and counters (engine/multi_view_shaders.h). */
+enum {
+    SQVFR_MVS_COUNT_USABLE = 0,                  /* mvr_probe_usable (0/1) */
+    SQVFR_MVS_COUNT_INSTANCED = 1,               /* mvr_probe_instanced (0/1) */
+    SQVFR_MVS_COUNT_INSTANCED_LAYOUTS = 2,       /* mvr_probe_instanced_layouts */
+    SQVFR_MVS_COUNT_LAYOUTS_TO_CHECK = 3,        /* mvr_probe_layouts_to_check (0/1) */
+    SQVFR_MVS_COUNT_LAYOUT_GENERATION = 4,       /* mvr_probe_layout_generation */
+    SQVFR_MVS_COUNT_SHADER_GENERATION = 5,       /* mvr_shader_generation */
+    SQVFR_MVS_COUNT_PIXEL_SHADER_GENERATION = 6, /* mvr_pixel_shader_generation */
+    SQVFR_MVS_COUNT_YEBIS_COPIES = 7,            /* MvrProbeStats::yebisCopies */
+    SQVFR_MVS_COUNT_YEBIS_COMPOSITES = 8,        /* MvrProbeStats::yebisComposites */
+    SQVFR_MVS_COUNT_FINAL_BLITS = 9              /* MvrProbeStats::finalBlits */
+};
 
 /* quad/focus_images.h FocusImagesStart: what the core settles at the session's start, for a mod that renders the
  * focus views itself at the D3D12 level. `device` an ID3D12Device*, `queue` the ID3D12CommandQueue* that presents
@@ -368,6 +381,16 @@ typedef struct SqvfrHost {
     void (*pass_census_set_view_columns)(const int32_t left[4], const int32_t width[4]);
     /* Developer probes on the game's exe (probe/probe.h): `fn(self)` at each entry to the named target. */
     int32_t (*probe_set_observer)(const char* name, void (*fn)(void* self));
+    /* ---- Appended for game mods drawing at the D3D11 level (LMU's) ---- */
+    /* The layer's own work inside the game's xrEndFrame, by part (probe/frame_parts.h FramePart): `ticks` of
+     * QueryPerformanceCounter added to `part`, one call counted. */
+    void (*frame_part_add)(int32_t part, uint64_t ticks);
+    /* The D3D11 frame capture hotkey's arm (probe/d3d11_capture.h d3d11_capture_armed): 0 none. */
+    uint64_t (*d3d11_capture_armed)(void);
+    /* The multi-view shader service's flags and counters: SQVFR_MVS_COUNT_*. */
+    uint64_t (*multi_view_shaders_count)(int32_t what);
+    /* The core's own folder (the layer's DLL's): where NVIDIA's and AMD's runtime DLLs it ships sit; never null. */
+    const wchar_t* (*core_dir)(void);
 } SqvfrHost;
 
 /* ---- mod -> core ---- */

@@ -18,6 +18,8 @@
 #include "../engine/multi_view_shaders.h"
 #include "../log.h"
 #include "../probe/aftermath.h"
+#include "../probe/d3d11_capture.h"
+#include "../probe/frame_parts.h"
 #include "../probe/hang_watch.h"
 #include "../probe/pass_census.h"
 #include "../probe/probe.h"
@@ -97,6 +99,15 @@ std::wstring captures_directory() {
     const wchar_t* dir = SQVFR_CALL(captures_dir, static_cast<const wchar_t*>(nullptr));
     return dir ? dir : L"";
 }
+
+std::wstring core_directory() {
+    const wchar_t* dir = SQVFR_CALL(core_dir, static_cast<const wchar_t*>(nullptr));
+    return dir ? dir : L"";
+}
+
+void frame_part_add(FramePart part, uint64_t ticks) { SQVFR_DO(frame_part_add, static_cast<int32_t>(part), ticks); }
+
+uint64_t d3d11_capture_armed() { return SQVFR_CALL(d3d11_capture_armed, uint64_t{0}); }
 
 // ---- engine/context_hooks.h: the mod's observers behind the host's C ones ----
 
@@ -248,6 +259,33 @@ void mvr_probe_own_pixel_loads(bool on) { SQVFR_DO(multi_view_shaders_option, SQ
 void mvr_probe_tint_rows(bool on) { SQVFR_DO(multi_view_shaders_option, SQVFR_MVS_TINT_ROWS, on ? 1 : 0); }
 void mvr_probe_cb_rows(bool on) { SQVFR_DO(multi_view_shaders_option, SQVFR_MVS_CB_ROWS, on ? 1 : 0); }
 void mvr_probe_frame_end() { SQVFR_DO(multi_view_shaders_frame_end); }
+namespace {
+uint64_t mvs_count(int32_t what) { return SQVFR_CALL(multi_view_shaders_count, uint64_t{0}, what); }
+}  // namespace
+bool mvr_probe_usable() { return mvs_count(SQVFR_MVS_COUNT_USABLE) != 0; }
+bool mvr_probe_instanced() { return mvs_count(SQVFR_MVS_COUNT_INSTANCED) != 0; }
+uint64_t mvr_probe_instanced_layouts() { return mvs_count(SQVFR_MVS_COUNT_INSTANCED_LAYOUTS); }
+bool mvr_probe_layouts_to_check() { return mvs_count(SQVFR_MVS_COUNT_LAYOUTS_TO_CHECK) != 0; }
+uint64_t mvr_probe_layout_generation() { return mvs_count(SQVFR_MVS_COUNT_LAYOUT_GENERATION); }
+uint64_t mvr_shader_generation() { return mvs_count(SQVFR_MVS_COUNT_SHADER_GENERATION); }
+uint64_t mvr_pixel_shader_generation() { return mvs_count(SQVFR_MVS_COUNT_PIXEL_SHADER_GENERATION); }
+uint64_t mvr_probe_yebis_copies() { return mvs_count(SQVFR_MVS_COUNT_YEBIS_COPIES); }
+uint64_t mvr_probe_final_blits() { return mvs_count(SQVFR_MVS_COUNT_FINAL_BLITS); }
+// A mod's copy of the stats: the counters a game mod logs (the rest stay the core's, in its own log lines).
+MvrProbeStats mvr_probe_stats() {
+    MvrProbeStats s;
+    s.yebisCopies = mvs_count(SQVFR_MVS_COUNT_YEBIS_COPIES);
+    s.yebisComposites = mvs_count(SQVFR_MVS_COUNT_YEBIS_COMPOSITES);
+    s.finalBlits = mvs_count(SQVFR_MVS_COUNT_FINAL_BLITS);
+    return s;
+}
+const char* mvr_backend_name(MvrBackend backend) {
+    switch (backend) {
+        case MvrBackend::nvapi: return "NVIDIA's multi-view rendering";
+        case MvrBackend::instanced: return "instancing (each draw twice, the vertex shader picking the viewport)";
+        default: return "none";
+    }
+}
 MvrBackend mvr_probe_backend() {
     switch (SQVFR_CALL(multi_view_shaders_backend, SQVFR_MVS_BACKEND_NONE)) {
         case SQVFR_MVS_BACKEND_NVAPI: return MvrBackend::nvapi;

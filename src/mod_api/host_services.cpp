@@ -19,6 +19,8 @@
 #include "../log.h"
 #include "../module_path.h"
 #include "../probe/aftermath.h"
+#include "../probe/d3d11_capture.h"
+#include "../probe/frame_parts.h"
 #include "../probe/hang_watch.h"
 #include "../probe/pass_census.h"
 #include "../probe/probe.h"
@@ -180,6 +182,33 @@ int32_t host_mvs_backend() {
     }
 }
 
+uint64_t host_mvs_count(int32_t what) {
+    namespace mvs = simqvfr::mvs;
+    switch (what) {
+        case SQVFR_MVS_COUNT_USABLE: return mvs::mvr_probe_usable() ? 1 : 0;
+        case SQVFR_MVS_COUNT_INSTANCED: return mvs::mvr_probe_instanced() ? 1 : 0;
+        case SQVFR_MVS_COUNT_INSTANCED_LAYOUTS: return mvs::mvr_probe_instanced_layouts();
+        case SQVFR_MVS_COUNT_LAYOUTS_TO_CHECK: return mvs::mvr_probe_layouts_to_check() ? 1 : 0;
+        case SQVFR_MVS_COUNT_LAYOUT_GENERATION: return mvs::mvr_probe_layout_generation();
+        case SQVFR_MVS_COUNT_SHADER_GENERATION: return mvs::mvr_shader_generation();
+        case SQVFR_MVS_COUNT_PIXEL_SHADER_GENERATION: return mvs::mvr_pixel_shader_generation();
+        case SQVFR_MVS_COUNT_YEBIS_COPIES: return mvs::mvr_probe_yebis_copies();
+        case SQVFR_MVS_COUNT_YEBIS_COMPOSITES: return mvs::mvr_probe_stats().yebisComposites;
+        case SQVFR_MVS_COUNT_FINAL_BLITS: return mvs::mvr_probe_final_blits();
+        default: return 0;
+    }
+}
+
+void host_frame_part_add(int32_t part, uint64_t ticks) {
+    if (part >= 0 && part < static_cast<int32_t>(simqvfr::FramePart::count))
+        simqvfr::frame_part_add(static_cast<simqvfr::FramePart>(part), ticks);
+}
+uint64_t host_d3d11_capture_armed() { return simqvfr::d3d11_capture_armed(); }
+const wchar_t* host_core_dir() {
+    static const std::wstring dir = simqvfr::core_directory();
+    return dir.c_str();
+}
+
 void host_nvapi_query(void* device, SqvfrNvapiSupport* out) {
     if (!out)
         return;
@@ -331,6 +360,10 @@ const SqvfrHost& host_table() {
         h.pass_census_barrier_after_next_dispatch = host_pass_census_barrier;
         h.pass_census_set_view_columns = host_pass_census_set_view_columns;
         h.probe_set_observer = host_probe_set_observer;
+        h.frame_part_add = host_frame_part_add;
+        h.d3d11_capture_armed = host_d3d11_capture_armed;
+        h.multi_view_shaders_count = host_mvs_count;
+        h.core_dir = host_core_dir;
         return h;
     }();
     return host;

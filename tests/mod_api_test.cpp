@@ -18,6 +18,8 @@
 #include "games/scssoftware/ats/game.h"
 #include "games/scssoftware/ets2/game.h"
 #include "games/adapter.h"
+#include "log.h"
+#include "probe/frame_parts.h"
 #include "quad/eye_off.h"
 #include "quad/showcase.h"
 #include "mod_api/adapter_mod.h"
@@ -763,6 +765,16 @@ void host_table_filled() {
               h.hook_apply_queued && h.hook_status_name && h.pass_census_installed &&
               h.pass_census_barrier_after_next_dispatch && h.pass_census_set_view_columns && h.probe_set_observer,
           "the D3D12 mods' host entries are filled");
+    check(h.frame_part_add && h.d3d11_capture_armed && h.multi_view_shaders_count && h.core_dir,
+          "the D3D11 mods' host entries are filled");
+    check(h.core_dir()[0] != 0 && simqvfr::core_directory() == h.core_dir(), "the host's folder is the core's");
+    {  // a frame part a mod times lands in the core's one copy
+        (void)simqvfr::frame_part_take(simqvfr::FramePart::dlssEnd);
+        h.frame_part_add(static_cast<int32_t>(simqvfr::FramePart::dlssEnd), 1234);
+        check(simqvfr::frame_part_take(simqvfr::FramePart::dlssEnd) == 1234, "a mod's frame part is the core's");
+    }
+    check(h.multi_view_shaders_count(SQVFR_MVS_COUNT_USABLE) == 0 && h.multi_view_shaders_count(99) == 0,
+          "the multi-view shader service's counts (not installed: none; an unknown one: 0)");
     check(std::strcmp(h.hook_status_name(0), "MH_OK") == 0, "hook statuses are MinHook's");
     // The shared switches are the core's one copy.
     simqvfr::set_stock_wanted(true);

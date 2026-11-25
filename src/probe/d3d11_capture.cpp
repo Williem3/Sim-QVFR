@@ -190,10 +190,12 @@ bool d3d11_capture_arm(uint64_t frame) {
     return true;
 }
 
+#if !defined(SIM_QVFR_MOD_BUILD)  // a game mod asks the core's (mod_api/core_shim.cpp): the hotkey arms the core's
 uint64_t d3d11_capture_armed() {
     std::lock_guard guard(mutex);
     return device ? captureFrame : 0;
 }
+#endif
 
 void d3d11_capture_stop() {
     std::lock_guard guard(mutex);

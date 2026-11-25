@@ -224,6 +224,20 @@ std::wstring captures_directory() {
     return dir.wstring();
 }
 
+std::wstring core_directory() {
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&core_directory), &self))
+        return {};
+    wchar_t path[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+    if (n == 0 || n == MAX_PATH)
+        return {};
+    const std::wstring full(path, n);
+    const size_t slash = full.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : full.substr(0, slash);
+}
+
 std::wstring log_file() { return logPath().wstring(); }
 
 void logf(const char* format, ...) {

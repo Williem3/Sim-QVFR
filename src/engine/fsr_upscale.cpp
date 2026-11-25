@@ -106,17 +106,11 @@ DXGI_FORMAT typed(DXGI_FORMAT f) {
     }
 }
 
-// The folder this module (the layer, or a test program) was loaded from.
+// The layer's folder (a check's or test's exe folder).
 std::wstring own_folder() {
-    HMODULE self = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&own_folder), &self))
-        return {};
-    wchar_t path[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
-    if (n == 0 || n == MAX_PATH)
-        return {};
-    return std::filesystem::path(std::wstring(path, n)).parent_path().wstring();
+    // The core's folder (log.h core_directory): the layer's, also from a game mod's DLL, where AMD's FSR DLLs
+    // ships beside it.
+    return simqvfr::core_directory();
 }
 
 std::wstring exe_folder() {

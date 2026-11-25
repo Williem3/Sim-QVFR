@@ -32,5 +32,10 @@ int eye_off() { return eyeOff.load(std::memory_order_relaxed); }
 void set_eye_off(int eye) { eyeOff.store(eye == 0 || eye == 1 ? eye : kEyeOffNone, std::memory_order_relaxed); }
 
 FramePartSpan framePartSpans[static_cast<int>(FramePart::count)];
+void frame_part_add(FramePart part, uint64_t ticks) {
+    FramePartSpan& s = framePartSpans[static_cast<int>(part)];
+    s.ticks.fetch_add(ticks, std::memory_order_relaxed);
+    s.calls.fetch_add(1, std::memory_order_relaxed);
+}
 
 }  // namespace simqvfr
