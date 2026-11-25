@@ -55,6 +55,9 @@ struct GameFeatures {
     // The showcase ([quad] stock, live; quad/showcase.h): the game switches between Stock and QVFR at a frame boundary,
     // for recording both in one session, and the overlay's A/B table compares them.
     bool showcase = false;
+    // The GPU regulator ([regulator], quad/regulator_settings.h, live): the adapter makes QVFR (adapter_qvfr) and times its eye
+    // passes, so it can take Periphery and Focus density down while frames run over a GPU time limit (rFactor 2).
+    bool gpuRegulator = false;
 };
 
 // How the layer offers the game its QVFR views (GameAdapter::qvfr_eye_columns, qvfr_one_view_size, qvfr_separate_views,
@@ -110,6 +113,9 @@ struct GameInfo {
     // The launcher then warns instead of saying Sim-QVFR stays off.
     bool anyBuild = false;
     QvfrImage qvfrImage = QvfrImage::DoubleWide;
+    // The launcher leaves the game's stdout and stderr alone (no openxr-loader.log in the run folder, no XR_LOADER_DEBUG):
+    // a game whose own output there grows by tens of MB a launch (rF2). [launcher] capture_game_output=1 captures anyway.
+    bool quietGameOutput = false;
 };
 
 // The game's id as the ini and the launcher's maps hold it (ids are ASCII: widened char by char).

@@ -221,6 +221,7 @@ void activate(Ctl id, int option) {
     case kCorridorPreset:
     case kDlssFocusPreset:
     case kDlssEyePreset:
+    case kDlssGlow:
     case kNrOrder:
     case kFgMultiplier:
     case kFgScale:
@@ -394,6 +395,8 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kRegFocus: app.s.regulator.focus = !app.s.regulator.focus; changed(); return;
+    case kRegPeriphery: app.s.regulator.periphery = !app.s.regulator.periphery; changed(); return;
     case kGradeOn:
         if (game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
@@ -532,6 +535,8 @@ bool space_control(Ctl id) {
     case kCorridorOn:
     case kCorridorPreset:
     case kCorridorShow:
+    case kRegFocus:
+    case kRegPeriphery:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:
@@ -568,6 +573,7 @@ bool space_control(Ctl id) {
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kDlssSharpening:
+    case kDlssGlow:
     case kOsdOn:
     case kClockOn:
     case kHotkeyFooter:

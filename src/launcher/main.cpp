@@ -11,6 +11,8 @@
 // Usage: sim-qvfr-launcher               the settings window (window.cpp)
 //        sim-qvfr-launcher --launch      launch now, report on the console it was started from
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
+//        sim-qvfr-launcher -lmu          launch that game now with its own settings (-<id>: ace, acc, xplane, lmu, ats,
+//                                        ets2), for this run only (not saved); --dry-run -lmu plans it, starts nothing
 //        sim-qvfr-launcher --apply-system-layers <request> <sha256>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h), if the
 //                                            request file still has that hash
@@ -339,6 +341,10 @@ struct LoaderOutput {
 
     explicit LoaderOutput(const std::wstring& path) {
         startup.StartupInfo.cb = sizeof(startup);
+        // [launcher] capture_game_output=0: start as before, with no inherited standard handles. This keeps a game's own
+        // verbose stdout/stderr (RF2's Jetty DEBUG output, for example) out of the run folder.
+        if (path.empty())
+            return;
         SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
         file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -372,6 +378,9 @@ struct LoaderOutput {
     LoaderOutput& operator=(const LoaderOutput&) = delete;
 };
 
+// -<game id> on the command line (wWinMain): the game this launch starts with its own settings; empty otherwise.
+std::wstring cliGameId;
+
 int fail(const std::wstring& why) {
     say(L"ERROR: " + why);
     return 1;
@@ -397,8 +406,25 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const fs::path ini = here / L"sim-qvfr.ini";
     if (!fs::exists(ini, ec))
         return fail(L"sim-qvfr.ini not found next to the launcher (" + ini.wstring() + L")");
+    // -<game id> (wWinMain): that game's own settings for this launch, the ini left as it is (settings.h
+    // launch_game_settings). `settings` is what this launch reads; `ini` stays the launcher's (its own keys written back,
+    // and the layer's SIM_QVFR_SETTINGS, where the headset menu files the game's settings).
+    struct LaunchSettings {
+        fs::path path;
+        ~LaunchSettings() {
+            if (!path.empty())
+                DeleteFileW(path.c_str());
+        }
+    } launchSettings;
+    fs::path settings = ini;
+    if (!cliGameId.empty()) {
+        launchSettings.path = fs::temp_directory_path(ec) / (L"sim-qvfr-launch-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
+        if (ec || !launch_game_settings(ini.wstring(), cliGameId, launchSettings.path.wstring()))
+            return fail(L"cannot make the settings of " + cliGameId + L" for this launch (" + launchSettings.path.wstring() + L")");
+        settings = launchSettings.path;
+    }
 
-    const std::wstring game = game_folder(ini.wstring());
+    const std::wstring game = game_folder(settings.wstring());
     const games::GameInfo& info = games::launcher_game();
     const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
@@ -406,15 +432,15 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
                     L" in [launcher] of sim-qvfr.ini");
     // [launcher] anticheat=1 (the Games pane), for a game with an anti-cheat bootstrapper: the game starts protected,
     // through the bootstrapper, and the layer runs in it as usual (games/game.h antiCheatStart). The user's risk.
-    const bool viaAntiCheat = info.antiCheatStart && games::anticheat_chosen(ini.c_str());
+    const bool viaAntiCheat = info.antiCheatStart && games::anticheat_chosen(settings.c_str());
     const fs::path bootstrapper = viaAntiCheat ? exe.parent_path() / info.antiCheatStart : fs::path();
     if (viaAntiCheat && !fs::exists(bootstrapper, ec))
         return fail(std::wstring(info.antiCheatStart) + L" not found next to " + exe.wstring() +
                     L" (Run with anti-cheat is on): verify the game's files in Steam");
 
-    const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
+    const std::wstring mode = ini_string(settings.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
-    const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(ini.wstring(), environment));
+    const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(settings.wstring(), environment));
     // Nothing of Cheeky's runs in a game its anti-cheat protects: its layer is off (ini_layer_options), so the launch
     // refuses where it can't be kept out (a registration without a disable variable, its loader in the game folder).
     if (viaAntiCheat) {
@@ -449,13 +475,13 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     // removes nothing.
     const PruneResult pruned = dryRun ? PruneResult{} : prune_logs(logs.wstring());
     // The Diagnostics pane's Detailed logs ([launcher] debug_logs, launches left): the layer logs at debug level.
-    const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, ini.c_str())), 0,
+    const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, settings.c_str())), 0,
                                      kDebugLogLaunches);
     const fs::path log = logs / (std::wstring(L"session-") + stamp + L".log"), iniCopy = runFolder / L"sim-qvfr.ini";
     std::wstring error;
     if (!write_run_folder(runFolder.wstring(), manifest.wstring(), library.wstring(), plan, error))
         return fail(error);
-    if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
+    if (!CopyFileW(settings.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
     // The game's own graphics settings as this launch starts (game_settings_snapshot.h), for the report: read only.
     const std::string gameSettings = game_settings_text(info.id, exe.wstring());
@@ -466,16 +492,21 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
-    const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
+    const bool baseline = ini_string(settings.wstring(), L"launcher", L"baseline_next") == L"1";
     if (baseline)
         WritePrivateProfileStringW(L"experiment", L"baseline", L"1", iniCopy.c_str());
     auto variables =
         launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring(),
                          info.openComposite != nullptr);  // OpenComposite's loader mangles a list of layers
     // The OpenXR loader prints why it refuses a runtime or a layer (errors on stderr, XR_LOADER_DEBUG's levels on
-    // stdout), before any layer runs: a game it fails starts flat with no layer log at all. The game's
-    // stdout and stderr go to the run folder (loader_output) for the report. A user's own level is kept.
-    if (std::none_of(environment.begin(), environment.end(),
+    // stdout), before any layer runs: a game it fails starts flat with no layer log at all. The game's stdout and stderr
+    // go to the run folder (loader_output) for the report, unless the game writes tens of MB there itself
+    // (GameInfo::quietGameOutput: rF2). [launcher] capture_game_output=0 or 1 decides for any game.
+    const std::wstring captureSetting = ini_string(ini.wstring(), L"launcher", L"capture_game_output");
+    const bool captureGameOutput = captureSetting.empty() ? !info.quietGameOutput : captureSetting != L"0";
+    // XR_LOADER_DEBUG writes to stdout. Do not enable it when stdout/stderr capture is disabled; a user's own value is kept.
+    if (captureGameOutput &&
+        std::none_of(environment.begin(), environment.end(),
                      [](const std::wstring& e) { return _wcsnicmp(e.c_str(), L"XR_LOADER_DEBUG=", 16) == 0; }))
         variables.emplace_back(L"XR_LOADER_DEBUG", L"warn");
     if (debugLogs > 0)
@@ -484,7 +515,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     // manifests XR_ENABLE_API_LAYERS names are registered there for this launch (explicit_layers.h), unless
     // [launcher] elevated_registration=0.
     const bool elevated = launcher_elevated();
-    const bool registerLayers = elevated && ini_string(ini.wstring(), L"launcher", L"elevated_registration") != L"0";
+    const bool registerLayers = elevated && ini_string(settings.wstring(), L"launcher", L"elevated_registration") != L"0";
     std::vector<std::wstring> named;
     for (const auto& [name, value] : variables)
         if (name == L"XR_ENABLE_API_LAYERS")
@@ -585,7 +616,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     std::wstring command = L"\"" + startExe.wstring() + L"\" " + info.launchArgs;
     PROCESS_INFORMATION pi{};
     const std::wstring workingFolder = exe.parent_path().wstring();
-    LoaderOutput output((runFolder / kLoaderOutputName).wstring());
+    LoaderOutput output(captureGameOutput ? (runFolder / kLoaderOutputName).wstring() : std::wstring{});
     // Registered just before the start; a failed start takes them out again.
     const std::wstring ledger = (registrations_folder() / (L"run-" + stamp + L".txt")).wstring();
     bool registered = false;
@@ -844,11 +875,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         return unregister_after(handle.c_str(), ledger);
     }
     bool dryRun = false, launchNow = false;
+    std::wstring gameArg;  // -lmu, -acc: the game for this run (its id, case ignored); not saved to the ini
     std::wstring request, requestHash;
     bool applyRequest = false;
     for (int i = 1; i < argc; ++i) {
         dryRun |= _wcsicmp(argv[i], L"--dry-run") == 0;
         launchNow |= _wcsicmp(argv[i], L"--launch") == 0;
+        if (argv[i][0] == L'-' && argv[i][1] != L'-' && argv[i][1] != L'\0')  // -<game id>: the game, and launch it now
+            gameArg = argv[i] + 1;
         if (_wcsicmp(argv[i], L"--apply-system-layers") == 0) {
             applyRequest = true;
             if (i + 1 < argc)
@@ -868,6 +902,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         log_registrations(notes);
     }
     choose_launcher_game();
+    bool unknownGame = false;
+    if (!gameArg.empty()) {
+        if (const games::GameInfo* chosen = games::game_by_id(narrow(gameArg).c_str())) {
+            games::set_launcher_game(*chosen);
+            cliGameId = games::wide_id(*chosen);  // run(): its settings, not those of the game the ini has
+        } else {
+            unknownGame = true;
+        }
+        launchNow = true;  // a game on the command line starts it (as --launch), with no window
+    }
     if (!dryRun && !launchNow)
         return run_window(instance, show);
     // Command line: report to the console (or pipe) the launcher was started from, if any.
@@ -878,6 +922,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             cliOut = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
         if (cliOut == INVALID_HANDLE_VALUE)
             cliOut = nullptr;
+    }
+    if (unknownGame) {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        std::wstring ids;
+        for (std::size_t i = 0; i < count; ++i)
+            ids += (i ? L", -" : L"-") + games::wide_id(*all[i]);
+        return fail(L"unknown game: -" + gameArg + L" (one of " + ids + L")");
     }
     return run(dryRun);
 }

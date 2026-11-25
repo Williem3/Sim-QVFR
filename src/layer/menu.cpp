@@ -104,6 +104,13 @@ MenuLaunch menu_launch_sizes() {
         m.optimize = false;
         m.cornerFit = true;  // the sizes in effect by the SCS corner's rule (quad/corner_fit.h)
     }
+    m.adapterQvfr = game && game->adapter_qvfr();  // RF2: its adapter makes QVFR, the menu steers it
+    if (m.adapterQvfr) {  // no view crop, helmet, focus shape or optimizer on this path
+        m.cropPage = false;
+        m.helmetPage = false;
+        m.shapePage = false;
+        m.optimize = false;
+    }
     {
         std::lock_guard guard(quad.mutex);
         m.helmetPieces = quad.helmetPiecesLoaded;

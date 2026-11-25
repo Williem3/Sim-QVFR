@@ -386,6 +386,32 @@ Card foveation_card() {
     return c;
 }
 
+// ---- GPU regulator -----------------------------------------------------------------------------
+
+// A game whose adapter makes QVFR and times its eye passes (GameFeatures::gpuRegulator: rFactor 2). The set
+// Periphery resolution and Focus density are the most it uses; it lowers them 1% at a time while the GPU time per frame runs
+// over the first limit and raises them again while it runs under the second.
+Card regulator_card() {
+    Card c{Tab::Picture, tr(L"GPU regulator"), Applies::Live};
+    c.body = [](Body& b) {
+        const GpuRegulatorSettings& r = app.s.regulator;
+        b.toggle(kRegFocus, tr(L"Regulate focus density"), r.focus,
+                 r.focus ? tr(L"Lowered and raised 1% at a time, never above the set density.") : tr(L"Off"));
+        b.toggle(kRegPeriphery, tr(L"Regulate periphery resolution"), r.periphery,
+                 r.periphery ? tr(L"Lowered and raised 1% at a time, never above the set resolution.") : tr(L"Off"));
+        b.sliders({kRegDecrease, tr(L"Lower above"), r.decreaseAbove, L" ms", L"", true},
+                  {kRegIncrease, tr(L"Raise below"), r.increaseBelow, L" ms", L"", true});
+        b.sliders({kRegLowerFrames, tr(L"Frames before lowering"), r.lowerFrames, L" frames"},
+                  {kRegRaiseFrames, tr(L"Frames before raising"), r.raiseFrames, L" frames"});
+        b.note(r.increaseBelow > r.decreaseAbove
+                   ? tr(L"Raise below is held at Lower above: nothing is raised while the frames are over the limit.")
+                   : r.on() ? tr(L"GPU time of the eye passes per frame, as the log’s scene span. Between the two limits nothing changes.")
+                            : tr(L"Switch on what to regulate: the sliders below act once one is on."));
+    };
+    c.reset = [](Settings& s) { s.regulator = GpuRegulatorSettings{}; };
+    return c;
+}
+
 // ---- Preview -----------------------------------------------------------------------------------
 
 Card preview_card() {
@@ -521,6 +547,8 @@ void dlss_rows(Body& b) {
         b.popup(kDlssSharpening, tr(L"Texture sharpening"),
                 tr(kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name),
                 names_of(kDlssTextureSharpening));
+        b.segments(kDlssGlow, tr(L"Light glow"), names_of(kDlssLightGlow),
+                   dlss_choice_index(kDlssLightGlow, d.lightGlow, true));
         b.more(tr(L"advanced options"), {tr(L"Other cars’ motion")}, [](Body& m) {
             m.toggle(kDlssCarVectors, tr(L"Other cars’ motion"), app.s.dlss.carVectors,
                      tr(L"Keeps passing cars clean; turn off for headroom."), false, Applies::NextLaunch);
@@ -663,7 +691,8 @@ Card fsr_card() {
         b.toggle(kDlssOn, tr(L"Use FSR"), on,
                  on ? tr(L"Native AA on the periphery, native AA or an upscale on the focus.") : tr(L"Off"));
         b.reveal(kDlssOn, on, tr(L"Use FSR"),
-                 {tr(L"Focus views"), tr(L"Texture sharpening"), tr(L"Other cars’ motion")}, fsr_rows);
+                 {tr(L"Focus views"), tr(L"Texture sharpening"), tr(L"Other cars’ motion")},
+                 fsr_rows);
     };
     c.reset = [](Settings& s) {  // its switch and options; DLSS's own DLL choice kept
         const std::wstring folder = s.dlss.folder;
@@ -825,6 +854,8 @@ Card frame_generation_card() {
 // The cards this game and these settings show, in reading order.
 std::vector<Card> picture_cards() {
     std::vector<Card> cards = {resolution_card(), foveation_card(), preview_card()};
+    if (game_has(&games::GameFeatures::gpuRegulator))
+        cards.push_back(regulator_card());
     if (game_has(&games::GameFeatures::sharpening))  // every game whose compositor runs; after Foveation, as in the headset
         cards.push_back(color_card());
     if (game_has(&games::GameFeatures::carLighting))  // LMU: after Color, as in the headset menu's Color page

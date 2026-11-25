@@ -41,7 +41,11 @@ void set_slider_from_x(float x) {
     const float f = std::clamp((x - app.dragTrack.x - 9) / travel, 0.0f, 1.0f);
     const int before = *v;
     // Inner resolution in its steps (100% reachable); the arrow keys still move every slider by 1.
-    *v = slider_value_at(app.dragRange, f, app.dragging == kInner ? kInnerDragStep : 1);
+    const int step = app.dragging == kInner ? kInnerDragStep
+                     : app.dragging == kRegDecrease || app.dragging == kRegIncrease ? kRegulatorMsDragStep
+                     : app.dragging == kRegRaiseFrames                              ? kRegulatorRaiseFramesDragStep
+                                                                                      : 1;
+    *v = slider_value_at(app.dragRange, f, step);
     if (app.dragging == kColorValue)
         apply_color_edit();  // the brightness: the edited game's colour follows
     shape_slider_set(app.dragging);
@@ -179,7 +183,7 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
                 items.push_back(tr(p.name));
             }
     } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
-               owner == kDlssSharpening) {  // DLSS in LMU
+               owner == kDlssSharpening || owner == kDlssGlow) {  // DLSS in LMU
         const auto fill = [&items, &selected](const auto& list, int value) {
             items.clear();
             for (const DlssChoice& c : list)
@@ -194,6 +198,8 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
             fill(kDlssFocusPresets, app.s.dlss.focusPreset);
         else if (owner == kDlssEyePreset)
             fill(kDlssEyePresets, app.s.dlss.eyePreset);
+        else if (owner == kDlssGlow)
+            fill(kDlssLightGlow, app.s.dlss.lightGlow);
         else
             fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
     } else if (owner == kNrStyle || owner == kNrPreset) {  // DLSS-NR in LMU
@@ -274,6 +280,7 @@ bool segmented_ctl(Ctl id) {
     case kNightQuality:
     case kDlssFocusPreset:
     case kDlssEyePreset:
+    case kDlssGlow:
     case kNrOrder:
     case kFgMultiplier:
     case kFgScale:
@@ -470,6 +477,8 @@ void choose(Ctl owner, int option) {
         app.s.dlss.focusPreset = kDlssFocusPresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssFocusPresets)) - 1)].value;
     else if (owner == kDlssEyePreset)
         app.s.dlss.eyePreset = kDlssEyePresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssEyePresets)) - 1)].value;
+    else if (owner == kDlssGlow)
+        app.s.dlss.lightGlow = kDlssLightGlow[std::clamp(option, 0, static_cast<int>(std::size(kDlssLightGlow)) - 1)].value;
     else if (owner == kDlssSharpening)
         app.s.dlss.textureSharpening =
             kDlssTextureSharpening[std::clamp(option, 0, static_cast<int>(std::size(kDlssTextureSharpening)) - 1)].value;

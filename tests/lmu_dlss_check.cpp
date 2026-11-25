@@ -2,7 +2,10 @@
 // with a stand-in for the game's side. Not part of the test suite (no _test suffix): it needs an NVIDIA RTX GPU, a build
 // with the NGX SDK and a folder holding nvngx_dlss.dll.
 //
-//   sim_qvfr_tests lmu_dlss_check <folder with nvngx_dlss.dll> [frames] [fsr=<folder with AMD's two FSR DLLs>]
+//   sim_qvfr_tests lmu_dlss_check <folder with nvngx_dlss.dll> [frames] [fsr=<folder with AMD's two FSR DLLs>] [glow]
+//
+// With glow: the first part with the lights' glow on ([dlss] light_glow at High: DLSS's exposure lowered): the same
+// checks, and every evaluated view at the lowered exposure.
 //
 // With fsr=: the same parts with AMD FSR running the views (DlssRun::upscaler 1, engine/fsr_upscale.h: our D3D12 device
 // beside this D3D11 one, FSR 3.1 on an NVIDIA GPU); NVIDIA's preset and refusal checks are left out, FSR's own lines
@@ -375,13 +378,15 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         return 2;
     }
     std::wstring fsrFolder;
-    bool fsrMode = false, flip = false;
+    bool fsrMode = false, flip = false, glow = false;
     int frames = 400;
     for (int i = 2; i < argc; ++i) {
         if (std::wcsncmp(argv[i], L"fsr=", 4) == 0)
             fsrMode = true, fsrFolder = argv[i] + 4;
         else if (std::wcscmp(argv[i], L"flip") == 0)  // a control: the jitter handed to the upscaler negated both ways
             flip = true;
+        else if (std::wcscmp(argv[i], L"glow") == 0)  // the lights' glow on ([dlss] light_glow High), the noise its lights
+            glow = true;
         else
             frames = (std::max)(120, _wtoi(argv[i]));
     }
@@ -447,6 +452,11 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     run.eyePreset = 6;  // the first part: the eyes on preset F (lmu_dlss_eye_preset=F), the focus views on NGX's default
     run.upscaler = fsrMode ? 1 : 0;
     run.flipX = run.flipY = flip;
+    if (glow) {
+        run.lightGlow = 100;
+        std::printf("     the lights' glow on (High: DLSS's exposure x%.4f)\n",
+                    simqvfr::dlss_light_glow_scale(100, run.glowScaleLow, run.glowScaleHigh));
+    }
     // The live part's changes taken at their frame's end, as the check expects (the game waits 500 ms for the player to
     // stop stepping through the modes).
     simqvfr::dlss_live_settle_for_tests(0);
@@ -539,6 +549,11 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     check(stateKept, "the caller's render target, depth target, shader input and viewport are bound as before after every call");
     check(rewritten, "the eye's and the focus view's parts of the scene are rewritten");
     check(restLeft, "the scene outside the views is untouched");
+    if (glow) {
+        std::printf("     %llu views at a lowered exposure\n", simqvfr::dlss_light_glow_views_total());
+        check(simqvfr::dlss_light_glow_views_total() == simqvfr::dlss_evaluations_total(),
+              "the lights' glow: every evaluated view at the lowered exposure");
+    }
     simqvfr::dlss_shutdown();
 
     // The second part: the scene that moves with the camera. A small eye (as the game's periphery at 10-20% of native)

@@ -57,9 +57,9 @@ enum class MenuItem {
     // The settings page, after Sharpening, for a game with it (MenuLaunch::textureMatch: ACE).
     TextureMatch,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
-    // the focus views' mode and preset, the eyes' preset, texture sharpening; with MenuLaunch::fsr the upscaler (DLSS or
-    // AMD FSR, an experiment).
-    DlssOn, DlssUpscaler, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening,
+    // the focus views' mode and preset, the eyes' preset, texture sharpening, the lights' glow; with MenuLaunch::fsr the
+    // upscaler (DLSS or AMD FSR, an experiment).
+    DlssOn, DlssUpscaler, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening, DlssLightGlow,
     // The DLSS-NR page ([dlss_nr], engine/nr_settings.h), for a launch that can run it (MenuLaunch::ownNr): on, the
     // model's settings, where it runs relative to DLSS, the focus views' working size, the edge blend, the periphery
     // and how much of it at what working size.
@@ -218,6 +218,10 @@ struct MenuLaunch {
     // size, quad/output_density.h); above it the density only antialiases. 0: no such cap (the runtime composes).
     double outputCap = 0;
     bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
+    // The game's adapter makes QVFR at the D3D11 level (GameAdapter::adapter_qvfr: RF2) and the menu steers it: periphery,
+    // focus density, the focus area's size, feather, corners, outline and its up/down place; no eye tracking, shape, crop,
+    // helmet or optimizer (the layer has no views of its own there).
+    bool adapterQvfr = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

@@ -70,9 +70,9 @@ enum Ctl {
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, another nvngx_dlss.dll's
     // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset, texture sharpening, the other
-    // cars' motion.
+    // cars' motion, the lights' glow.
     kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
-    kDlssCarVectors,
+    kDlssCarVectors, kDlssGlow,
     // DLSS-NR on those views ([dlss_nr], DLSS pane): on, the player's nvngx_dlssnr.dll (Choose…), the model's settings,
     // where it runs relative to DLSS, the working sizes, the edge blend, the periphery and how much of it.
     kNrOn, kNrFolder, kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask, kNrOrder,
@@ -85,6 +85,9 @@ enum Ctl {
     kSharpen,
     // Periphery texture match ([quad] periphery_texture_match, Resolution pane; ACE).
     kTextureMatch,
+    // The GPU regulator ([regulator], Foveation card; a game with GameFeatures::gpuRegulator): the two switches (Focus
+    // density, Periphery), the GPU time over which it lowers them and under which it raises them, the frames before a 1% step down and before a 1% step up.
+    kRegFocus, kRegPeriphery, kRegDecrease, kRegIncrease, kRegLowerFrames, kRegRaiseFrames,
     // Colour correction ([quad] color_correction and its values, the Picture tab's Color card).
     kGradeOn, kGradeExposure, kGradeBrightness, kGradeContrast, kGradeSaturation,
     // Night car lighting ([quad] car_light and its values, the Picture tab's Night cars card; LMU).

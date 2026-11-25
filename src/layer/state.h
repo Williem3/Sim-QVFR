@@ -29,6 +29,7 @@
 #include "quad/compositor.h"
 #include "quad/d3d11_compositor.h"
 #include "quad/focus_offset.h"
+#include "quad/regulator_settings.h"
 #include "quad/focus_outline.h"
 #include "quad/focus_shape.h"
 #include "quad/fov_crop.h"

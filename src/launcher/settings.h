@@ -26,6 +26,7 @@
 #include "../quad/helmet.h"
 #include "../quad/osd.h"
 #include "../quad/qvfr_settings.h"
+#include "../quad/regulator_settings.h"
 
 namespace simqvfr::launcher {
 
@@ -92,6 +93,9 @@ struct Settings {
     bool turbo = kTurbo.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     ClockPlacement clock;     // [clock]: the clock's card, on or off, its place and size (live)
+    // [regulator] (a game with GameFeatures::gpuRegulator: rFactor 2): Periphery and/or Focus density go down 1% at a time
+    // while the GPU time per frame runs over a limit, and back up (never above the set values) while it runs under one (live).
+    GpuRegulatorSettings regulator;
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
     // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.
     bool crop = false;        // [crop] enabled
@@ -162,6 +166,14 @@ inline constexpr Range kOuterRange = range_of(kPeripheryScale), kInnerRange = ra
 inline constexpr int kInnerDragStep = kFocusDensity.step;
 // Detailed logs ([launcher] debug_logs): the launches they last once switched on.
 inline constexpr int kDebugLogLaunches = 3;
+// The GPU regulator's sliders (quad/regulator_settings.h): the limits in tenths of a ms, the frames before a step down and before a step up. Dragging a limit
+// moves it in steps of this many tenths (0.5 ms); the arrow keys move it by one (0.1 ms).
+inline constexpr Range kRegulatorMsRange{kRegulatorMsMin, kRegulatorMsMax},
+    kRegulatorLowerFramesRange{kRegulatorLowerFramesMin, kRegulatorLowerFramesMax},
+    kRegulatorRaiseFramesRange{kRegulatorRaiseFramesMin, kRegulatorRaiseFramesMax};
+inline constexpr int kRegulatorMsDragStep = 5;
+// Dragging Frames before raising (50-300) moves it in steps of this many frames; the arrow keys move it by one.
+inline constexpr int kRegulatorRaiseFramesDragStep = 10;
 // A slider's value at `share` (0..1) of its travel: on a grid of `step` from range.min, never past range.max.
 int slider_value_at(Range range, double share, int step = 1);
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
@@ -196,6 +208,10 @@ int seed_game_settings(const std::wstring& ini);
 // Leaving `fromId` for `toId`: the ini stored as `fromId`'s copy, then `toId`'s loaded (a copy of the ini first if
 // it has none). False if a step failed.
 bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId);
+// A launch of `gameId` that leaves the ini as it is (the launcher's -<game id>): `into` made a copy of the ini holding
+// `gameId`'s per-game settings (its copy, or the first one switch_game_settings would make) and [launcher] game=<gameId>.
+// Nothing else is written. False if a step failed.
+bool launch_game_settings(const std::wstring& ini, const std::wstring& gameId, const std::wstring& into);
 // A profile as text to share: only its keys that differ from the defaults' profile.
 std::string share_profile(const Profile& profile);
 // A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the

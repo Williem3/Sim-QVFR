@@ -16,7 +16,8 @@ Requirements
 - One of the games: Le Mans Ultimate (1.4.2.0, Steam), Assetto Corsa EVO (Steam, its current build
   when this release came out), Assetto Corsa Competizione (1.10.4, Steam, its VR through
   OpenComposite: see below), X-Plane 12 (12.4.3-r2, from Steam or elsewhere), American Truck
-  Simulator (1.62.2.2, Steam) or Euro Truck Simulator 2 (1.62.3.3, Steam).
+  Simulator (1.62.2.2, Steam), Euro Truck Simulator 2 (1.62.3.3, Steam) or rFactor 2 (Steam, its
+  VR through OpenComposite; experimental).
 - A PC VR headset with an OpenXR runtime. Steam running for the Steam games.
 - Eye tracking (XR_EXT_eye_gaze_interaction) for the focus area to follow your eyes; without it
   the focus area stays in the centre.
@@ -366,6 +367,16 @@ garage show as without Sim-QVFR; the focus view starts with the first frame that
 What works: the sharp area (following your eyes with eye tracking), the headset menu, the performance
 overlay and sharpening. Not yet: the field of view crop, the helmet overlay and Auto-fit. Mods from
 the game's mod manager are the game's own business. Online (TruckersMP, Convoy): at your own risk.
+
+rFactor 2 (experimental)
+------------------------
+New in this release, built on a community contribution and not yet tested on our own headsets.
+rFactor 2's VR has to run through OpenComposite (the same one-time setup as ACC: put OpenComposite's
+openvr_api.dll in rFactor 2's Bin64 folder). Pick rFactor 2 in the game list, then Launch. The focus
+area stays in the centre (no eye tracking yet), and there is no field of view crop, helmet overlay or
+focus shape. The GPU regulator (Picture > GPU regulator) can lower the periphery and focus density while
+frames run over a GPU time you set, and raise them again. If something looks wrong, send a report
+(Report an issue in the launcher): its logs are what a fix is made from.
 
 Le Mans Ultimate
 ----------------

@@ -4,6 +4,7 @@
 #include "focus_mask.h"
 #include "fov_crop.h"
 #include "views4_layout.h"
+#include "two_view_atlas.h"
 
 #include <algorithm>
 #include <cmath>
@@ -151,6 +152,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::DlssFocusPreset, I18N(L"Focus preset"), 0, 0, 1},
     {MenuItem::DlssEyePreset, I18N(L"Periphery preset"), 0, 0, 1},
     {MenuItem::DlssSharpening, I18N(L"Texture sharpening"), 0, 0, 1},
+    {MenuItem::DlssLightGlow, I18N(L"Light glow"), 0, 0, 1},
     // The DLSS-NR page (engine/nr_settings.h's ranges).
     {MenuItem::NrOn, I18N(L"Use DLSS-NR"), 0, 1, 1},
     {MenuItem::NrIntensity, I18N(L"Intensity"), 0, 100, 5},
@@ -365,7 +367,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         // The launcher's Foveation card in its order: mode, size, shape (its corner radius, or the point to adjust and
         // its place: three lines for any number of points), feather, the focus's place, the gaze dead-zone (eye
         // tracked), the outline.
-        add({MenuItem::HeadFoveation, MenuItem::EyeTracking, MenuItem::Width, MenuItem::Height});
+        add({MenuItem::HeadFoveation});
+        if (!l.adapterQvfr)  // RF2 has no eye tracking: its focus box keeps the one fixed place
+            items.push_back(MenuItem::EyeTracking);
+        add({MenuItem::Width, MenuItem::Height});
         if (l.shapePage)
             items.push_back(MenuItem::Shape);
         if (l.shapePage && v.shape.custom)
@@ -375,7 +380,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         items.push_back(MenuItem::Feather);
         if (!l.runtimeComposes)  // the runtime places the focus area in its own focus region: the offsets do nothing
             add({MenuItem::FocusOffset, MenuItem::FocusOffsetX});
-        if (v.eyeTracking)
+        if (v.eyeTracking && !l.adapterQvfr)
             items.push_back(MenuItem::GazeDeadzone);
         if (l.focusQuads)  // focus_layer=2's test
             items.push_back(MenuItem::FocusQuadDistance);
@@ -407,9 +412,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             if (v.dlss.on && l.fsr && !l.fsrPc)
                 items.push_back(MenuItem::DlssUpscaler);
             if (v.dlss.on && fsr)
-                add({MenuItem::DlssFocusMode, MenuItem::DlssSharpening});
+                add({MenuItem::DlssFocusMode, MenuItem::DlssSharpening, MenuItem::DlssLightGlow});
             else if (v.dlss.on)
-                add({MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset, MenuItem::DlssSharpening});
+                add({MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset, MenuItem::DlssSharpening,
+                     MenuItem::DlssLightGlow});
             if (l.ownNr) {
                 add({MenuItem::HeadNr, MenuItem::NrOn});
                 if (v.nr.on) {
@@ -587,6 +593,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         const int before = dl.textureSharpening;
         dl.textureSharpening = dlss_choice_step(kDlssTextureSharpening, dl.textureSharpening, step);
         return dl.textureSharpening != before;
+    }
+    case MenuItem::DlssLightGlow: {  // off, low, high (no wrap)
+        const int before = dl.lightGlow;
+        dl.lightGlow = dlss_choice_step(kDlssLightGlow, dl.lightGlow, step);
+        return dl.lightGlow != before;
     }
     case MenuItem::CheekyProcessing: c.processing = !c.processing; return true;
     case MenuItem::CheekyOuterDlaa: c.outerDlaa = !c.outerDlaa; return true;
@@ -842,6 +853,23 @@ MenuFit menu_fit(const SettingsMenu& menu) {
     f.focusWidth = f.wantFocusWidth;
     f.focusHeight = f.wantFocusHeight;
     f.densityX = f.densityY = v.density;
+    if (menu.launch.adapterQvfr) {
+        // RF2's adapter composes the views: the two-view atlas rule (two_view_atlas.h), in percent of the native eye. The focus
+        // view takes its width first; the periphery gets what is left, so a high density shrinks it.
+        // The native eye is the target (its size once known; the rule's fixed pixels against a typical eye before).
+        const unsigned w = menu.launch.nativeWidth > 0 ? static_cast<unsigned>(menu.launch.nativeWidth) : 2000u;
+        const unsigned h = menu.launch.nativeHeight > 0 ? static_cast<unsigned>(menu.launch.nativeHeight) : 2000u;
+        const TwoViewAtlas a = fit_two_view_atlas(w, h, v.periphery / 100.0, f.wantFocusWidth / 100, f.wantFocusHeight / 100);
+        f.periphery = a.outer * 100;
+        f.focusWidth = a.focusW * 100.0 / w;
+        f.focusHeight = a.focusH * 100.0 / h;
+        f.peripheryCapped = a.outerCapped;
+        f.peripheryByRoom = a.outerCapped;  // the focus view's width is the only limit there
+        f.focusCapped = a.focusCapped;
+        f.densityX = f.focusWidth * 100 / v.width;
+        f.densityY = f.focusHeight * 100 / v.height;
+        return f;
+    }
     if (menu.launch.cornerFit) {  // the corner path's own rule, the one it draws by
         const CornerFit c = corner_fit(v.periphery, v.width, v.height, v.density);
         f.periphery = c.periphery;
@@ -1183,6 +1211,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu, bool shown) {
             line.value = w.t(dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset));
         else if (items[i] == MenuItem::DlssSharpening)
             line.value = w.t(dlss_choice_name(kDlssTextureSharpening, v.dlss.textureSharpening));
+        else if (items[i] == MenuItem::DlssLightGlow)
+            line.value = w.t(dlss_choice_name(kDlssLightGlow, v.dlss.lightGlow));
         else if (items[i] == MenuItem::FgOn)
             line.value = on_off(c.fg);
         else if (items[i] == MenuItem::FgMultiplier)

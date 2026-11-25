@@ -145,7 +145,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR) {
             ID3D11Device* device = reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device;
             d3d11_capture_start(device, experiment.d3d11CaptureFrame);
-            if (experiment.views4ComposeD3D11 || game->observes_d3d11())
+            if (experiment.views4ComposeD3D11 || game->observes_d3d11() || game->adapter_qvfr())
                 game->d3d11_session(device);
             cheeky_session_d3d11(device);  // when Cheeky runs in this game (loads_cheeky)
             if (experiment.views4 || experiment.measure) {  // as D3D12 below: the overlay's GPU split and busiest thread

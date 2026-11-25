@@ -131,6 +131,28 @@ constexpr Help kHelp[] = {
     {I18N(L"Corner radius"), I18N(L"Rounds the focus area’s corners, so its edge is harder to spot. No cost: the area renders as a rectangle "
                        L"either way.")},
     {I18N(L"Feather"), I18N(L"The band where the focus area blends into the outer view. Wider hides the edge better; no measurable cost.")},
+    // The GPU regulator card (rFactor 2).
+    {I18N(L"Regulate focus density"),
+     I18N(L"Takes Focus density down 1% at a time while the GPU time per frame stays over Lower above, and back up while it stays "
+     L"under Raise below. The density you set is the most it uses; it is never written over. It stops at 50%.")},
+    {I18N(L"Regulate periphery resolution"),
+     I18N(L"Takes Periphery resolution down 1% at a time while the GPU time per frame stays over Lower above, and back up while it "
+     L"stays under Raise below. The resolution you set is the most it uses; it is never written over. It stops at 20%.")},
+    {I18N(L"Lower above"),
+     I18N(L"The GPU time per frame, in ms, over which the regulator lowers what it regulates. It is the time the layer measures on "
+     L"the GPU for the eye passes (the log’s scene span), not the overlay’s GPU number. At 90 Hz a frame has 11.1 ms; frames "
+     L"start to miss a little under that, so 10 ms is a start.")},
+    {I18N(L"Raise below"),
+     I18N(L"The GPU time per frame, in ms, under which the regulator raises what it regulates again. Keep it a ms or more under "
+     L"Lower above, so it does not go up and down: between the two limits nothing changes.")},
+    {I18N(L"Frames before lowering"),
+     I18N(L"How many frames in a row must run over Lower above before the regulator takes a 1% step down (1-50). Keep it low to "
+     L"react quickly: at 90 Hz, 10 frames is about a tenth of a second per step. A frame under Raise below starts the count "
+     L"again.")},
+    {I18N(L"Frames before raising"),
+     I18N(L"How many frames in a row must run under Raise below before the regulator takes a 1% step back up (50-300). Keep it "
+     L"high to come back slowly: at 90 Hz, 300 frames is about three seconds per step. A frame over Lower above starts the "
+     L"count again.")},
     {I18N(L"Gaze dead-zone"),
      I18N(L"How far your eyes move before the focus area follows. A little keeps it still against eye-tracker noise; too much "
      L"makes it lag when you look around. No GPU cost.")},
@@ -301,6 +323,11 @@ constexpr Help kHelp[] = {
      L"runs. Sim-QVFR does that through copies of the game’s shaders, in the focus area alone or in the periphery too. "
      L"Measured gains are modest (most in the periphery and on distant textures). Off at launch, nothing is installed for "
      L"it; turned on then, it starts at the next launch. Fine patterns may shimmer: then a step lower.")},
+    {I18N(L"Light glow"),
+     I18N(L"At night DLSS takes very bright lights (distant headlights, floodlights) for noise and smooths them away, so "
+     L"the game’s bloom fades. Light glow lowers the exposure DLSS works at, so it keeps them: some at Low, more at High. "
+     L"Nothing is added to the picture, so the lights don’t flicker or smear. Very bright edges may get a faint halo: "
+     L"then Low or Off. NVIDIA DLSS only. Experimental.")},
     {I18N(L"Updates"),
      I18N(L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
      L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "

@@ -75,6 +75,18 @@ struct DlssRun {
     // The copy taken only where what was drawn over it lies nearer than this (metres; 0: everywhere): the player's car's
     // glass, not another car drawn blended with its depth written (whose surface the depth is).
     double depthCopyNear = 3.0;
+    // The lights' glow ([dlss] light_glow, percent: 0 off, 50 low, 100 high; live: DlssLive::lightGlow). DLSS tonemaps
+    // its input by its auto exposure before it filters: at night a headlight or floodlight thousands of times brighter
+    // than the scene saturates there and is filtered away as a firefly, and the game's bloom, made from the brightest
+    // texels after DLSS, loses its glow (lmu_glow_check: DLSS alone kept none of the bloom of lights up to a texel
+    // across, a steady 300-bright 3-texel light came out at 0.6). The glow lowers DLSS's exposure (NGX's
+    // InExposureScale, per evaluation) to `glowScaleLow` at 50 and `glowScaleHigh` at 100 (log-linear between), so
+    // DLSS keeps the lights itself, with its own motion and history: nothing of ours to strobe or smear. NVIDIA DLSS
+    // only (FSR's auto exposure has no scale). Earlier, PR 41 put the drawn peaks back over DLSS's output: they strobed
+    // with the jitter, and every hold tried left trails (headset runs 2026-11-22).
+    int lightGlow = 0;
+    double glowScaleLow = 0.01;
+    double glowScaleHigh = 0.003;
 };
 
 // The game's side: eye `eye`'s pass's view matrix (world -> view, row vectors) and projection as rendered (jitter
@@ -96,10 +108,15 @@ struct DlssLive {
     int eyePreset = -1;   // DlssRun::eyePreset
     int textureSharpening = 0;  // DlssRun::textureSharpening (no new feature: taken at once)
     int upscaler = 0;           // DlssRun::upscaler (every view's feature made again by the other)
+    int lightGlow = 0;          // DlssRun::lightGlow (no new feature: taken at once)
 };
 void dlss_live(const DlssLive& live);
 // Checks: how long the settings must hold before a change that makes features again is taken (500 ms in the game).
 void dlss_live_settle_for_tests(int ms);
+// Checks: the views evaluated at a lowered exposure (DlssRun::lightGlow) since the module started.
+unsigned long long dlss_light_glow_views_total();
+// DLSS's exposure scale for a light glow in percent (DlssRun::lightGlow, glowScaleLow, glowScaleHigh): 1 at 0.
+double dlss_light_glow_scale(int percent, double low, double high);
 // The end of xrLocateViews for the game's stereo views: this frame's jitter put into their FOV.
 void dlss_jitter_views(XrView* views, uint32_t count);
 // The focus views' render scale for the frame being set up: a focus view w x h is drawn at dlss::render_size(w, s) x

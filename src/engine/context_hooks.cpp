@@ -20,14 +20,15 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 // d3d11.h order: IUnknown 3 + ID3D11DeviceChild 4, then ID3D11DeviceContext's own.
-constexpr unsigned kSlot[kEntries] = {33, 34, 12, 13, 20, 21, 39, 40, 58, 44, 45, 119, 123, 15};
+constexpr unsigned kSlot[kEntries] = {33, 34, 12, 13, 20, 21, 39, 40, 58, 44, 45, 119, 123, 15, 57};
 constexpr const char* kName[kEntries] = {"OMSetRenderTargets",   "OMSetRenderTargetsAndUnorderedAccessViews",
                                          "DrawIndexed",          "Draw",
                                          "DrawIndexedInstanced", "DrawInstanced",
                                          "DrawIndexedInstancedIndirect", "DrawInstancedIndirect",
                                          "ExecuteCommandList",   "RSSetViewports",
                                          "RSSetScissorRects",    "VSSetConstantBuffers1",
-                                         "PSSetConstantBuffers1", "Unmap"};
+                                         "PSSetConstantBuffers1", "Unmap",
+                                         "ResolveSubresource"};
 constexpr int kFunctions = 4;  // per entry: LMU's measurements found 4 on WARP and an RTX 5070 Ti
 
 struct Functions {
@@ -78,6 +79,8 @@ struct Detours {
         }
         if (!observed) {
             ++depth;
+            if constexpr (E == kOMSetRenderTargets || E == kOMSetRenderTargetsAndUavs)
+                other_targets(context, a...);
             real(context, a...);
             --depth;
             return;
@@ -106,6 +109,12 @@ struct Detours {
             }
             if (!replaced)
                 real(context, a...);
+            if constexpr (E == kResolveSubresource) {
+                const auto args = std::make_tuple(a...);
+                if (g.observers.resolved)
+                    g.observers.resolved(context, std::get<0>(args), std::get<1>(args), std::get<2>(args), std::get<3>(args),
+                                         std::get<4>(args));
+            }
             if constexpr (E == kDrawIndexed || E == kDraw || E == kDrawIndexedInstanced || E == kDrawInstanced ||
                           E == kDrawIndexedInstancedIndirect || E == kDrawInstancedIndirect) {
                 if (g.observers.draw_after)
@@ -136,6 +145,16 @@ struct Detours {
                 real(c, a...);
         }
         --depth;
+    }
+
+    // Another immediate context's target bind (Observers::other_targets), while one is observed.
+    static void other_targets(ID3D11DeviceContext* c, A... a) {
+        if (!g.observers.other_targets || !g.context.load(std::memory_order_relaxed) ||
+            c->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+            return;
+        const auto args = std::make_tuple(a...);
+        if (std::get<0>(args) != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+            g.observers.other_targets(c, std::get<0>(args), std::get<1>(args), std::get<2>(args));
     }
 
     template <Entry X>
@@ -207,6 +226,10 @@ struct Detours {
             const auto args = std::make_tuple(a...);
             if (o.unmap)
                 o.unmap(c, std::get<0>(args), std::get<1>(args));
+        } else if constexpr (X == kResolveSubresource) {
+            const auto args = std::make_tuple(a...);
+            if (o.resolve)
+                o.resolve(c, std::get<0>(args), std::get<1>(args), std::get<2>(args), std::get<3>(args), std::get<4>(args));
         }
     }
 };
@@ -233,6 +256,8 @@ void* detour_for(int e, int n) {
         case kPSSetConstantBuffers1:
             return Detours<kPSSetConstantBuffers1, UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*>::get(n);
         case kUnmap: return Detours<kUnmap, ID3D11Resource*, UINT>::get(n);
+        case kResolveSubresource:
+            return Detours<kResolveSubresource, ID3D11Resource*, UINT, ID3D11Resource*, UINT, DXGI_FORMAT>::get(n);
         default: return nullptr;
     }
 }
@@ -302,17 +327,9 @@ void hook_entries() {
         hook_entry(e);
 }
 
-}  // namespace
-
-bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& observers) {
-    std::lock_guard lock(g.mutex);
-    if (ID3D11DeviceContext* const current = g.context.load(); !context || current)
-        return current == context && context;
-    if (!minhook_ready("context hooks", ": off"))
-        return false;
-    g.wanted = wanted;
-    g.observers = observers;
-    g.context.store(context);  // last: the detours start observing once it's set
+// Every function `context`'s wanted entries hold, idle and busy, with and without multithread protection. Under g.mutex,
+// with g.context already `context`.
+void scan(ID3D11DeviceContext* context) {
     ComPtr<ID3D11Device> device;
     context->GetDevice(&device);
     // A command of ours that changes nothing the game sees: a 16-byte constant buffer of our own updated.
@@ -341,6 +358,20 @@ bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& obs
         hook_entries();
         g.stats.protectionTried = true;
     }
+}
+
+}  // namespace
+
+bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& observers) {
+    std::lock_guard lock(g.mutex);
+    if (ID3D11DeviceContext* const current = g.context.load(); !context || current)
+        return current == context && context;
+    if (!minhook_ready("context hooks", ": off"))
+        return false;
+    g.wanted = wanted;
+    g.observers = observers;
+    g.context.store(context);  // last: the detours start observing once it's set
+    scan(context);
     logf("context hooks: %d d3d11 functions hooked for %d entries%s%s", g.stats.functions,
          [&] {
              int n = 0;
@@ -357,6 +388,25 @@ void rescan() {
     if (g.context.load())
         hook_entries();
 }
+
+bool retarget(ID3D11DeviceContext* context) {
+    std::lock_guard lock(g.mutex);
+    ID3D11DeviceContext* const current = g.context.load();
+    if (!current || !context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+        return false;
+    if (current == context)
+        return true;
+    const int before = g.stats.functions;
+    g.context.store(context);
+    ++depth;  // the scan's own commands on the context: not observed
+    scan(context);
+    --depth;
+    logf("context hooks: observing context %p now (was %p), %d more d3d11 functions hooked", static_cast<void*>(context),
+         static_cast<void*>(current), g.stats.functions - before);
+    return true;
+}
+
+ID3D11DeviceContext* observed_context() { return g.context.load(); }
 
 // The hooks stay in d3d11's code (a game thread may be inside one): with no context they pass every call straight on.
 // The detours themselves (this file's state) live for the process. Calls already inside an observer are waited out
