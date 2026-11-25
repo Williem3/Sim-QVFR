@@ -193,7 +193,8 @@ bool evaluate(ID3D11DeviceContext* context, Feature* feature, const Evaluation& 
     e.InColorSubrectBase = {v.colourX, v.colourY};
     e.InReset = v.reset ? 1 : 0;
     e.InMVScaleX = e.InMVScaleY = 1;
-    e.InPreExposure = e.InExposureScale = 1;
+    e.InPreExposure = 1;
+    e.InExposureScale = v.exposureScale > 0 ? v.exposureScale : 1;
     const NVSDK_NGX_Result r = NGX_D3D11_EVALUATE_DLSS_EXT(context, feature->handle, params, &e);
     result = static_cast<unsigned>(r);
     return NVSDK_NGX_SUCCEED(r);

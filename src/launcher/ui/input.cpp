@@ -221,6 +221,7 @@ void activate(Ctl id, int option) {
     case kCorridorPreset:
     case kDlssFocusPreset:
     case kDlssEyePreset:
+    case kDlssGlow:
     case kNrOrder:
     case kFgMultiplier:
     case kFgScale:
@@ -572,6 +573,7 @@ bool space_control(Ctl id) {
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kDlssSharpening:
+    case kDlssGlow:
     case kOsdOn:
     case kClockOn:
     case kHotkeyFooter:

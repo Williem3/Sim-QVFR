@@ -70,9 +70,9 @@ enum Ctl {
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, another nvngx_dlss.dll's
     // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset, texture sharpening, the other
-    // cars' motion.
+    // cars' motion, the lights' glow.
     kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
-    kDlssCarVectors,
+    kDlssCarVectors, kDlssGlow,
     // DLSS-NR on those views ([dlss_nr], DLSS pane): on, the player's nvngx_dlssnr.dll (Choose…), the model's settings,
     // where it runs relative to DLSS, the working sizes, the edge blend, the periphery and how much of it.
     kNrOn, kNrFolder, kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask, kNrOrder,

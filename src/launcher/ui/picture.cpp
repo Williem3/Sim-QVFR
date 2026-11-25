@@ -547,6 +547,8 @@ void dlss_rows(Body& b) {
         b.popup(kDlssSharpening, tr(L"Texture sharpening"),
                 tr(kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name),
                 names_of(kDlssTextureSharpening));
+        b.segments(kDlssGlow, tr(L"Light glow"), names_of(kDlssLightGlow),
+                   dlss_choice_index(kDlssLightGlow, d.lightGlow, true));
         b.more(tr(L"advanced options"), {tr(L"Other cars’ motion")}, [](Body& m) {
             m.toggle(kDlssCarVectors, tr(L"Other cars’ motion"), app.s.dlss.carVectors,
                      tr(L"Keeps passing cars clean; turn off for headroom."), false, Applies::NextLaunch);
@@ -689,7 +691,8 @@ Card fsr_card() {
         b.toggle(kDlssOn, tr(L"Use FSR"), on,
                  on ? tr(L"Native AA on the periphery, native AA or an upscale on the focus.") : tr(L"Off"));
         b.reveal(kDlssOn, on, tr(L"Use FSR"),
-                 {tr(L"Focus views"), tr(L"Texture sharpening"), tr(L"Other cars’ motion")}, fsr_rows);
+                 {tr(L"Focus views"), tr(L"Texture sharpening"), tr(L"Other cars’ motion")},
+                 fsr_rows);
     };
     c.reset = [](Settings& s) {  // its switch and options; DLSS's own DLL choice kept
         const std::wstring folder = s.dlss.folder;

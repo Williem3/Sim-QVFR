@@ -45,6 +45,10 @@ struct Evaluation {
     unsigned width = 0, height = 0;     // this frame's render size (at most the feature's)
     float jitterX = 0, jitterY = 0;     // this frame's projection jitter, in render pixels
     bool reset = false;                 // no history (the first frame, a cut)
+    // DLSS's auto exposure times this (NGX's InExposureScale): DLSS tonemaps by its exposure before it filters, and a
+    // light far brighter than the scene around it saturates there and is filtered away (the lights' glow:
+    // engine/dlss_views.h DlssRun::lightGlow). 1: DLSS's own.
+    float exposureScale = 1;
 };
 bool evaluate(ID3D11DeviceContext* context, Feature* feature, const Evaluation& e, unsigned& result);
 // Every feature must be released first.

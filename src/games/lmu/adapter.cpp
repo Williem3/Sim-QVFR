@@ -214,6 +214,12 @@ public:
             // lmu_dlss_glass_near_cm (300): DLSS's depth from before the transparents only where they lie nearer than
             // this (the player's car's glass); 0 everywhere (DlssRun::depthCopyNear).
             dlss.depthCopyNear = std::clamp(key(L"lmu_dlss_glass_near_cm", 300), 0, 100000) / 100.0;
+            // The lights' glow (engine/dlss_views.h DlssRun::lightGlow): the player's [dlss] light_glow (live). DLSS's
+            // exposure scale at Low and High, tuning for tests: lmu_dlss_glow_low_x10000 (100: x0.01),
+            // lmu_dlss_glow_high_x10000 (30: x0.003).
+            dlss.lightGlow = std::clamp(player.lightGlow, 0, 100);
+            dlss.glowScaleLow = std::clamp(key(L"lmu_dlss_glow_low_x10000", 100), 1, 10000) / 10000.0;
+            dlss.glowScaleHigh = std::clamp(key(L"lmu_dlss_glow_high_x10000", 30), 1, 10000) / 10000.0;
             // AMD FSR in DLSS's place (engine/fsr_upscale.h; experimental): wherever DLSS can't run (not an NVIDIA GPU,
             // or NGX refuses to start), the launcher's FSR card. On an RTX card, lmu_fsr=1 (a test) lets [dlss]
             // upscaler=fsr choose it, live. lmu_fsr_provider=3 the newest FSR 3.x even where FSR 4 is offered;
@@ -336,6 +342,7 @@ public:
         live.preset = settings.focusPreset;
         live.eyePreset = settings.eyePreset;
         live.textureSharpening = settings.textureSharpening;
+        live.lightGlow = settings.lightGlow;
         live.upscaler = fsrAllowed_ ? settings.upscaler : 0;
         simqvfr::dlss_live(live);
         qvfr_frame_cars_wanted(settings.on && settings.carVectors);  // the cars' tracking only for an upscaler using it

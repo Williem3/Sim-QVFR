@@ -103,6 +103,9 @@ struct State {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch, bandOutside;
+    // Views evaluated at a lowered exposure (the lights' glow) since the last line, and since the module started.
+    unsigned long long glowViews = 0, glowViewsTotal = 0;
+    bool glowFsrSaid = false;  // the glow asked for while FSR runs the views (not under FSR), said once
     // The vectors with our single-sample depth copy beside multisample object slots; the copy's and the measurement's.
     ComPtr<ID3D11PixelShader> vectorsCopyMs, depthCopyMs, depthCopySs, measureMs, measureSs, keepFarMs, keepFarSs;
     ComPtr<ID3D11Buffer> constants;
@@ -259,6 +262,9 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
     const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
     const auto bandOutside = compile(kBandOutsideShader, "ps", "ps_5_0", nullptr);
+    say("the lights' glow: %d%% (DLSS's exposure x%.4f; low x%.4f, high x%.4f)", d.cfg.lightGlow,
+        dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh), d.cfg.glowScaleLow,
+        d.cfg.glowScaleHigh);
     const D3D_SHADER_MACRO bothMs[] = {{"MS", "1"}, {"DEPTH_MS", "1"}, {nullptr, nullptr}};
     const auto psBoth = compile(kVectorsShader, "ps", "ps_5_0", bothMs);
     const auto copyMs = compile(kDepthCopyShader, "ps", "ps_5_0", ms);
@@ -876,6 +882,10 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         fe.fovY = camera.fovY;
         fe.frameMs = static_cast<float>(d.frameMs);
         done = fsr::evaluate(context, s.fsrView, fe, result);
+        if (d.cfg.lightGlow > 0 && !d.glowFsrSaid) {
+            d.glowFsrSaid = true;
+            say("the lights' glow: not under AMD FSR (its auto exposure has no scale): the views as FSR makes them");
+        }
     } else {
         ngx::Evaluation e;
         e.colour = resolved;
@@ -889,7 +899,12 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         e.jitterX = jx;
         e.jitterY = jy;
         e.reset = !history;
+        e.exposureScale = static_cast<float>(dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
         done = ngx::evaluate(context, s.feature, e, result);
+        if (done && e.exposureScale != 1) {
+            ++d.glowViews;
+            ++d.glowViewsTotal;
+        }
     }
     if (done) {
         context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
@@ -1765,8 +1780,14 @@ bool live_remakes(const DlssLive& l) {
            l.upscaler != d.cfg.upscaler;
 }
 
-// Texture sharpening: no feature to make again, from the next pass.
+// Texture sharpening and the lights' glow: no feature to make again, from the next pass.
 void apply_live_sharpening(const DlssLive& l) {
+    const int glow = (std::max)(0, (std::min)(100, l.lightGlow));
+    if (glow != d.cfg.lightGlow) {
+        d.cfg.lightGlow = glow;
+        say("live: the lights' glow %d%% (DLSS's exposure x%.4f)", glow,
+            dlss_light_glow_scale(glow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
+    }
     if (l.textureSharpening == d.cfg.textureSharpening)
         return;
     d.cfg.textureSharpening = l.textureSharpening;
@@ -1824,6 +1845,15 @@ void apply_live(const DlssLive& l, unsigned changes) {
 
 void dlss_live_settle_for_tests(int ms) { kLiveSettle = std::chrono::milliseconds(ms < 0 ? 0 : ms); }
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
+unsigned long long dlss_light_glow_views_total() { return d.glowViewsTotal; }
+
+double dlss_light_glow_scale(int percent, double low, double high) {
+    if (percent <= 0 || !(low > 0) || !(high > 0))
+        return 1;
+    // Log-linear: 0 -> 1, 50 -> low, 100 -> high.
+    const double t = (std::min)(100, percent) / 50.0;
+    return t <= 1 ? std::pow(low, t) : low * std::pow(high / low, t - 1);
+}
 int dlss_upscaler_in_use() { return d.backend; }
 
 const wchar_t* dlss_upscaler_badge() {
@@ -1913,6 +1943,10 @@ void dlss_frame_end(unsigned long long frame) {
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+            if (d.cfg.lightGlow > 0 || d.glowViews)
+                say("the lights' glow %d%%: %llu views at DLSS's exposure x%.4f since the last line", d.cfg.lightGlow,
+                    d.glowViews, dlss_light_glow_scale(d.cfg.lightGlow, d.cfg.glowScaleLow, d.cfg.glowScaleHigh));
+            d.glowViews = 0;
             if (d.bands || d.bandFallbacks || d.composed)
                 say("focus views over a band of their rows: %llu (%.0f%% of their rows each); %llu whose rest took the eye's "
                     "image after DLSS (%llu drawn into the scene itself), %llu that kept the pass's own (the band or the eye "

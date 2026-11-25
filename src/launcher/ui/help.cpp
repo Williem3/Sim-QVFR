@@ -323,6 +323,11 @@ constexpr Help kHelp[] = {
      L"runs. Sim-QVFR does that through copies of the game’s shaders, in the focus area alone or in the periphery too. "
      L"Measured gains are modest (most in the periphery and on distant textures). Off at launch, nothing is installed for "
      L"it; turned on then, it starts at the next launch. Fine patterns may shimmer: then a step lower.")},
+    {I18N(L"Light glow"),
+     I18N(L"At night DLSS takes very bright lights (distant headlights, floodlights) for noise and smooths them away, so "
+     L"the game’s bloom fades. Light glow lowers the exposure DLSS works at, so it keeps them: some at Low, more at High. "
+     L"Nothing is added to the picture, so the lights don’t flicker or smear. Very bright edges may get a faint halo: "
+     L"then Low or Off. NVIDIA DLSS only. Experimental.")},
     {I18N(L"Updates"),
      I18N(L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
      L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "

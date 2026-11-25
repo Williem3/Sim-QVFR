@@ -1386,6 +1386,17 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   dm.values.dlss.textureSharpening == 2 && line_of(dm, MenuItem::DlssSharpening).value == L"Focus and periphery" &&
                   !menu_key(dm, MenuKey::Right),
               "DLSS card: texture sharpening steps to Focus only, then Focus and periphery, the last");
+        pick(dm, MenuItem::DlssLightGlow);  // the lights' glow: off by default, then low, then high
+        check(at(dm, MenuItem::DlssLightGlow) == at(dm, MenuItem::DlssSharpening) + 1 && dm.values.dlss.lightGlow == 0 &&
+                  line_of(dm, MenuItem::DlssLightGlow).label == L"Light glow" &&
+                  line_of(dm, MenuItem::DlssLightGlow).value == L"Off" && !menu_key(dm, MenuKey::Left),
+              "DLSS card: Light glow after texture sharpening, off by default, Left from Off stays there");
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.lightGlow == 50 &&
+                  line_of(dm, MenuItem::DlssLightGlow).value == L"Low" && menu_key(dm, MenuKey::Right) &&
+                  dm.values.dlss.lightGlow == 100 && line_of(dm, MenuItem::DlssLightGlow).value == L"High" &&
+                  !menu_key(dm, MenuKey::Right),
+              "DLSS card: Light glow steps to Low (50), then High (100), the last");
+        dm.values.dlss.lightGlow = 0;
         const auto has_note = [&](const wchar_t* start) {
             for (const std::wstring& n : menu_notes(dm))
                 if (n.rfind(start, 0) == 0)
@@ -1406,7 +1417,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             fm.values.dlss.focusScale = 100;
             menu_key(fm, MenuKey::Right);
             check(fm.values.dlss.upscaler == 1 && line_of(fm, MenuItem::DlssUpscaler).value == L"AMD FSR" &&
-                      has(fm, MenuItem::DlssFocusMode) && has(fm, MenuItem::DlssSharpening) && !has(fm, MenuItem::DlssFocusPreset) &&
+                      has(fm, MenuItem::DlssFocusMode) && has(fm, MenuItem::DlssSharpening) && has(fm, MenuItem::DlssLightGlow) &&
+                      !has(fm, MenuItem::DlssFocusPreset) &&
                       !has(fm, MenuItem::DlssEyePreset) && line_of(fm, MenuItem::DlssFocusMode).value == L"Native AA" &&
                       line_of(fm, MenuItem::HeadDlss).label == L"FSR",
                   "Right takes AMD FSR: the focus views (DLAA named Native AA) and texture sharpening; the card is FSR's");
@@ -1429,8 +1441,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         DeleteFileW(ini.c_str());
         DlssSettings fresh = read_dlss_settings(ini.c_str());
         check(!fresh.on && fresh.folder.empty() && fresh.focusScale == 100 && fresh.focusPreset == 0 && fresh.eyePreset == 11 &&
-                  fresh.textureSharpening == 0 && fresh.carVectors,
-              "[dlss]: an empty file reads off, DLAA, NGX's default, K, no texture sharpening, the other cars' motion on");
+                  fresh.textureSharpening == 0 && fresh.carVectors && fresh.lightGlow == 0,
+              "[dlss]: an empty file reads off, DLAA, NGX's default, K, no texture sharpening, the other cars' motion on, "
+              "no light glow");
         // An older file: [experiment] lmu_dlss=2, its folder, 50%, preset 0, the eyes on F.
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss", L"2", ini.c_str());
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"K:\\Games\\X", ini.c_str());
@@ -1447,6 +1460,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         mine.eyePreset = 11;
         mine.textureSharpening = 2;
         mine.carVectors = false;
+        mine.lightGlow = 50;
         check(fresh.upscaler == 0 && old.upscaler == 0, "[dlss]: upscaler NVIDIA DLSS unless the file says fsr");
         mine.upscaler = 1;
         check(write_dlss_settings(ini.c_str(), mine) && read_dlss_settings(ini.c_str()) == mine,
@@ -1462,7 +1476,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         WritePrivateProfileStringW(L"dlss", L"focus_scale", L"60", ini.c_str());
         WritePrivateProfileStringW(L"dlss", L"focus_preset", L"J", ini.c_str());
         WritePrivateProfileStringW(L"dlss", L"texture_sharpening", L"7", ini.c_str());
+        WritePrivateProfileStringW(L"dlss", L"light_glow", L"80", ini.c_str());
         const DlssSettings odd = read_dlss_settings(ini.c_str());
+        check(odd.lightGlow == 100, "[dlss]: a light glow between the steps snaps to the nearest (80: High)");
         check(odd.focusScale == 58 && odd.focusPreset == 0 && odd.textureSharpening == 2,
               "[dlss]: a scale between modes snaps to the nearest; a preset not offered reads as NGX's default; a "
               "sharpening past the last reads as the last");
