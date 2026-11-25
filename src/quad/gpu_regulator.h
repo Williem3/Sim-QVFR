@@ -2,13 +2,13 @@
 
 #include <algorithm>
 
-#include "../../quad/regulator_settings.h"
+#include "regulator_settings.h"
 
-namespace simqvfr::games::rf2 {
+namespace simqvfr {
 
-// The GPU regulator's decision, pure (no D3D, no threads: SessionBackend calls it under its atlas lock).
+// The GPU regulator's decision, pure (no graphics API and no threading of its own; callers provide synchronization).
 //
-// It is fed the GPU time of every timed frame (gpu_timing.h: the span of the eye passes, resolves and compositions).
+// It is fed the GPU time of every timed frame by the game adapter.
 // A frame over `decreaseAbove` counts towards a step down, a frame under `increaseBelow` towards a step up; the band
 // between the two counts for neither. A frame in the opposite zone resets a count, so a step up needs `raiseFrames` calm
 // frames (many: it comes back slowly) with no frame over the upper limit between, and a step down needs `lowerFrames`
@@ -111,4 +111,4 @@ private:
     unsigned long long heldNotBound_ = 0;
 };
 
-}  // namespace simqvfr::games::rf2
+}  // namespace simqvfr

@@ -31,7 +31,7 @@
 #include "draw_backend.h"
 #include "gpu_timing.h"
 #include "pass_state.h"
-#include "regulator.h"
+#include "../../quad/gpu_regulator.h"
 #include "render_backend.h"
 
 namespace simqvfr::games::rf2 {
