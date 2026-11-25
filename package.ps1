@@ -270,7 +270,12 @@ try {
     # strings, which Sim-QVFR's code never spells out), and NVIDIA's licence goes with it (the RTX SDKs licence's
     # distribution terms; THIRD_PARTY_NOTICES.md).
     $layerBytes = [IO.File]::ReadAllBytes((Join-Path $stage 'layer\sim-qvfr.dll'))
-    $hasNgx = [Text.Encoding]::ASCII.GetString($layerBytes).Contains('NVSDK_NGX_D3D11_Init')
+    # The code that runs DLSS and FSR: the layer's, and on the nightly LMU's mod too (its DLSS views moved with it; the
+    # NVIDIA and AMD DLLs still go in layer\, where the mod looks for them: core_dir).
+    $upscalerBytes = $layerBytes
+    $lmuMod = Join-Path $stage 'mods\lmu\sim-qvfr-lmu.dll'
+    if (Test-Path -LiteralPath $lmuMod) { $upscalerBytes = $layerBytes + [IO.File]::ReadAllBytes($lmuMod) }
+    $hasNgx = [Text.Encoding]::ASCII.GetString($upscalerBytes).Contains('NVSDK_NGX_D3D11_Init')
     # No local analysis tool in a release: the layer has none of their log text, and the launcher removes what older
     # versions left in the logs folder (leftovers.h; compiled out in a build with the tools).
     if ([Text.Encoding]::ASCII.GetString($layerBytes).Contains('image dump')) { throw 'The layer has a local analysis tool in it' }
@@ -289,7 +294,7 @@ try {
     } else {
         Write-Host '  DLSS: not in this release (-NoDlss)'
     }
-    $hasFsr = $latin1.GetString($layerBytes).Contains($latin1.GetString([Text.Encoding]::Unicode.GetBytes('amd_fidelityfx_upscaler_dx12.dll')))
+    $hasFsr = $latin1.GetString($upscalerBytes).Contains($latin1.GetString([Text.Encoding]::Unicode.GetBytes('amd_fidelityfx_upscaler_dx12.dll')))
     if ($FfxSdk -and -not $hasFsr) { throw 'Built with -FfxSdk, but the layer has no FSR in it (CMake did not take the headers)' }
     if (-not $FfxSdk -and $hasFsr) { throw 'Built without -FfxSdk, but the layer has FSR in it' }
     if ($FfxSdk) {
