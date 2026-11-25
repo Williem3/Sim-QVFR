@@ -53,8 +53,16 @@ int focus_preset();
 // single-pass stereo applies half the horizontal jitter it reports (its NDC jitter is over the double-wide target):
 // 0.5 tells NGX the shift really drawn; 1 leaves the game's value. peripheryDlaa: the game's eyes at DLAA in every
 // in-game DLSS mode (its optimal-settings query answered with render = output, its feature made as DLAA).
-void set_options(float jitterX, bool peripheryDlaa);
+// remakeEyes: a live eye preset change remakes the game's feature at its next evaluation; otherwise it waits for the
+// game's next feature (a feature remade mid-session with K smeared ACE's right eye, 2026-11-24).
+void set_options(float jitterX, bool peripheryDlaa, bool remakeEyes = false);
 float jitter_x();
+// The right eye evaluated from copies of its inputs at x 0, its output copied back: NGX's preset K smears the right eye
+// read at a subrect base past 0 of the game's double-wide targets.
+void set_right_own_inputs(bool on);
+// The game's resource transitions (its lists' ResourceBarrier): the right eye's inputs' states, for those copies.
+bool watching();
+void note_transition(ID3D12Resource* r, D3D12_RESOURCE_STATES after);
 // What runs, for the headset menu. Not seen until the game has made its DLSS feature.
 struct State {
     bool seen = false, forcedDlaa = false;

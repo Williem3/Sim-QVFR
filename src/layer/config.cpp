@@ -331,19 +331,27 @@ void load_experiment() {
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
             // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
             const DlssSettings player = read_dlss_settings(ini.c_str());
-            // The periphery (ACE's own eyes): F. K smeared the right eye's periphery in ACE, on the game's own feature too
-            // and with ACE's own jitter (2026-11-13 runs 22:39 and after), F was clean; pinned to F on the API path until
-            // K's smear is explained (2026-11-14, the user: a later release).
-            experiment.replayDlssEyePreset = experiment.apiPath ? 6 : player.eyePreset;
+            // The periphery (ACE's own eyes): the menu's preset (K or F), from ACE's first DLSS feature. K's right-eye
+            // smear was NGX reading the right eye at x past 0 (replay_dlss_right_own_inputs fixes it), and a feature
+            // remade mid-session; a live change now waits for ACE's next feature (replay_dlss_eye_remake=1 remakes).
+            experiment.replayDlssEyePreset = player.eyePreset;
+            experiment.replayDlssEyeRemake = GetPrivateProfileIntW(L"experiment", L"replay_dlss_eye_remake", 0, ini.c_str()) != 0;
             experiment.replayDlssFocusPreset = player.focusPreset;
             experiment.replayDlssFocusScale = player.focusScale;  // the focus views' mode: DLAA 100, 67, 58, 50
             experiment.replayDlssJitterX =
                 std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_dlss_jitter_x_percent", 50, ini.c_str()), 10u, 200u) / 100.0;
             experiment.replayDlssPeripheryDlaa =
                 GetPrivateProfileIntW(L"experiment", L"replay_dlss_periphery_dlaa", 0, ini.c_str()) != 0;
+            // The right eye's DLSS from copies of its inputs at x 0: preset K smeared the right eye read at x past 0 of
+            // ACE's double-wide targets (2026-11-24 headset runs, F didn't).
+            experiment.replayDlssRightOwnInputs =
+                GetPrivateProfileIntW(L"experiment", L"replay_dlss_right_own_inputs", 1, ini.c_str()) != 0;
             if (experiment.replayDlss)
                 logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every in-game "
-                     "mode %s", experiment.replayDlssJitterX * 100, experiment.replayDlssPeripheryDlaa ? "on" : "off");
+                     "mode %s; the right eye's DLSS %s",
+                     experiment.replayDlssJitterX * 100, experiment.replayDlssPeripheryDlaa ? "on" : "off",
+                     experiment.replayDlssRightOwnInputs ? "from inputs of its own at x 0 (replay_dlss_right_own_inputs=1)"
+                                                         : "from ACE's double-wide inputs at their x offset");
             if (experiment.replayDlss && (experiment.replayDlssEyePreset || experiment.replayDlssFocusPreset))
                 logf("experiment: API path DLSS presets: the eyes (periphery) %d, the focus views %d (0: ACE's own)",
                      experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
