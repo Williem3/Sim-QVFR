@@ -331,10 +331,11 @@ void load_experiment() {
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
             // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
             const DlssSettings player = read_dlss_settings(ini.c_str());
-            // The periphery (ACE's own eyes): F. K smeared the right eye's periphery in ACE, on the game's own feature too
-            // and with ACE's own jitter (2026-11-13 runs 22:39 and after), F was clean; pinned to F on the API path until
-            // K's smear is explained (2026-11-14, the user: a later release).
-            experiment.replayDlssEyePreset = experiment.apiPath ? 6 : player.eyePreset;
+            // The periphery (ACE's own eyes): the menu's preset (K or F), from ACE's first DLSS feature. K's right-eye
+            // smear was NGX reading the right eye at x past 0 (replay_dlss_right_own_inputs fixes it), and a feature
+            // remade mid-session; a live change now waits for ACE's next feature (replay_dlss_eye_remake=1 remakes).
+            experiment.replayDlssEyePreset = player.eyePreset;
+            experiment.replayDlssEyeRemake = GetPrivateProfileIntW(L"experiment", L"replay_dlss_eye_remake", 0, ini.c_str()) != 0;
             experiment.replayDlssFocusPreset = player.focusPreset;
             experiment.replayDlssFocusScale = player.focusScale;  // the focus views' mode: DLAA 100, 67, 58, 50
             experiment.replayDlssJitterX =

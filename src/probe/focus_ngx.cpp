@@ -29,7 +29,7 @@ bool installed() { return false; }
 void preload() {}
 void set_presets(int, int) {}
 int focus_preset() { return 0; }
-void set_options(float, bool) {}
+void set_options(float, bool, bool) {}
 float jitter_x() { return 1; }
 State state() { return {}; }
 void note_focus_running(bool) {}
@@ -109,6 +109,7 @@ EyeEval eyes[2];
 std::atomic<uint64_t> evaluations{0};
 int logged = 0;  // whole evaluations logged
 std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
+std::atomic<bool> eyeRemake{false};             // set_options: a live eye preset remakes the game's feature
 std::atomic<float> jitterX{1.0f};        // set_options
 // The right eye evaluated from inputs of its own at x 0 (copies of its half of ACE's double-wide colour, motion, depth
 // and bias mask, and an output of ours copied back): NGX's preset K smears the right eye when it reads it at x past 0
@@ -459,6 +460,10 @@ NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feat
 // retired (released a few evaluations later), one per change would leak otherwise.
 void retire_feature_later(NVSDK_NGX_Handle* handle);
 const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, bool& fresh) {
+    // A live change of the eyes' preset waits for the game's next feature (`create` applies it): a feature of ours
+    // remade mid-session with K smeared ACE's right eye (2026-11-24). [experiment] replay_dlss_eye_remake=1 remakes.
+    if (!eyeRemake.load())
+        return h;
     const int want = eyePreset.load();
     GameFeature g;
     {
@@ -556,7 +561,6 @@ void release_old_features() {
 // fy), recorded into the game's list. Null when the game's feature isn't known or NGX refuses (the game's own
 // evaluation then runs unchanged).
 const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, double fx, double fy, bool& fresh) {
-    const int want = eyePreset.load();
     GameFeature g;
     {
         AcquireSRWLockShared(&lock);
@@ -568,6 +572,8 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         if (!found)
             return nullptr;
     }
+    // The preset the game's feature was made with (eye_feature: no live preset change unless it remakes).
+    const int want = eyeRemake.load() ? eyePreset.load() : g.basePreset;
     const unsigned w = static_cast<unsigned>(std::lround(g.info.width * fx)), hgt = static_cast<unsigned>(std::lround(g.info.height * fy));
     unsigned ow = 0, oh = 0;
     live_output(g.info.outWidth, g.info.outHeight, fx, fy, ow, oh);
@@ -1035,9 +1041,10 @@ void set_presets(int eye, int focus) {
 
 int focus_preset() { return focusPreset.load(); }
 
-void set_options(float jitter, bool dlaa) {
+void set_options(float jitter, bool dlaa, bool remakeEyes) {
     jitterX.store(jitter);
     peripheryDlaa.store(dlaa);
+    eyeRemake.store(remakeEyes);
 }
 
 float jitter_x() { return jitterX.load(); }
