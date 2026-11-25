@@ -33,6 +33,7 @@ page compares the two.
 | **Assetto Corsa Competizione** | Beta | Steam, version 1.10.4. Needs a one-time VR setup first. [ACC guide](docs/guides/assetto-corsa-competizione.md) |
 | **X-Plane 12** | Beta | Steam, version 12.4.3-r2. [X-Plane guide](docs/guides/x-plane-12.md) |
 | **American Truck Simulator** (1.62.2.2), **Euro Truck Simulator 2** (1.62.3.3) | Experimental | Steam. [Truck sims guide](docs/guides/truck-simulators.md) |
+| **rFactor 2** | Experimental | Steam, in VR through OpenComposite. New: tell us how it runs, with a report from the launcher. |
 
 Each game works with the version named (Assetto Corsa EVO: its current Steam build when this release came out).
 **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new Sim-QVFR comes out: watch
@@ -152,6 +153,12 @@ Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
 DLSS, DLSS-NR and frame generation features, and for his permission to integrate it into Sim-QVFR.
 Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QVFR loads it as a separate download
 and doesn't include it. The launcher and the headset menu show its version wherever they control it.
+
+Thanks to [danoveb](https://github.com/danoveb) (Dan-Ove Brantholm), who built the base of Sim-QVFR's rFactor 2
+support and contributed the launcher's game switch (`-<game id>`, which starts that game with its own settings).
+
+Thanks to [fabz011](https://github.com/fabz011), who found that Sim-QVFR's DLSS took the bloom off Le Mans
+Ultimate's lights at night and made the first fix, which led to the Light glow setting.
 
 Thanks to ecstra for [ACEvoPerf](https://github.com/Williem3/ACEvoPerf), open source under the MIT licence.
 Its way of finding Assetto Corsa EVO's engine settings by name solved the problem of turning on the game's own
