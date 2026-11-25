@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include "../dev_build.h"
 #include "../i18n.h"
 
 namespace simqvfr::launcher::lmu_settings {
@@ -54,6 +55,12 @@ Def choice(File f, const char* key, const wchar_t* label, const wchar_t* help, i
 
 Def toggle(File f, const char* key, const wchar_t* label, const wchar_t* help, int group) {
     return {f, key, Kind::Toggle, label, help, group};
+}
+
+// Not vetted for players yet: shown in development builds only (shown()).
+Def dev_only(Def d) {
+    d.devOnly = true;
+    return d;
 }
 
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
@@ -259,13 +266,13 @@ const std::vector<Def>& defs() {
         choice(File::Player, "Soft Particles", I18N(L"Soft particles"),
                I18N(L"Softens where smoke and spray meet the scenery."), 2, kSoftParticles),
         choice(File::Player, "Motion blur", I18N(L"Motion blur"), I18N(L"Usually off in VR."), 2, kMotionBlur),
-        toggle(File::Player, "Headlights On Cars", I18N(L"Headlights light other cars"),
-               I18N(L"Other cars lit by headlights at night."), 2),
+        dev_only(toggle(File::Player, "Headlights On Cars", I18N(L"Headlights light other cars"),
+               I18N(L"Other cars lit by headlights at night."), 2)),
         choice(File::Player, "Max Headlights", I18N(L"Headlights"),
                I18N(L"The most cars whose headlights light the scene (up to 20)."), 2, kHeadlights),
-        toggle(File::Player, "Sun Occlusion", I18N(L"Sun occlusion"), I18N(L"Sunlight dimmed by the clouds."), 2),
-        toggle(File::Player, "Wind and Crowd Motion", I18N(L"Wind and crowd motion"),
-               I18N(L"Trees in the wind and moving crowds."), 2),
+        dev_only(toggle(File::Player, "Sun Occlusion", I18N(L"Sun occlusion"), I18N(L"Sunlight dimmed by the clouds."), 2)),
+        dev_only(toggle(File::Player, "Wind and Crowd Motion", I18N(L"Wind and crowd motion"),
+               I18N(L"Trees in the wind and moving crowds."), 2)),
         toggle(File::Player, "Transparency AA", I18N(L"Transparency anti-aliasing"),
                I18N(L"Smooths the edges of fences, trees and grass."), 2),
         // Rear-view mirrors
@@ -287,20 +294,29 @@ const std::vector<Def>& defs() {
         toggle(File::Player, "Vehicle Occlusion Culling", I18N(L"Vehicle occlusion culling"),
                I18N(L"Skips cars hidden behind other objects: saves CPU time in traffic."), 4),
         // Advanced performance
-        choice(File::Player, "Auto Detail Framerate", I18N(L"Lower detail under"),
+        dev_only(choice(File::Player, "Auto Detail Framerate", I18N(L"Lower detail under"),
                I18N(L"When the frame rate drops below this, LMU lowers detail and visible cars by up to half. Scenery "
                     L"and cars can change detail mid-race. Set it to your headset’s refresh rate or a little under."),
-               5, kAutoDetail),
-        toggle(File::Player, "Load Opponent Cockpits", I18N(L"Opponents’ cockpits"),
+               5, kAutoDetail)),
+        dev_only(toggle(File::Player, "Load Opponent Cockpits", I18N(L"Opponents’ cockpits"),
                I18N(L"Loads the other cars’ gauges and screens. Off saves CPU time and video memory; leave it on if you "
                     L"swap cars in multiplayer."),
-               5),
-        choice(File::Player, "UI Refresh Rate", I18N(L"Interface refresh in a race"),
+               5)),
+        dev_only(choice(File::Player, "UI Refresh Rate", I18N(L"Interface refresh in a race"),
                I18N(L"How often LMU redraws its own interface while you drive. Lower can save CPU time on LMU’s main "
                     L"thread; the HUD updates less smoothly."),
-               5, kUiRate),
+               5, kUiRate)),
     };
     return list;
+}
+
+bool shown(const Def& d) { return shown_in(d, kDevBuild); }
+
+bool group_shown(int group) {
+    for (const Def& d : defs())
+        if (d.group == group && shown(d))
+            return true;
+    return false;
 }
 
 std::wstring user_folder(const std::wstring& exe) {
