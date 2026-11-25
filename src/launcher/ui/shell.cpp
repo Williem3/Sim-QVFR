@@ -59,10 +59,10 @@ void tab_shape(Tab tab, float cx, float cy, float s) {
     }
 }
 
-// The logo (brand_logo.h), vertically centred on cy: with `compact`, the app icon's tile, `w` x `w`, centred on x;
-// otherwise the SQVFR wordmark, its letters starting at x (in line with the games' abbreviations under it) and `w`
-// wide; its trail runs left of x. The rail is dark in both themes, so it always uses the on-dark colours.
-void brand_mark(float x, float cy, float w, bool compact) {
+// The logo (brand_logo.h): with `compact`, the app icon's tile, `w` x `w`, centred on (x, y); otherwise the SQVFR
+// wordmark, its letters starting at x (in line with the games' abbreviations under it) and `w` wide, its baseline on y;
+// its trail runs left of x. The rail is dark in both themes, so it always uses the on-dark colours.
+void brand_mark(float x, float y, float w, bool compact) {
     Canvas& cv = app.canvas;
     const auto letters = [&](const char* sq, const char* vfr, float trail, bool trailAll, float x, float y, float box, float s) {
         // The motion-blur trail: faint copies of the letters, spread over the SVG's offset to the left.
@@ -76,12 +76,12 @@ void brand_mark(float x, float cy, float w, bool compact) {
         cv.path(sq, r, box, col(0xf2f4f7), 0, true);
         cv.path(vfr, r, box, col(0x5fe0d2), 0, true);
     };
-    if (!compact) {  // the wordmark: its letters span x 55..289 and y 31..85 of its 308 x 120 units
+    if (!compact) {  // the wordmark: its letters span x 55..289; its baseline is y 84 of its 308 x 120 units
         const float s = w / 234;
-        letters(brand::kWordSq, brand::kWordVfr, brand::kWordTrail, true, x - 55 * s, cy - 58 * s, 308, s);
+        letters(brand::kWordSq, brand::kWordVfr, brand::kWordTrail, true, x - 55 * s, y - 84 * s, 308, s);
         return;
     }
-    const Rect tile{x - w / 2, cy - w / 2, w, w};
+    const Rect tile{x - w / 2, y - w / 2, w, w};
     cv.fill(tile, col(0x111418), w * 0.22f);
     cv.push_clip(tile);
     letters(brand::kIconSq, brand::kIconVfr, brand::kIconTrail, false, tile.x, tile.y, 100, w / 100);
@@ -284,8 +284,9 @@ void rail(float H) {
     cv.fill({0, 0, W, H}, col(app.c->rail));
     if (compact)
         brand_mark(W / 2, top / 2, 40, true);
-    else  // the abbreviations' left edge and width, below
-        brand_mark(16, top / 2, W - 16 - 8, false);
+    else  // the abbreviations' left edge and width below; its baseline level with the top bar's tab labels (topbar()
+          // centres them in the same height)
+        brand_mark(16, (top - t::kTabLabel.lineHeight) / 2 + cv.baseline(t::kTabLabel), W - 16 - 8, false);
     // The bottom first: the blocks take what is left above it.
     // The About button: the kit's small control height; compact, two lines (the icon over the version number).
     const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;

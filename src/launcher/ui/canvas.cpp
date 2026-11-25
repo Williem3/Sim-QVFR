@@ -443,6 +443,11 @@ float Canvas::measure(const std::wstring& s, const tokens::TypeStyle& style) {
     return m.widthIncludingTrailingWhitespace;
 }
 
+float Canvas::baseline(const tokens::TypeStyle& style) const {
+    const FamilyFont& fam = family(style);
+    return (style.lineHeight - (fam.ascent + fam.descent) * style.size) / 2 + fam.ascent * style.size;  // as format() spaces it
+}
+
 float Canvas::measure_height(const std::wstring& s, const tokens::TypeStyle& style, float width) {
     const ComPtr<IDWriteTextLayout> l = layout(s, style, Align::Leading, true, width, 10000);
     if (!l)

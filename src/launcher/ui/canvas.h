@@ -71,6 +71,8 @@ public:
     float measure(const std::wstring& s, const tokens::TypeStyle& style);
     // Height of wrapped text at a width.
     float measure_height(const std::wstring& s, const tokens::TypeStyle& style, float width);
+    // Where one line of `style` has its baseline, below the top of its line box (text() centres that box when vcenter).
+    float baseline(const tokens::TypeStyle& style) const;
 
     ID2D1RenderTarget* target() { return target_.Get(); }
     ID2D1Factory* factory() { return factory_.Get(); }
