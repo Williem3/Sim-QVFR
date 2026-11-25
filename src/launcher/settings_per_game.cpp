@@ -100,27 +100,51 @@ bool store_game_settings(const std::wstring& ini, const std::wstring& gameId) {
     return write_game_copy(game_settings_file(ini, gameId), game_copy_keys(ini));
 }
 
-bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) {
-    Profile stored;
-    if (gameId.empty() || is_preset_name(gameId) || !load_profile(game_settings_folder(ini), gameId, stored, true))
-        return false;
-    // Only the keys whose value differs are written: each write rewrites the whole ini, and between two games
-    // usually only a few differ.
+namespace {
+
+// A game's per-game `keys` (and its [profiles] current) into `into`: only the keys whose value differs are written (each
+// write rewrites the whole ini, and between two games usually only a few differ).
+bool apply_game_keys(const std::wstring& into, const std::vector<ProfileKey>& keys) {
     bool ok = true;
-    for (const ProfileKey& k : stored.keys)
+    for (const ProfileKey& k : keys)
         if ((per_game_key(k.section, k.key) || (k.section == L"profiles" && k.key == L"current")) &&
-            ini_value(ini, k.section, k.key) != k.value)
-            ok &= WritePrivateProfileStringW(k.section.c_str(), k.key.c_str(), k.value.c_str(), ini.c_str()) != 0;
+            ini_value(into, k.section, k.key) != k.value)
+            ok &= WritePrivateProfileStringW(k.section.c_str(), k.key.c_str(), k.value.c_str(), into.c_str()) != 0;
     // A per-game key the copy doesn't hold (a setting newer than the copy, such as [quad] sharpen_percent): its default,
     // not the value the last game left in the ini, which would otherwise carry over into this game.
     static const std::vector<ProfileKey> defaults = settings_profile(Settings{}, L"defaults").keys;
     for (const ProfileKey& d : defaults) {
-        const bool held = std::any_of(stored.keys.begin(), stored.keys.end(), [&](const ProfileKey& k) {
+        const bool held = std::any_of(keys.begin(), keys.end(), [&](const ProfileKey& k) {
             return _wcsicmp(k.section.c_str(), d.section.c_str()) == 0 && _wcsicmp(k.key.c_str(), d.key.c_str()) == 0;
         });
-        if (!held && per_game_key(d.section, d.key) && ini_value(ini, d.section, d.key) != d.value)
-            ok &= WritePrivateProfileStringW(d.section.c_str(), d.key.c_str(), d.value.c_str(), ini.c_str()) != 0;
+        if (!held && per_game_key(d.section, d.key) && ini_value(into, d.section, d.key) != d.value)
+            ok &= WritePrivateProfileStringW(d.section.c_str(), d.key.c_str(), d.value.c_str(), into.c_str()) != 0;
     }
+    return ok;
+}
+
+}  // namespace
+
+bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) {
+    Profile stored;
+    if (gameId.empty() || is_preset_name(gameId) || !load_profile(game_settings_folder(ini), gameId, stored, true))
+        return false;
+    return apply_game_keys(ini, stored.keys);
+}
+
+bool launch_game_settings(const std::wstring& ini, const std::wstring& gameId, const std::wstring& into) {
+    if (gameId.empty() || is_preset_name(gameId) || !CopyFileW(ini.c_str(), into.c_str(), FALSE))
+        return false;
+    if (_wcsicmp(launcher_game_id(ini.c_str()).c_str(), gameId.c_str()) == 0)  // the ini holds this game's settings
+        return true;
+    // Its copy, or (none yet) the settings in use with the sizes it starts with, as switch_game_settings would make it;
+    // nothing is written beside the ini.
+    Profile stored;
+    const std::vector<ProfileKey> keys = load_profile(game_settings_folder(ini), gameId, stored, true)
+                                             ? stored.keys
+                                             : first_game_copy(game_copy_keys(ini), gameId);
+    bool ok = apply_game_keys(into, keys);
+    ok &= WritePrivateProfileStringW(L"launcher", L"game", gameId.c_str(), into.c_str()) != 0;
     return ok;
 }
 
