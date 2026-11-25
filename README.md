@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/sqvfr-wordmark-on-dark.png">
+    <img src="assets/brand/sqvfr-wordmark-on-light.png" alt="Sim-QVFR" width="360">
+  </picture>
+</p>
+
 # Sim-QVFR
 
 **More frames per second in VR, with a sharp picture where you're looking.**

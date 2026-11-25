@@ -14,6 +14,7 @@
 #include "../update_check.h"
 #include "../../games/game.h"
 #include "../../profile/profiles.h"
+#include "brand_logo.h"
 #include "launcher_version.h"
 #include "window_state.h"
 #include "controls.h"
@@ -58,12 +59,32 @@ void tab_shape(Tab tab, float cx, float cy, float s) {
     }
 }
 
-// The logo: a blue square, a red circle and a yellow triangle (Picture, Headset, Game), `size` high, centred on cx.
-void brand_mark(float cx, float y, float size) {
-    const float s = size * 0.62f, gap = size * 0.14f, w = 3 * s + 2 * gap, x = cx - w / 2, top = y + (size - s) / 2;
-    app.canvas.fill({x, top, s, s}, col(app.c->blue));
-    app.canvas.circle(x + s + gap + s / 2, top + s / 2, s / 2, col(app.c->red), true);
-    app.canvas.path("M0 12L6 0L12 12Z", {x + 2 * (s + gap), top, s, s}, 12, col(app.c->yellow), 0, true);
+// The logo (brand_logo.h): the SQVFR wordmark, `w` wide, centred on (cx, cy); or, when `w` is too narrow for the word
+// to read, the app icon's tile, `w` x `w`. The rail is dark in both themes, so it always uses the on-dark colours.
+void brand_mark(float cx, float cy, float w) {
+    Canvas& cv = app.canvas;
+    const auto letters = [&](const char* sq, const char* vfr, float trail, bool trailAll, float x, float y, float box, float s) {
+        // The motion-blur trail: faint copies of the letters, spread over the SVG's offset to the left.
+        for (const float k : {0.7f, 1.0f, 1.3f}) {
+            const Rect r{x - trail * k * s, y, box * s, box * s};
+            cv.path(sq, r, box, col(0x2f6fb8, 0.2f), 0, true);
+            if (trailAll)
+                cv.path(vfr, r, box, col(0x2f6fb8, 0.2f), 0, true);
+        }
+        const Rect r{x, y, box * s, box * s};
+        cv.path(sq, r, box, col(0xf2f4f7), 0, true);
+        cv.path(vfr, r, box, col(0x5fe0d2), 0, true);
+    };
+    if (w >= 80) {  // the wordmark: its letters and trail span x 20..290 and y 31..89 of its 308 x 120 units
+        const float s = w / 270;
+        letters(brand::kWordSq, brand::kWordVfr, brand::kWordTrail, true, cx - 155 * s, cy - 60 * s, 308, s);
+        return;
+    }
+    const Rect tile{cx - w / 2, cy - w / 2, w, w};
+    cv.fill(tile, col(0x111418), w * 0.22f);
+    cv.push_clip(tile);
+    letters(brand::kIconSq, brand::kIconVfr, brand::kIconTrail, false, tile.x, tile.y, 100, w / 100);
+    cv.pop_clip();
 }
 
 // The theme button's glyph: a sun (light), a crescent (dark), or a half-filled circle (following Windows).
@@ -260,7 +281,7 @@ void rail(float H) {
     const float W = rail_width(), top = t::kTopbarHeight;
     const bool compact = W < t::kRailWidth;
     cv.fill({0, 0, W, H}, col(app.c->rail));
-    brand_mark(W / 2, (top - 20) / 2, 20);
+    brand_mark(W / 2, top / 2, compact ? 40.0f : W - 2 * t::kSpace4);
     // The bottom first: the blocks take what is left above it.
     // The About button: the kit's small control height; compact, two lines (the icon over the version number).
     const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;

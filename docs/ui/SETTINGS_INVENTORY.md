@@ -36,7 +36,7 @@ Phase 1 of the UI overhaul (`OVERHAUL_PLAN.md`). This file lists every control, 
 
 | Current page | Control label | Type | Config key | Applies | Depends on | Per-game? | New location |
 |---|---|---|---|---|---|---|---|
-| Tab strip | Sim-QVFR mark, name, BETA tag | info | — | — | — | — | Rail (top: logo ■●▲); BETA beside the version at the rail bottom |
+| Tab strip | Sim-QVFR mark, name, BETA tag | info | — | — | — | — | Rail (top: SQVFR logo); BETA beside the version at the rail bottom |
 | Tab strip | Game tab (one per game) | nav | `[launcher] game`. Switching swaps the per-game keys (`switch_game_settings`) | Launcher | Shown when installed and not hidden, or added by hand (§12). The selected game always shows. | No | Rail › game block |
 | Tab strip | Game tab colour dot and underline | info | `[launcher] color_<id>` (or the built-in palette) | — | — | No | Rail (see plan, open question 1) |
 | Tab strip | Short names when full names don't fit | info | — | — | Window width | — | Rail collapses to abbreviations under 1024 px |
