@@ -43,9 +43,9 @@ void optimize_apply(const QvfrValues& q) {
     v.height = q.height;
     menu.dirty = true;
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = v] {
-        write_menu_values(ini.c_str(), values, true);
+        write_menu_values(ini.c_str(), values);
         if (!settings.empty())
-            write_menu_values(game_settings_ini(settings).c_str(), values, true);
+            write_menu_values(game_settings_ini(settings).c_str(), values);
     });
     logf("optimize: periphery %d%%, focus density %d%%, focus box %d%% x %d%%", q.periphery, q.density, q.width,
          q.height);
@@ -187,7 +187,7 @@ namespace {
 // cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
 // whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
 void profile_notice(const std::wstring& text, int64_t ms) {
-    if (!experiment.views4 && !experiment.quad)
+    if (!experiment.views4)
         return;  // no settings menu to show it in (baseline): the log has it
     const int64_t now = qpc_now();
     menu.model.notice = text;

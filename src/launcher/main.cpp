@@ -207,15 +207,13 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
 
 // The launch's layer options from the ini: the launcher's profile and what the method and Cheeky lock.
 Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstring>& environment) {
-    const std::wstring mode = ini_string(ini, L"experiment", L"mode");
     const simqvfr::CheekySettings cheeky = simqvfr::read_cheeky_settings(ini.c_str());
     const games::GameInfo& game = games::launcher_game();
     const bool dlss = game.features.foveatedDlss;  // Cheeky only in a game that has it
     // Through the game's anti-cheat ([launcher] anticheat=1): Cheeky's layer off (games/game.h antiCheatStart).
     const bool antiCheat = game.antiCheatStart && games::anticheat_chosen(ini.c_str());
-    return launch_options(read_launcher_layers(ini),
-                          simqvfr::parse_render_mode(mode.c_str()) == simqvfr::IniRenderMode::TwoLoop,
-                          dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment), antiCheat);
+    return launch_options(read_launcher_layers(ini), dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment),
+                          antiCheat);
 }
 
 std::wstring stamp_now() {
@@ -779,9 +777,8 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.build = build;
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
     const simqvfr::IniRenderMode iniMode = simqvfr::parse_render_mode(mode.c_str());
-    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off
-              : iniMode == simqvfr::IniRenderMode::TwoLoop ? LaunchMode::TwoLoop
-                                                           : LaunchMode::Qvfr;  // views4 and the research modes
+    // views4, the research modes, and the removed Two-Loop (the layer runs an ini still set to it as QVFR).
+    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off : LaunchMode::Qvfr;
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
@@ -822,7 +819,11 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.cheekyLayer = cheeky_layer_state();
     in.layers = launcher_layer_plan();
     in.toolkitTurbo = exe.empty() ? -1 : toolkit_turbo(exe);
-    in.eyeTracked = load_settings(ini).eyeTracking;
+    {
+        const Settings settings = load_settings(ini);
+        in.eyeTracked = settings.eyeTracking;
+        in.turbo = settings.turbo;
+    }
     const RuntimeInfo runtime = load_runtime_info(runtime_info_path());
     in.eyeTracker = runtime.eyeTracker;
     in.sessionFocus = runtime.sessionFocus;

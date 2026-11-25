@@ -42,8 +42,6 @@ inline constexpr DevSwitch kDevSwitches[] = {
      L"The CPU spent in the multi-view context hooks, logged every 900 frames."},
     {DevGroup::Diagnostic, "lmu", L"experiment", L"lmu_mvr_probe", 1, L"Multi-view shader probe",
      L"Every vertex shader converted and created once, then released: NVAPI's support and the counts in the log."},
-    {DevGroup::Diagnostic, "lmu", L"experiment", L"lmu_view_probe", 1, L"View probe",
-     L"Each frame's view renders and their parameters in the log."},
     {DevGroup::Diagnostic, "acc", L"experiment", L"acc_diag", 1, L"Pass hotkeys",
      L"Ctrl+Alt+1-6 switch SSR, AO, the sun's shadows, the focus views' sharing, contact shadows and convergence."},
     {DevGroup::Diagnostic, "acc", L"experiment", L"acc_pass_probe", 1, L"Mesh pass probe",

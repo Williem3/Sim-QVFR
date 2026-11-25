@@ -178,7 +178,7 @@ void push_live() {
     const std::wstring running = running_live_ini(runtime_info_path());
     if (running.empty() || !save_live_settings(running, app.s))
         return;
-    // QVFR resolution applies live up to the launch size; more, the method or Two-loop's resolution next launch.
+    // QVFR resolution applies live up to the launch size; more at the next launch.
     app.live = fits_launch(app.s, load_launch_sizes(runtime_info_path())) ? Live::Applied : Live::NextLaunch;
 }
 
@@ -466,9 +466,6 @@ Range slider_range(Ctl id) {
     default: return kSizeRange;
     }
 }
-
-// Two-loop is legacy (ini mode=quad still runs it): the method picker shows only while it is chosen, to leave it.
-bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
 namespace {
 

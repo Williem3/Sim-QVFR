@@ -23,7 +23,6 @@
 #include "../../dev_build.h"
 #include "../../quad/showcase.h"
 #include "../../sha256_file.h"
-#include "abi.h"
 #include "car_light.h"
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
@@ -95,18 +94,12 @@ int passesThisFrame = 0;
 int eyeOfPass[4] = {-1, -1, -1, -1};
 unsigned long long frames = 0;
 
-std::uintptr_t base() { return simqvfr::module_base(); }
-
 // ---- The game's facts on any build ----
-// QVFR reads five facts of the game: the size it was offered, its render scale (its main targets' size), whether its FSR
-// is on, each eye's projection and the eye a pass rendered. On a build abi.h's addresses are from (knownBuild) they are
-// read there, as since the start; on any other build (a game update, the studio's beta or alpha branches) they come from
-// what the layer sees instead (buildFree): the size it offered at xrEnumerateViewConfigurationViews, the scene target a
-// pass binds, FSR's compute writes into the eye's image, the FOV the game was handed at xrLocateViews, and the passes'
-// order. [experiment] lmu_build_free=1 takes them that way on a known build too (the check of this path). On a known
-// build both are taken and compared (check_facts), so a run says whether the layer's agree with the game's.
-bool knownBuild = false;
-bool buildFree = false;
+// QVFR needs five facts of the game: the size it was offered, its render scale (its main targets' size), whether its
+// FSR is on, each eye's projection and the eye a pass rendered. On every build they come from what the layer sees: the
+// size it offered at xrEnumerateViewConfigurationViews, the scene target a pass binds, FSR's compute writes into the
+// eye's image, the FOV the game was handed at xrLocateViews, and the passes' order. Nothing is read in the game's
+// memory; the exe's SHA-256 (game.h kBuilds) only says whether this is a build Sim-QVFR was tested on.
 std::atomic<std::uint32_t> offeredW{0}, offeredH{0};  // the stereo views' size the layer offered the game
 float gameFovTan[2][4] = {};  // the FOV the game was last handed (jitter included), tangents l r d u (under liveMutex)
 bool gameFovValid = false;
@@ -122,40 +115,6 @@ bool exe_known_build() {
         return simqvfr::games::supported_build(kGame, buildSha);
     }();
     return known;
-}
-
-// The comparison of the two sources on a known build (the log): each fact's checks and mismatches, the first of each
-// kind said with its values, a summary every 5400 checked frames (a minute at 90 Hz).
-struct FactCheck {
-    const char* name;
-    unsigned long long checks = 0, mismatches = 0;
-    int said = 0;
-};
-FactCheck factChecks[4] = {{"offered size"}, {"main targets' size"}, {"eye projection"}, {"FSR"}};
-unsigned long long factFrames = 0;
-
-void fact(int k, bool agree, const char* detail) {
-    FactCheck& c = factChecks[k];
-    ++c.checks;
-    if (agree)
-        return;
-    ++c.mismatches;
-    if (c.said < 3) {
-        ++c.said;
-        simqvfr::logf("lmu qvfr: frame %llu: build-free facts: the %s from the layer differs from the game's: %s%s", frames,
-                      c.name, detail, buildFree ? " (the layer's taken)" : " (the game's taken)");
-    }
-}
-
-void log_fact_checks(const char* when) {
-    if (!knownBuild || factFrames == 0)
-        return;
-    char text[256];
-    int n = 0;
-    for (const FactCheck& c : factChecks)
-        n += std::snprintf(text + n, sizeof(text) - n, "%s%s %llu of %llu", n ? ", " : "", c.name, c.checks - c.mismatches,
-                           c.checks);
-    simqvfr::logf("lmu qvfr: build-free facts %s: agree with the game's (%s)", when, text);
 }
 
 // The multi-view path's eye images, without calling the game's code: LMU's submit copies each eye's image into that eye's
@@ -195,14 +154,8 @@ ID3D11Texture2D* game_eye_image(int e) {
 
 // ---- Focus views ----
 
-// The projection slots' 4x4 (focus_math.h): the camera update copies its eye's two into the camera each pass.
-const float* game_slot(int eye, int kind) {
-    return reinterpret_cast<const float*>(base() + (kind ? kEyeProjectionFar : kEyeProjection) + eye * kEyeSlotStride +
-                                          kSlotMatrix);
-}
-
-// The same from the FOV the game was handed (any build): what the focus maths read of it (focus_math.h
-// projection_from_tangents). False before the first.
+// Eye `eye`'s projection from the FOV the game was handed: what the focus maths read of it (focus_math.h
+// projection_from_tangents; the game's own slots have these terms). False before the first.
 bool layer_slot(int eye, float (&out)[16]) {
     float t[4];
     {
@@ -214,14 +167,9 @@ bool layer_slot(int eye, float (&out)[16]) {
     return projection_from_tangents(t, out);
 }
 
-// Eye `eye`'s projection (kind 0; 1 its slot with a fixed far plane: the same tangents): the game's slot on a known
-// build, the layer's on any other (both compared on a known build: kind 0, check_facts). False: none yet.
-bool slot_matrix(int eye, int kind, float (&out)[16]) {
-    if (buildFree)
-        return layer_slot(eye, out);
-    std::memcpy(out, game_slot(eye, kind), sizeof(out));
-    return true;
-}
+// Eye `eye`'s projection (kind 0; 1 the game's slot with a fixed far plane: the same tangents, so the same terms).
+// False: none yet.
+bool slot_matrix(int eye, int /*kind*/, float (&out)[16]) { return layer_slot(eye, out); }
 
 FocusBox boxes[2];
 bool shapeLogged = false;
@@ -248,7 +196,7 @@ bool focus_matrices(int eye, float (&eyeM)[2][16], float (&focusM)[2][16], Focus
         }
     }
     for (int k = 0; k < 2; ++k)
-        if (!slot_matrix(eye, k, eyeM[k])) {  // a build-free run before the game was handed a FOV
+        if (!slot_matrix(eye, k, eyeM[k])) {  // before the game was handed a FOV
             for (int j = 0; j < 2; ++j)
                 box[j] = FocusBox{};
             return false;
@@ -393,42 +341,23 @@ unsigned passW[4] = {}, passH[4] = {};
 unsigned sceneW[4] = {}, sceneH[4] = {};
 double extentW[4] = {}, extentH[4] = {};
 bool liveLogged = false, stretchLogged = false;
-// The runtime's recommended size as the game took it (VR_Init): read in the game on a known build, else the size the
-// layer offered it (the same: the game takes what it is offered).
-void game_recommended(std::uint32_t (&out)[2]) {
-    const auto* rec = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
-    out[0] = rec[0];
-    out[1] = rec[1];
-}
+// The runtime's recommended size as the game took it: the size the layer offered (the game takes what it is offered).
 void real_recommended(std::uint32_t (&out)[2]) {
-    if (buildFree) {
-        out[0] = offeredW.load(std::memory_order_relaxed);
-        out[1] = offeredH.load(std::memory_order_relaxed);
-        return;
-    }
-    game_recommended(out);
+    out[0] = offeredW.load(std::memory_order_relaxed);
+    out[1] = offeredH.load(std::memory_order_relaxed);
 }
 
-// The main targets' size: the recommended size at the game's own render scale, as cubeDX11_CreateVRMainTargets makes
-// them (build-free: the scene target the last pass began on, which is one of them); 0 x 0 before the game's scale is
-// known.
+// The main targets' size: the scene target the last pass began on (one of them: the recommended size at the game's
+// own render scale); 0 x 0 before the game's scale is known.
 void main_size(unsigned (&out)[2]) {
     out[0] = out[1] = 0;
     if (gameScale <= 0)
         return;
-    if (buildFree) {
-        mvr_scene_size(out[0], out[1]);
-        return;
-    }
-    std::uint32_t rec[2];
-    real_recommended(rec);
-    out[0] = scaled_size(rec[0], gameScale);
-    out[1] = scaled_size(rec[1], gameScale);
+    mvr_scene_size(out[0], out[1]);
 }
 
-// The game's render scale: read on a known build; build-free, from its main targets' size over the recommended size
-// (focus_math.h render_scale_from_sizes). 0: not known yet.
-float game_render_scale() { return *reinterpret_cast<const float*>(base() + kRenderScale); }
+// The game's render scale from its main targets' size over the recommended size (focus_math.h render_scale_from_sizes).
+// 0: not known yet.
 float layer_render_scale() {
     unsigned m[2];
     std::uint32_t rec[2] = {offeredW.load(std::memory_order_relaxed), offeredH.load(std::memory_order_relaxed)};
@@ -436,29 +365,15 @@ float layer_render_scale() {
 }
 
 // LMU's FSR 1 is on (its UpscaleMethod): each view's post-processing ends in FSR's upscale, not in the final blit.
-// Build-free: FSR's compute writes into an eye's image seen (qvfr_frame_frame_end note_fsr), a frame late.
-bool game_fsr_on() {
-    const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base() + kRenderer);
-    if (!renderer)
-        return false;
-    const auto* fsr = *reinterpret_cast<const std::uint8_t* const*>(renderer + kRendererFsr);
-    return fsr && *reinterpret_cast<const int*>(fsr + kFsrMethod) != 0;
-}
-bool fsr_on() { return buildFree ? fsrSeen : game_fsr_on(); }
+// From FSR's compute writes into an eye's image seen (qvfr_frame_frame_end note_fsr), a frame late.
+bool fsr_on() { return fsrSeen; }
 
 // A frame end with both eye passes: whether FSR wrote an eye's image this frame; two frames in a row that say otherwise
-// change the build-free answer (one stray frame, a loading screen's, doesn't).
+// change the answer (one stray frame, a loading screen's, doesn't).
 void note_fsr(bool passes) {
     const bool written = mvr_fsr_written();
     if (!passes)
         return;
-    if (knownBuild) {
-        const bool game = game_fsr_on();
-        char detail[96];
-        std::snprintf(detail, sizeof(detail), "the layer saw FSR %s, the game's setting says %s", written ? "on" : "off",
-                      game ? "on" : "off");
-        fact(3, written == game, detail);
-    }
     if (written == fsrSeen) {
         fsrSeenFrames = 0;
         return;
@@ -467,46 +382,8 @@ void note_fsr(bool passes) {
         return;
     fsrSeenFrames = 0;
     fsrSeen = written;
-    if (buildFree)
-        simqvfr::logf("lmu qvfr: frame %llu: FSR %s (its compute writes into the eye's image %s): from the next frame",
-                      frames, written ? "on" : "off", written ? "seen" : "gone");
-}
-
-// Pass 0 on a known build: the layer's facts against the game's (the log; nothing changes with them).
-void check_facts() {
-    if (!knownBuild)
-        return;
-    ++factFrames;
-    std::uint32_t game[2], layer[2] = {offeredW.load(std::memory_order_relaxed), offeredH.load(std::memory_order_relaxed)};
-    game_recommended(game);
-    char detail[160];
-    std::snprintf(detail, sizeof(detail), "layer %ux%u, game %ux%u", layer[0], layer[1], game[0], game[1]);
-    fact(0, layer[0] == game[0] && layer[1] == game[1], detail);
-    unsigned scene[2];
-    const float scale = game_render_scale();
-    if (mvr_scene_size(scene[0], scene[1]) && scale > 0) {
-        const unsigned want[2] = {scaled_size(game[0], scale), scaled_size(game[1], scale)};
-        const float layerScale = render_scale_from_sizes(scene[0], scene[1], layer[0], layer[1]);
-        std::snprintf(detail, sizeof(detail), "scene target %ux%u (scale %.4f), the game's scale %.4f makes %ux%u", scene[0],
-                      scene[1], layerScale, scale, want[0], want[1]);
-        fact(1, scene[0] == want[0] && scene[1] == want[1] && layerScale == scale, detail);
-    }
-    for (int e = 0; e < 2; ++e) {
-        float mine[16];
-        if (!layer_slot(e, mine))
-            continue;
-        const float* theirs = game_slot(e, 0);
-        const int at[4] = {0, 5, 8, 9};
-        float worst = 0;
-        for (int i : at)
-            worst = (std::max)(worst, std::fabs(mine[i] - theirs[i]));
-        std::snprintf(detail, sizeof(detail),
-                      "eye %d: m0 %.5f/%.5f m5 %.5f/%.5f m8 %.5f/%.5f m9 %.5f/%.5f (layer/game; largest gap %.2g)", e,
-                      mine[0], theirs[0], mine[5], theirs[5], mine[8], theirs[8], mine[9], theirs[9], worst);
-        fact(2, worst < 1e-4f, detail);
-    }
-    if (factFrames % 5400 == 0)
-        log_fact_checks("so far");
+    simqvfr::logf("lmu qvfr: frame %llu: FSR %s (its compute writes into the eye's image %s): from the next frame",
+                  frames, written ? "on" : "off", written ? "seen" : "gone");
 }
 
 // Pass p's part of its eye target from what it rendered of the main targets (passW from sceneW), at most the target.
@@ -594,9 +471,7 @@ void stock_frame_begin() {
 void qvfr_before_pass(int p) {
     if (p >= 4)
         return;
-    if (p == 0)
-        check_facts();
-    const float scale = buildFree ? layer_render_scale() : game_render_scale();
+    const float scale = layer_render_scale();
     if (scale > 0 && scale != gameScale) {
         if (gameScale > 0)
             simqvfr::logf("lmu qvfr: frame %llu: the game's render scale changed (%.3f -> %.3f): live scales from it",
@@ -697,11 +572,10 @@ bool install_mvr(ID3D11Device* device) {
     mvr_car_slot_images(cars && cfg.carForced);  // a freeze each: never the player's
     mvr_car_light(cars && cfg.carLight);
     carsOn = cars && (cfg.carSlots >= 2 || cfg.carLight);  // the A/B measures what players get (DLSS taking the motion)
-    // FSR seen at the d3d11 level: build-free runs take it from there, a known build compares it with the game's setting.
+    // FSR seen at the d3d11 level (the only source of it).
     mvr_fsr_watch(cfg.trackerDrives);
-    // DLSS's camera from the per-draw buffer (view_pair.h): where it is the source (build-free), and where the cars'
-    // hooks are in anyway (a known build's comparison with the renderer's, at no cost).
-    mvr_view_track(cfg.trackerDrives && (buildFree || cars));
+    // DLSS's camera (and night car lighting's) from the per-draw buffer (view_pair.h), on every build.
+    mvr_view_track(cfg.trackerDrives);
     mvr_viewport_reads(cfg.viewportReads);  // the game's viewport reads answered with its own (lmu_viewport_reads)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
@@ -1130,12 +1004,8 @@ void pass_end(int p) {
             ab.cpu[ab_side()][p] += static_cast<double>(cpu1 - cpu0);
     }
     if (p < 4) {
-        // The eye the game rendered: its view params' on a known build; build-free, the passes' order (left first, as
-        // the game's eye loop runs them).
-        void* renderer = buildFree ? nullptr : *reinterpret_cast<void**>(base() + kRenderer);
-        eyeOfPass[p] = buildFree ? p
-                       : renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
-                                  : -1;
+        // The eye the game rendered: the passes' order (left first, as the game's eye loop runs them).
+        eyeOfPass[p] = p;
         if (p < 2 && eyeOfPass[p] != p) {
             ++trackedEyeMismatches;
             if (trackedEyeLogged < 5) {
@@ -1499,23 +1369,16 @@ bool qvfr_frame_start(const QvfrFrameRun& run) {
     layerShare[0] = run.layerWidth;
     layerShare[1] = run.layerHeight;
     qvfr_frame_set_box(run.fraction, run.fractionY);
-    // Any build: on one abi.h's addresses are from the game's facts are read there (and compared with the layer's), on
-    // any other they come from what the layer sees (buildFree, above).
-    knownBuild = exe_known_build();
-    buildFree = !knownBuild || run.buildFree;
-    if (!knownBuild)
+    // Any build: the game's facts from what the layer sees (above); the exe's hash only says if it is a tested build.
+    if (!exe_known_build())
         simqvfr::logf("%s: a game build Sim-QVFR wasn't made for (sha256 %s): the eye size, render scale, FSR and eye "
                       "projections from what OpenXR and Direct3D show, DLSS's camera from the draws' constant buffers, "
                       "nothing read in the game",
                       tag(), buildSha.c_str());
-    else if (buildFree)
-        simqvfr::logf("%s: lmu_build_free=1: the game's facts from what OpenXR and Direct3D show, as on a build Sim-QVFR "
-                      "wasn't made for (compared with the game's in the log)",
-                      tag());
     else
-        simqvfr::logf("%s: a build Sim-QVFR was made for: the game's facts read in it, compared with what OpenXR and "
-                      "Direct3D show (the log's build-free lines)",
-                      tag());
+        simqvfr::logf("%s: a build Sim-QVFR was tested on (sha256 %s): the game's facts from what OpenXR and "
+                      "Direct3D show, DLSS's camera from the draws' constant buffers, nothing read in the game",
+                      tag(), buildSha.c_str());
     // The game's own two eye passes, found at the d3d11 level, and the lens mask and the VR UI from their d3d11 draws:
     // no game code hooked.
     const bool driven = cfg.trackerDrives;
@@ -1594,7 +1457,7 @@ void qvfr_frame_frame_end() {
         // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit; the focus
         // composite goes beside the eye before it, so FSR carries it into the eye's image (mvr_fsr).
         if (!offThread)
-            note_fsr(passes >= 2);  // build-free: FSR as this frame's compute writes showed it
+            note_fsr(passes >= 2);  // FSR as this frame's compute writes showed it
         mvr_fsr(fsr_on(), eyeImage[0], eyeImage[1]);
         const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
                                                    "couldn't take over)"
@@ -1725,7 +1588,7 @@ void qvfr_frame_frame_end() {
                               frames, gaze[0][0], gaze[0][1], valid[0] ? "" : " (not valid)", gaze[1][0], gaze[1][1],
                               valid[1] ? "" : " (not valid)", centre(frozenBox[0], 0), centre(frozenBox[0], 1),
                               centre(frozenBox[1], 0), centre(frozenBox[1], 1),
-                              buildFree ? "build-free" : "the game's facts");
+                              "build-free");
             }
             std::uint32_t rec[2];
             real_recommended(rec);
@@ -1941,8 +1804,6 @@ void qvfr_frame_note_views(const XrView* views, uint32_t count) {
     maskStale.store(stale, std::memory_order_relaxed);
 }
 
-bool qvfr_frame_known_build() { return exe_known_build(); }
-bool qvfr_frame_build_free() { return buildFree; }
 bool qvfr_frame_eye_projection(int eye, float (&out)[16]) { return eye >= 0 && eye < 2 && layer_slot(eye, out); }
 
 void qvfr_frame_offered(std::uint32_t width, std::uint32_t height) {
@@ -1952,7 +1813,7 @@ void qvfr_frame_offered(std::uint32_t width, std::uint32_t height) {
     offeredH.store(height, std::memory_order_relaxed);
     if (changed)
         simqvfr::logf("lmu qvfr: the game offered %ux%u per eye (the eye targets' size%s)", width, height,
-                      buildFree ? "; this run's, nothing read in the game" : "");
+                      "; this run's, nothing read in the game");
 }
 
 void qvfr_frame_game_views(const XrView* views, uint32_t count) {

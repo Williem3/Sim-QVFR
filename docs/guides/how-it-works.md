@@ -46,8 +46,8 @@ Multi-view rendering is always on in LMU and is the only way Sim-QVFR runs there
 by changing LMU's code, has been removed.
 
 **It doesn't patch LMU's code.** Sim-QVFR works through OpenXR and Direct3D 11 only: it doesn't change, hook or call
-any of LMU's own code. In LMU's memory it reads a few values (the cameras, the eye being drawn, the render scale) and
-writes nothing. Each view's resolution, and its live changes while you drive, are set in the Direct3D 11 calls: LMU
+any of LMU's own code, and it reads and writes nothing in LMU's memory: what it needs (the cameras, the eye being
+drawn, the render scale) it takes from what LMU hands OpenXR and Direct3D 11. Each view's resolution, and its live changes while you drive, are set in the Direct3D 11 calls: LMU
 renders at its own size and Sim-QVFR draws the eye into the part of its image the periphery's resolution needs.
 
 **DLSS** runs through NVIDIA's NGX on LMU's views: DLAA on the periphery, DLAA or an upscale on the focus views,

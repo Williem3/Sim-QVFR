@@ -17,12 +17,10 @@ SHA-256 and code anchors. `[experiment] mode` in `sim-qvfr.ini` picks the render
   outer eye views at `periphery_scale` and two focus views at `focus_density` over `focus_percent`
   of the FOV). The layer blends each focus view into its eye at the headset's native size, following
   the eyes when eye tracking is available. This is the launcher's default.
-- `quad`, **Two-Loop** (legacy): ACE runs two full frames per headset frame (A for the full view, B for the
-  focus box), and the layer blends B into A. Frame generation (VectorXR) has to be off. The launcher
-  no longer offers it (its method picker shows only to switch an ini still set to `quad` over to
-  QVFR) and shared profiles can't select it; the code stays, but new work targets QVFR only.
+- `quad` and `two_loops` were **Two-Loop**, removed: an ini still set to either runs as `views4` (QVFR), with a
+  log line, and the launcher reads it as QVFR.
 - `off`: rendering unchanged. Only the log-only probes run.
-- Experiments for diagnosis, not for driving: `focus_only`, `two_loops`, `views3`, and
+- Experiments for diagnosis, not for driving: `focus_only`, `views3`, and
   `double_render`, which crashes ACE. The comments in `manifest/sim-qvfr.ini` describe each one.
 
 With `probes=1` (the default), the layer also logs the views, swapchains and frame submission. It
@@ -153,7 +151,7 @@ standard and Windows headers.
 ### Tests
 
 The offline tests (`tests/*_test.cpp`: hook stub, code patch, compositor, focus outline/cull/turn,
-launcher settings and plan, two-loop and quad flow, and others) are linked into one program,
+launcher settings and plan, layer hooks and quad flow, and others) are linked into one program,
 `build/Release/sim_qvfr_tests.exe`, which runs one by name: `sim_qvfr_tests osd_test`
 (`sim_qvfr_tests --list` names them all). Each test exits non-zero on failure. ctest runs them all side
 by side, each as its own process, in about 14 seconds. The hardware checks (`tests/*_check.cpp`) are in
@@ -229,9 +227,9 @@ including D-pad hats. A wheel's menu directions act only while the menu shows. `
 
 **OpenXR layer order.** The layer is loaded nearest the game. Every enabled implicit layer that can be
 switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry order,
-so nothing can change what ACE renders behind the layer's back. VectorXR frame generation is turned off
-for Two-Loop (`mode=quad`, and also `mode=two_loops`); it stays on below the layer for QVFR. Layers that
-cannot be moved are listed as staying above.
+so nothing can change what ACE renders behind the layer's back. VectorXR frame generation stays on below
+the layer for QVFR (Cheeky's frame generation turns it off). Layers that cannot be moved are listed as
+staying above.
 
 ```ini
 [launcher]

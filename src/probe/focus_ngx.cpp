@@ -30,7 +30,7 @@ bool installed() { return false; }
 void preload() {}
 void set_presets(int, int) {}
 int focus_preset() { return 0; }
-void set_options(float, bool) {}
+void set_options(float, bool, bool) {}
 float jitter_x() { return 1; }
 State state() { return {}; }
 void note_focus_running(bool) {}
@@ -128,8 +128,9 @@ bool trace_due(const NVSDK_NGX_Handle* h) {
 std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
 std::atomic<bool> eyeRemake{false};             // set_options: a live eye preset remakes the game's feature
 std::atomic<float> jitterX{1.0f};        // set_options
-// The right eye evaluated from inputs of its own at x 0 (copies of its half of ACE's double-wide colour, motion and depth,
-// and an output of ours copied back): whether preset K mishandles the right eye's subrect bases (x past 0).
+// The right eye evaluated from inputs of its own at x 0 (copies of its half of ACE's double-wide colour, motion, depth
+// and bias mask, and an output of ours copied back): NGX's preset K smears the right eye when it reads it at x past 0
+// of ACE's double-wide targets (2026-11-24 headset runs; F didn't).
 std::atomic<bool> rightOwnInputs{false};
 // From a release of the game's (its settings menu, a rebuild) to its next DLSS feature: the right eye as the game gave it.
 std::atomic<bool> ownPaused{false};

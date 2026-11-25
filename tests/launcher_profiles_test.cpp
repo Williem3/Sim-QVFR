@@ -159,9 +159,9 @@ int SIM_QVFR_TEST_MAIN() {
         apply_profile(profileIni.c_str(), saved);
         WritePrivateProfileStringW(L"experiment", L"eye_scale", L"10", profileIni.c_str());
         const bool qvfrMatch = profile_matches(profileIni.c_str(), saved);
-        WritePrivateProfileStringW(L"experiment", L"mode", L"quad", profileIni.c_str());
+        WritePrivateProfileStringW(L"experiment", L"mode", L"focus_only", profileIni.c_str());
         check(qvfrMatch && !profile_matches(profileIni.c_str(), saved),
-              "profiles: eye_scale doesn't count in QVFR; in Two-loop (its resolution) it does");
+              "profiles: eye_scale doesn't count in QVFR; in a research mode (its resolution) it does");
         check(set_current_profile(profileIni.c_str(), L"Night") && current_profile(profileIni.c_str()) == L"Night",
               "profiles: the current one named");
 
@@ -188,10 +188,10 @@ int SIM_QVFR_TEST_MAIN() {
         legacy.name = L"Legacy";
         legacy.keys = {{L"experiment", L"mode", L"quad"}};
         bool legacyKept = true;
-        check(shared_profile(export_profile(legacy), fromLegacy), "profiles: a Two-loop shared text still reads");
+        check(shared_profile(export_profile(legacy), fromLegacy), "profiles: a shared text of the removed Two-Loop still reads");
         for (const ProfileKey& k : fromLegacy.keys)
             legacyKept &= !(k.key == L"mode" && k.value != L"views4");
-        check(legacyKept, "profiles: a shared text can't switch to Two-loop (legacy)");
+        check(legacyKept, "profiles: a shared text can't switch the method away from QVFR");
         Profile junk;
         check(!shared_profile("hello", junk) && !shared_profile("QVFR1:!!!", junk) && !import_profile("QVFR1:", junk) &&
                   !import_profile(export_profile(Profile{L"", {{L"quad", L"gaze", L"1"}}}), junk) &&

@@ -24,7 +24,7 @@ struct IniInt {
 // [experiment]: the resolution. periphery_scale and focus_density 0 (or missing) follow eye_scale (equal quarters: the
 // periphery at eye_scale, the density eye_scale / focus_percent); their `def` is the launcher's starting value (Restore
 // Defaults writes both), not what a missing key means.
-inline constexpr IniInt kEyeScale{L"experiment", L"eye_scale", 50, 10, 100, 5};  // Two-loop's resolution; QVFR's fallback
+inline constexpr IniInt kEyeScale{L"experiment", L"eye_scale", 50, 10, 100, 5};  // QVFR's fallback
 inline constexpr IniInt kPeripheryScale{L"experiment", L"periphery_scale", 50, 10, 100, 5};
 inline constexpr IniInt kFocusDensity{L"experiment", L"focus_density", 100, 50, 400, 5};
 inline constexpr IniInt kObjectDetail{L"experiment", L"object_detail", 100, 0, 100, 10};  // X-Plane's
@@ -116,6 +116,10 @@ inline constexpr IniInt kHotkeyFooter{L"menu", L"hotkey_footer", 1, 0, 1, 1};
 // [cpu] (probe/cpu_isolation.h): 1 the game's main thread gets a core to itself, the game's other threads the rest; 0
 // they share every core (the default). Live; not in a baseline or a log-only run. [experiment] cpu_isolate > 0 overrides it.
 inline constexpr IniInt kCpuIsolateMain{L"cpu", L"isolate_main_thread", 0, 0, 1, 1};
+// [cpu] turbo (layer/turbo.h): 1 the game's xrWaitFrame returns at once and the runtime's wait runs beside the game's
+// CPU work, joined in its xrBeginFrame; 0 off (the default). Live; off with Cheeky's frame generation and in a baseline
+// or a log-only run.
+inline constexpr IniInt kTurbo{L"cpu", L"turbo", 0, 0, 1, 1};
 
 // The key as written, `fallback` when missing; not clamped (0 keeps its "unset" meaning where a key has one).
 // GetPrivateProfileInt, as every reader had it: a negative value reads as 0; a key whose range goes below 0 (the
@@ -140,16 +144,17 @@ inline BorderColor read_border_color(const wchar_t* ini) {
     return parse_border_color(ini_get(ini, kBorderColorSection, kBorderColorKey).c_str());
 }
 
-// [experiment] mode as the layer runs it: views4 QVFR, quad or two_loops Two-loop (quad: frame B the focus box),
-// off or missing nothing, the research modes (focus_only, double_render, views3) and anything else Other.
-enum class IniRenderMode { Off, Qvfr, TwoLoop, Other };
+// [experiment] mode as the layer reads it: views4 QVFR, off or missing nothing, quad or two_loops the removed Two-Loop
+// (Deprecated: the layer and the launcher run it as QVFR), the research modes (focus_only, double_render, views3) and
+// anything else Other.
+enum class IniRenderMode { Off, Qvfr, Deprecated, Other };
 inline IniRenderMode parse_render_mode(const wchar_t* mode) {
     if (!mode || !*mode || _wcsicmp(mode, L"off") == 0)
         return IniRenderMode::Off;
     if (_wcsicmp(mode, L"views4") == 0)
         return IniRenderMode::Qvfr;
     if (_wcsicmp(mode, L"quad") == 0 || _wcsicmp(mode, L"two_loops") == 0)
-        return IniRenderMode::TwoLoop;
+        return IniRenderMode::Deprecated;
     return IniRenderMode::Other;
 }
 

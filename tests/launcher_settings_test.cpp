@@ -174,7 +174,7 @@ int SIM_QVFR_TEST_MAIN() {
         write_file(ini, "; comment kept\r\n[experiment]\r\nmode=views4\r\ndred=1\r\nfocus_percent=31\r\neye_scale=40\r\n"
                         "[quad]\r\nfeather_percent=20\r\ndebug_border=0\r\ndebug_border_color=magenta\r\ngaze=1\r\n");
         const Settings shipped = load_settings(ini);
-        check(shipped.mode == RenderMode::Qvfr && shipped.outer == 40 && shipped.width == 31 && shipped.height == 31 &&
+        check(shipped.outer == 40 && shipped.width == 31 && shipped.height == 31 &&
                   shipped.inner == 129 && shipped.feather == 20 && shipped.eyeTracking && !shipped.outline &&
                   shipped.color == OutlineColor::Magenta,
               "settings: the shipped ini reads as QVFR outer 40%, 31% x 31%, inner 129% (from eye_scale)");
@@ -267,13 +267,12 @@ int SIM_QVFR_TEST_MAIN() {
             check(!off.cpuProfile && !off.baselineNext, "settings: and both turn off again");
         }
 
-        s.mode = RenderMode::TwoLoop;
-        save_settings(ini, s);
-        const Settings loop = load_settings(ini);
+        // Two-Loop is gone: an ini still set to it reads as QVFR, and is saved back as views4.
+        WritePrivateProfileStringW(L"experiment", L"mode", L"quad", ini.c_str());
+        save_settings(ini, load_settings(ini));
         read_file(ini, iniText);
-        check(loop.mode == RenderMode::TwoLoop && loop.outer == 30 && iniText.find("mode=quad") != std::string::npos &&
-                  iniText.find("eye_scale=30") != std::string::npos,
-              "settings: Two-loop writes mode=quad with the outer resolution as eye_scale");
+        check(iniText.find("mode=views4") != std::string::npos && iniText.find("mode=quad") == std::string::npos,
+              "settings: an ini set to Two-loop (removed) reads as QVFR, saved as views4");
 
         Settings big;
         big.outer = 200;
@@ -355,7 +354,6 @@ int SIM_QVFR_TEST_MAIN() {
                   Settings{}.menuWidth == layerMenu.width,
               "settings: the launcher's default menu place is the layer's");
         Settings cropSave = load_settings(ini);
-        cropSave.mode = RenderMode::Qvfr;
         cropSave.crop = true;
         cropSave.cropTop = 30;
         cropSave.cropBottom = 55;  // above kCropRange: clamped on its own
@@ -519,9 +517,6 @@ int SIM_QVFR_TEST_MAIN() {
                   summaryText.find(L"VRAM: 12.2 GB of 12.7 GB") != std::wstring::npos &&
                   summaryText.find(L"frame generation off") != std::wstring::npos,
               "session: the summary has the frame times, threads, VRAM and frame generation");
-        Settings twoLoop;
-        twoLoop.mode = RenderMode::TwoLoop;
-        check(vram_estimate(twoLoop, r, withVram).mb == 0, "vram estimate: QVFR only");
         Settings wide;
         wide.outer = 100;
         wide.inner = 200;
@@ -585,12 +580,6 @@ int SIM_QVFR_TEST_MAIN() {
         cropOff.crop = false;
         check(readouts(cropOff, rt).outer.width == 1292 && crop_key(cropOff) == L"0,0,0,0" && crop_key(cropped) == L"15,5,10,0",
               "readouts: a crop that is off changes nothing");
-        Settings loopDefaults;
-        loopDefaults.mode = RenderMode::TwoLoop;
-        const Readouts l = readouts(loopDefaults, rt);
-        check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
-                  std::abs(l.focusDensity - 50.0 / 35) < 1e-9,
-              "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
 
         // The focus mask: in a game that masks its focus views (GameFeatures::focusMask), the pixels it skips outside
         // the focus shape leave the count; nothing for the plain box, the mask off or another game.
@@ -616,9 +605,6 @@ int SIM_QVFR_TEST_MAIN() {
             check(readouts(Settings{}, rt, true).focusMasked == 0 && readouts(maskOff, rt, true).focusMasked == 0 &&
                       round.focusMasked > 0.1 && round.focusMasked < share && round.pixels < r.pixels,
                   "readouts: the plain box or focus_mask=0 mask nothing; full rounding masks less than the trapezoid");
-            Settings loopTrap = trap;
-            loopTrap.mode = RenderMode::TwoLoop;
-            check(readouts(loopTrap, rt, true).focusMasked == 0, "readouts: Two-loop has no focus views to mask");
         }
 
         // Live settings: only the reloadable keys go to the running game's ini, and only while that
@@ -637,19 +623,13 @@ int SIM_QVFR_TEST_MAIN() {
                   iniText.find("focus_density=100") != std::string::npos && iniText.find("eye_scale") == std::string::npos &&
                   iniText.find("mode=views4") != std::string::npos,
               "live: QVFR sends foveation and resolution, never the method or eye_scale");
-        write_file(liveIni, "[experiment]\r\nmode=quad\r\neye_scale=50\r\n");
-        changedLive.mode = RenderMode::TwoLoop;
-        save_live_settings(liveIni, changedLive);
-        read_file(liveIni, iniText);
-        check(iniText.find("periphery_scale") == std::string::npos && iniText.find("eye_scale=50") != std::string::npos,
-              "live: Two-loop sends no resolution");
 
-        // Live resolution fits the launch: QVFR up to its launch sizes, Two-loop only unchanged.
+        // Live resolution fits the launch: up to its launch sizes.
         write_file(runtimeIni, "[runtime]\r\nlaunch_mode=views4\r\nlaunch_outer=50\r\nlaunch_focus_width=39\r\n"
                                "launch_focus_height=39\r\n");
         const LaunchSizes qvfrLaunch = load_launch_sizes(runtimeIni);
         Settings lower = Settings{};  // outer 50, inner 100 x 35%: inside the launch's 39%
-        check(qvfrLaunch.known && qvfrLaunch.mode == RenderMode::Qvfr && fits_launch(lower, qvfrLaunch),
+        check(qvfrLaunch.known && fits_launch(lower, qvfrLaunch),
               "live fit: the launch settings fit");
         lower.outer = 30;
         lower.inner = 80;
@@ -661,17 +641,10 @@ int SIM_QVFR_TEST_MAIN() {
         wider.width = 50;  // the same density over a larger box needs more pixels
         Settings sharper = Settings{};
         sharper.outer = 60;
-        Settings loopMode = Settings{};
-        loopMode.mode = RenderMode::TwoLoop;
-        check(!fits_launch(higher, qvfrLaunch) && !fits_launch(wider, qvfrLaunch) && !fits_launch(sharper, qvfrLaunch) &&
-                  !fits_launch(loopMode, qvfrLaunch),
-              "live fit: more density, a larger box at the same density, more periphery or another method do not");
-        write_file(runtimeIni, "[runtime]\r\nlaunch_mode=quad\r\nlaunch_outer=50\r\n");
-        const LaunchSizes loopLaunch = load_launch_sizes(runtimeIni);
-        Settings loopLower = loopMode;
-        loopLower.outer = 40;
-        check(fits_launch(loopMode, loopLaunch) && !fits_launch(loopLower, loopLaunch) && !load_launch_sizes(liveIni).known,
-              "live fit: Two-loop resolution is fixed; no launch report, no fit");
+        check(!fits_launch(higher, qvfrLaunch) && !fits_launch(wider, qvfrLaunch) && !fits_launch(sharper, qvfrLaunch),
+              "live fit: more density, a larger box at the same density or more periphery do not");
+        check(!load_launch_sizes(liveIni).known && !fits_launch(Settings{}, load_launch_sizes(liveIni)),
+              "live fit: no launch report, no fit");
         write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=" +
                                    std::to_string(GetCurrentProcessId()) + "\r\n");
         check(running_live_ini(runtimeIni).empty(), "live: a live_pid that is not ACE is ignored");

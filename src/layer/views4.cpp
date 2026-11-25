@@ -136,7 +136,6 @@ void views4_compose() {
         return;
     }
     quad.v4Composed = true;
-    quad.fallbackRun = 0;
     views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
     if (quad.composed++ == 0)
         logf("views4: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f, output "
@@ -244,7 +243,6 @@ void replay_compose() {
         return;
     }
     quad.v4Composed = true;
-    quad.fallbackRun = 0;
     images->eye_allow(true);
     views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
     if (quad.composed++ == 0)
@@ -256,8 +254,7 @@ void replay_compose() {
 
 }  // namespace
 
-// Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
-// layer may still read it) until B's xrEndFrame has composed it.
+// The game's eye image is composed (views4_compose, replay_compose) before the runtime gets it back.
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info) {
     game->swapchain_releasing(swapchain);  // the game's last change before the runtime reads the image (ATS's corner)
     if (experiment.d3d11CaptureFrame)
@@ -279,21 +276,6 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
             views4_compose();  // reads the image on ACE's queue before the runtime gets it back
             cpu.compose.add(qpc_now() - t0);
             gpu_frame_timer_mark(GpuMark::kComposed);
-        }
-    }
-    if (experiment.quad) {
-        bool active;
-        {
-            std::lock_guard guard(loops.mutex);
-            active = loops.active;
-        }
-        std::lock_guard guard(quad.mutex);
-        if (active && swapchain == quad.appChain && quad.appAcquired < quad.appImages.size()) {
-            if (loops.inB) {
-                quad.releaseHeld = true;
-                return XR_SUCCESS;
-            }
-            quad.outerCaptured = quad.compositor.capture_outer(quad.appImages[quad.appAcquired]);
         }
     }
     return next.ReleaseSwapchainImage(swapchain, info);

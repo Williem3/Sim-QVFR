@@ -369,7 +369,8 @@ float color_panel(float x, float y, float w, bool draw) {
     return b.height();
 }
 
-// The game's main thread on a core of its own ([cpu] isolate_main_thread, probe/cpu_isolation.h): every game.
+// The game's main thread on a core of its own ([cpu] isolate_main_thread, probe/cpu_isolation.h) and Turbo mode
+// ([cpu] turbo, layer/turbo.h): every game.
 Card cpu_card() {
     Card c{Tab::Game, L"CPU", Applies::Live};
     c.body = [](Body& b) {
@@ -382,8 +383,23 @@ Card cpu_card() {
                   L"with 6 or more cores and two threads per core, and stays off if another tool (such as Process "
                   L"Lasso) already set the game’s CPU sets or affinity. Try it on and watch your frames; the headset "
                   L"menu’s Game page changes it too."));
+        b.toggle(kTurbo, tr(L"Turbo mode"), app.s.turbo,
+                 app.s.turbo
+                     ? tr(L"On: the game doesn’t wait for the headset at the start of each frame. It starts its next "
+                          L"frame’s work while the headset runtime waits for its display slot, for more frames when the "
+                          L"CPU limits them.")
+                     : tr(L"Off (the default): the game waits for the headset at the start of each frame, as it "
+                          L"normally does."));
+        if (app.s.turbo && game_has(&games::GameFeatures::frameGeneration) && app.s.cheeky.load && app.s.cheeky.fg)
+            b.note(tr(L"Turbo mode stays off while Cheeky’s frame generation is on: the game can crash with both."));
+        else
+            b.note(tr(L"Don’t turn on OpenXR Toolkit’s Turbo mode as well: one is enough. It may add a little "
+                      L"latency; try it on and watch your frames. The headset menu’s Game page changes it too."));
     };
-    c.reset = [](Settings& s) { s.cpuIsolateMain = Settings{}.cpuIsolateMain; };
+    c.reset = [](Settings& s) {
+        s.cpuIsolateMain = Settings{}.cpuIsolateMain;
+        s.turbo = Settings{}.turbo;
+    };
     return c;
 }
 

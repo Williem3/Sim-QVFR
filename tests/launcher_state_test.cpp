@@ -570,7 +570,6 @@ void per_game_settings_checks() {
     const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
     // A user's ini before the update: one set of settings, ACE selected, no games folder.
     Settings before;
-    before.mode = RenderMode::Qvfr;
     before.inner = 160;
     before.outer = 45;
     save_settings(ini, before);

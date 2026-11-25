@@ -1,64 +1,11 @@
-// Offline check of the two_loops frame pairing against a fake runtime that enforces OpenXR's frame
-// rules (wait before begin, begin/end strictly alternating), for ACE's normal call order and for a
-// frame generator above the layer (two ends per begin), which must never arm.
+// Offline checks of the layer's hooks against fake runtime calls: the bounded waits on its own swapchain images, the
+// game's swapchains and spaces going, live settings, and the settings menu's ini writes.
 #include "layer/layer.h"
 #include "../src/games/ace/game.h"
 
 #include <cstdio>
 
 namespace {
-
-struct FakeRuntime {
-    int waits = 0, begins = 0, ends = 0, violations = 0;
-    bool waited = false, begun = false;
-    XrTime time = 1000;
-} rt;
-
-XrResult XRAPI_CALL fakeWait(XrSession, const XrFrameWaitInfo*, XrFrameState* s) {
-    ++rt.waits;
-    rt.waited = true;
-    s->predictedDisplayTime = rt.time += 11111;
-    s->predictedDisplayPeriod = 11111;
-    s->shouldRender = XR_TRUE;
-    return XR_SUCCESS;
-}
-XrResult XRAPI_CALL fakeBegin(XrSession, const XrFrameBeginInfo*) {
-    ++rt.begins;
-    if (!rt.waited || rt.begun) ++rt.violations;
-    rt.waited = false;
-    rt.begun = true;
-    return XR_SUCCESS;
-}
-XrResult XRAPI_CALL fakeEnd(XrSession, const XrFrameEndInfo* info) {
-    ++rt.ends;
-    if (!rt.begun) ++rt.violations;
-    rt.begun = false;
-    return info->displayTime == rt.time ? XR_SUCCESS : XR_ERROR_TIME_INVALID;
-}
-
-int run(int appFrames, bool frameGenerator) {
-    using namespace simqvfr;
-    using namespace simqvfr::layer;
-    rt = FakeRuntime{};
-    loops.active = loops.broken = false;
-    loops.waits = loops.begins = loops.ends = 0;
-    next.WaitFrame = fakeWait;
-    next.BeginFrame = fakeBegin;
-    next.EndFrame = fakeEnd;
-    experiment.twoLoops = true;
-    int errors = 0;
-    for (int i = 0; i < appFrames; ++i) {
-        XrFrameState state{XR_TYPE_FRAME_STATE};
-        layerWaitFrame(nullptr, nullptr, &state);
-        layerBeginFrame(nullptr, nullptr);
-        XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
-        end.displayTime = state.predictedDisplayTime;
-        errors += XR_FAILED(layerEndFrame(nullptr, &end));
-        if (frameGenerator)  // a generated frame submitted between app frames
-            errors += XR_FAILED(layerEndFrame(nullptr, &end));
-    }
-    return errors;
-}
 
 // A layer swapchain under OpenXR's image rules (3 images): acquire within the count, wait only on an acquired image,
 // release only a waited one; the first `timeoutsLeft` waits time out.
@@ -256,23 +203,14 @@ bool destroy_space_clears_gaze_base() {
 
 int SIM_QVFR_TEST_MAIN() {
     simqvfr::layer::game = &simqvfr::games::adapter_for(&ace::kGame);  // views4 below is ACE's
-    const int errors = run(130, false);
-    std::printf("ACE order: runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d active=%d\n", rt.waits,
-                rt.begins, rt.ends, rt.violations, errors, simqvfr::layer::loops.active ? 1 : 0);
-    // 30 unpaired frames, then 100 app frames paired into 50 display frames
-    bool ok = rt.waits == 80 && rt.begins == 80 && rt.ends == 80 && rt.violations == 0 && errors == 0;
-
-    run(130, true);
-    std::printf("frame generator above: active=%d broken=%d (expected 0 and 1)\n", simqvfr::layer::loops.active ? 1 : 0,
-                simqvfr::layer::loops.broken ? 1 : 0);
-    ok &= !simqvfr::layer::loops.active && simqvfr::layer::loops.broken;
+    bool ok = true;
 
     // The layer's own swapchain images and the game's swapchains and spaces going.
     ok &= image_wait_rules();
     ok &= destroy_swapchain_purges();
     ok &= destroy_space_clears_gaze_base();
 
-    // Live settings: an edited ini applies at the next xrEndFrame, but never between frames A and B.
+    // Live settings: an edited ini applies at the next xrEndFrame, read on the ini worker.
     {
         using namespace simqvfr;
         using namespace simqvfr::layer;
@@ -290,25 +228,18 @@ int SIM_QVFR_TEST_MAIN() {
         Sleep(20);
         WritePrivateProfileStringW(L"experiment", L"focus_percent", L"50", ini.c_str());
         WritePrivateProfileStringW(L"quad", L"feather_percent", L"25", ini.c_str());
-        loops.active = true;
-        loops.pairedEnds = 1;  // A ended, B pending
         live_reload();  // points the ini worker at the file
         ini_worker_sync();  // it has read the change (the render thread never reads the file)
-        live_reload();
-        const bool heldForB = experiment.focusFraction == 0.35;
-        loops.pairedEnds = 2;
         live_reload();
         const bool applied = experiment.focusFraction == 0.5 && experiment.feather == 0.25;
         experiment.focusFraction = 0.35;
         ini_worker_sync();
         live_reload();  // unchanged file: nothing re-read
         const bool quiet = experiment.focusFraction == 0.35;
-        loops.active = false;
         live = Live{};
         DeleteFileW(ini.c_str());
-        std::printf("live reload: held between A and B=%d, applied after B=%d, no re-read=%d\n", heldForB ? 1 : 0,
-                    applied ? 1 : 0, quiet ? 1 : 0);
-        ok &= heldForB && applied && quiet;
+        std::printf("live reload: applied=%d, no re-read=%d\n", applied ? 1 : 0, quiet ? 1 : 0);
+        ok &= applied && quiet;
     }
 
     // The settings menu opens (its first key press) and steps a value into the ini, without a session

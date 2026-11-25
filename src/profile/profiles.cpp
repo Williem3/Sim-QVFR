@@ -280,7 +280,7 @@ bool apply_profile(const wchar_t* ini, const Profile& profile) {
 }
 
 bool profile_matches(const wchar_t* ini, const Profile& profile) {
-    // eye_scale is Two-loop's resolution and QVFR's fallback only; the headset menu leaves it as it was in QVFR.
+    // eye_scale is QVFR's fallback only; the headset menu leaves it as it was in QVFR.
     const bool qvfr = _wcsicmp(read_value(ini, L"experiment", L"mode").c_str(), L"views4") == 0;
     for (const ProfileKey& k : profile.keys)
         if (!(qvfr && k.section == L"experiment" && k.key == L"eye_scale") && read_value(ini, k.section, k.key) != k.value)

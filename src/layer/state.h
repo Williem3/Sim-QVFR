@@ -54,6 +54,7 @@ struct Dispatch {
     PFN_xrCreateSession CreateSession = nullptr;
     PFN_xrDestroySession DestroySession = nullptr;
     PFN_xrBeginSession BeginSession = nullptr;
+    PFN_xrEndSession EndSession = nullptr;
     PFN_xrWaitFrame WaitFrame = nullptr;
     PFN_xrBeginFrame BeginFrame = nullptr;
     PFN_xrCreateSwapchain CreateSwapchain = nullptr;
@@ -95,6 +96,11 @@ struct Experiment {
     // The layer may change the game's CPU scheduling ([cpu], probe/cpu_isolation.h): not in a baseline or a log-only run.
     bool cpuSettings = false;
     int cpuIsolate = 0;  // core isolation's mode in effect (LiveSettings::cpuIsolate)
+    std::atomic<bool> turbo{false};  // [cpu] turbo asked for (layer/turbo.h; armed per frame by turbo_block), live
+    // Cheeky's frame generation set to run ([cheeky] enabled, processing and fg, a game with it), live: turbo's guard.
+    std::atomic<bool> fgSet{false};
+    // VectorXR's layer is loaded (below this one, or above it): its frame generation, turbo's guard (xr_layer.cpp).
+    bool vectorXrLoaded = false;
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
@@ -155,8 +161,6 @@ struct Experiment {
     bool logCppExceptions = false;         // log_cpp_exceptions=1 (development builds): probe/cpp_exceptions.h
     bool replayCensusHotkey = false;      // replay_census_hotkey=1 (development builds, ACE's API path): the frame capture
                                            // hotkey logs the next frames' draws by pipeline and saves the eye images
-    bool twoLoops = false;        // round 7: two complete ACE frames per display frame
-    bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
     Views4Layout views4Layout;    // views4: outer views at periphery_scale, focus views at focus_density x focus_percent
     // views4: [crop], the FOV ACE renders the eyes with (fov_crop.h); live (set_crop). The launch crop sizes
@@ -193,7 +197,6 @@ struct Experiment {
     // QVFR runs on the game's own path below the layer (ACE's API path, the SCS games' D3D11 corner; GameAdapter::own_qvfr)
     // with the layer at mode=off: the reports say QVFR, and the CPU settings apply.
     bool ownQvfr = false;
-    bool quad = false;           // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
     SharedFocusShape focusShape;  // the focus area's free-form outline (focus_shape.h's words; none: the box)
@@ -226,7 +229,7 @@ struct Experiment {
     // (0: none, the boxes parallel as before).
     bool views4Converge = true;
     double convergeM = 0;
-    UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
+    UINT captureEverySeconds = 0; // quad debug: saves the views and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
     UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h;
                                   // default: the game's hang_watch_s)
@@ -265,6 +268,7 @@ struct LiveSettings {
     // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames
     // a side), else [cpu] isolate_main_thread (1 on, 0 off).
     int cpuIsolate = 0;
+    bool turbo = false;  // [cpu] turbo (layer/turbo.h)
     int focusMaskMargin = 16;     // [experiment] focus_mask_margin, focus view texels
 };
 
@@ -282,30 +286,6 @@ struct Live {
     MenuPlacement menuPlacement;  // the settings menu's place ([menu]) when last read
     FILETIME written{};        // the ini's last write time when last read
 };
-
-// Round 7: two complete ACE frames per display frame. ACE's frames are paired A, B by its own
-// xrWaitFrame calls. A gets the real xrWaitFrame/xrBeginFrame and its xrEndFrame is swallowed. B
-// receives A's frame state at once (same display time, same pose), its xrBeginFrame is answered
-// here and its xrEndFrame is the one the runtime sees. The runtime keeps one wait/begin/end per
-// display frame. Arms only after ACE's own wait/begin/end calls ran 1:1:1 for a while (a frame
-// generator above this layer breaks that), and switches on only between frames.
-struct TwoLoops {
-    std::mutex mutex;
-    bool active = false;
-    uint64_t waits = 0, begins = 0, ends = 0;  // app calls since session start
-    uint64_t pairedWaits = 0, pairedBegins = 0, pairedEnds = 0;
-    XrFrameState pendingState{XR_TYPE_FRAME_STATE};
-    LARGE_INTEGER frequency{}, aWaitReturned{}, bWaitReturned{};
-    double aMs = 0, bMs = 0, displayMs = 0;
-    uint64_t pairs = 0;
-    std::atomic<bool> inB{false};  // between B's xrWaitFrame and B's xrEndFrame
-    LARGE_INTEGER lastReport{};
-    bool broken = false;
-};
-
-inline constexpr uint64_t kArmAfterFrames = 30;
-
-inline constexpr uint64_t kMaxFallbackRun = 90;  // ~1-2 s of display frames
 
 // Eye gaze for the quad focus box (XR_EXT_eye_gaze_interaction, which ACE enables itself). The
 // layer has its own action set with one gaze pose action. OpenXR allows one attach per session and
@@ -432,18 +412,6 @@ struct GazeHold {
     std::atomic<uint64_t> samples = 0, moves = 0;  // for the log (gaze_hold_report)
 };
 
-// Quad pipeline (mode=quad), on top of two_loops with b_focus. ACE renders frame A with the full
-// FOV and frame B with the focus FOV into its own (eye_scale-sized) double-wide swapchain, which
-// the runtime never sees. A's image is copied when ACE releases it; B's release is held back until
-// B's xrEndFrame, where the compositor draws the outer view with the focus view blended into its
-// box into this layer's own double-wide swapchain at the runtime's native size. That swapchain
-// replaces ACE's projection layer, using the poses and FOVs ACE rendered frame A with.
-struct EyeView {
-    XrPosef pose{};
-    XrFovf fov{};
-    XrRect2Di rect{};
-};
-
 // The helmet layer's quads: two bands, each once (far depth) or once per eye (near depth).
 inline constexpr int kHelmetQuadsMax = 4;
 
@@ -473,6 +441,9 @@ struct OutputDensity {
     double logged = 0;      // the scale last logged
 };
 
+// The D3D12 composition (views4_compose, ACE's API path replay_compose): ACE's double-wide eye swapchain is adopted
+// (appChain) and composed at its release into this layer's own double-wide output (outChain), which replaces ACE's
+// projection layer at xrEndFrame.
 struct Quad {
     std::mutex mutex;
     uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
@@ -483,18 +454,13 @@ struct Quad {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // ACE's eye chain format, also the output's
     std::vector<ID3D12Resource*> appImages;
     uint32_t appAcquired = 0;
-    bool releaseHeld = false;               // B's image, released at B's xrEndFrame
     XrSwapchain outChain = XR_NULL_HANDLE;  // this layer's double-wide output
     std::vector<ID3D12Resource*> outImages;
     PendingImage outPending;  // outChain's image left acquired by a timed-out wait
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
     QuadCompositor compositor;
-    bool outerCaptured = false;
-    EyeView aViews[2];
-    bool aViewsValid = false;
     uint64_t composed = 0, fallbacks = 0;
-    uint64_t fallbackRun = 0;  // fallbacks in a row; a long run turns the pipeline off
     // views4 composition: done at ACE's image release, submitted at xrEndFrame.
     XrFovf v4Fov[2] = {};
     FovCrop v4Crop;  // the FOV crop ACE last located with (views4_output_extent, the helmet's uncropped eye)
@@ -866,7 +832,7 @@ struct Notice {
 };
 
 // The capture's start and end in the headset: the settings menu's panel shows for a few seconds with a line
-// under its title (QVFR and Two-loop: the panel is theirs; with mode=off only the log says).
+// under its title (with QVFR; with mode=off only the log says).
 struct ProfileNotice {
     int64_t until = 0;
     bool wasRunning = false;
@@ -937,7 +903,6 @@ FocusImagesStart focus_images_start(ID3D12Device* device, ID3D12CommandQueue* qu
 extern bool focusLogged;
 extern HelmetSettings helmetSettings;
 extern Live live;
-extern TwoLoops loops;
 extern Gaze gaze;
 extern HeadSpaces headSpaces;
 extern GazeThread gazeThread;

@@ -6,8 +6,8 @@
 //    on/off. This is what every other app loads, and ACE started from Steam. Switches are written to the
 //    registry in place; HKLM needs administrator rights (the launcher runs itself elevated with
 //    --apply-system-layers).
-// Neither can break the mod or ACE's start: the Sim-QVFR layer is always nearest the game, Two-loop and
-// Cheeky's frame generation keep VectorXR's frame generation off, and with Cheeky loaded its layer
+// Neither can break the mod or ACE's start: the Sim-QVFR layer is always nearest the game, Cheeky's
+// frame generation keeps VectorXR's frame generation off, and with Cheeky loaded its layer
 // stays on (all for launches from here). In Windows' list an installed Sim-QVFR layer stays first.
 #pragma once
 
@@ -33,11 +33,11 @@ LauncherLayers read_launcher_layers(const std::wstring& ini);
 bool write_launcher_layers(const std::wstring& ini, const LauncherLayers& layers);
 std::vector<std::string> split_layer_names(const std::wstring& list);
 
-// The options of a launch: the profile, and what the launch locks. Two-loop (two ACE frames per headset
-// frame) and Cheeky's frame generation turn VectorXR's frame generation off; Cheeky loaded keeps its layer on.
+// The options of a launch: the profile, and what the launch locks. Cheeky's frame generation turns VectorXR's frame
+// generation off; Cheeky loaded keeps its layer on.
 // `antiCheat`: the game starts through its anti-cheat ([launcher] anticheat=1): Cheeky's layer is off whatever the
 // profile or [cheeky] say (nothing of Cheeky's runs in a protected game).
-Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLoad, bool cheekyFg,
+Options launch_options(const LauncherLayers& layers, bool cheekyLoad, bool cheekyFg,
                        std::vector<std::wstring> setVariables = {}, bool antiCheat = false);
 // Moves `name` one place among `plan.layers` (step -1: toward the game, +1: toward the runtime) and
 // writes the whole order into the profile. False when it is already at that end.

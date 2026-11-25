@@ -58,7 +58,7 @@ inline constexpr int kTabs = 5;
 enum Ctl {
     // kPage: a page (option: its Pane) in the strip under the top bar; kGameTab: a game on the rail (option: its index in
     // games::all_games).
-    kNone, kPage, kGameTab, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kPage, kGameTab, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or custom, then the point to adjust (a pop-up,
     // app.shapePoint) and its place, starting the shape again, removing the point; kShapeCanvas the preview's focus
@@ -119,6 +119,8 @@ enum Ctl {
     kHotkeyFooter,
     // The Game tab's CPU card: the game's main thread on a core of its own ([cpu] isolate_main_thread).
     kCpuIsolateMain,
+    // The same card's Turbo mode ([cpu] turbo, layer/turbo.h).
+    kTurbo,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
     // The About pane's language ([launcher] language; lang.h): a pop-up of Windows' language, English and lang\*.ini.
@@ -342,9 +344,6 @@ void open_sheet(Sheet sheet);
 
 // A notice with OK; `then` once it's closed.
 void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then = nullptr);
-
-inline constexpr wchar_t kMethodNames[2][40] = {I18N(L"Quad View Foveated Rendering"),
-                                                I18N(L"Two-loop Foveated Interlaced (legacy)")};
 
 inline constexpr wchar_t kModeNames[2][16] = {I18N(L"Eye tracked"), I18N(L"Fixed")};
 
@@ -647,7 +646,6 @@ void follow_ini();
 void refresh_checks();
 int* slider_value(Ctl id);
 Range slider_range(Ctl id);
-bool method_shown();
 std::vector<FocusStop> focus_order();
 void launch();
 

@@ -43,7 +43,6 @@ struct Options {
     std::vector<std::string> onLayers;   // switched off in Windows, loaded for ACE all the same (ini: on_layers)
     std::vector<std::string> order;      // the order below the Sim-QVFR layer (ini: layer_order); unlisted layers
                                          // follow the listed ones, in registry order
-    bool frameGenerationOff = false;     // mode=quad (two ACE frames per headset frame): VectorXR off
     std::vector<ForcedLayer> forced;     // beats offLayers and onLayers
     std::vector<std::wstring> setVariables;  // environment variables set in the launcher's environment
 };

@@ -34,8 +34,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     kAntiCheat,
     L"start_protected_game.exe",
     {},
-    // QVFR on any build (qvfr_frame.h qvfr_frame_known_build): a game update or the studio's beta and alpha branches
-    // run it, and Sim-QVFR's DLSS, from what OpenXR and Direct3D show.
+    // QVFR on any build (qvfr_frame.cpp "any build"): a game update or the studio's beta and alpha branches run it, and
+    // Sim-QVFR's DLSS, from what OpenXR and Direct3D show (nothing read in the game on any build).
     true,
     simqvfr::games::QvfrImage::SeparateViews,  // adapter.cpp qvfr_separate_views
 };

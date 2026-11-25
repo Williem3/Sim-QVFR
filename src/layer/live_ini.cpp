@@ -111,6 +111,8 @@ void live_apply(const LiveSettings& l) {
         experiment.cpuIsolate = l.cpuIsolate;
         cpu_isolation_mode(l.cpuIsolate);
     }
+    if (experiment.turbo.exchange(l.turbo) != l.turbo)  // armed or disarmed at the game's next xrWaitFrame
+        logf("live: turbo %s", l.turbo ? "asked for" : "off");
     if (car_lighting() != l.carLight) {
         set_car_lighting(l.carLight);
         logf("live: game lighting enhancement %s", car_lighting_log(l.carLight).c_str());
@@ -214,7 +216,7 @@ void live_apply(const LiveSettings& l) {
         live_resolution(l);
     else if (experiment.views4)
         logf("live: %ls resizes its views at the next launch (no live resolution yet)", game->info()->shortName);
-    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
+    if (l.gaze && !gazeAvailable && experiment.composing())
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
     if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
         log_line("live: debug_border without views4_compose starts at the next launch");
@@ -396,19 +398,13 @@ void ini_worker_sync() {
         log_line("live: the ini worker hadn't finished its writes after 2 s: going on (they finish later)");
 }
 
-// Applies the ini's live keys when the worker read a change. Only between display frames: with
-// two_loops, never between frame A and frame B. No file access here.
+// Applies the ini's live keys when the worker read a change, between display frames. No file access here.
 void live_reload() {
     if (live.ini.empty())
         return;
     {
         std::lock_guard guard(iniWorker.mutex);
         ini_worker_watch(live.ini, live.written);
-    }
-    {
-        std::lock_guard guard(loops.mutex);
-        if (loops.active && loops.pairedEnds % 2 != 0)
-            return;  // A ended, B not yet: apply after B
     }
     std::optional<IniSnapshot> s;
     {
@@ -420,6 +416,8 @@ void live_reload() {
     stint_check(*s);
     live_apply(s->live);
     cheeky_apply_settings(s->cheeky, s->live.gaze);
+    if (const bool fg = cheeky_fg_set(s->cheeky); experiment.fgSet.exchange(fg) != fg)
+        logf("live: Cheeky's frame generation %s", fg ? "set to run (turbo stays off)" : "off");
     if (experiment.views4 && game_features().sideLoadedDlss) {
         game->qvfr_set_dlss(s->menu.dlss);  // [dlss], read with the menu's values: the adapter applies a change
         game->qvfr_set_nr(s->menu.nr);      // [dlss_nr] likewise

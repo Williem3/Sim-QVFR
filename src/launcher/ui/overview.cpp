@@ -80,8 +80,6 @@ std::vector<const SessionRecord*> game_sessions() {
 // The headset's refresh rate, the frame rate a session aims for (runtime.ini's last session; 0: not known).
 double target_hz() { return app.runtime.session.refreshHz > 0 ? app.runtime.session.refreshHz : 0; }
 
-bool qvfr_mode() { return app.s.mode == RenderMode::Qvfr; }
-
 // ---- The game's panel ----------------------------------------------------------------------------
 
 // The profile as four segments: the three presets of this foveated mode, then Custom (the profile menu). Too narrow
@@ -147,8 +145,7 @@ void profile_segments(const Rect& r) {
 std::wstring picture_summary() {
     std::wstring s = app.s.eyeTracking ? tr(L"Eye tracked") : tr(L"Fixed");
     s += L" · " + trf(L"Periphery {percent}", {{L"percent", percent_of(app.s.outer)}});
-    s += L" · " + (qvfr_mode() ? trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}})
-                               : std::wstring(tr(L"Two-loop")));
+    s += L" · " + trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}});
     return s;
 }
 
@@ -394,10 +391,9 @@ struct Tile {
 std::vector<Tile> picture_tiles() {
     std::vector<Tile> out;
     const Readouts ro = readouts(app.s, app.runtime);
-    const bool known = app.runtime.known(), q = qvfr_mode();
+    const bool known = app.runtime.known();
     const std::wstring periphery = trf(L"Periphery {percent}", {{L"percent", percent_of(app.s.outer)}});
-    const std::wstring density =
-        q ? trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}}) : std::wstring(tr(L"Two-loop"));
+    const std::wstring density = trf(L"Focus density {percent}", {{L"percent", percent_of(app.s.inner)}});
     out.push_back({tr(L"Resolution"), periphery + L" · " + density,
                    known ? trf(L"{size} periphery", {{L"size", px(ro.outer)}})
                          : std::wstring(tr(L"Pixel sizes after the first launch")),
@@ -418,18 +414,15 @@ std::vector<Tile> picture_tiles() {
         if (helmet)
             line += (line.empty() ? L"" : L" · ") +
                     std::wstring(app.s.helmet.on ? tr(L"Helmet on") : tr(L"Helmet off"));
-        out.push_back({tr(L"View & helmet"), line,
-                       !q                     ? tr(L"In Quad View Foveated Rendering only")
-                       : crop && app.s.crop ? tr(L"Edges cropped")
-                                              : tr(L"Whole view rendered"),
+        out.push_back({tr(L"View & helmet"), line, crop && app.s.crop ? tr(L"Edges cropped") : tr(L"Whole view rendered"),
                        L"", 3, I18N(L"View & helmet")});
     }
     const bool ownDlss = game_has(&games::GameFeatures::sideLoadedDlss), cheeky = game_has(&games::GameFeatures::foveatedDlss),
                multiView = multi_view_game();
-    if (method_shown() || ownDlss || cheeky || multiView) {
-        std::wstring line = q ? L"" : tr(L"Legacy method (Two-loop)");
+    if (ownDlss || cheeky || multiView) {
+        std::wstring line;
         const auto add = [&line](const std::wstring& part) { line += (line.empty() ? L"" : L" · ") + part; };
-        if (multiView && q)
+        if (multiView)
             add(trf(L"Focus view by {way}", {{L"way", multi_view_way()}}));
         if (ownDlss)
             add(own_upscaler_available() && app.s.dlss.on ? trf(L"{upscaler} on", {{L"upscaler", upscaler_name()}})

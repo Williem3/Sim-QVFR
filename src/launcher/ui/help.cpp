@@ -13,10 +13,6 @@ namespace simqvfr::launcher::ui::win {
 // ---- Help --------------------------------------------------------------------------------------
 // What a setting does and what it costs, by its label: an ⓘ after the label shows it under the pointer.
 constexpr Help kHelp[] = {
-    {I18N(L"Rendering method"),
-     I18N(L"Quad View Foveated Rendering draws the outer and focus views in one game frame: the lightest on the CPU, and the one "
-     L"with every feature. Two-loop (legacy) draws two whole game frames per headset frame: about twice the CPU work per frame, "
-     L"and no frame generation.")},
     {I18N(L"Foveated mode"),
      I18N(L"Eye tracked: the sharp area follows your eyes, so it can be small and dense; it needs a headset with eye tracking. "
      L"Fixed: the area stays in the centre, so make it larger, since your eyes move off it.")},

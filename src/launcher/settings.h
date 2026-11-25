@@ -3,8 +3,7 @@
 //
 // Quad View Foveated Rendering (mode=views4): one ACE frame renders the outer views at `outer` of the
 // headset's recommended size and the focus views at `inner` density over the foveated size, each
-// independent. Two-loop Foveated Interlaced (mode=quad): two ACE frames per headset frame, both at
-// `outer`; frame B covers the foveated size, so its density follows from the two and is not set.
+// independent.
 #pragma once
 
 #include <cstdint>
@@ -30,13 +29,11 @@
 
 namespace simqvfr::launcher {
 
-enum class RenderMode { Qvfr, TwoLoop };
 enum class OutlineColor { Teal, Magenta, Green };
 
 struct Settings {
-    RenderMode mode = RenderMode::Qvfr;
     bool eyeTracking = true;  // [quad] gaze: Eye tracked, or Fixed (centre)
-    int outer = kPeripheryScale.def;  // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
+    int outer = kPeripheryScale.def;  // periphery_scale (QVFR; eye_scale too, its fallback): percent of recommended
     int inner = kFocusDensity.def;    // focus_density (QVFR): focus pixel density, percent of recommended
     int objectDetail = kObjectDetail.def;  // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening of the focus views as
@@ -91,6 +88,8 @@ struct Settings {
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
     // [cpu] isolate_main_thread (probe/cpu_isolation.h): the game's main thread gets a core to itself (live).
     bool cpuIsolateMain = kCpuIsolateMain.def != 0;
+    // [cpu] turbo (layer/turbo.h): the game's xrWaitFrame returns at once, the runtime's wait beside its CPU work (live).
+    bool turbo = kTurbo.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     ClockPlacement clock;     // [clock]: the clock's card, on or off, its place and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
@@ -98,7 +97,7 @@ struct Settings {
     bool crop = false;        // [crop] enabled
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR): the helmet overlay round the view (live)
-    // The outer views' kept share of the eye's width and height (1 without a crop or in Two-loop).
+    // The outer views' kept share of the eye's width and height (1 without a crop).
     double crop_width() const;
     double crop_height() const;
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
@@ -176,8 +175,7 @@ Settings restored_defaults(const Settings& current);
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
 // outline, eye tracking, the headset menu's place, the hotkeys and, for QVFR, the resolution (up to its launch size)
-// and the FOV crop. The method and
-// Two-loop's resolution apply at the next launch.
+// and the FOV crop.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
 // A profile of `settings` (profile/profiles.h): the keys save_settings writes for the picture, without the
 // panels' places ([menu], [osd]), the hotkeys, the launcher's own keys and the CPU capture switch.
@@ -201,26 +199,24 @@ bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, c
 // A profile as text to share: only its keys that differ from the defaults' profile.
 std::string share_profile(const Profile& profile);
 // A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the
-// method only as views4 or quad), so a shared text can't set anything else. False if it isn't one.
+// method only as views4), so a shared text can't set anything else. False if it isn't one.
 bool shared_profile(const std::string& text, Profile& profile);
 
 // The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.
 std::wstring running_live_ini(const std::wstring& runtimeInfo);
 
-// What the running game launched with (runtime.ini, written by the layer at launch): its method and
-// view sizes, percent of the native eye (QVFR: the outer and focus views; Two-loop: eye_scale).
+// What the running game launched with (runtime.ini, written by the layer at launch): its view sizes, percent of the
+// native eye (the outer and focus views).
 struct LaunchSizes {
     bool known = false;
-    RenderMode mode = RenderMode::Qvfr;
     int outer = 0, focusWidth = 0, focusHeight = 0;
     std::wstring crop;  // the FOV crop launched with, "top,bottom,outer,inner" percent (crop_key)
 };
 // A crop as the layer reports it at launch: "top,bottom,outer,inner" percent, all 0 without one.
 std::wstring crop_key(const Settings& settings);
 LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo);
-// Whether `settings` applies live in full to a game launched with `launch`: the same method and, for
-// QVFR, no view larger than at launch (live sizes can only shrink; the FOV crop shapes the outer
-// views); Two-loop's resolution unchanged.
+// Whether `settings` applies live in full to a game launched with `launch`: no view larger than at launch (live
+// sizes can only shrink; the FOV crop shapes the outer views).
 bool fits_launch(const Settings& settings, const LaunchSizes& launch);
 
 // A size in pixels.
@@ -286,7 +282,7 @@ std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& layer
 RuntimeInfo load_runtime_info(const std::wstring& path);
 
 // The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and
-// the pixels rendered per headset frame (Two-loop: both frames) against the runtime's own.
+// the pixels rendered per headset frame against the runtime's own.
 struct Readouts {
     Size runtime;              // the runtime's recommended eye, before the layer changes it
     Size outer, focus, target;
@@ -306,8 +302,8 @@ Readouts readouts(const Settings& settings, const RuntimeInfo& runtime, bool gam
                   games::QvfrImage image = games::QvfrImage::DoubleWide, bool multiView = false);
 
 // VRAM at `settings` (QVFR), from the last launch's measurement: ACE's render targets that follow its
-// target scale with the target's area, the rest of its use stays. `mb` 0: not known (no QVFR launch yet,
-// or Two-loop). Measured on whatever track and cars that launch loaded, so a heavier one adds to it.
+// target scale with the target's area, the rest of its use stays. `mb` 0: not known (no QVFR launch yet).
+// Measured on whatever track and cars that launch loaded, so a heavier one adds to it.
 struct VramEstimate {
     double mb = 0, budgetMb = 0;
 };

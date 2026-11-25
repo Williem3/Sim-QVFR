@@ -95,7 +95,6 @@ LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
     LaunchSizes l;
     const std::wstring mode = read_string(runtimeInfo, L"runtime", L"launch_mode");
     l.known = !mode.empty();
-    l.mode = parse_render_mode(mode.c_str()) == IniRenderMode::TwoLoop ? RenderMode::TwoLoop : RenderMode::Qvfr;
     l.outer = read_int(runtimeInfo, L"runtime", L"launch_outer", 0);
     l.focusWidth = read_int(runtimeInfo, L"runtime", L"launch_focus_width", 0);
     l.focusHeight = read_int(runtimeInfo, L"runtime", L"launch_focus_height", 0);
@@ -106,10 +105,8 @@ LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
 }
 
 bool fits_launch(const Settings& s, const LaunchSizes& launch) {
-    if (!launch.known || s.mode != launch.mode)
+    if (!launch.known)
         return false;
-    if (s.mode == RenderMode::TwoLoop)
-        return s.outer == launch.outer;
     // The focus views' size against the native eye, as the layer computes it (percent, rounded there).
     const double focusWidth = s.inner * s.width / 100.0, focusHeight = s.inner * s.height / 100.0;
     // The outer views (periphery density over the crop's share) no larger than at launch.

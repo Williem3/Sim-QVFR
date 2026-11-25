@@ -27,9 +27,13 @@ int setting_index(Ctl id) { return static_cast<int>(id) - static_cast<int>(kLmuS
 
 Ctl setting_ctl(std::size_t i) { return static_cast<Ctl>(static_cast<int>(kLmuSetting) + static_cast<int>(i)); }
 
+// A setting this build shows (ls::shown): a release's development-only settings have no control, so nothing here writes them.
 const ls::Def* def_of(Ctl id) {
     const int i = setting_index(id);
-    return i >= 0 && i < static_cast<int>(ls::defs().size()) ? &ls::defs()[static_cast<std::size_t>(i)] : nullptr;
+    if (i < 0 || i >= static_cast<int>(ls::defs().size()))
+        return nullptr;
+    const ls::Def& d = ls::defs()[static_cast<std::size_t>(i)];
+    return ls::shown(d) ? &d : nullptr;
 }
 
 std::wstring widen_ascii(const std::string& s) { return std::wstring(s.begin(), s.end()); }
@@ -155,7 +159,7 @@ Card group_card(int group) {
     c.body = [group](Body& b) {
         bool any = false;
         for (std::size_t i = 0; i < ls::defs().size(); ++i)
-            if (ls::defs()[i].group == group && file_ok(ls::defs()[i].file)) {
+            if (ls::defs()[i].group == group && ls::shown(ls::defs()[i]) && file_ok(ls::defs()[i].file)) {
                 setting_row(b, i);
                 any = true;
             }
@@ -279,7 +283,8 @@ float lmu_game_page(float x, float y, float w, bool draw) {
     std::vector<Card> cards = {files_card()};
     if (!app.lmuGame.userFolder.empty() && (app.lmuGame.configOk || app.lmuGame.playerOk))
         for (int g = 0; g < ls::kGroupCount; ++g)
-            cards.push_back(group_card(g));
+            if (ls::group_shown(g) || g == ls::kVrGroup)  // a release has no Advanced performance card
+                cards.push_back(group_card(g));
     return card_grid(cards, x, y, w, draw);
 }
 

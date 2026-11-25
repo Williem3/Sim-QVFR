@@ -167,7 +167,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/aftermath.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/cpp_exceptions.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_placement.cpp src/probe/cpu_isolation.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/mod_api/mod_loader.cpp src/mod_api/mod_trust.cpp src/engine/code_patch.cpp src/engine/code_shapes.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/lmu/adapter.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/mod_api/mod_loader.cpp src/mod_api/mod_trust.cpp src/engine/code_patch.cpp src/engine/code_shapes.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/d3d11_fixation.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/showcase.cpp src/quad/shared_state.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -211,14 +211,15 @@ endif()
 set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtables.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-# The layer (src/xr_layer.cpp and src/layer/), for the DLL and for two_loops_test and quad_flow_test. An OBJECT
-# library, not a static one: every object is linked in, including xr_layer.cpp's exported
-# xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
+# The layer (src/xr_layer.cpp and src/layer/), for the DLL and for the tests that link it (layer_hooks_test,
+# quad_flow_test and others). An OBJECT library, not a static one: every object is linked in, including xr_layer.cpp's
+# exported xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
-  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
+  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/captures.cpp src/layer/visibility_mask.cpp
+  src/layer/views.cpp src/layer/live_ini.cpp
   src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp src/layer/native_quad.cpp
-  src/layer/eye_off.cpp)
+  src/layer/eye_off.cpp src/layer/submit_trace.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
@@ -570,11 +571,19 @@ sim_qvfr_test(frame_records_test tests/frame_records_test.cpp)
 target_include_directories(frame_records_test PRIVATE src)
 target_compile_options(frame_records_test PRIVATE /W4 /permissive- /utf-8)
 
-# Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
-sim_qvfr_test(two_loops_test tests/two_loops_test.cpp)
-target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
-target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(two_loops_test PRIVATE sim_qvfr_layer)
+# Offline checks of the layer's hooks against fake runtime calls: its own swapchain images' waits, the game's swapchains
+# and spaces going, live settings and the settings menu's ini writes (tests/layer_hooks_test.cpp).
+sim_qvfr_test(layer_hooks_test tests/layer_hooks_test.cpp)
+target_include_directories(layer_hooks_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(layer_hooks_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(layer_hooks_test PRIVATE sim_qvfr_layer)
+
+# Offline check of turbo mode's frame loop (layer/turbo.h) against fake runtimes, alone and through the layer's
+# xrWaitFrame and xrBeginFrame (tests/turbo_test.cpp).
+sim_qvfr_test(turbo_test tests/turbo_test.cpp)
+target_include_directories(turbo_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(turbo_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(turbo_test PRIVATE sim_qvfr_layer)
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
 sim_qvfr_test(quad_flow_test tests/quad_flow_test.cpp)
@@ -598,6 +607,13 @@ target_include_directories(eye_off_test PRIVATE src ${THIRD_PARTY}/openxr/includ
 target_compile_definitions(eye_off_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(eye_off_test PRIVATE /utf-8)
 target_link_libraries(eye_off_test PRIVATE sim_qvfr_core)
+
+# The submission's trace: layer lines, frame shapes, motion compensator names (tests/submit_trace_test.cpp).
+sim_qvfr_test(submit_trace_test tests/submit_trace_test.cpp)
+target_include_directories(submit_trace_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(submit_trace_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(submit_trace_test PRIVATE /utf-8)
+target_link_libraries(submit_trace_test PRIVATE sim_qvfr_core)
 
 # Offline check of native quad views (quad/native_quad.h, layer/native_quad.cpp) against a fake runtime offering
 # PRIMARY_QUAD_VARJO (tests/native_quad_test.cpp).

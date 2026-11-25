@@ -133,9 +133,7 @@ Picture
   Closed, Half or Open (its hotkey, Ctrl+Alt+V). The headset menu's Helmet page has them all. The log
   suggests the crop that matches their opening.
 - Rendering: how the focus views are drawn in this game (in LMU and the truck sims, multi-view
-  rendering: NVIDIA's or Sim-QVFR's own). A profile still on the legacy Two-loop method shows
-  Rendering method here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered
-  again.
+  rendering: NVIDIA's or Sim-QVFR's own).
   Runtime composition (LMU, automatic, no switch): on a Pimax or Varjo OpenXR runtime with Quad-Views
   Foveated Rendering enabled in Pimax Play or Varjo Base, Sim-QVFR hands the runtime the four views,
   and the focus area reaches the display at its full resolution. Its focus area is drawn inside the
@@ -199,6 +197,11 @@ Game
   more cores and two threads per core, and stays off if another tool (such as Process Lasso) already
   set the game's CPU sets or affinity. Try it on and watch your frames; it applies live, also from the
   headset menu's Game tab.
+  Turbo mode (off by default): the game doesn't wait for the headset at the start of each frame; it
+  starts its next frame's work while the headset runtime waits for the display slot, for more frames
+  when the CPU limits them, perhaps with a little more latency. Like OpenXR Toolkit's Turbo mode: turn
+  Toolkit's off with it (the Launch checks say so). It stays off while Cheeky's or VectorXR's frame generation is on.
+  Live, also from the headset menu's Game tab.
 - Diagnostics: the last session's numbers (frame rate against the headset's, slow frames against the
   frame's budget, CPU and GPU time, what limited the frame, the game's busiest threads, and how much
   of the session the headset runtime ran the game at half rate, as Varjo's motion smoothing does), to
@@ -390,8 +393,8 @@ A yellow Eyes only there means the focus views aren't being made: both eyes rend
 a correct, sharp picture that costs more. Sim-QVFR tries again by itself, at once after you change a
 graphics setting in LMU and otherwise every 20 seconds at most (a failed try shows as a brief soft
 blink); on a card that can't do multi-view rendering it stays that way. The log says why.
-Sim-QVFR doesn't change, hook or call LMU's own code: it works through OpenXR and Direct3D 11, reads a
-few values in LMU's memory (the cameras, the eye being drawn, the render scale) and writes nothing.
+Sim-QVFR doesn't change, hook or call LMU's own code, and reads and writes nothing in LMU's memory: it
+works through OpenXR and Direct3D 11 alone (the cameras, the eye being drawn and the render scale too).
 Each view's resolution, and its live changes, are set in the Direct3D 11 calls: LMU renders at its own
 size and Sim-QVFR draws the eye into the part of its image the periphery's resolution needs.
 LMU's own render scale and FSR (its VR graphics settings) work with QVFR: they lower every view's
@@ -431,8 +434,8 @@ DLSS are trademarks of NVIDIA Corporation; Sim-QVFR is not sponsored or endorsed
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Run with
 anti-cheat (Game > Online racing) starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
 launch; it asks you to accept the risk first. AT YOUR OWN RISK: Sim-QVFR works inside LMU while it
-runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics calls and reads LMU's
-memory. The anti-cheat may kick you or ban your account for that. Turning it on, you knowingly take
+runs. LMU's code stays unchanged, but Sim-QVFR sits between LMU and its graphics calls. The anti-cheat
+may kick you or ban your account for that. Turning it on, you knowingly take
 responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off
 with it on.
 Before each Run with anti-cheat launch the launcher checks that Windows trusts Sim-QVFR's signature

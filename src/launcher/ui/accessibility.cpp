@@ -120,7 +120,6 @@ bool popup_ctl(Ctl id) {
     if (lmu_game_choice(id))
         return true;
     switch (id) {
-    case kMethod:
     case kCheekyOuterPreset:
     case kCheekyFocusPreset:
     case kCheekyNrPreset:

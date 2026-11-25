@@ -13,9 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "../../engine/code_patch.h"
 #include "../../log.h"
-#include "abi.h"
 #include "qvfr_frame.h"
 #include "yebis_shaders.h"
 
@@ -71,20 +69,6 @@ std::string pt_game_settings() {
         while (from < json.size() && json[from] == ' ')
             ++from;
         line += " " + std::string(key) + " " + json.substr(from, to == std::string::npos ? 8 : to - from) + ",";
-    }
-    // The renderer's own state (a read of the game's memory, this diagnostic's alone): the post-processing bits and the
-    // flags a static reading of its post-processing function names. Their offsets are from that reading, not verified.
-    // Only on a build abi.h's addresses are from (another build's renderer is elsewhere).
-    const std::uintptr_t base = simqvfr::module_base();
-    if (const auto* renderer = qvfr_frame_known_build() ? *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)
-                                                        : nullptr) {
-        std::uint32_t post = 0, msaa = 0;
-        std::memcpy(&post, renderer + 0x7770c, sizeof(post));
-        std::memcpy(&msaa, renderer + 0x1a1c, sizeof(msaa));
-        char text[160];
-        std::snprintf(text, sizeof(text), " renderer: post bits 0x%08x (bits 24-26: %u%u%u), +0x770fa %u, +0x1a1c %u", post,
-                      (post >> 24) & 1, (post >> 25) & 1, (post >> 26) & 1, static_cast<unsigned>(renderer[0x770fa]), msaa);
-        line += text;
     }
     return line;
 }

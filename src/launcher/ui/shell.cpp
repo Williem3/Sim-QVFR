@@ -169,10 +169,7 @@ StatusNow status_now() {
     if (const Check* w = first_with(app.checks, CheckTone::Warn))
         return {1, trf(L"{count} to check", {{L"count", std::to_wstring(warn)}}), checks_text(*w), kChecksBadge};
     if (app.live == Live::NextLaunch)
-        return {1, tr(L"Partly live"),
-                app.s.mode == RenderMode::Qvfr
-                    ? tr(L"Applied live up to the launch resolution · the rest at the next launch")
-                    : tr(L"Foveation applied live · resolution and method at the next launch")};
+        return {1, tr(L"Partly live"), tr(L"Applied live up to the launch resolution · the rest at the next launch")};
     if (app.live == Live::Applied)
         return {0, tr(L"Applied live"), tr(L"Applied to the running game")};
     if (watching)

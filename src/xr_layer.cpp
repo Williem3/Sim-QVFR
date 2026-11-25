@@ -1,6 +1,6 @@
 // XR_APILAYER_SIM_qvfr: logs what the game asks for (views, swapchains, frame submission) and starts the
 // log-only engine probes (probe/probe.cpp) at xrCreateSession. With mode=off nothing alters rendering; the
-// experiments and the quad pipeline are selected in sim-qvfr.ini. This file has the loader side:
+// experiments and QVFR are selected in sim-qvfr.ini. This file has the loader side:
 // GetInstanceProcAddr, the layer order and gaze extension checks, CreateApiLayerInstance and the exported
 // negotiation; the rest is in src/layer/ (layer.h).
 #include <cstring>
@@ -65,6 +65,7 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         SIMQVFR_INTERCEPT(CreateSession)
         SIMQVFR_INTERCEPT(DestroySession)
         SIMQVFR_INTERCEPT(BeginSession)
+        SIMQVFR_INTERCEPT(EndSession)  // turbo's pending wait joined first (layer/turbo.h)
         SIMQVFR_INTERCEPT(WaitFrame)
         SIMQVFR_INTERCEPT(BeginFrame)
         SIMQVFR_INTERCEPT(CreateSwapchain)
@@ -100,6 +101,7 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
     }
     logf("layers below this one: [%s]", names.c_str());
     layersBelow = names;
+    experiment.vectorXrLoaded = vectorxrBelow || GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll") != nullptr;
     if (!vectorxrBelow && GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll"))
         log_line("VectorXR is loaded above this layer: its frame generation would see the game's four-view image; move "
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");
@@ -399,6 +401,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(CreateSession)
     SIMQVFR_LOAD(DestroySession)
     SIMQVFR_LOAD(BeginSession)
+    SIMQVFR_LOAD(EndSession)
     SIMQVFR_LOAD(WaitFrame)
     SIMQVFR_LOAD(BeginFrame)
     SIMQVFR_LOAD(CreateSwapchain)
@@ -441,6 +444,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         log_line("missing downstream functions; pass-through only");
     else
         gaze_init(*instance, gazeExtension == GazeExtension::Requested || gazeAdded);
+    if (ok)
+        submit_trace_install();  // the last before whatever is below: the frame as it is handed down
     if (ok)
         eye_off_install();  // right above the runtime: it sees the frame as the runtime will
     if (ok)

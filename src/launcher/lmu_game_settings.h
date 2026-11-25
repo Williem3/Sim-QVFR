@@ -36,6 +36,7 @@ struct Def {
     int group;
     const Option* options = nullptr;  // Choice only
     std::size_t count = 0;
+    bool devOnly = false;  // not vetted for players yet: development builds only (dev_build.h)
 };
 
 // The cards, in order.
@@ -47,6 +48,13 @@ inline constexpr int kVrGroup = 4;  // the card that also carries the VR FOV sca
 
 // Every setting, in the order shown.
 const std::vector<Def>& defs();
+
+// Whether a build shows (and may write) a setting: a release leaves the development-only ones out entirely, so LMU's
+// own value in its file stays as the player or the game set it. shown() is this build's answer (dev_build.h).
+inline bool shown_in(const Def& d, bool devBuild) { return devBuild || !d.devOnly; }
+bool shown(const Def& d);
+// Whether a card has any setting this build shows.
+bool group_shown(int group);
 
 // The game's UserData folder from its exe ("…\Le Mans Ultimate\Le Mans Ultimate.exe"), and each file's path in it.
 std::wstring user_folder(const std::wstring& exe);

@@ -68,11 +68,9 @@ MenuLaunch menu_launch_sizes() {
     const Views4Layout& l = experiment.views4Layout;
     {
         std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
-        m = {experiment.views4, l.outer * 100, l.focus * 100, l.focusHeight * 100,
-             static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0, experiment.eyeScale * 100};
+        m = {l.outer * 100, l.focus * 100, l.focusHeight * 100, static_cast<int>(quad.nativeW),
+             static_cast<int>(quad.nativeH)};
     }
-    if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
-        m.qvfr = true;
     m.cropWidth = l.cropWidth * 100;  // the launch crop
     m.cropHeight = l.cropHeight * 100;
     const games::GameFeatures features = game_features();  // what the game has: the rest is left out
@@ -98,7 +96,6 @@ MenuLaunch menu_launch_sizes() {
     if (experiment.replayCompose)
         m.liveResolution = false;  // periphery and density: the next launch
     if (game->shows_overlay()) {  // QVFR at the D3D11 level (ATS): the settings page, its sizes live
-        m.qvfr = true;
         m.liveResolution = true;
         m.cropPage = false;  // no view crop, helmet, focus shape or optimizer on this path
         m.helmetPage = false;
@@ -184,7 +181,7 @@ void menu_placement_changed(const MenuPlacement& placement) {
     live.menuPlacement = placement;
     menu_place(placement);
     logf("settings menu: moved to %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
-    if (experiment.views4 || experiment.quad || experiment.replayCompose || game->shows_overlay())
+    if (experiment.views4 || experiment.replayCompose || game->shows_overlay())
         menu_open(qpc_now());
 }
 
@@ -369,13 +366,13 @@ void menu_press(MenuKey key, int64_t now) {
     // (the next launch starts from them); the live reload follows within a frame or two. Steps quicker than the
     // worker are written as one (IniWrite::MenuStep).
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
-                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
+                     cheeky = menu.model.cheeky, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
                      eyeOff = menu.model.launch.eyeOff, carLighting = menu.model.launch.carLighting,
                      corridor = menu.model.launch.focusCorridor, match = menu.model.launch.textureMatch,
                      showcase = menu.model.launch.showcase,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match, showcase);
+        write_menu_values(ini.c_str(), values, detail, quads, sharpening, eyeOff, carLighting, corridor, match, showcase);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -384,7 +381,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff, carLighting, corridor, match);
+            write_menu_values(target.c_str(), values, detail, quads, sharpening, eyeOff, carLighting, corridor, match);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)
@@ -565,7 +562,7 @@ bool menu_resources(XrSession session) {
 
 // Pixels per degree at the centre of the view at the runtime's recommended size (100% density), over
 // the FOV ACE renders with: views4 reads it back from ACE's projection (the focus density is against
-// it), Two-loop uses frame A's. 0 until known.
+// it). 0 until known.
 double native_center_ppd() {
     float tan[4] = {};
     Views4Frame frame{};
@@ -575,8 +572,6 @@ double native_center_ppd() {
     if (!(tan[1] > tan[0])) {
         if (experiment.views4 && quad.v4FovValid)
             fov_tangents(quad.v4Fov[0], tan);
-        else if (quad.aViewsValid)
-            fov_tangents(quad.aViews[0].fov, tan);
     }
     // The native size spans the uncropped FOV (the crop keeps the density).
     const double width = (static_cast<double>(tan[1]) - tan[0]) / experiment.crop().kept_width();
@@ -635,7 +630,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
     // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
     // menu only with a method of the layer's (its settings would change nothing in mode=off).
-    const bool method = experiment.views4 || experiment.quad || experiment.replayCompose || game->shows_overlay();
+    const bool method = experiment.views4 || experiment.replayCompose || game->shows_overlay();
     if (live.ini.empty() || (!method && !experiment.measure && !notice_pending()))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.

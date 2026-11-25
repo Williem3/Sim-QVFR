@@ -252,7 +252,6 @@ void activate(Ctl id, int option) {
         ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return;
     }
-    case kMethod:
     case kCheekyOuterPreset:
     case kCheekyFocusPreset:
     case kCheekyNrPreset:
@@ -313,6 +312,7 @@ void activate(Ctl id, int option) {
     case kClockOn: app.s.clock.enabled = !app.s.clock.enabled; changed(); return;
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kCpuIsolateMain: app.s.cpuIsolateMain = !app.s.cpuIsolateMain; changed(); return;
+    case kTurbo: app.s.turbo = !app.s.turbo; changed(); return;
     case kUpdateCheck:
         app.s.updateCheck = !app.s.updateCheck;
         app.s.updateAsked = true;  // a choice: the first start's question is answered
@@ -362,13 +362,13 @@ void activate(Ctl id, int option) {
         changed();
         return;
     case kCropOn:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::fovCrop)) {
+        if (game_has(&games::GameFeatures::fovCrop)) {
             app.s.crop = !app.s.crop;
             changed();
         }
         return;
     case kHelmetOn:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::helmet)) {
+        if (game_has(&games::GameFeatures::helmet)) {
             app.s.helmet.on = !app.s.helmet.on;
             changed();
         }
@@ -378,13 +378,13 @@ void activate(Ctl id, int option) {
     case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
     case kOutline: app.s.outline = !app.s.outline; changed(); return;
     case kCorridorShow:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+        if (game_has(&games::GameFeatures::focusCorridor)) {
             app.s.corridorShow = !app.s.corridorShow;
             changed();
         }
         return;
     case kCorridorOn:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::focusCorridor)) {
+        if (game_has(&games::GameFeatures::focusCorridor)) {
             // On: the cockpit's shape and size (the player's kept); off: the player's back (road_focus_shape.h).
             // Under native quad views (the last session's), no larger than the runtime's focus region (rounded, a
             // point under it: inside it).
@@ -398,13 +398,13 @@ void activate(Ctl id, int option) {
         }
         return;
     case kGradeOn:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::sharpening)) {
+        if (game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
             changed();
         }
         return;
     case kNightOn:
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::carLighting)) {
+        if (game_has(&games::GameFeatures::carLighting)) {
             app.s.carLight.on = !app.s.carLight.on;
             changed();
         }
@@ -533,7 +533,6 @@ bool space_control(Ctl id) {
     if ((id >= kModOnline0 && id <= kModOnlineLast) || (id >= kModSetting0 && id <= kModSettingLast))
         return true;  // the Mods card's switches
     switch (id) {
-    case kMethod:
     case kMode:
     case kOutline:
     case kCorridorOn:
@@ -579,6 +578,7 @@ bool space_control(Ctl id) {
     case kClockOn:
     case kHotkeyFooter:
     case kCpuIsolateMain:
+    case kTurbo:
     case kUpdateCheck:
     case kCropOn:
     case kHelmetOn:
