@@ -36,7 +36,7 @@ Constraints (brief §0):
 
 ### Rail (left, about 120 px; abbreviations only under 1024 px)
 
-- Logo ■●▲ at the top.
+- Logo at the top: the SQVFR wordmark (the icon tile when the rail is compact).
 - One block per shown game: abbreviation (Jost 900) and full name (Inter, rail-muted token). The selected game is a yellow block with ink text and a notch pointing at the content. Click, Up/Down and Ctrl+Tab switch games, as today (`select_game` swaps the per-game settings, unchanged).
 - Bottom: a red-circle heart with "Support on Ko-fi" (opens the Ko-fi page), then the version with "BETA". The version opens the About sheet and carries a dot when an update is available.
 
