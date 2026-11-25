@@ -108,8 +108,9 @@ Picture
   following its hills and bends, and in your own car; the trees, grandstands and sky beside and above
   the road come from the periphery. It saves the most with a large focus area. Preset A or B sets a
   focus shape, size and position made for it when you switch it on (switching it off puts yours back),
-  Road edge blend sets how softly it fades at its edges, and Show Road focus area tints blue what comes
-  from the periphery. It's off while the focus follows your eyes. Turn it off if something beside the
+  Road edge blend sets how softly it fades at its edges, Road widening (10 to 25 degrees either side)
+  lets it widen with distance so bends stay inside, and Show Road focus area tints blue what comes
+  from the periphery. Past a crest it keeps the road and the cars beyond in full detail. It's off while the focus follows your eyes. Turn it off if something beside the
   road looks softer than you want. All of it applies live, also from the headset menu.
   The two eyes' focus areas meet at the depth of what you look at (the dash, or the road), so near
   things fall inside both; in X-Plane they stay parallel. When the headset composes the views itself
@@ -382,6 +383,10 @@ Le Mans Ultimate
 ----------------
 More frames in LMU: LMU-OPTIMIZATION-GUIDE.md, in this folder, explains which settings cost CPU and GPU
 time (DLSS, other cars' motion, MSAA, resolution) and what to turn down first.
+Game > In-game settings edits LMU's own graphics settings (its settings files) from the launcher, with
+LMU closed: post effects, MSAA, detail, reflections, shadows and more, and its VR FOV scale (keep it at
+100%: Set to 100% puts it back). Changes apply at LMU's next start; the first change keeps a backup of
+each file. A report includes LMU's graphics settings from each launch.
 Pick LMU in the game list, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR is made for LMU
 1.4.2.0 (the Steam build of 23 October 2026), and also runs on other builds (a game update, a beta or
 alpha branch) from what OpenXR and Direct3D show, DLSS and FSR included. Launch checks then say the
@@ -424,6 +429,9 @@ Texture sharpening (off by default; Focus only, or Focus and periphery) samples 
 DLSS works; the gain is subtle, most in the periphery. On at launch it changes while you drive, without
 a stutter; turned on from Off it starts at the next launch (off, it costs nothing). If fine patterns
 shimmer, a step lower.
+Light glow (DLSS card, or the headset menu's DLSS page; Off by default, Low or High; NVIDIA DLSS only)
+lowers the exposure DLSS works at, so headlights and floodlights at night keep their bloom. It changes
+while you drive, without a stutter.
 With DLSS on, LMU's MSAA can go off. Other cars' motion (on by default, the DLSS card's advanced
 options) gives DLSS each other car's motion, so passing cars don't smear; in a full field about 0.5 ms
 of CPU and 0.2-0.5 ms of GPU a frame. Applies at the next launch.
