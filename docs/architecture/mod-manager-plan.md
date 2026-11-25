@@ -85,7 +85,8 @@ Each phase leaves the app working.
 3. **Trust and loading.** The pinned-thumbprint check in the core, approval by hash, refusal under anti-cheat, safe
    `LoadLibraryExW`, and a packaging guard. Status: first step done, see below.
 4. **Extract the games into their own DLLs.** The SCS games first (after `lmu/mvr_probe` becomes an engine service),
-   then X-Plane, ACC once it is remade, ACE, and LMU last.
+   then X-Plane, ACC once it is remade, ACE, and LMU last. Status: SCS, X-Plane, ACE and LMU done (ACC waits for its
+   remake), see below.
 5. **Dynamic tabs.** The launcher scans `mods/*/mod.json` and builds each tab from `settings.json`. It never loads a
    mod DLL itself. Status: first step done (the Mods card), see below.
 6. **The SDK and its docs.** An `sdk/` folder with `mod_api.h`, `mod.hpp`, helpers that hold no global state, a
@@ -308,7 +309,7 @@ Found while sizing the boundary:
 - **X-Plane's early load** runs in `DllMain` under the loader lock. Its mod can't be loaded with `LoadLibrary` at
   that point.
 
-## Phase 4: ACE as its own DLL (done in code, 2026-11-24; not yet checked in a headset)
+## Phase 4: ACE as its own DLL (done in code, 2026-11-24; headset-checked 2026-11-24)
 
 - **The option.** `-DSIM_QVFR_ACE_AS_MOD=ON` (nightly: on) builds `mods\ace\sim-qvfr-ace.dll` with its `mod.json`.
   Built in, the same entry (`ace/mod_entry.cpp`) runs through `through_mod`, so both builds use the mod ABI.
@@ -319,4 +320,36 @@ Found while sizing the boundary:
   the layer keeps only what it composes with. `focus_ngx` (ACE's NGX hooks) moved with ACE.
 - **Host entries added.** MinHook in steps (`hook_create` .. `hook_apply_queued`, so the process keeps one MinHook),
   the pass census, and the probe observer. The stateless patch shapes are in `engine/code_shapes.cpp`, linked by both.
-- **Verified.** Stable and nightly configs build with no warnings; 81/81 tests in each.
+- **Verified.** Stable and nightly configs build with no warnings; 81/81 tests in each. Headset-checked 2026-11-24:
+  every ACE test build of the right-eye DLSS fix ran ACE from `mods\ace\`.
+
+## Phase 4: LMU as its own DLL (done 2026-11-24/25; headset-checked 2026-11-24, capture hotkey not yet checked)
+
+- **The option.** `-DSIM_QVFR_LMU_AS_MOD=ON` (nightly: on; package.ps1 lists it with the other first-party mods) builds
+  `mods\lmu\sim-qvfr-lmu.dll` with its `mod.json`. Built in, the same entry (`lmu/mod_entry.cpp`) runs through
+  `through_mod`, so both builds use the mod ABI. `lmu` is a first-party mod id.
+- **The multi-view shader service stays in the core.** LMU's MVR probe became `engine/multi_view_shaders.{h,cpp}`
+  (namespace `simqvfr::mvs`): the one D3D11 device-creation detour and the shader twins, which the SCS games and LMU
+  share. The private-data GUIDs the twins and facts are stored under are public in `engine/multi_view_shaders_abi.h`,
+  so a mod reads them off the game's shaders with GetPrivateData. LMU's reflection rules stay in the service as its
+  options.
+- **What moved into the mod.** LMU's sources, and the engine pieces only it uses: its DLSS / DLSS-NR / FSR views
+  (`dlss_views`, `ngx_dlss`, `nr_views`, `ngx_nr`, `fsr_upscale`, the `d3d12_bridge` FSR runs on), its DXBC twins
+  (`dxbc_patch`), `object_vtable`, `d3d11_vtables`, `nvapi_gpus`, `multi_view.cpp`'s GPU choice, and the stateless
+  D3D11 helpers (view resample, fixation, depth probe, capture). Its MinHook use (mvr_pass's context hooks) goes
+  through the host's `hook_create` / `hook_enable` / `hook_remove`.
+- **Host entries added** (`SqvfrHost`, appended): `frame_part_add` (the layer's per-part timing, probe/frame_parts.h;
+  `FramePartTimer` adds through it), `d3d11_capture_armed` (the capture hotkey's arm is the core's; a mod's linked
+  d3d11_capture.cpp leaves its own out), `multi_view_shaders_count` (`SQVFR_MVS_COUNT_*`: the service's flags and
+  counters LMU reads), and `core_dir`.
+- **NVIDIA's and AMD's DLLs stay in layer\.** `core_dir` is the core's folder (`log.h core_directory`); `ngx_dlss` and
+  `fsr_upscale` look there for nvngx_dlss.dll and AMD's FSR DLLs, from the core or from LMU's mod alike. package.ps1's
+  DLSS / FSR checks read the layer and LMU's mod.
+- **One adapter entry added** (`SqvfrMod`, appended): `qvfr_upscaler` (games/adapter.h). The overlay asks the game for
+  its upscaler's badge and evaluation count instead of calling dlss_views in the core, which is idle when LMU is a mod.
+- **Verified.** Stable and nightly configs: no warnings, 83/83 tests in each. In the nightly the layer keeps 11 `lmu::`
+  symbols (the game list's kGame / kBuilds / kAntiCheat and YEBIS's shader roles, which the service uses), against
+  3,068 in the stable layer. Headset 2026-11-24 (sqvfr-nightly-lmu-test1, 8902d48): the mod loaded from `mods\lmu\`,
+  NVIDIA's multi-view rendering drew the focus views, focus size, focus density and periphery resolution live, DLSS
+  then AMD FSR 3.1.5 live with AMD's runtime from `layer\`, Game Lighting Enhancement toggled, the overlay's badges.
+  Not yet checked: the capture hotkey (`[experiment] d3d11_capture_hotkey=1`).
