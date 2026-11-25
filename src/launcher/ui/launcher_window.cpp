@@ -321,7 +321,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             set_panel_from(x, y);
         } else if (h->id == kDiagZip) {
             drag_report_zip(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport || h->id == kLayerApply ||
+        } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport || h->id == kDiscord || h->id == kLayerApply ||
                    h->id == kLayerRevert || h->id == kLayerReset || h->id == kReportOpen || h->id == kColorCustom) {
             app.pressed = h->id;
             SetCapture(hwnd);

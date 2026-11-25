@@ -276,7 +276,7 @@ std::wstring rail_abbreviation(const games::GameInfo& game) {
 }
 
 // The rail: the logo, a block per game with a tab (the selected one yellow, with a notch toward the page), and at the
-// bottom Support on Ko-fi and the version (it opens About; a dot when an update is available).
+// bottom Discord, Support on Ko-fi and the version (it opens About; a dot when an update is available).
 void rail(float H) {
     Canvas& cv = app.canvas;
     const float W = rail_width(), top = t::kTopbarHeight;
@@ -290,8 +290,8 @@ void rail(float H) {
     // The bottom first: the blocks take what is left above it.
     // The About button: the kit's small control height; compact, two lines (the icon over the version number).
     const float aboutH = compact ? 4 + 12 + 2 + t::kRailName.lineHeight + 4 : 26, heartR = compact ? 14.0f : 16.0f;
-    const float bottomH = t::kSpace4 + 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight) + t::kSpace3 + aboutH +
-                          t::kSpace4;
+    const float roundH = 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight);  // Discord's and Ko-fi's
+    const float bottomH = t::kSpace4 + 2 * (roundH + t::kSpace3) + aboutH + t::kSpace4;
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
     std::vector<int> shown;
@@ -330,28 +330,36 @@ void rail(float H) {
         app.hits.push_back({kGameTab, block, i, compact ? std::wstring(game.name) : std::wstring(), game.name, selected ? 1 : 0});
         y += blockH;
     }
-    // Support on Ko-fi: a red circle with a heart.
+    // Discord, then Support on Ko-fi: each a coloured circle with its icon and, not compact, its label under it.
     float by = H - bottomH + t::kSpace4;
     const float cx = W / 2;
-    const Rect kofi{0, by, W, 2 * heartR + (compact ? 0 : t::kSpace2 + t::kRailName.lineHeight)};
-    cv.circle(cx, by + heartR, heartR, col(app.c->red), true);
-    if (app.pressed == kSupport && kofi.contains(app.mouseX, app.mouseY))  // held: a shade darker, as a button's
-        cv.circle(cx, by + heartR, heartR, col(0, 0.12f), true);
-    const float hs = heartR;
-    cv.path("M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 "
-            "14 9.9 8 13.5 8 13.5Z",
-            {cx - hs / 2, by + heartR - hs / 2 + 1, hs, hs}, 16, col(app.c->on_red), 0, true);
-    if (!compact) {
-        const t::TypeStyle kofiStyle{11, 13, 700, false};
-        cv.text(fit(tr(L"Support on Ko-fi"), kofiStyle, W - 2 * t::kSpace2), kofiStyle,
-                {0, by + 2 * heartR + t::kSpace2, W, t::kRailName.lineHeight}, col(app.c->rail_text), Align::Center);
-    }
-    if (pointer_in(kofi))
-        cv.circle(cx, by + heartR, heartR + 3, col(0xffffff, 0.5f), false, 1.5f);
-    if (focused(kSupport))
-        cv.stroke(kofi.inset(6, -3), col(app.c->rail_text), 2, t::kRadiusControl);
-    app.hits.push_back({kSupport, kofi, -1, tr(L"Support Sim-QVFR on Ko-fi")});
-    by += kofi.h + t::kSpace3;
+    const auto round_button = [&](Ctl id, Color fill, Color ink, const char* icon, const std::wstring& label,
+                                  const std::wstring& tip) {
+        const Rect r{0, by, W, roundH};
+        cv.circle(cx, by + heartR, heartR, fill, true);
+        if (app.pressed == id && r.contains(app.mouseX, app.mouseY))  // held: a shade darker, as a button's
+            cv.circle(cx, by + heartR, heartR, col(0, 0.12f), true);
+        const float hs = heartR;
+        cv.path(icon, {cx - hs / 2, by + heartR - hs / 2 + 1, hs, hs}, 16, ink, 0, true);
+        if (!compact) {
+            const t::TypeStyle style{11, 13, 700, false};
+            cv.text(fit(label, style, W - 2 * t::kSpace2), style, {0, by + 2 * heartR + t::kSpace2, W, t::kRailName.lineHeight},
+                    col(app.c->rail_text), Align::Center);
+        }
+        if (pointer_in(r))
+            cv.circle(cx, by + heartR, heartR + 3, col(0xffffff, 0.5f), false, 1.5f);
+        if (focused(id))
+            cv.stroke(r.inset(6, -3), col(app.c->rail_text), 2, t::kRadiusControl);
+        app.hits.push_back({id, r, -1, tip});
+        by += r.h + t::kSpace3;
+    };
+    // Discord's blurple with a speech bubble; its name is the label (a brand, not translated).
+    round_button(kDiscord, col(0x5865f2), col(0xffffff), "M2 3H14V11H7.5L4.5 14V11H2Z", L"Discord",
+                 tr(L"Sim-QVFR’s Discord server"));
+    round_button(kSupport, col(app.c->red), col(app.c->on_red),
+                 "M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 "
+                 "14 5.9 14 9.9 8 13.5 8 13.5Z",
+                 tr(L"Support on Ko-fi"), tr(L"Support Sim-QVFR on Ko-fi"));
     // The About button: an info icon and the version ("About · v1.2.3-beta" where it fits), a dot when an update is
     // available. A release's version without its commit ("1.0.5-beta (a78fc1f)"); a development build the release it is
     // headed for.

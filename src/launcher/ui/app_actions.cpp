@@ -482,7 +482,7 @@ namespace {
 // In a panel only its own hits were drawn, and its Ko-fi button (About) is one of them.
 std::vector<FocusStop> drawn_order(bool panel = false) {
     static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
-                                    kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
+                                    kLaunch, kSupport, kDiscord, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
                                     kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip, kText};
     std::vector<FocusStop> out;
     for (const Hit& h : app.hits) {

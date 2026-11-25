@@ -57,7 +57,7 @@ enum Ctl {
     // kPage: a page (option: its Pane) in the strip under the top bar; kGameTab: a game on the rail (option: its index in
     // games::all_games).
     kNone, kPage, kGameTab, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
-    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
+    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kDiscord, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or custom, then the point to adjust (a pop-up,
     // app.shapePoint) and its place, starting the shape again, removing the point; kShapeCanvas the preview's focus
     // area with a custom shape (option: kShapeCanvasEye x the eye drawn + the point, kShapeCanvasBox for the area
@@ -194,6 +194,8 @@ inline constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 inline constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 
 inline constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
+// The community's Discord server (the rail's Discord button, above Ko-fi).
+inline constexpr wchar_t kDiscordUrl[] = L"https://discord.gg/FXsXbJvskk";
 
 // The OpenXR layers card's More (its list, for troubleshooting): Launch checks' Open OpenXR layers opens it.
 inline constexpr wchar_t kLayersMore[] = I18N(L"the add-ons and their order");

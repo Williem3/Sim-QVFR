@@ -151,6 +151,7 @@ std::wstring own_name(const Hit& h) {
     case kLaunch: return trf(L"Launch {game}", {{L"game", game_name()}});
     case kVersion: return tr(L"About Sim-QVFR");
     case kSupport: return tr(L"Support Sim-QVFR on Ko-fi");
+    case kDiscord: return tr(L"Sim-QVFR’s Discord server");
     case kPanelClose: return tr(L"Close");
     case kCardMenu:
         return h.option >= 0 && h.option < static_cast<int>(app.cardTitles.size())
