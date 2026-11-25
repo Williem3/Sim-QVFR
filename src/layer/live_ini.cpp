@@ -22,6 +22,7 @@
 #include "quad/fov_crop.h"
 #include "quad/helmet.h"
 #include "quad/osd.h"
+#include "quad/regulator_settings.h"
 #include "quad/settings_menu.h"
 #include "quad/showcase.h"
 #include "xr.h"
@@ -151,6 +152,15 @@ void live_apply(const LiveSettings& l) {
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.composing());
+    else if (!experiment.views4 && game->adapter_qvfr()) {  // QVFR in the adapter (RF2): its focus box and sizes, from the ini
+        const double fy = l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction;
+        game->qvfr_set_live(l.focusFraction, fy, 1.0 + l.feather, l.gaze);
+        const Views4Sizes sizes = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
+        game->qvfr_set_density(sizes.outer, sizes.focus, sizes.focusHeight);
+        game->qvfr_set_regulator(read_regulator(live.ini.c_str()), sizes.density);  // [regulator], from the set sizes down
+        // The look, and the offset of the mode the menu edits (focus_offset.h: eye tracked or fixed).
+        game->qvfr_set_focus_look(l.feather, l.cornerRadius, l.border, l.borderColor, l.offset.for_mode(l.gaze));
+    }
     if (experiment.views4 && !experiment.views4EyeCamera) {  // the focus mask: the shape as the compositor has it
         game->qvfr_set_focus_mask(l.focusMask, focus_area_from(focus_shape_words(l.shape), l.cornerRadius),
                                   l.focusMaskMargin);
@@ -440,7 +450,9 @@ void live_reload() {
     clock_placement_changed(s->clock);
     hotkeys_changed(s->hotkeys);
     if (s->restartKeys != live.restartKeys) {
-        logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
+        // A game whose adapter makes QVFR (RF2) applies its sizes at once (live_apply above): nothing waits for a launch.
+        if (!game->adapter_qvfr())
+            logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
         live.restartKeys = s->restartKeys;
     }
 }

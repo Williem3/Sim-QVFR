@@ -485,6 +485,16 @@ OsdInput osd_input(int64_t now) {
     } else {
         in.multiView = OsdMultiView::Stock;  // the showcase (quad/showcase.h)
     }
+    if (game) {  // The GPU regulator (RF2): the views' sizes it has brought the set ones down to
+        const games::QvfrRegulatorStatus r = game->qvfr_regulator_status();
+        in.regulatorOn = r.active;
+        in.regulatorPeriphery = r.periphery;
+        in.regulatorFocus = r.focus;
+        in.regulatorPeripheryPercent = r.peripheryPercent;
+        in.regulatorDensityPercent = r.densityPercent;
+        in.regulatorCutPeriphery = r.cutPeriphery;
+        in.regulatorCutDensity = r.cutDensity;
+    }
     {  // DLSS: views evaluated since the card's last drawing
         static unsigned long long seen = 0;
         const unsigned long long total = dlss_evaluations_total();

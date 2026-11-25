@@ -17,6 +17,8 @@
 #include "scssoftware/ats/game.h"
 #include "scssoftware/ets2/game.h"
 #include "lmu/game.h"
+#include "rf2/adapter.h"
+#include "rf2/game.h"
 #include "xplane/adapter.h"
 #include "xplane/game.h"
 
@@ -71,6 +73,8 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::xplane::adapter();
     if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
         return ::lmu::adapter();
+    if (game == &::rf2::kGame)  // QVFR at the D3D11 level: both views in each eye's pass, composed at its resolve
+        return ::rf2::adapter();
     if (game == &::ats::kGame || game == &::ets2::kGame)  // SCS Software's: QVFR at the D3D11 level
         return ::scs::adapter(game);
     return none;

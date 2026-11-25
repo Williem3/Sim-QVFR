@@ -41,7 +41,11 @@ void set_slider_from_x(float x) {
     const float f = std::clamp((x - app.dragTrack.x - 9) / travel, 0.0f, 1.0f);
     const int before = *v;
     // Inner resolution in its steps (100% reachable); the arrow keys still move every slider by 1.
-    *v = slider_value_at(app.dragRange, f, app.dragging == kInner ? kInnerDragStep : 1);
+    const int step = app.dragging == kInner ? kInnerDragStep
+                     : app.dragging == kRegDecrease || app.dragging == kRegIncrease ? kRegulatorMsDragStep
+                     : app.dragging == kRegRaiseFrames                              ? kRegulatorRaiseFramesDragStep
+                                                                                      : 1;
+    *v = slider_value_at(app.dragRange, f, step);
     if (app.dragging == kColorValue)
         apply_color_edit();  // the brightness: the edited game's colour follows
     shape_slider_set(app.dragging);

@@ -35,6 +35,7 @@ enum Entry : int {
     kVSSetConstantBuffers1,
     kPSSetConstantBuffers1,
     kUnmap,
+    kResolveSubresource,
     kEntries
 };
 
@@ -71,6 +72,16 @@ struct Observers {
                              ID3D11Buffer** out) = nullptr;
     // Unmap, before it goes on: the resource the game just wrote.
     void (*unmap)(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) = nullptr;
+    // ResolveSubresource, before it goes on and after (`resolved`: the destination now holds the resolved image).
+    void (*resolve)(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
+                    DXGI_FORMAT format) = nullptr;
+    void (*resolved)(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
+                     DXGI_FORMAT format) = nullptr;
+    // OMSetRenderTargets on another immediate context than the observed one (a game whose OpenXR session and renderer
+    // use two devices: rF2 through OpenComposite), before it goes on; the observer may `retarget` to it. Deferred
+    // contexts aren't reported.
+    void (*other_targets)(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView* const* rtvs,
+                          ID3D11DepthStencilView* dsv) = nullptr;
 };
 
 struct Stats {
@@ -85,6 +96,10 @@ struct Stats {
 bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& observers);
 // The entries' current functions hooked if new (the game's thread, between its commands: an xrEndFrame).
 void rescan();
+// Observing moves to `context` (another immediate context of the game's: Observers::other_targets), its functions
+// found and hooked as at install. False: not installed, or the context is no immediate one.
+bool retarget(ID3D11DeviceContext* context);
+ID3D11DeviceContext* observed_context();
 // Observing stops (session end): the hooks stay in d3d11's code and pass every call straight on. A later install on
 // the same context hooks again only what's new. Calls already inside an observer are waited out (up to 500 ms), so
 // the observers' state may be freed after it returns; not to be called from inside an observer.
