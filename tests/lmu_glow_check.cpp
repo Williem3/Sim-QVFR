@@ -481,9 +481,9 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
             const float motion[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, static_cast<float>(-mode.car), 0, 0};
             const D3D11_BUFFER_DESC mb = {sizeof(motion), D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0,
                                           D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, sizeof(motion)};
-            const D3D11_SUBRESOURCE_DATA mi = {motion, 0, 0};
+            const D3D11_SUBRESOURCE_DATA motionData = {motion, 0, 0};
             ComPtr<ID3D11Buffer> buffer;
-            if (SUCCEEDED(device->CreateBuffer(&mb, &mi, &buffer)))
+            if (SUCCEEDED(device->CreateBuffer(&mb, &motionData, &buffer)))
                 device->CreateShaderResourceView(buffer.Get(), nullptr, &carMotion);
         }
         simqvfr::dlss_start(run);
@@ -634,12 +634,12 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                 if (eye == 0)
                     context->End(disjoint.Get());
                 for (int i = 0; eye == 0 && i < kLightCount; ++i) {  // eye 0's lights, before eye 1 draws over them
-                    const int cx = (std::clamp)(windowAt[i][0], kWindow, static_cast<int>(kW) - kWindow),
-                              cy = (std::clamp)(windowAt[i][1], kWindow, static_cast<int>(kH) - kWindow);
-                    const D3D11_BOX box{static_cast<UINT>(cx - kWindow / 2), static_cast<UINT>(cy - kWindow / 2), 0,
-                                        static_cast<UINT>(cx + kWindow / 2 + 1), static_cast<UINT>(cy + kWindow / 2 + 1), 1};
+                    const int lx = (std::clamp)(windowAt[i][0], kWindow, static_cast<int>(kW) - kWindow),
+                              ly = (std::clamp)(windowAt[i][1], kWindow, static_cast<int>(kH) - kWindow);
+                    const D3D11_BOX box{static_cast<UINT>(lx - kWindow / 2), static_cast<UINT>(ly - kWindow / 2), 0,
+                                        static_cast<UINT>(lx + kWindow / 2 + 1), static_cast<UINT>(ly + kWindow / 2 + 1), 1};
                     context->CopySubresourceRegion(staging[i].Get(), 0, 0, 0, 0, scene.Get(), 0, &box);
-                    const int tx = (std::clamp)(cx - kTrail, kWindow, static_cast<int>(kW) - kWindow);
+                    const int tx = (std::clamp)(lx - kTrail, kWindow, static_cast<int>(kW) - kWindow);
                     const D3D11_BOX trailBox{static_cast<UINT>(tx - kWindow / 2), box.top, 0,
                                              static_cast<UINT>(tx + kWindow / 2 + 1), box.bottom, 1};
                     context->CopySubresourceRegion(trailStaging[i].Get(), 0, 0, 0, 0, scene.Get(), 0, &trailBox);
@@ -694,16 +694,16 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                     continue;
                 }
                 if (converged && inside) {
-                    const int cx = (std::clamp)(windowAt[i][0], kWindow, static_cast<int>(kW) - kWindow),
-                              cy = (std::clamp)(windowAt[i][1], kWindow, static_cast<int>(kH) - kWindow);
-                    double sx, sy, farthest;
-                    spread_of(staging[i].Get(), exactAt[i][0] - (cx - kWindow / 2), exactAt[i][1] - (cy - kWindow / 2),
-                              sx, sy, farthest);
+                    const int lx = (std::clamp)(windowAt[i][0], kWindow, static_cast<int>(kW) - kWindow),
+                              ly = (std::clamp)(windowAt[i][1], kWindow, static_cast<int>(kH) - kWindow);
+                    double alongX, alongY, farthest;
+                    spread_of(staging[i].Get(), exactAt[i][0] - (lx - kWindow / 2), exactAt[i][1] - (ly - kWindow / 2),
+                              alongX, alongY, farthest);
                     if (share > 0)
-                        spreadX[i].push_back(sx), spreadY[i].push_back(sy), farX[i].push_back(farthest);
+                        spreadX[i].push_back(alongX), spreadY[i].push_back(alongY), farX[i].push_back(farthest);
                     if (mode.bank > 0)
-                        gapFill[i].push_back(gap_fill(staging[i].Get(), exactAt[i][0] - (cx - kWindow / 2),
-                                                      exactAt[i][1] - (cy - kWindow / 2),
+                        gapFill[i].push_back(gap_fill(staging[i].Get(), exactAt[i][0] - (lx - kWindow / 2),
+                                                      exactAt[i][1] - (ly - kWindow / 2),
                                                       (std::max)(mode.bank * kS, 3 * kLights[i].radius * mode.scale * kS)));
                     series[i].push_back(share);
                     trails[i].push_back(behind);
