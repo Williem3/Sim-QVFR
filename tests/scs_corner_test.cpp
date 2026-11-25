@@ -19,7 +19,7 @@
 #include "engine/dxbc_patch.h"
 #include "games/scssoftware/corner.h"
 #include "games/scssoftware/corner_internal.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "games/scssoftware/corner_rules.h"
 #include "test_util.h"
 
@@ -369,7 +369,7 @@ void warp_checks() {
         } else if (!svs || !sps || !twin) {
             check(false, "the scene shader and its instanced twin created");
         } else {
-            svs->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, twin.Get());
+            svs->SetPrivateDataInterface(simqvfr::mvs::kMvrInstancedTwinGuid, twin.Get());
             context->ClearRenderTargetView(gb[0].Get(), clear);
             context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH, 1, 0);
             context->RSSetViewports(1, &full);

@@ -13,7 +13,7 @@
 #include "../../log.h"
 #include "../../probe/aftermath.h"
 #include "../identity_adapter.h"
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "corner.h"
 #include "fixation.h"
 #include "ats/game.h"
@@ -69,7 +69,7 @@ public:
         // a pair: the violet flash): their draws rewritten per draw with that row left alone. [experiment] scs_tint_rows=0:
         // as before (an A/B).
         if (GetPrivateProfileIntW(L"experiment", L"scs_tint_rows", 1, ini) != 0) {
-            lmu::mvr_probe_tint_rows(true);
+            simqvfr::mvs::mvr_probe_tint_rows(true);
             corner_tint_rows(true);
             simqvfr::log_line("scs corner: shaders that read a constant row as a colour keep it out of the pair rule");
         }
@@ -80,16 +80,16 @@ public:
         // signs' forward pass): their focus view reads its own region, not the eye's corner. [experiment]
         // scs_own_pixel_loads=0: as before (an A/B).
         if (focusPercent_ > 0 && GetPrivateProfileIntW(L"experiment", L"scs_own_pixel_loads", 1, ini) != 0) {
-            lmu::mvr_probe_own_pixel_loads(true);
+            simqvfr::mvs::mvr_probe_own_pixel_loads(true);
             corner_own_pixel_loads(true);
             simqvfr::log_line("scs focus: scene pixel shaders that load at a projected screen position read their own pixel");
         }
         if (focusPercent_ > 0 && GetPrivateProfileIntW(L"experiment", L"scs_focus_position", 1, ini) != 0) {
-            lmu::mvr_probe_position_twins(true);
+            simqvfr::mvs::mvr_probe_position_twins(true);
             simqvfr::log_line("scs focus: full-screen passes that use screen pixels are replayed at the box's place on the eye's screen");
         }
         if (shaderProbe_)  // with the focus view on, each shader keeps its twin (the scene draws bind it)
-            shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
+            shaderProbe_ = simqvfr::mvs::mvr_probe_install(ini, focusPercent_ > 0);
         if (cornerPercent_)
             passProbe_ = false;
         if (focusPercent_ > 0)
@@ -171,7 +171,7 @@ public:
     }
     void d3d11_session(ID3D11Device* device) override {
         if (shaderProbe_)
-            lmu::mvr_probe_device(device);
+            simqvfr::mvs::mvr_probe_device(device);
         if (cornerPercent_)
             corner_install(device, cornerPercent_, shaderProbe_ ? focusPercent_ : 0);
         if (passProbe_)
@@ -193,7 +193,7 @@ public:
         if (passProbe_)
             pass_probe_frame_end();
         if (shaderProbe_)
-            lmu::mvr_probe_frame_end();
+            simqvfr::mvs::mvr_probe_frame_end();
     }
 
 private:

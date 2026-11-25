@@ -7,7 +7,7 @@
 #include <cstring>
 
 #include "../../engine/nvapi_stereo.h"
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "../../log.h"
 
 namespace scs {
@@ -313,9 +313,9 @@ void replay(UINT vertices, UINT start) {
         gameVs.Attach(vs);
         ID3D11VertexShader* twin = nullptr;
         UINT size = sizeof(twin), rowsSize = sizeof(positionRows);
-        if (vs && SUCCEEDED(vs->GetPrivateData(lmu::kFocusPositionTwinGuid, &size, &twin)) && twin) {
+        if (vs && SUCCEEDED(vs->GetPrivateData(simqvfr::mvs::kFocusPositionTwinGuid, &size, &twin)) && twin) {
             positionTwin.Attach(twin);
-            if (FAILED(vs->GetPrivateData(lmu::kFocusPositionRowsGuid, &rowsSize, positionRows)) || rowsSize != sizeof(positionRows))
+            if (FAILED(vs->GetPrivateData(simqvfr::mvs::kFocusPositionRowsGuid, &rowsSize, positionRows)) || rowsSize != sizeof(positionRows))
                 positionTwin.Reset();
         }
     }
@@ -456,7 +456,7 @@ void focus_draw() {
     const bool instancing = g.instanced && (g.preferInstanced || !g.mvr);
     ID3D11VertexShader* twin = nullptr;
     UINT size = sizeof(twin);
-    if (FAILED(vs->GetPrivateData(instancing ? lmu::kMvrInstancedTwinGuid : lmu::kMvrTwinGuid, &size, &twin)) || !twin) {
+    if (FAILED(vs->GetPrivateData(instancing ? simqvfr::mvs::kMvrInstancedTwinGuid : simqvfr::mvs::kMvrTwinGuid, &size, &twin)) || !twin) {
         vs->Release();
         ++g.noTwin;
         // A draw onto the headset's image (the UI panels: their shader made before ours were hooked) is drawn again
@@ -511,7 +511,7 @@ void own_pixel_loads() {
     {
         IUnknown* stored = nullptr;
         UINT size = sizeof(stored);
-        if (SUCCEEDED(ps->GetPrivateData(lmu::kOwnPixelLoadsTwinGuid, &size, &stored)) && stored) {
+        if (SUCCEEDED(ps->GetPrivateData(simqvfr::mvs::kOwnPixelLoadsTwinGuid, &size, &stored)) && stored) {
             stored->QueryInterface(IID_PPV_ARGS(twin.GetAddressOf()));
             stored->Release();
         }
@@ -555,7 +555,7 @@ bool on_draw_replace(ID3D11DeviceContext*, ch::Entry entry, const ch::DrawCall& 
     if (layout) {
         UINT size = sizeof(void*);
         IUnknown* stored = nullptr;  // SetPrivateDataInterface's: an IUnknown, asked for the layout (as LMU's doubled_draw)
-        if (SUCCEEDED(layout->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &stored)) && stored) {
+        if (SUCCEEDED(layout->GetPrivateData(simqvfr::mvs::kMvrInstancedLayoutGuid, &size, &stored)) && stored) {
             stored->QueryInterface(IID_PPV_ARGS(twin.GetAddressOf()));
             stored->Release();
         }

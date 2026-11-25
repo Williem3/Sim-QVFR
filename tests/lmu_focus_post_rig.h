@@ -56,7 +56,7 @@
 
     ComPtr<ID3D11VertexShader> plainVs = vs(device.Get(), kPlainVs), yebisVs = vs(device.Get(), kYebisVs),
                                twinned = vs(device.Get(), kPlainVs), twin = vs(device.Get(), kPlainVs);
-    twinned->SetPrivateDataInterface(lmu::kMvrTwinGuid, twin.Get());
+    twinned->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, twin.Get());
     ComPtr<ID3D11PixelShader> scenePs = ps(device.Get(), kScenePs), glarePs = ps(device.Get(), kGlarePs),
                               copyPs = ps(device.Get(), kCopyPs, lmu::YebisRole::copy),
                               compositePs = ps(device.Get(), kCompositePs, lmu::YebisRole::composite);

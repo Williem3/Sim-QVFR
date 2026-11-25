@@ -26,7 +26,7 @@
 #include <vector>
 
 #include "../../dev_build.h"
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "../../log.h"
 
 namespace scs {
@@ -97,13 +97,13 @@ struct Log {
 void rows_of(ID3D11DeviceChild* shader, uint64_t& id) {
     id = 0;
     UINT size = sizeof(id);
-    if (!shader || FAILED(shader->GetPrivateData(lmu::kShaderIdGuid, &size, &id)))
+    if (!shader || FAILED(shader->GetPrivateData(simqvfr::mvs::kShaderIdGuid, &size, &id)))
         return;
     if (a.rows.count(id))
         return;
     Rows r{};
     UINT rs = sizeof(r);
-    if (FAILED(shader->GetPrivateData(lmu::kCbRows4Guid, &rs, r.data())) || rs != sizeof(r))
+    if (FAILED(shader->GetPrivateData(simqvfr::mvs::kCbRows4Guid, &rs, r.data())) || rs != sizeof(r))
         r.fill(0);
     a.rows.emplace(id, r);
 }
@@ -230,7 +230,7 @@ void summary() {
 void anomaly_enable(bool on) {
     a.on = on;
     if (on) {
-        lmu::mvr_probe_cb_rows(true);  // every shader tagged with its id and the rows it reads (kCbRows4Guid)
+        simqvfr::mvs::mvr_probe_cb_rows(true);  // every shader tagged with its id and the rows it reads (kCbRows4Guid)
         simqvfr::logf("scs violet: anomaly log on (scs_violet_log=1): every rewritten pair against the draws that read it; "
                       "new kinds after %llu frames logged at once, the rarest every %llu frames; Ctrl+Alt+M when you see a "
                       "flash",

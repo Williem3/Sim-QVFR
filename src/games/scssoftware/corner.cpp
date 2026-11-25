@@ -11,7 +11,7 @@
 
 #include "../../dev_build.h"
 #include "../../engine/nvapi_stereo.h"
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "../../log.h"
 #include "../../probe/aftermath.h"
 #include "../../probe/hang_watch.h"
@@ -433,7 +433,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         bool haveRows = false;
         if (ID3D11VertexShader* s = nullptr; (g.context->VSGetShader(&s, nullptr, nullptr), s)) {
             UINT size = sizeof(rows);
-            haveRows = SUCCEEDED(s->GetPrivateData(lmu::kFocusPositionRowsGuid, &size, rows)) && size == sizeof(rows);
+            haveRows = SUCCEEDED(s->GetPrivateData(simqvfr::mvs::kFocusPositionRowsGuid, &size, rows)) && size == sizeof(rows);
             s->Release();
         }
         vs = rewrite(g.vs, false, false, haveRows ? rows : nullptr);
@@ -502,13 +502,13 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
         const unsigned n = ++g.frameReplay;
         const bool large = psCount > kLargeRange;
-        uint64_t psId = 0;  // the pass's pixel shader (lmu::kPixelIdGuid: the shader dump's file name)
+        uint64_t psId = 0;  // the pass's pixel shader (simqvfr::mvs::kPixelIdGuid: the shader dump's file name)
         {
             ID3D11PixelShader* ps = nullptr;
             g.context->PSGetShader(&ps, nullptr, nullptr);
             if (ps) {
                 UINT size = sizeof(psId);
-                if (FAILED(ps->GetPrivateData(lmu::kPixelIdGuid, &size, &psId)))
+                if (FAILED(ps->GetPrivateData(simqvfr::mvs::kPixelIdGuid, &size, &psId)))
                     psId = 0;
                 ps->Release();
             }
@@ -864,11 +864,11 @@ bool install_now(ID3D11Device* device, int percent, int focusPercent) {
         const bool remapCb = lookCb && SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
         // The two ways to the scene draws' second view: NVIDIA's (the probe attached its twins unless
         // multi_view_software=1), and instancing where a vertex shader may pick the viewport.
-        const lmu::MvrBackend probed = lmu::mvr_probe_backend();
+        const simqvfr::mvs::MvrBackend probed = simqvfr::mvs::mvr_probe_backend();
         D3D11_FEATURE_DATA_D3D11_OPTIONS3 o3{};
         g.instanced = remapCb && SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS3, &o3, sizeof(o3))) &&
                       o3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer;
-        g.mvr = remapCb && support.xyzw && probed != lmu::MvrBackend::instanced;
+        g.mvr = remapCb && support.xyzw && probed != simqvfr::mvs::MvrBackend::instanced;
         g.preferInstanced = g.instanced && !g.mvr;
         if (g.mvr || g.instanced) {
             wanted |= (1u << ch::kDrawIndexed) | (1u << ch::kDrawIndexedInstanced);

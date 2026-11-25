@@ -311,7 +311,7 @@ typedef struct SqvfrHost {
     void (*d3d11_hooks_bypass)(int32_t enter);
 
     /* The core's multi-view shader service (every vertex shader given its twins at creation, the private-data GUIDs
-     * the twins carry: games/lmu/mvr_probe.h). One per process. */
+     * the twins carry: engine/multi_view_shaders.h). One per process. */
     int32_t (*multi_view_shaders_install)(const wchar_t* ini, int32_t attachTwins, int32_t nameShaders);
     void (*multi_view_shaders_device)(void* device);
     void (*multi_view_shaders_option)(int32_t option, int32_t on); /* SQVFR_MVS_* */

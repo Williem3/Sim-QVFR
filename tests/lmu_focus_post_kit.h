@@ -18,7 +18,7 @@
 #include <wrl/client.h>
 
 #include "games/lmu/mvr_pass.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "games/lmu/yebis_shaders.h"
 #include "probe/d3d11_capture.h"
 #include "test_util.h"

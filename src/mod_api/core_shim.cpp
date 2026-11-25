@@ -15,7 +15,7 @@
 #include "../engine/context_hooks.h"
 #include "../engine/nvapi_stereo.h"
 #include "../games/identity_adapter.h"
-#include "../games/lmu/mvr_probe.h"
+#include "../engine/multi_view_shaders.h"
 #include "../log.h"
 #include "../probe/aftermath.h"
 #include "../probe/hang_watch.h"
@@ -235,9 +235,9 @@ void IdentityAdapter::instance_created(const wchar_t*, const wchar_t*) {}
 
 }  // namespace simqvfr
 
-// ---- games/lmu/mvr_probe.h: the core's multi-view shader service ----
+// ---- engine/multi_view_shaders.h: the core's multi-view shader service ----
 
-namespace lmu {
+namespace simqvfr::mvs {
 
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     return SQVFR_CALL(multi_view_shaders_install, 0, ini, attachTwins ? 1 : 0, nameShaders ? 1 : 0) != 0;
@@ -256,7 +256,7 @@ MvrBackend mvr_probe_backend() {
     }
 }
 
-}  // namespace lmu
+}  // namespace simqvfr::mvs
 
 // ---- engine/code_patch.h (the core's: one copy of each patch and hook in the process) ----
 

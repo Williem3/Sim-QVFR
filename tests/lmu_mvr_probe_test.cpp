@@ -1,4 +1,4 @@
-// Offline check of LMU's MVR probe (games/lmu/mvr_probe.h) on a WARP device: installed at instance creation it hooks
+// Offline check of LMU's MVR probe (engine/multi_view_shaders.h) on a WARP device: installed at instance creation it hooks
 // device creation, then the device's vertex shader creation; the game's shaders still come back as created, each is
 // converted (or refused, and why) and counted. NVAPI isn't asked on WARP (not an NVIDIA device).
 #include <cstdio>
@@ -15,7 +15,7 @@
 #include "engine/nvapi_gpus.h"
 #include "games/ace/game.h"
 #include "games/lmu/game.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "games/multi_view.h"
 #include "test_util.h"
 
@@ -62,7 +62,7 @@ int SIM_QVFR_TEST_MAIN() {
         }
     }
     check(shaderCode != nullptr, "d3d11.dll's code read before the probe");
-    check(lmu::mvr_probe_install(nullptr, true), "installed at instance creation (twins attached, as for multi-view)");
+    check(simqvfr::mvs::mvr_probe_install(nullptr, true), "installed at instance creation (twins attached, as for multi-view)");
     // Another tool's throwaway device first, on a thread of its own, released (an overlay finding Present: issue 29,
     // OpenKneeboard): the game's device, made after it, is still hooked.
     {
@@ -94,7 +94,7 @@ int SIM_QVFR_TEST_MAIN() {
                          SUCCEEDED(device->CreateVertexShader(full.data(), full.size(), nullptr, &b)) && b &&
                          SUCCEEDED(device->CreatePixelShader(pixel.data(), pixel.size(), nullptr, &ps)) && ps;
     check(created, "the game's shaders are created as before");
-    const lmu::MvrProbeStats s = lmu::mvr_probe_stats();
+    const simqvfr::mvs::MvrProbeStats s = simqvfr::mvs::mvr_probe_stats();
     char what[200];
     std::snprintf(what, sizeof(what), "counted: %llu vertex shaders, %llu converted, %llu refused for no free register",
                   static_cast<unsigned long long>(s.created), static_cast<unsigned long long>(s.converted),
@@ -120,9 +120,9 @@ int SIM_QVFR_TEST_MAIN() {
                       static_cast<unsigned long long>(s.instancedConverted),
                       static_cast<unsigned long long>(s.instancedCreated), static_cast<unsigned long long>(s.instancedFailed));
         check(s.instancedConverted == 2 && s.instancedCreated == 2 && s.instancedFailed == 0 && created &&
-                  twin(a.Get(), lmu::kMvrInstancedTwinGuid) && twin(b.Get(), lmu::kMvrInstancedTwinGuid) &&
-                  !twin(a.Get(), lmu::kMvrTwinGuid) && lmu::mvr_probe_usable() &&
-                  lmu::mvr_probe_backend() == lmu::MvrBackend::instanced && lmu::mvr_probe_instanced(),
+                  twin(a.Get(), simqvfr::mvs::kMvrInstancedTwinGuid) && twin(b.Get(), simqvfr::mvs::kMvrInstancedTwinGuid) &&
+                  !twin(a.Get(), simqvfr::mvs::kMvrTwinGuid) && simqvfr::mvs::mvr_probe_usable() &&
+                  simqvfr::mvs::mvr_probe_backend() == simqvfr::mvs::MvrBackend::instanced && simqvfr::mvs::mvr_probe_instanced(),
               what);
         // Input layouts: one with per-instance data gets a twin with its step rate doubled; a per-vertex one doesn't.
         const std::vector<uint8_t> perInstance =
@@ -137,26 +137,26 @@ int SIM_QVFR_TEST_MAIN() {
         const auto layoutTwin = [](ID3D11InputLayout* l) {
             IUnknown* u = nullptr;
             UINT size = sizeof(u);
-            const bool has = l && SUCCEEDED(l->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &u)) && u;
+            const bool has = l && SUCCEEDED(l->GetPrivateData(simqvfr::mvs::kMvrInstancedLayoutGuid, &size, &u)) && u;
             if (u)
                 u->Release();
             return has;
         };
-        const lmu::MvrProbeStats ls = lmu::mvr_probe_stats();
+        const simqvfr::mvs::MvrProbeStats ls = simqvfr::mvs::mvr_probe_stats();
         check(vertexOnly && instanceData && !layoutTwin(vertexOnly.Get()) && layoutTwin(instanceData.Get()) &&
-                  ls.layouts == 2 && ls.instancedLayouts == 1 && lmu::mvr_probe_instanced_layouts() == 1,
+                  ls.layouts == 2 && ls.instancedLayouts == 1 && simqvfr::mvs::mvr_probe_instanced_layouts() == 1,
               "instancing: the layout with per-instance data twinned (step rate doubled), the per-vertex one not");
     }
-    lmu::mvr_probe_frame_end();  // the summary (log only)
+    simqvfr::mvs::mvr_probe_frame_end();  // the summary (log only)
     // xrCreateSession: device creation unhooked, its code as it was; the device's shader creation still seen.
     check(exportCode && std::memcmp(exportBefore, exportCode, sizeof(exportBefore)) != 0,
           "device creation hooked before the session");
-    lmu::mvr_probe_device(device.Get());
+    simqvfr::mvs::mvr_probe_device(device.Get());
     check(exportCode && std::memcmp(exportBefore, exportCode, sizeof(exportBefore)) == 0,
           "device creation unhooked at the session: D3D11CreateDevice's code as it was");
     ComPtr<ID3D11VertexShader> c;
     check(SUCCEEDED(device->CreateVertexShader(plain.data(), plain.size(), nullptr, &c)) && c &&
-              lmu::mvr_probe_stats().created == 3,
+              simqvfr::mvs::mvr_probe_stats().created == 3,
           "the device's shader creation still seen after the session starts");
 
     // Which GPUs draw two full views per draw: Turing (RTX 20) and newer, not Tegra's ids.

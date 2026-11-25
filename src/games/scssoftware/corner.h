@@ -64,9 +64,9 @@ void corner_mirror_diag(bool on);
 // Dev builds' violet-flash anomaly log ([experiment] scs_violet_log=1, corner_anomaly.cpp): before the install.
 void corner_violet_log(bool on);
 // Scene draws whose shader reads a constant row as a colour: rewritten per draw without that row (the violet flash).
-// Before the install, with lmu::mvr_probe_tint_rows.
+// Before the install, with simqvfr::mvs::mvr_probe_tint_rows.
 void corner_tint_rows(bool on);
-// The scene draws' own-pixel-loads twins (lmu::mvr_probe_own_pixel_loads): bound for their focus draws. Before the install.
+// The scene draws' own-pixel-loads twins (simqvfr::mvs::mvr_probe_own_pixel_loads): bound for their focus draws. Before the install.
 void corner_own_pixel_loads(bool on);
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame

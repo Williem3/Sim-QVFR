@@ -141,7 +141,7 @@ int SIM_QVFR_TEST_MAIN() {
        // twin, two views); while the mask is stale, not drawn at all.
         lmu::mvr_frame_end(100030);
         ComPtr<ID3D11VertexShader> maskVs = marked(lmu::VsRole::lensMask), maskTwin = vs(device.Get(), kPlainVs);
-        maskVs->SetPrivateDataInterface(lmu::kMvrTwinGuid, maskTwin.Get());
+        maskVs->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, maskTwin.Get());
         lmu::mvr_twins_changed();
         std::atomic<bool> stale{false};
         lmu::mvr_mask_stale(&stale);

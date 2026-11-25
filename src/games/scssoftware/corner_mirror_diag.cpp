@@ -16,7 +16,7 @@
 #include <map>
 #include <vector>
 
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "../../log.h"
 
 namespace scs {
@@ -80,13 +80,13 @@ bool ones(const float* v) { return v[0] == 1 && v[1] == 1 && v[2] == 1 && v[3] =
 const Rows* rows_of(ID3D11DeviceChild* shader, uint64_t& id) {
     id = 0;
     UINT size = sizeof(id);
-    if (!shader || FAILED(shader->GetPrivateData(lmu::kShaderIdGuid, &size, &id)))
+    if (!shader || FAILED(shader->GetPrivateData(simqvfr::mvs::kShaderIdGuid, &size, &id)))
         return nullptr;
     auto it = d.rows.find(id);
     if (it == d.rows.end()) {
         Rows r{};
         UINT rs = sizeof(r);
-        if (FAILED(shader->GetPrivateData(lmu::kCbRows4Guid, &rs, r.data())) || rs != sizeof(r))
+        if (FAILED(shader->GetPrivateData(simqvfr::mvs::kCbRows4Guid, &rs, r.data())) || rs != sizeof(r))
             r.fill(0);
         it = d.rows.emplace(id, r).first;
     }
@@ -174,7 +174,7 @@ void log_stats() {
 
 void mirror_diag_enable(bool on) {
     d.on = on;
-    lmu::mvr_probe_cb_rows(on);
+    simqvfr::mvs::mvr_probe_cb_rows(on);
     if (on)
         simqvfr::logf("scs mirror diag: on (scs_mirror_diag=1): one frame in %llu sampled, the totals every %llu frames",
                       static_cast<unsigned long long>(kSampleEvery), static_cast<unsigned long long>(kLogEvery));

@@ -15,7 +15,7 @@
 
 #include "engine/dxbc_patch.h"
 #include "games/lmu/mvr_pass.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
@@ -118,7 +118,7 @@ int SIM_QVFR_TEST_MAIN() {
 
     ComPtr<ID3D11VertexShader> a = vertex_shader(device.Get(), "1"), twin = vertex_shader(device.Get(), "2"),
                                b = vertex_shader(device.Get(), "3");
-    a->SetPrivateDataInterface(lmu::kMvrTwinGuid, twin.Get());
+    a->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, twin.Get());
     D3D11_TEXTURE2D_DESC td = {256, 128, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
                                D3D11_BIND_RENDER_TARGET, 0, 0};
     ComPtr<ID3D11Texture2D> colour, depth;
@@ -402,13 +402,13 @@ int SIM_QVFR_TEST_MAIN() {
               "the next frame: every lookup answered by the cache");
         lmu::mvr_pass_end(0);
         ComPtr<ID3D11VertexShader> twinB = vertex_shader(device.Get(), "4");
-        b->SetPrivateDataInterface(lmu::kMvrTwinGuid, twinB.Get());
+        b->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, twinB.Get());
         lmu::mvr_twins_changed();
         lmu::mvr_pass_begin(0, &view, false);
         context->VSSetShader(b.Get(), nullptr, 0);
         check(bound_vs(context.Get()) == twinB.Get() && twoViewsOn == 1, "a twin attached and announced: b's twin bound");
         lmu::mvr_pass_end(0);
-        b->SetPrivateDataInterface(lmu::kMvrTwinGuid, nullptr);
+        b->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, nullptr);
         lmu::mvr_twins_changed();
     }
 
@@ -431,7 +431,7 @@ int SIM_QVFR_TEST_MAIN() {
             return ps;
         };
         ComPtr<ID3D11PixelShader> gamePs = pixel_shader("1"), psTwin = pixel_shader("2"), plainPs = pixel_shader("3");
-        gamePs->SetPrivateDataInterface(lmu::kMvrMipBiasTwinGuid, psTwin.Get());
+        gamePs->SetPrivateDataInterface(simqvfr::mvs::kMvrMipBiasTwinGuid, psTwin.Get());
         context->RSSetViewports(1, &eye);
         context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
         context->VSSetShader(a.Get(), nullptr, 0);
@@ -567,8 +567,8 @@ int SIM_QVFR_TEST_MAIN() {
         device->CreateVertexShader(iv.bytecode.data(), iv.bytecode.size(), nullptr, &instTwin);
         gameTwin = vertex_shader(device.Get(), "5");  // single-pass stereo's (a stand-in)
         check(game && instTwin && gameTwin, "instancing: a game shader with both twins");
-        game->SetPrivateDataInterface(lmu::kMvrTwinGuid, gameTwin.Get());
-        game->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, instTwin.Get());
+        game->SetPrivateDataInterface(simqvfr::mvs::kMvrTwinGuid, gameTwin.Get());
+        game->SetPrivateDataInterface(simqvfr::mvs::kMvrInstancedTwinGuid, instTwin.Get());
         lmu::mvr_twins_changed();
         const D3D11_QUERY_DESC qd = {D3D11_QUERY_PIPELINE_STATISTICS, 0};
         ComPtr<ID3D11Query> query;
@@ -663,7 +663,7 @@ O main(float4 p : POSITION, float4 c : COLOR0) {
             device->CreateVertexShader(sv.bytecode.data(), sv.bytecode.size(), nullptr, &stwin);
             device->CreatePixelShader(pc->GetBufferPointer(), pc->GetBufferSize(), nullptr, &sps);
             device->CreateInputLayout(el, 2, vc->GetBufferPointer(), vc->GetBufferSize(), &layout);  // the game's bytecode
-            svs->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, stwin.Get());
+            svs->SetPrivateDataInterface(simqvfr::mvs::kMvrInstancedTwinGuid, stwin.Get());
             lmu::mvr_twins_changed();
             // A grid of 8 x 6 quads over the eye, each its own colour, depth and w (a perspective), as a triangle list.
             std::vector<float> verts;

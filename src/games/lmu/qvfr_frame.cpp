@@ -33,7 +33,8 @@
 #include "game.h"
 #include "mvr_pass.h"
 #include "mvr_recovery.h"
-#include "mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
+namespace lmu { using namespace simqvfr::mvs; }
 #include "qvfr_frame_internal.h"
 
 namespace lmu {

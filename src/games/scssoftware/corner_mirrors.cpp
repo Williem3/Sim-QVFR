@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "../lmu/mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
 #include "../../log.h"
 
 namespace scs {
@@ -367,7 +367,7 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
     // field's weights: far terrain black for single frames).
     UINT declared = count;
     uint64_t rows[64];
-    bool haveRows = false;  // the shader's rows read by a fixed index (lmu::kCb0StaticRowsGuid): the focus matrix rule's limit
+    bool haveRows = false;  // the shader's rows read by a fixed index (simqvfr::mvs::kCb0StaticRowsGuid): the focus matrix rule's limit
     {
         ComPtr<ID3D11DeviceChild> shader;
         if (pixel) {
@@ -381,10 +381,10 @@ bool rewrite(Range& r, bool pixel, bool focus, const int* position) {
         }
         if (shader && pixel && focus) {
             UINT rowsSize = sizeof(rows);
-            haveRows = SUCCEEDED(shader->GetPrivateData(lmu::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
+            haveRows = SUCCEEDED(shader->GetPrivateData(simqvfr::mvs::kCb0StaticRowsGuid, &rowsSize, rows)) && rowsSize == sizeof(rows);
         }
         UINT vectors = 0, size = sizeof(vectors);
-        if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors))) {
+        if (shader && SUCCEEDED(shader->GetPrivateData(simqvfr::mvs::kCb0VectorsGuid, &size, &vectors))) {
             if (!vectors) {  // the shader reads no constants from slot 0: nothing of its to rewrite
                 r = Range{};
                 return false;
@@ -441,7 +441,7 @@ void tint_draw() {
         return;
     const auto tinted = [](ID3D11DeviceChild* s) {
         UINT size = 0;
-        return s && s->GetPrivateData(lmu::kCb0TintRowsGuid, &size, nullptr) != DXGI_ERROR_NOT_FOUND && size;
+        return s && s->GetPrivateData(simqvfr::mvs::kCb0TintRowsGuid, &size, nullptr) != DXGI_ERROR_NOT_FOUND && size;
     };
     bool any = false;
     for (int stage = 0; stage < 2; ++stage) {

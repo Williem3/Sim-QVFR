@@ -14,7 +14,7 @@
 
 #include "engine/dxbc_patch.h"
 #include "games/lmu/mvr_pass.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
@@ -73,8 +73,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         return 1;
     }
     const UINT place[2] = {3, 0};
-    vs->SetPrivateData(lmu::kVsWorldMatrixGuid, sizeof(place), place);
-    gamePs->SetPrivateDataInterface(lmu::kMvrSlotTwinGuid, slotPs.Get());
+    vs->SetPrivateData(simqvfr::mvs::kVsWorldMatrixGuid, sizeof(place), place);
+    gamePs->SetPrivateDataInterface(simqvfr::mvs::kMvrSlotTwinGuid, slotPs.Get());
 
     // The hooks: the ten as always, DrawIndexed, car tracking's five, PSSetShader, the blend and depth-stencil states.
     lmu::mvr_set_two_views(&fake_two_views);

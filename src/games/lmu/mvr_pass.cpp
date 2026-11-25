@@ -37,7 +37,8 @@
 #include "fixation.h"
 #include "focus_post.h"
 #include "glare_math.h"
-#include "mvr_probe.h"
+#include "../../engine/multi_view_shaders.h"
+namespace lmu { using namespace simqvfr::mvs; }
 #include "qvfr_frame.h"
 #include "tag_viewport.h"
 #include "view_pair.h"

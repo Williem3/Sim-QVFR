@@ -1,5 +1,5 @@
 // LMU's MVR probe (mvr_probe.h).
-#include "mvr_probe.h"
+#include "multi_view_shaders.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -17,18 +17,19 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../../engine/code_patch.h"
-#include "../../engine/dlss_settings.h"
-#include "../../engine/dxbc_patch.h"
-#include "../../engine/nvapi_stereo.h"
-#include "../../engine/object_vtable.h"
-#include "../../log.h"
-#include "../../quad/car_lighting.h"
+#include "code_patch.h"
+#include "dlss_settings.h"
+#include "dxbc_patch.h"
+#include "nvapi_stereo.h"
+#include "object_vtable.h"
+#include "../log.h"
+#include "../quad/car_lighting.h"
 #include "MinHook.h"
-#include "yebis_shaders.h"
+#include "../games/lmu/yebis_shaders.h"
 
-namespace lmu {
+namespace simqvfr::mvs {
 namespace {
+using namespace ::lmu;  // LMU's shader roles (games/lmu/yebis_shaders.h)
 
 namespace dxbc = simqvfr::dxbc;
 namespace nvapi = simqvfr::nvapi;
@@ -1142,4 +1143,4 @@ bool mvr_world_matrix_place(const void* code, size_t size, unsigned& slot, unsig
     return true;
 }
 
-}  // namespace lmu
+}  // namespace simqvfr::mvs

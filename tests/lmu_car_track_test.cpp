@@ -17,7 +17,7 @@
 #include <wrl/client.h>
 
 #include "games/lmu/mvr_pass.h"
-#include "games/lmu/mvr_probe.h"
+#include "engine/multi_view_shaders.h"
 #include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
@@ -66,7 +66,7 @@ int scan(const char* folder) {
         std::fclose(file);
         ++files;
         unsigned slot = 0, offset = 0;
-        if (lmu::mvr_world_matrix_place(code.data(), code.size(), slot, offset))
+        if (simqvfr::mvs::mvr_world_matrix_place(code.data(), code.size(), slot, offset))
             ++places[{slot, offset}];
         else
             ++none;
@@ -108,17 +108,17 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     if (!worldCode || !plainCode)
         return 1;
     unsigned slot = 99, offset = 99;
-    check(lmu::mvr_world_matrix_place(worldCode->GetBufferPointer(), worldCode->GetBufferSize(), slot, offset) &&
+    check(simqvfr::mvs::mvr_world_matrix_place(worldCode->GetBufferPointer(), worldCode->GetBufferSize(), slot, offset) &&
               slot == 3 && offset == 16,
           "worldMatrix found by the reflection: slot 3, offset 16");
     unsigned s2 = 0, o2 = 0;
-    check(!lmu::mvr_world_matrix_place(plainCode->GetBufferPointer(), plainCode->GetBufferSize(), s2, o2),
+    check(!simqvfr::mvs::mvr_world_matrix_place(plainCode->GetBufferPointer(), plainCode->GetBufferSize(), s2, o2),
           "a shader without one: none");
     ComPtr<ID3D11VertexShader> worldVs, plainVs;
     device->CreateVertexShader(worldCode->GetBufferPointer(), worldCode->GetBufferSize(), nullptr, &worldVs);
     device->CreateVertexShader(plainCode->GetBufferPointer(), plainCode->GetBufferSize(), nullptr, &plainVs);
     const UINT place[2] = {slot, offset};
-    if (!worldVs || !plainVs || FAILED(worldVs->SetPrivateData(lmu::kVsWorldMatrixGuid, sizeof(place), place))) {
+    if (!worldVs || !plainVs || FAILED(worldVs->SetPrivateData(simqvfr::mvs::kVsWorldMatrixGuid, sizeof(place), place))) {
         std::printf("FAIL shaders\n");
         return 1;
     }
@@ -316,7 +316,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(c.draws == before.draws && c.frames == 3, "outside a pass, without depth, a shader without a worldMatrix: not counted");
     // A shader reading it at another offset than the learned one: counted apart, left out.
     const UINT elsewhere[2] = {slot, offset + 64};
-    worldVs->SetPrivateData(lmu::kVsWorldMatrixGuid, sizeof(elsewhere), elsewhere);
+    worldVs->SetPrivateData(simqvfr::mvs::kVsWorldMatrixGuid, sizeof(elsewhere), elsewhere);
     lmu::mvr_twins_changed();  // the entry cache looks again
     context->VSSetShader(worldVs.Get(), nullptr, 0);
     draw(moved7, vbB.Get(), 0, 6);

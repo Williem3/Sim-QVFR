@@ -15,7 +15,7 @@
 #include "../engine/code_patch.h"
 #include "../engine/context_hooks.h"
 #include "../engine/nvapi_stereo.h"
-#include "../games/lmu/mvr_probe.h"
+#include "../engine/multi_view_shaders.h"
 #include "../log.h"
 #include "../module_path.h"
 #include "../probe/aftermath.h"
@@ -159,23 +159,23 @@ void host_d3d11_hooks_bypass(int32_t enter) {
 // ---- The multi-view shader service, NVAPI, Aftermath, the hang watch, the shared switches ----
 
 int32_t host_mvs_install(const wchar_t* ini, int32_t attachTwins, int32_t nameShaders) {
-    return b(lmu::mvr_probe_install(ini, attachTwins != 0, nameShaders != 0));
+    return b(simqvfr::mvs::mvr_probe_install(ini, attachTwins != 0, nameShaders != 0));
 }
-void host_mvs_device(void* device) { lmu::mvr_probe_device(static_cast<ID3D11Device*>(device)); }
+void host_mvs_device(void* device) { simqvfr::mvs::mvr_probe_device(static_cast<ID3D11Device*>(device)); }
 void host_mvs_option(int32_t option, int32_t on) {
     switch (option) {
-        case SQVFR_MVS_POSITION_TWINS: lmu::mvr_probe_position_twins(on != 0); break;
-        case SQVFR_MVS_OWN_PIXEL_LOADS: lmu::mvr_probe_own_pixel_loads(on != 0); break;
-        case SQVFR_MVS_TINT_ROWS: lmu::mvr_probe_tint_rows(on != 0); break;
-        case SQVFR_MVS_CB_ROWS: lmu::mvr_probe_cb_rows(on != 0); break;
+        case SQVFR_MVS_POSITION_TWINS: simqvfr::mvs::mvr_probe_position_twins(on != 0); break;
+        case SQVFR_MVS_OWN_PIXEL_LOADS: simqvfr::mvs::mvr_probe_own_pixel_loads(on != 0); break;
+        case SQVFR_MVS_TINT_ROWS: simqvfr::mvs::mvr_probe_tint_rows(on != 0); break;
+        case SQVFR_MVS_CB_ROWS: simqvfr::mvs::mvr_probe_cb_rows(on != 0); break;
         default: break;
     }
 }
-void host_mvs_frame_end() { lmu::mvr_probe_frame_end(); }
+void host_mvs_frame_end() { simqvfr::mvs::mvr_probe_frame_end(); }
 int32_t host_mvs_backend() {
-    switch (lmu::mvr_probe_backend()) {
-        case lmu::MvrBackend::nvapi: return SQVFR_MVS_BACKEND_NVAPI;
-        case lmu::MvrBackend::instanced: return SQVFR_MVS_BACKEND_INSTANCED;
+    switch (simqvfr::mvs::mvr_probe_backend()) {
+        case simqvfr::mvs::MvrBackend::nvapi: return SQVFR_MVS_BACKEND_NVAPI;
+        case simqvfr::mvs::MvrBackend::instanced: return SQVFR_MVS_BACKEND_INSTANCED;
         default: return SQVFR_MVS_BACKEND_NONE;
     }
 }
