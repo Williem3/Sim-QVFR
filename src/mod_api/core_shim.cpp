@@ -242,6 +242,13 @@ uint64_t car_lighting_current_bits() { return SQVFR_CALL(car_lighting_bits, car_
 
 namespace games {
 void IdentityAdapter::instance_created(const wchar_t*, const wchar_t*) {}
+// games/game.h: the game's known builds (the mod's own GameInfo; the core's list isn't in the mod).
+bool supported_build(const GameInfo& game, const std::string& sha256) {
+    for (std::size_t i = 0; i < game.buildCount; ++i)
+        if (sha256 == game.builds[i])
+            return true;
+    return false;
+}
 }  // namespace games
 
 }  // namespace simqvfr

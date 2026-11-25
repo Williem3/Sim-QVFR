@@ -166,6 +166,9 @@ public:
         }
     }
     bool qvfr_car_light_costs(double& gpu, double& cpu) override { return a_.qvfr_car_light_costs(gpu, cpu); }
+    bool qvfr_upscaler(const wchar_t*& badge, unsigned long long& evaluations) override {
+        return a_.qvfr_upscaler(badge, evaluations);
+    }
 
     void early_start(const wchar_t* ini) override { a_.early_start(ini); }
     void instance_created(const wchar_t* ini, const wchar_t* mode) override { a_.instance_created(ini, mode); }

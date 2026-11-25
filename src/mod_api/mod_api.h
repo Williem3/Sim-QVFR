@@ -466,6 +466,10 @@ typedef struct SqvfrMod {
     /* A D3D12 game whose mod renders the focus views itself (the core composes them): its table, for the process.
      * Null: none (the core's own QVFR paths). */
     const SqvfrFocusImages* (*focus_images)(void* self);
+    /* ---- Appended for game mods with an upscaler of the core's engine (LMU's DLSS / FSR) ---- */
+    /* games/adapter.h qvfr_upscaler: the overlay's name for it (lives for the process) and the views it has evaluated
+     * this session. 0: none. */
+    int32_t (*qvfr_upscaler)(void* self, const wchar_t** badge, uint64_t* evaluations);
 } SqvfrMod;
 
 /* The mod's one export (SQVFR_MOD_ENTRY_NAME). `host` lives for the process. Null: the mod refuses this core (it logs

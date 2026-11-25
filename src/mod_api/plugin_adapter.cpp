@@ -304,6 +304,19 @@ bool PluginAdapter::qvfr_car_light_costs(double& gpuMs, double& cpuMs) const {
     return fn(mod_->self, &gpuMs, &cpuMs) != 0;
 }
 
+bool PluginAdapter::qvfr_upscaler(const wchar_t*& badge, unsigned long long& evaluations) const {
+    auto fn = entry(&SqvfrMod::qvfr_upscaler);
+    if (!fn)
+        return GameAdapter::qvfr_upscaler(badge, evaluations);
+    const wchar_t* b = nullptr;
+    uint64_t n = 0;
+    if (fn(mod_->self, &b, &n) == 0 || !b)
+        return false;
+    badge = b;
+    evaluations = n;
+    return true;
+}
+
 void PluginAdapter::early_start(const wchar_t* ini) {
     if (auto fn = entry(&SqvfrMod::early_start))
         fn(mod_->self, ini);

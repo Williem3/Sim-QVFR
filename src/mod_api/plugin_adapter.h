@@ -65,6 +65,7 @@ public:
     void qvfr_frame_end() override;
     games::QvfrMultiView qvfr_multi_view() const override;
     bool qvfr_car_light_costs(double& gpuMs, double& cpuMs) const override;
+    bool qvfr_upscaler(const wchar_t*& badge, unsigned long long& evaluations) const override;
 
     void early_start(const wchar_t* ini) override;
     void instance_created(const wchar_t* ini, const wchar_t* mode) override;

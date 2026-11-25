@@ -160,6 +160,15 @@ set(SIM_QVFR_ACE_SOURCES
   src/games/ace/focus_images.cpp
   src/games/ace/mod_entry.cpp src/probe/focus_ngx.cpp)
 
+# Le Mans Ultimate: built into the core, or with SIM_QVFR_LMU_AS_MOD as its own game mod, mods/lmu/sim-qvfr-lmu.dll.
+# The multi-view shader service (engine/multi_view_shaders.h) stays the core's; NVIDIA's and AMD's DLLs stay in layer\ (core_dir).
+option(SIM_QVFR_LMU_AS_MOD "Build Le Mans Ultimate as its own mod DLL (mods/lmu/sim-qvfr-lmu.dll)" OFF)
+set(SIM_QVFR_LMU_SOURCES
+  src/games/lmu/adapter.cpp src/games/lmu/mod_entry.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp
+  src/games/lmu/native_menus.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp
+  src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp
+  src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp)
+
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
 # A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
@@ -167,7 +176,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/aftermath.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/cpp_exceptions.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_placement.cpp src/probe/cpu_isolation.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/lmu/adapter.cpp src/games/lmu/qvfr_frame.cpp src/games/lmu/pass_costs.cpp src/games/lmu/native_menus.cpp src/engine/multi_view_shaders.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/fixation.cpp src/games/lmu/car_motion.cpp src/games/lmu/car_light.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/mod_api/mod_loader.cpp src/mod_api/mod_trust.cpp src/engine/code_patch.cpp src/engine/code_shapes.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/engine/multi_view_shaders.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/mod_api/plugin_adapter.cpp src/mod_api/host_services.cpp src/mod_api/mod_loader.cpp src/mod_api/mod_trust.cpp src/engine/code_patch.cpp src/engine/code_shapes.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/d3d11_fixation.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/showcase.cpp src/quad/shared_state.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -190,6 +199,11 @@ if(SIM_QVFR_ACE_AS_MOD)
   target_compile_definitions(sim_qvfr_core PRIVATE SIM_QVFR_ACE_AS_MOD)
 else()
   target_sources(sim_qvfr_core PRIVATE ${SIM_QVFR_ACE_SOURCES})
+endif()
+if(SIM_QVFR_LMU_AS_MOD)
+  target_compile_definitions(sim_qvfr_core PRIVATE SIM_QVFR_LMU_AS_MOD)
+else()
+  target_sources(sim_qvfr_core PRIVATE ${SIM_QVFR_LMU_SOURCES})
 endif()
 if(SIM_QVFR_AFTERMATH)
   set_property(SOURCE src/probe/aftermath.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${AFTERMATH_SDK_DIR}/include")
@@ -319,6 +333,43 @@ if(SIM_QVFR_ACE_AS_MOD)
     target_compile_definitions(sim_qvfr_ace_inproc PRIVATE SIM_QVFR_NGX)
   endif()
   target_link_libraries(sim_qvfr_ace_inproc PUBLIC sim_qvfr_core d3d12)
+endif()
+
+if(SIM_QVFR_LMU_AS_MOD)
+  # LMU as a game mod: its sources and the engine pieces only it uses (its DLSS / DLSS-NR / FSR views, the D3D12 bridge
+  # FSR runs on, the DXBC twins it makes), the core's services through the host table (mod_api/core_shim.cpp: logs, code
+  # patches, the one MinHook, the D3D11 context hooks, the multi-view shader service, frame parts, the capture hotkey).
+  add_library(sim_qvfr_lmu SHARED ${SIM_QVFR_LMU_SOURCES} src/games/lmu/mod_export.cpp src/mod_api/core_shim.cpp
+    src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp
+    src/engine/d3d12_bridge.cpp src/engine/fsr_upscale.cpp src/engine/dxbc_patch.cpp src/engine/object_vtable.cpp
+    src/engine/d3d11_vtables.cpp src/engine/nvapi_gpus.cpp src/engine/code_shapes.cpp src/probe/d3d11_capture.cpp
+    src/quad/d3d11_view_resample.cpp src/quad/d3d11_fixation.cpp src/quad/d3d11_depth_probe.cpp src/games/multi_view.cpp)
+  target_include_directories(sim_qvfr_lmu PRIVATE src ${THIRD_PARTY}/openxr/include ${THIRD_PARTY}/minhook/include)
+  target_compile_definitions(sim_qvfr_lmu PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX SIM_QVFR_MOD_BUILD)
+  target_compile_options(sim_qvfr_lmu PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
+  if(SIM_QVFR_NGX)
+    target_include_directories(sim_qvfr_lmu PRIVATE "${NGX_SDK_DIR}/include")
+    target_compile_definitions(sim_qvfr_lmu PRIVATE SIM_QVFR_NGX)
+    target_link_libraries(sim_qvfr_lmu PRIVATE debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
+  endif()
+  target_link_libraries(sim_qvfr_lmu PRIVATE d3d12 d3d11 dxgi d3dcompiler windowscodecs ole32 dxguid bcrypt)
+  set_target_properties(sim_qvfr_lmu PROPERTIES OUTPUT_NAME sim-qvfr-lmu
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/mods/lmu)
+  sim_qvfr_version_info(sim_qvfr_lmu sim-qvfr-lmu.dll VFT_DLL "Sim-QVFR game mod: Le Mans Ultimate")
+  add_custom_command(TARGET sim_qvfr_lmu POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/src/games/lmu/mod.json
+            $<TARGET_FILE_DIR:sim_qvfr_lmu>/mod.json)
+  add_dependencies(sim_qvfr sim_qvfr_lmu)
+  # The same sources linked straight into the test program, for the tests of LMU's code itself.
+  add_library(sim_qvfr_lmu_inproc STATIC ${SIM_QVFR_LMU_SOURCES})
+  target_include_directories(sim_qvfr_lmu_inproc PRIVATE src ${THIRD_PARTY}/openxr/include ${THIRD_PARTY}/minhook/include)
+  target_compile_definitions(sim_qvfr_lmu_inproc PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(sim_qvfr_lmu_inproc PRIVATE /W4 /permissive- /utf-8)
+  if(SIM_QVFR_NGX)
+    target_include_directories(sim_qvfr_lmu_inproc PRIVATE "${NGX_SDK_DIR}/include")
+    target_compile_definitions(sim_qvfr_lmu_inproc PRIVATE SIM_QVFR_NGX)
+  endif()
+  target_link_libraries(sim_qvfr_lmu_inproc PUBLIC sim_qvfr_core d3d11)
 endif()
 
 # Offline check of the layer chain (tests/layer_chain_test.cpp): it negotiates the built sim-qvfr.dll.
@@ -1038,6 +1089,9 @@ if(SIM_QVFR_SCS_AS_MOD)
 endif()
 if(SIM_QVFR_ACE_AS_MOD)
   target_link_libraries(sim_qvfr_tests PRIVATE sim_qvfr_ace_inproc)
+endif()
+if(SIM_QVFR_LMU_AS_MOD)
+  target_link_libraries(sim_qvfr_tests PRIVATE sim_qvfr_lmu_inproc)
 endif()
 # What the tests load or start from beside the program: the layer, the launcher (the dump helper), the fake runtime.
 add_dependencies(sim_qvfr_tests sim_qvfr sim_qvfr_launcher cheeky_fake_runtime)

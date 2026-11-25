@@ -357,6 +357,11 @@ public:
             qvfr_frame_mask_taken(viewIndex);
     }
     bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && qvfr_frame_record(frame); }
+    bool qvfr_upscaler(const wchar_t*& badge, unsigned long long& evaluations) const override {
+        badge = simqvfr::dlss_upscaler_badge();
+        evaluations = simqvfr::dlss_evaluations_total();
+        return true;
+    }
     bool qvfr_car_light_costs(double& gpuMs, double& cpuMs) const override {
         return mvr_car_light_costs(gpuMs, cpuMs);
     }

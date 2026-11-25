@@ -19,7 +19,9 @@
 #include "ace/game.h"
 #include "acc/adapter.h"
 #include "acc/game.h"
+#ifndef SIM_QVFR_LMU_AS_MOD
 #include "lmu/adapter.h"
+#endif
 #ifndef SIM_QVFR_SCS_AS_MOD
 #include "scssoftware/adapter.h"
 #endif
@@ -140,8 +142,17 @@ GameAdapter& adapter_for(const GameInfo* game) {
 #endif
         return xp;
     }
-    if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
-        return ::lmu::adapter();
+    // LMU: QVFR at the D3D11 level by NVIDIA's multi-view rendering or instancing, through the game-mod ABI
+    // (lmu/mod_entry.cpp): built in, or with SIM_QVFR_LMU_AS_MOD its own DLL, mods\lmu\sim-qvfr-lmu.dll.
+    if (game == &::lmu::kGame) {
+#ifdef SIM_QVFR_LMU_AS_MOD
+        static GameAdapter& lmu = through_mod_dll(game, L"lmu", L"sim-qvfr-lmu.dll", mod_api::first_party_mod(L"lmu"),
+                                                  protectedLaunch);
+#else
+        static GameAdapter& lmu = through_mod(game, &::lmu::mod_entry);
+#endif
+        return lmu;
+    }
     // SCS Software's: QVFR at the D3D11 level, through the game-mod ABI (mod_api.h), one mod for both games
     // (scssoftware/mod_entry.cpp): built in, or with SIM_QVFR_SCS_AS_MOD its own DLL, mods\scs\sim-qvfr-scs.dll.
 #ifdef SIM_QVFR_SCS_AS_MOD

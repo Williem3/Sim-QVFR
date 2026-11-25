@@ -9,7 +9,6 @@
 #include <intrin.h>
 #include <wrl/client.h>
 
-#include <MinHook.h>
 #include <d3dcompiler.h>
 
 #include <algorithm>

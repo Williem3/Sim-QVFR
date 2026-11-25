@@ -174,7 +174,8 @@ bool hook_entry(int h) {
     }
     const int n = f.count;
     f.target[n] = fn;
-    if (MH_CreateHook(fn, detour_for(h, n), &f.real[n]) == MH_OK && MH_EnableHook(fn) == MH_OK) {
+    if (simqvfr::hook_create(fn, detour_for(h, n), &f.real[n]) == simqvfr::kHookOk &&
+        simqvfr::hook_enable(fn) == simqvfr::kHookOk) {
         ++f.hooked;
         ++g.stats.contextFunctions;
         if (h == kHookResolve)
@@ -221,7 +222,7 @@ void unhook_entries() {
     for (Functions& f : functions) {
         for (int i = 0; i < f.count; ++i)
             if (f.real[i] != f.target[i])
-                MH_RemoveHook(f.target[i]);
+                simqvfr::hook_remove(f.target[i]);
         f = Functions{};
     }
 }

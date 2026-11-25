@@ -485,12 +485,16 @@ OsdInput osd_input(int64_t now) {
     } else {
         in.multiView = OsdMultiView::Stock;  // the showcase (quad/showcase.h)
     }
-    {  // DLSS: views evaluated since the card's last drawing
+    {  // DLSS: views evaluated since the card's last drawing (the game's upscaler: its adapter, or its mod)
         static unsigned long long seen = 0;
-        const unsigned long long total = dlss_evaluations_total();
+        const wchar_t* badge = nullptr;
+        unsigned long long total = 0;
+        if (!game->qvfr_upscaler(badge, total))
+            badge = nullptr, total = 0;
         in.dlss = total != seen;
         seen = total;
-        in.upscaler = dlss_upscaler_badge();  // DLSS, or AMD FSR's version where it runs instead
+        if (badge)
+            in.upscaler = badge;  // DLSS, or AMD FSR's version where it runs instead
     }
     return in;
 }

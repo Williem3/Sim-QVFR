@@ -92,6 +92,9 @@ public:
     virtual void qvfr_frame_end() {}
     virtual int32_t qvfr_multi_view() { return SQVFR_MULTI_VIEW_NONE; }
     virtual bool qvfr_car_light_costs(double&, double&) { return false; }
+    // The game's upscaler for the overlay (games/adapter.h qvfr_upscaler): its badge (lives for the process) and the
+    // views it has evaluated this session.
+    virtual bool qvfr_upscaler(const wchar_t*&, unsigned long long&) { return false; }
 
     // The game's own experiments and watches.
     virtual void early_start(const wchar_t*) {}
@@ -269,6 +272,16 @@ inline SqvfrMod mod_table(Mod& mod, const char* gameId) {
         return as_mod(s).adjust_frame_end(frameEnd, enumerate);
     };
     t.focus_images = [](void* s) { return as_mod(s).focus_images(); };
+    t.qvfr_upscaler = [](void* s, const wchar_t** badge, uint64_t* evaluations) {
+        const wchar_t* b = nullptr;
+        unsigned long long n = 0;
+        const bool ok = as_mod(s).qvfr_upscaler(b, n);
+        if (badge)
+            *badge = ok ? b : nullptr;
+        if (evaluations)
+            *evaluations = ok ? n : 0;
+        return ok ? int32_t{1} : int32_t{0};
+    };
     return t;
 }
 

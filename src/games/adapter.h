@@ -213,6 +213,14 @@ public:
         (void)cpuMs;
         return false;
     }
+    // The game's own upscaler as the overlay shows it (engine/dlss_views.h: "DLSS", or AMD FSR's version), and how many
+    // views it has evaluated this session (the card's DLSS mark when it changed). False: the game has none of ours.
+    // `badge` lives for the process. Any thread.
+    virtual bool qvfr_upscaler(const wchar_t*& badge, unsigned long long& evaluations) const {
+        (void)badge;
+        (void)evaluations;
+        return false;
+    }
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
     // The layer was loaded at the game's first vkCreateInstance (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain,
