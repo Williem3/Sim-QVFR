@@ -183,6 +183,7 @@ void mvr_keep_focus(bool on);
 bool mvr_focus_ready(int eye);
 // Every frame: a sampled frame's comparison; the counts, the hooks' CPU and each pass's GPU time every 900 frames.
 void mvr_frame_end(unsigned long long frame);
+bool mvr_gpu_frame_ms(double& ms);
 // Before pass 0 (an A/B run): 0 for a frame with MVR, 1 for one with the four passes alone; GPU times kept apart.
 void mvr_frame_mode(int mode);
 

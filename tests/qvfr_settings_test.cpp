@@ -10,6 +10,7 @@
 #include "launcher/settings.h"
 #include "layer/config.h"
 #include "quad/qvfr_settings.h"
+#include "quad/regulator_settings.h"
 #include "quad/settings_menu.h"
 #include "test_util.h"
 
@@ -98,6 +99,16 @@ int SIM_QVFR_TEST_MAIN() {
     launcher::save_settings(ini, launcher::load_settings(ini));
     GetPrivateProfileStringW(L"experiment", L"mode", L"", saved, 32, ini.c_str());
     check(parse_render_mode(saved) == IniRenderMode::Qvfr, "mode=quad (removed) too");
+    write_ini(ini, "[regulator]\r\nfocus=1\r\nperiphery=1\r\nrequire_gpu_busy=0\r\n");
+    GpuRegulatorSettings regulator = read_regulator(ini.c_str());
+    check(regulator.focus && regulator.periphery && !regulator.requireGpuBusy,
+          "regulator: require_gpu_busy=0 disables the GPU-load gate");
+    regulator.requireGpuBusy = true;
+    check(write_regulator(ini.c_str(), regulator) && read_regulator(ini.c_str()).requireGpuBusy,
+          "regulator: require_gpu_busy writes and reads back on");
+    write_ini(ini, "[regulator]\r\nfocus=1\r\n");
+    check(read_regulator(ini.c_str()).requireGpuBusy,
+          "regulator: missing require_gpu_busy defaults on");
     DeleteFileW(ini.c_str());
     return test_result();
 }

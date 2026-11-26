@@ -8,7 +8,7 @@
 
 #include "games/rf2/draw_backend.h"
 #include "games/rf2/pass_state.h"
-#include "games/rf2/regulator.h"
+#include "quad/gpu_regulator.h"
 #include "games/rf2/render_backend.h"
 #include "quad/two_view_atlas.h"
 #include "test_util.h"

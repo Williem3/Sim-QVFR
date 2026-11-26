@@ -399,6 +399,8 @@ Card regulator_card() {
                  r.focus ? tr(L"Lowered and raised 1% at a time, never above the set density.") : tr(L"Off"));
         b.toggle(kRegPeriphery, tr(L"Regulate periphery resolution"), r.periphery,
                  r.periphery ? tr(L"Lowered and raised 1% at a time, never above the set resolution.") : tr(L"Off"));
+        b.toggle(kRegRequireGpuBusy, tr(L"Require high GPU load"), r.requireGpuBusy,
+                 r.requireGpuBusy ? tr(L"Lower only while GPU load is at least 90%.") : tr(L"Use GPU frame time alone."));
         b.sliders({kRegDecrease, tr(L"Lower above"), r.decreaseAbove, L" ms", L"", true},
                   {kRegIncrease, tr(L"Raise below"), r.increaseBelow, L" ms", L"", true});
         b.sliders({kRegLowerFrames, tr(L"Frames before lowering"), r.lowerFrames, L" frames"},

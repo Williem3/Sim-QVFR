@@ -27,6 +27,7 @@ inline constexpr int kRegulatorRaiseFramesDefault = 50;  // about 0.6 s at 90 Hz
 struct GpuRegulatorSettings {
     bool focus = false;      // [regulator] focus: Focus density is regulated
     bool periphery = false;  // [regulator] periphery: Periphery resolution is regulated
+    bool requireGpuBusy = true;  // [regulator] require_gpu_busy: require >=90% GPU load before lowering
     int decreaseAbove = kRegulatorDecreaseDefault;  // [regulator] decrease_above: tenths of a ms of GPU time per frame
     int increaseBelow = kRegulatorIncreaseDefault;  // [regulator] increase_below: tenths of a ms
     int lowerFrames = kRegulatorLowerFramesDefault;  // [regulator] lower_frames: frames over decrease_above before a 1% step down
@@ -59,6 +60,7 @@ inline GpuRegulatorSettings read_regulator(const wchar_t* ini) {
     GpuRegulatorSettings s;
     s.focus = number(L"focus", 0) != 0;
     s.periphery = number(L"periphery", 0) != 0;
+    s.requireGpuBusy = number(L"require_gpu_busy", 1) != 0;
     s.decreaseAbove = number(L"decrease_above", kRegulatorDecreaseDefault);
     s.increaseBelow = number(L"increase_below", kRegulatorIncreaseDefault);
     s.lowerFrames = number(L"lower_frames", kRegulatorLowerFramesDefault);
@@ -70,6 +72,7 @@ inline bool write_regulator(const wchar_t* ini, const GpuRegulatorSettings& in) 
     const GpuRegulatorSettings s = clamp_regulator(in);
     bool ok = ini_put(ini, L"regulator", L"focus", s.focus ? 1 : 0);
     ok &= ini_put(ini, L"regulator", L"periphery", s.periphery ? 1 : 0);
+    ok &= ini_put(ini, L"regulator", L"require_gpu_busy", s.requireGpuBusy ? 1 : 0);
     ok &= ini_put(ini, L"regulator", L"decrease_above", s.decreaseAbove);
     ok &= ini_put(ini, L"regulator", L"increase_below", s.increaseBelow);
     ok &= ini_put(ini, L"regulator", L"lower_frames", s.lowerFrames);

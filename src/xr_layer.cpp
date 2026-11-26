@@ -405,6 +405,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         start.focusCullScale = 1.0 + experiment.feather + experiment.views4FocusCullMargin;
         start.focusCullGaze = experiment.gaze && experiment.composing();  // gaze turns only when composing
         start.ini = live.ini.c_str();
+        if (game_features().gpuRegulator) { const Views4Sizes sizes = views4_sizes(live.ini.c_str(), experiment.focusFraction.load(), experiment.focusFractionY.load()); game->qvfr_set_regulator(read_regulator(live.ini.c_str()), sizes.density); }
         if (!game->qvfr_start(start)) {
             experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
             notice_set(lang::tr(L"Sim-QVFR is off"),

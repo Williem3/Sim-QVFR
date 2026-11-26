@@ -161,6 +161,7 @@ void live_apply(const LiveSettings& l) {
         // The look, and the offset of the mode the menu edits (focus_offset.h: eye tracked or fixed).
         game->qvfr_set_focus_look(l.feather, l.cornerRadius, l.border, l.borderColor, l.offset.for_mode(l.gaze));
     }
+    if (experiment.views4 && game_features().gpuRegulator) { const Views4Sizes sizes = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY); game->qvfr_set_regulator(read_regulator(live.ini.c_str()), sizes.density); }
     if (experiment.views4 && !experiment.views4EyeCamera) {  // the focus mask: the shape as the compositor has it
         game->qvfr_set_focus_mask(l.focusMask, focus_area_from(focus_shape_words(l.shape), l.cornerRadius),
                                   l.focusMaskMargin);
