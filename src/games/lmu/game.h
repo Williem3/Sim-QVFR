@@ -27,7 +27,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // eye's pass with no focus view, its scene cut to a few pixels, no DLSS), and the focus mask (mvr_pass_focus_mask.h).
     // Live resolution on (the adapter's qvfr_live_resolution: every QVFR run), so the launcher's Resolution and Foveation
     // cards say what the launch size allows, as for the other games. Road focus (mvr_pass_corridor.h).
-    {false, true, true, true, false, false, true, true, true, true, false, true, true, true, true, false, true},  // ..., road focus, the showcase
+    {false, true, true, true, false, false, true, true, true, true, false, true, true, true, true, false, true, true},  // ..., road focus, the showcase
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet

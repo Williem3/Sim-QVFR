@@ -156,6 +156,7 @@ struct State {
     GpuFrame gpu[kGpuFrames];
     int gpuSlot = -1;            // this frame's, while it runs
     unsigned long long gpuFrameNo = 0;
+    std::atomic<double> gpuFrameMs{0};
     int mode = 0;                // this frame's (mvr_frame_mode)
     double sceneMs[2][4] = {}, postMs[2][4] = {};
     unsigned gpuCounts[2][4] = {};

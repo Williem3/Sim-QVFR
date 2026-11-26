@@ -499,7 +499,7 @@ private:
     // the next frame's first scene pass like any other change.
     void on_gpu_sample(double ms) {
         const GpuLoad load = simqvfr::gpu_load_latest();
-        const bool gpuBound = !load.valid || load.busy >= kRegulatorBusyPercent;
+        const bool gpuBound = !reg_.settings().requireGpuBusy || !load.valid || load.busy >= kRegulatorBusyPercent;
         std::lock_guard<std::mutex> lock(atlasMutex_);
         if (reg_.feed(ms, gpuBound)) {
             atlasDirty_ = true;

@@ -138,6 +138,8 @@ constexpr Help kHelp[] = {
     {I18N(L"Regulate periphery resolution"),
      I18N(L"Takes Periphery resolution down 1% at a time while the GPU time per frame stays over Lower above, and back up while it "
      L"stays under Raise below. The resolution you set is the most it uses; it is never written over. It stops at 20%.")},
+    {I18N(L"Require high GPU load"),
+     I18N(L"Requires at least 90% GPU load before lowering resolution. Turn it off to react to GPU frame time alone.")},
     {I18N(L"Lower above"),
      I18N(L"The GPU time per frame, in ms, over which the regulator lowers what it regulates. It is the time the layer measures on "
      L"the GPU for the eye passes (the log’s scene span), not the overlay’s GPU number. At 90 Hz a frame has 11.1 ms; frames "

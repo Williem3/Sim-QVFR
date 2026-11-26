@@ -3,8 +3,11 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <mutex>
 
 #include "../../log.h"
+#include "../../probe/gpu_load.h"
+#include "../../quad/gpu_regulator.h"
 #include "../../quad/car_lighting.h"
 #include "../identity_adapter.h"
 #include "../diag_switches.h"
@@ -260,7 +263,8 @@ public:
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
         if (qvfr_)
-            set_scales(simqvfr::views4_live_one_size(s.layout, s.layout.outer, s.layout.focus, s.layout.focusHeight));
+            qvfr_set_live_layout(simqvfr::views4_live_one_size(s.layout, s.layout.outer, s.layout.focus,
+                                                             s.layout.focusHeight));
         return qvfr_;
     }
     // How far the eyes look (fixation.h): the layer converges both eyes' focus boxes there.
@@ -294,8 +298,28 @@ public:
     // `live`: views4_live_one_size's layout (each view's share of its layer, halved). LMU scales both axes together, so
     // each view takes the larger share: at least the density asked on both axes.
     void qvfr_set_live_layout(const simqvfr::Views4Layout& live) override {
-        if (qvfr_)
-            set_scales(live);
+        std::lock_guard lock(regulatorMutex_);
+        baseLive_ = live;
+        baseSet_ = true;
+        apply_regulator_locked();
+    }
+    void qvfr_set_regulator(const simqvfr::GpuRegulatorSettings& s, double density) override {
+        std::lock_guard lock(regulatorMutex_);
+        reg_.set_settings(s);
+        baseDensity_ = density * 100.0;
+        apply_regulator_locked();
+    }
+    simqvfr::games::QvfrRegulatorStatus qvfr_regulator_status() const override {
+        std::lock_guard lock(regulatorMutex_);
+        simqvfr::games::QvfrRegulatorStatus r;
+        r.active = baseSet_ && reg_.active();
+        r.focus = reg_.settings().focus;
+        r.periphery = reg_.settings().periphery;
+        r.cutPeriphery = reg_.periphery_cut();
+        r.cutDensity = reg_.density_cut();
+        r.peripheryPercent = baseOuter_ - r.cutPeriphery;
+        r.densityPercent = baseDensity_ - r.cutDensity;
+        return r;
     }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
         qvfr_frame_view_size(render);
@@ -386,6 +410,15 @@ public:
                           diag_.off(0) ? "OFF" : "on", diag_.off(1) ? "OFF (the depth as the pass ends it)" : "on");
         }
         qvfr_frame_frame_end();
+        double gpuMs = 0;
+        if (mvr_gpu_frame_ms(gpuMs)) {
+            const simqvfr::GpuLoad load = simqvfr::gpu_load_latest();
+            std::lock_guard lock(regulatorMutex_);
+            const bool gpuBound = !reg_.settings().requireGpuBusy || !load.valid ||
+                                  load.busy >= simqvfr::kRegulatorBusyPercent;
+            if (reg_.feed(gpuMs, gpuBound))
+                apply_regulator_locked();
+        }
     }
 
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
@@ -412,12 +445,32 @@ public:
     }
 
 private:
+    void apply_regulator_locked() {
+        if (!qvfr_ || !baseSet_)
+            return;
+        simqvfr::Views4Layout live = baseLive_;
+        const double outerW = live.cropWidth > 0 ? 2 * live.width[0] * live.layer_width() / live.cropWidth : 0;
+        const double outerH = live.cropHeight > 0 ? 2 * live.height[0] * live.layer_height() / live.cropHeight : 0;
+        baseOuter_ = 100.0 * std::max(outerW, outerH);
+        reg_.set_limits(static_cast<int>(baseOuter_ + 0.5) - simqvfr::kRegulatorPeripheryFloor,
+                        static_cast<int>(baseDensity_ + 0.5) - simqvfr::kRegulatorDensityFloor);
+        const double outerFactor = baseOuter_ > 0 ? std::max(0.0, baseOuter_ - reg_.periphery_cut()) / baseOuter_ : 1.0;
+        const double densityFactor = baseDensity_ > 0 ? std::max(0.0, baseDensity_ - reg_.density_cut()) / baseDensity_ : 1.0;
+        for (int v = 0; v < 2; ++v) { live.width[v] *= outerFactor; live.height[v] *= outerFactor; }
+        for (int v = 2; v < 4; ++v) { live.width[v] *= densityFactor; live.height[v] *= densityFactor; }
+        set_scales(live);
+    }
     static void set_scales(const simqvfr::Views4Layout& live) {
         const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
         qvfr_frame_set_live_scales(share(0), share(2));
         // Per axis (side by side for MVR): each view's share of the target's width and height.
         qvfr_frame_set_live_axes(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]);
     }
+    mutable std::mutex regulatorMutex_;
+    simqvfr::Regulator reg_;
+    simqvfr::Views4Layout baseLive_;
+    double baseOuter_ = 0, baseDensity_ = 0;
+    bool baseSet_ = false;
     bool mvrProbe_ = false;
     bool qvfr_ = false;
     bool fixation_ = true;       // [experiment] lmu_fixation

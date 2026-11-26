@@ -328,6 +328,16 @@ void gpu_collect() {
             g.postMs[f.mode][p] += 1000.0 * static_cast<double>(t[2] - t[1]) / static_cast<double>(dj.Frequency);
             ++g.gpuCounts[f.mode][p];
         }
+        if (f.mode == 0 && f.stamped[0][0] && f.stamped[1][2]) {
+            UINT64 begin = 0, end = 0;
+            const bool ready =
+                g.context->GetData(f.stamp[0][0].Get(), &begin, sizeof(begin), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                g.context->GetData(f.stamp[1][2].Get(), &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+            if (ready && end >= begin)
+                g.gpuFrameMs.store(1000.0 * static_cast<double>(end - begin) /
+                                       static_cast<double>(dj.Frequency),
+                                   std::memory_order_relaxed);
+        }
         // The corridor's spans: the copy (0-1), the road pass (1-2), the mask (3-4), the fill (5-6), each where both ends
         // were stamped.
         static constexpr int kSpan[4][2] = {{0, 1}, {1, 2}, {3, 4}, {5, 6}};

@@ -490,6 +490,8 @@ void mvr_car_light_frame(const simqvfr::CarLighting& settings) {
     g.carLightOn = g.carLight && settings.on && g.slotsOn && g.carActive;
 }
 
+bool mvr_gpu_frame_ms(double& ms) { ms = g.gpuFrameMs.exchange(0, std::memory_order_relaxed); return ms > 0; }
+
 bool mvr_car_light_costs(double& gpuMs, double& cpuMs) {
     const float gpu = carLightGpu.load(std::memory_order_relaxed), cpu = carLightCpu.load(std::memory_order_relaxed);
     if (!g.carLight || std::isnan(gpu) || std::isnan(cpu))

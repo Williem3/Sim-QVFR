@@ -87,7 +87,7 @@ enum Ctl {
     kTextureMatch,
     // The GPU regulator ([regulator], Foveation card; a game with GameFeatures::gpuRegulator): the two switches (Focus
     // density, Periphery), the GPU time over which it lowers them and under which it raises them, the frames before a 1% step down and before a 1% step up.
-    kRegFocus, kRegPeriphery, kRegDecrease, kRegIncrease, kRegLowerFrames, kRegRaiseFrames,
+    kRegFocus, kRegPeriphery, kRegRequireGpuBusy, kRegDecrease, kRegIncrease, kRegLowerFrames, kRegRaiseFrames,
     // Colour correction ([quad] color_correction and its values, the Picture tab's Color card).
     kGradeOn, kGradeExposure, kGradeBrightness, kGradeContrast, kGradeSaturation,
     // Night car lighting ([quad] car_light and its values, the Picture tab's Night cars card; LMU).

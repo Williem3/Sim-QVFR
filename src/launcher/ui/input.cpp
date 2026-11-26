@@ -397,6 +397,7 @@ void activate(Ctl id, int option) {
         return;
     case kRegFocus: app.s.regulator.focus = !app.s.regulator.focus; changed(); return;
     case kRegPeriphery: app.s.regulator.periphery = !app.s.regulator.periphery; changed(); return;
+    case kRegRequireGpuBusy: app.s.regulator.requireGpuBusy = !app.s.regulator.requireGpuBusy; changed(); return;
     case kGradeOn:
         if (game_has(&games::GameFeatures::sharpening)) {
             app.s.grade.on = !app.s.grade.on;
@@ -539,6 +540,7 @@ bool space_control(Ctl id) {
     case kCorridorShow:
     case kRegFocus:
     case kRegPeriphery:
+    case kRegRequireGpuBusy:
     case kGradeOn:
     case kNightOn:
     case kNightQuality:
